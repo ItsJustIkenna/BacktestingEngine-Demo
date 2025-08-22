@@ -1,7 +1,7 @@
 //! Utilities for order book and signal conversion
 
 use chrono::{DateTime, Utc};
-use strategy::{Signal, SignalType};
+use signal::{Signal, SignalType};
 use crate::types::{OrderBookEvent, BookSide};
 
 /// Convert a Signal to an OrderBookEvent::NewOrder

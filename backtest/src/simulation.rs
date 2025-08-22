@@ -25,7 +25,7 @@ impl SimulationLoop {
         portfolio: &mut PortfolioState,
         risk_manager: &mut RiskManager,
         market_data: Vec<MarketData>,
-        config: &crate::backtest::config::BacktestConfig,
+    config: &config::BacktestConfig,
     ) -> BacktestResult {
     let mut events: Vec<BacktestEvent> = Vec::new();
     let mut result = BacktestResult::default();

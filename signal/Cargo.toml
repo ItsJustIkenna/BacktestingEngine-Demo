@@ -1,0 +1,9 @@
+[package]
+name = "signal"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chrono = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+bigdecimal = "0.4"
