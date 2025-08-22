@@ -2,5 +2,6 @@
 members = [
     "program",
     "config",
-    "dataloader"
+    "dataloader",
+    "orderbook"
 ]
