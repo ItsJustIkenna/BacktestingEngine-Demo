@@ -1,8 +1,6 @@
-pub mod cache_simple;
+pub mod cache;
 pub mod aggregation;
 pub mod query;
-
-pub use cache_simple as cache;
 
 use anyhow::Result;
 use bigdecimal::BigDecimal;
