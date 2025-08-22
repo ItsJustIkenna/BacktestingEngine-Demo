@@ -1,0 +1,49 @@
+[package]
+name = "strategy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Core async runtime
+tokio = { version = "1.0", features = ["full"] }
+anyhow = "1.0"
+async-trait = "0.1"
+thiserror = "1.0"
+
+# Data structures and serialization
+serde = { version = "1.0", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
+bigdecimal = { version = "0.4", features = ["serde"] }
+
+# Math and statistics
+statrs = "0.17"
+ta = "0.5"  # Technical analysis library
+
+# Collections
+indexmap = { version = "2.0", features = ["serde"] }
+
+# Integration with existing modules
+databaseschema = { path = "../../databaseschema" }
+dataloader = { path = "../dataloader" }
+orderbook = { path = "../orderbook" }
+config = { path = "../config" }
+
+# Portfolio manager integration
+portfoliomanager = { path = "../portfoliomanager" }
+
+# Risk manager integration
+riskmanager = { path = "../riskmanager" }
+
+# Logging and metrics
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Async utilities
+futures = "0.3"
+
+# For BigDecimal conversions
+num-traits = "0.2"
+
+[dev-dependencies]
+tokio-test = "0.4"
+approx = "0.5"  # For floating point comparisons in tests

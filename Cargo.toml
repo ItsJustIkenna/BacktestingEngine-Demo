@@ -3,5 +3,6 @@ members = [
     "program",
     "config",
     "dataloader",
-    "orderbook"
+    "orderbook",
+    "strategy"
 ]
