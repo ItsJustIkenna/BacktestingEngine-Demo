@@ -1,7 +1,8 @@
-//! Order Book Reconstruction Module
-//! 
-//! This module provides functionality to reconstruct and maintain order books
-//! from historical market data, enabling realistic backtesting and market analysis.
+pub mod order_utils;
+/// Order Book Reconstruction Module
+/// 
+/// This module provides functionality to reconstruct and maintain order books
+/// from historical market data, enabling realistic backtesting and market analysis.
 
 pub mod order_book;
 pub mod level;

@@ -1,7 +1,10 @@
-//! Core order book implementation
-//!
-//! This module provides the main OrderBook structure that manages bid and ask sides
-//! and handles all order book operations.
+use crate::order_utils;
+// Utility for converting Signal to OrderBookEvent moved to order_utils.rs
+
+/// Core order book implementation
+///
+/// This module provides the main OrderBook structure that manages bid and ask sides
+/// and handles all order book operations.
 
 use crate::level::Level;
 use crate::types::{BookSide, OrderBookEvent, OrderInfo, SnapshotLevel};
@@ -34,6 +37,53 @@ pub struct OrderBook {
 }
 
 impl OrderBook {
+
+    /// Submit an order from a Signal (convenience for simulation)
+    pub fn submit_order_from_signal(&mut self, signal: &strategy::Signal, timestamp: DateTime<Utc>) -> anyhow::Result<()> {
+        // Use the utility function from order_utils
+        let event = order_utils::signal_to_order_event(signal, timestamp);
+        self.apply_event(event)
+    }
+
+    /// Match all possible orders (simple fill model for backtesting)
+    pub fn match_all_orders(&mut self, timestamp: DateTime<Utc>) -> Vec<crate::types::OrderInfo> {
+        // Simple model: match best bid and best ask if crossed
+        let mut fills = Vec::new();
+        while self.is_crossed() {
+            let best_bid = self.bids.values().next_back().cloned();
+            let best_ask = self.asks.values().next().cloned();
+            if let (Some(bid_level), Some(ask_level)) = (best_bid, best_ask) {
+                let fill_qty = bid_level.total_quantity.min(ask_level.total_quantity.clone());
+                // Remove from both sides
+                // (In a real engine, would update orders and levels, here just simulate fill)
+                // For now, just record a fill event
+                // TODO: Actually update order quantities and remove filled orders
+                fills.push(crate::types::OrderInfo {
+                    order_id: "sim_fill_bid".to_string(),
+                    side: crate::types::BookSide::Bid,
+                    original_quantity: fill_qty.clone(),
+                    remaining_quantity: BigDecimal::from(0),
+                    price: bid_level.price.clone(),
+                    timestamp,
+                    order_type: crate::types::OrderType::Limit,
+                });
+                fills.push(crate::types::OrderInfo {
+                    order_id: "sim_fill_ask".to_string(),
+                    side: crate::types::BookSide::Ask,
+                    original_quantity: fill_qty.clone(),
+                    remaining_quantity: BigDecimal::from(0),
+                    price: ask_level.price.clone(),
+                    timestamp,
+                    order_type: crate::types::OrderType::Limit,
+                });
+                // Remove filled quantities (not implemented in this stub)
+                break;
+            } else {
+                break;
+            }
+        }
+        fills
+    }
     /// Create a new empty order book
     pub fn new(symbol: String, exchange: String, config: OrderBookConfig) -> Self {
         Self {
