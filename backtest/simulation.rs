@@ -8,6 +8,7 @@ use crate::portfoliomanager::PortfolioState;
 use crate::riskmanager::RiskManager;
 use crate::dataloader::MarketData;
 use crate::backtest::types::{BacktestEvent, BacktestResult};
+use crate::metrics::{performance, risk, trade_stats};
 use chrono::{DateTime, Utc};
 
 pub struct SimulationLoop;
@@ -24,11 +25,17 @@ impl SimulationLoop {
         portfolio: &mut PortfolioState,
         risk_manager: &mut RiskManager,
         market_data: Vec<MarketData>,
+        config: &crate::backtest::config::BacktestConfig,
     ) -> BacktestResult {
-        let mut events: Vec<BacktestEvent> = Vec::new();
-        let mut result = BacktestResult::default();
+    let mut events: Vec<BacktestEvent> = Vec::new();
+    let mut result = BacktestResult::default();
 
-        for data in market_data {
+    // Collectors for metrics
+    let mut trade_returns: Vec<f64> = Vec::new();
+    let mut equity_curve: Vec<f64> = Vec::new();
+    let mut trade_durations: Vec<f64> = Vec::new();
+
+    for data in market_data {
             // 1. Update orderbook with new market data if needed
             match &data {
                 MarketData::Snapshot(snapshot) => {
@@ -58,7 +65,7 @@ impl SimulationLoop {
 
             // 3. Run all enabled strategies, collect signals
             let signals = strategy_manager.process_market_data(&data, &context).await.unwrap_or_default();
-            for (strategy_id, sigs) in signals {
+            for (_strategy_id, sigs) in signals {
                 for signal in sigs {
                     // 4. Submit order to orderbook
                     let _ = orderbook.submit_order_from_signal(&signal, timestamp);
@@ -75,13 +82,43 @@ impl SimulationLoop {
                         order_id: signal.id().to_string(),
                         timestamp,
                     });
-                    // TODO: Record fills, PnL, etc.
                 }
             }
-            // TODO: Collect metrics, update result
+
+            // Collect equity value at each step
+            equity_curve.push(portfolio.balance.to_f64().unwrap_or(0.0));
+
+            // Collect trade returns and durations from closed positions
+            for pos in &portfolio.positions {
+                if let Some(close_time) = pos.close_time {
+                    // Only consider closed positions
+                    trade_returns.push(pos.realized_pnl.to_f64().unwrap_or(0.0));
+                    let duration = (close_time - pos.open_time).num_seconds() as f64;
+                    trade_durations.push(duration);
+                }
+            }
         }
 
-        // TODO: Finalize result (PnL, drawdown, etc.)
+        // Compute metrics using collected data
+        result.num_trades = performance::number_of_trades(&trade_returns);
+        result.gross_profit = Some(performance::gross_profit(&trade_returns));
+        result.gross_loss = Some(performance::gross_loss(&trade_returns));
+        result.net_profit = Some(performance::net_profit(&trade_returns));
+        result.avg_trade_return = performance::average_trade_return(&trade_returns);
+        result.median_trade_return = performance::median_trade_return(&trade_returns);
+        result.sharpe_ratio = performance::sharpe_ratio(&trade_returns, config.risk_free_rate);
+        result.profit_factor = performance::profit_factor(
+            result.gross_profit.unwrap_or(0.0),
+            result.gross_loss.unwrap_or(0.0),
+        );
+        result.win_rate = trade_stats::win_rate(&trade_returns);
+        result.avg_trade_duration = trade_stats::average_trade_duration(&trade_durations);
+        result.volatility = risk::volatility(&trade_returns);
+        result.max_drawdown = risk::max_drawdown(&equity_curve)
+            .map(|v| num_bigdecimal::BigDecimal::from_f64(v).unwrap_or_default())
+            .unwrap_or_default();
+        // result.total_pnl: set as needed from portfolio or trade_returns
+
         result
     }
 }

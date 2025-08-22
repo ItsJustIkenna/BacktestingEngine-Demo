@@ -29,5 +29,14 @@ pub struct BacktestResult {
     pub total_pnl: BigDecimal,
     pub num_trades: usize,
     pub max_drawdown: BigDecimal,
-    // Add more result fields as needed
+    pub sharpe_ratio: Option<f64>,
+    pub profit_factor: Option<f64>,
+    pub win_rate: Option<f64>,
+    pub avg_trade_return: Option<f64>,
+    pub median_trade_return: Option<f64>,
+    pub avg_trade_duration: Option<f64>,
+    pub volatility: Option<f64>,
+    pub gross_profit: Option<f64>,
+    pub gross_loss: Option<f64>,
+    pub net_profit: Option<f64>,
 }

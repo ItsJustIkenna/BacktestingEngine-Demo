@@ -1,8 +1,11 @@
+
 [workspace]
 members = [
     "program",
     "config",
     "dataloader",
     "orderbook",
-    "strategy"
+    "strategy",
+    "metrics",
+    "backtest"
 ]
