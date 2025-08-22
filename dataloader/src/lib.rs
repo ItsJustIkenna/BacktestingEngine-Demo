@@ -1,6 +1,12 @@
+pub mod cache_simple;
+pub mod aggregation;
+pub mod query;
+
+pub use cache_simple as cache;
+
 use anyhow::Result;
 use bigdecimal::BigDecimal;
-use chrono::{DateTime, Utc, Duration};
+use chrono::{DateTime, Utc};
 use databaseschema::{
     CustomAsyncPgConnectionManager,
     models::{
@@ -15,20 +21,11 @@ use databaseschema::{
 use deadpool::managed::Pool;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::collections::HashMap;
 
 /// Core data loader for market data processing
 pub struct DataLoader {
     pool: Arc<Pool<CustomAsyncPgConnectionManager>>,
-    cache: Arc<tokio::sync::RwLock<DataCache>>,
-}
-
-/// In-memory cache for frequently accessed data
-#[derive(Default)]
-struct DataCache {
-    orders: HashMap<String, Vec<HistoricalOrder>>,
-    snapshots: HashMap<String, Vec<HistoricalSnapshot>>,
-    last_updated: HashMap<String, DateTime<Utc>>,
+    cache: Arc<cache::DataCache>,
 }
 
 /// Market data types supported by the loader
@@ -91,7 +88,7 @@ impl DataLoader {
     pub fn new(pool: Arc<Pool<CustomAsyncPgConnectionManager>>) -> Self {
         Self {
             pool,
-            cache: Arc::new(tokio::sync::RwLock::new(DataCache::default())),
+            cache: Arc::new(cache::DataCache::new()),
         }
     }
 
@@ -100,16 +97,8 @@ impl DataLoader {
         let cache_key = format!("orders_{}_{}", params.symbol, params.exchange);
         
         // Check cache first
-        {
-            let cache = self.cache.read().await;
-            if let Some(cached_orders) = cache.orders.get(&cache_key) {
-                if let Some(last_updated) = cache.last_updated.get(&cache_key) {
-                    // Use cache if updated within last 5 minutes
-                    if Utc::now() - *last_updated < Duration::minutes(5) {
-                        return Ok(self.filter_orders(cached_orders.clone(), params));
-                    }
-                }
-            }
+        if let Some(cached_orders) = self.cache.get_orders(&cache_key).await {
+            return Ok(self.filter_orders(cached_orders, params));
         }
 
         // Load from database
@@ -120,11 +109,7 @@ impl DataLoader {
         ).await.map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
 
         // Update cache
-        {
-            let mut cache = self.cache.write().await;
-            cache.orders.insert(cache_key.clone(), orders.clone());
-            cache.last_updated.insert(cache_key, Utc::now());
-        }
+        self.cache.put_orders(cache_key, orders.clone()).await;
 
         Ok(self.filter_orders(orders, params))
     }
@@ -134,15 +119,8 @@ impl DataLoader {
         let cache_key = format!("snapshots_{}_{}", params.symbol, params.exchange);
         
         // Check cache first
-        {
-            let cache = self.cache.read().await;
-            if let Some(cached_snapshots) = cache.snapshots.get(&cache_key) {
-                if let Some(last_updated) = cache.last_updated.get(&cache_key) {
-                    if Utc::now() - *last_updated < Duration::minutes(5) {
-                        return Ok(self.filter_snapshots(cached_snapshots.clone(), params));
-                    }
-                }
-            }
+        if let Some(cached_snapshots) = self.cache.get_snapshots(&cache_key).await {
+            return Ok(self.filter_snapshots(cached_snapshots, params));
         }
 
         // Load from database
@@ -153,11 +131,7 @@ impl DataLoader {
         ).await.map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
 
         // Update cache
-        {
-            let mut cache = self.cache.write().await;
-            cache.snapshots.insert(cache_key.clone(), snapshots.clone());
-            cache.last_updated.insert(cache_key, Utc::now());
-        }
+        self.cache.put_snapshots(cache_key, snapshots.clone()).await;
 
         Ok(self.filter_snapshots(snapshots, params))
     }
@@ -310,10 +284,7 @@ impl DataLoader {
 
     /// Clear the cache
     pub async fn invalidate_cache(&self) {
-        let mut cache = self.cache.write().await;
-        cache.orders.clear();
-        cache.snapshots.clear();
-        cache.last_updated.clear();
+        self.cache.clear().await;
     }
 
     /// Filter orders based on query parameters
@@ -363,6 +334,7 @@ fn align_to_interval(timestamp: DateTime<Utc>, interval_minutes: i32) -> DateTim
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Timelike;
 
     #[test]
     fn test_align_to_interval() {
