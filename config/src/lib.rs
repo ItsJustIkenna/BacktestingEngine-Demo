@@ -75,6 +75,15 @@ pub struct OutputConfig {
     pub export_formats: Vec<String>, // e.g., ["json", "csv", "html"]
 }
 
+/// Monte Carlo simulation configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonteCarloConfig {
+    pub dataloader: crate::dataloader::DataLoader,
+    pub query_params: crate::dataloader::QueryParams,
+    pub mc_params: crate::dataloader::MonteCarloParams,
+    // Add more config options as needed
+}
+
 impl Default for BacktestConfig {
     fn default() -> Self {
         Self {

@@ -2,6 +2,7 @@
 pub mod simulation;
 pub mod types;
 pub mod config;
+pub mod monte_carlo;
 
 // Main simulation orchestrator
 // Coordinates data loading, strategy execution, order matching, portfolio/risk updates, and reporting.

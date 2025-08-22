@@ -4,3 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+deadpool-postgres = "0.10"
+tokio-postgres = { version = "0.7", features = ["with-uuid-0_8"] }
+dotenv = "0.15"
