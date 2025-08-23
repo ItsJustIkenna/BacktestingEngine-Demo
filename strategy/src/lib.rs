@@ -15,87 +15,14 @@ pub mod strategies;
 pub use traits::{Strategy, StrategyContext, StrategyError, StrategyResult};
 pub use signal::{Signal, SignalType, SignalStrength, SignalReason};
 pub use indicators::{IndicatorValue};
-pub use riskmanager::{RiskManager, RiskLimits, RiskMetrics};
+pub use riskmanager::{RiskManager, RiskMetrics};
+pub use config::{StrategyConfig, ParameterValue, RiskLimits};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use bigdecimal::BigDecimal;
 use std::collections::HashMap;
-
-/// Strategy configuration parameters
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StrategyConfig {
-    /// Unique strategy identifier
-    pub id: String,
-    /// Human-readable strategy name
-    pub name: String,
-    /// Strategy type/category
-    pub strategy_type: String,
-    /// Symbol to trade
-    pub symbol: String,
-    /// Exchange to trade on
-    pub exchange: String,
-    /// Strategy-specific parameters
-    pub parameters: HashMap<String, ParameterValue>,
-    /// Risk management settings
-    pub risk_limits: RiskLimits,
-    /// Whether the strategy is enabled
-    pub enabled: bool,
-}
-
-/// Parameter value that can hold different types
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ParameterValue {
-    Integer(i64),
-    Float(f64),
-    String(String),
-    Boolean(bool),
-    Decimal(BigDecimal),
-}
-
-impl ParameterValue {
-    /// Get as integer
-    pub fn as_int(&self) -> Option<i64> {
-        match self {
-            ParameterValue::Integer(v) => Some(*v),
-            ParameterValue::Float(v) => Some(*v as i64),
-            _ => None,
-        }
-    }
-
-    /// Get as float
-    pub fn as_float(&self) -> Option<f64> {
-        match self {
-            ParameterValue::Float(v) => Some(*v),
-            ParameterValue::Integer(v) => Some(*v as f64),
-            _ => None,
-        }
-    }
-
-    /// Get as string
-    pub fn as_string(&self) -> Option<&str> {
-        match self {
-            ParameterValue::String(v) => Some(v),
-            _ => None,
-        }
-    }
-
-    /// Get as boolean
-    pub fn as_bool(&self) -> Option<bool> {
-        match self {
-            ParameterValue::Boolean(v) => Some(*v),
-            _ => None,
-        }
-    }
-
-    /// Get as BigDecimal
-    pub fn as_decimal(&self) -> Option<&BigDecimal> {
-        match self {
-            ParameterValue::Decimal(v) => Some(v),
-            _ => None,
-        }
-    }
-}
+use config::{StrategyConfig, ParameterValue, RiskLimits};
 
 /// Strategy manager that coordinates multiple strategies
 #[derive(Debug)]

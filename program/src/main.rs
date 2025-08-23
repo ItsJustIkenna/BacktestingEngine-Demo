@@ -10,8 +10,11 @@ use orderbook::{OrderBook, OrderBookConfig};
 use portfoliomanager::PortfolioState;
 use riskmanager::RiskManager;
 use genetic::{GeneticOptimizer, GeneticConfig, chromosome::AvellanedaStoikovChromosome};
+use metrics::{PerformanceMetrics, create_basic_report, ReportGenerator, ReportConfig, ReportFormat, EquityPoint};
+use config::OutputConfig;
 use std::io::{self, Write};
 use std::sync::Arc;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "TradingPlatform")]
@@ -53,6 +56,23 @@ enum Commands {
     Optimize {
         #[arg(long)]
         data_path: String,
+    },
+    /// Generate comprehensive backtest report
+    Report {
+        #[arg(long)]
+        data_path: String,
+        #[arg(long)]
+        strategy_name: String,
+        #[arg(long)]
+        symbol: String,
+        #[arg(long)]
+        timeframe: String,
+        #[arg(long)]
+        output_dir: String,
+        #[arg(long, value_delimiter = ',', default_values = ["html", "json", "csv"])]
+        formats: Vec<String>,
+        #[arg(long, default_value = "10000.0")]
+        initial_capital: f64,
     },
 }
 
@@ -220,6 +240,98 @@ async fn main() {
             println!("   Fee Rate: {:.6}", best_params.fee_rate);
             println!("   Latency Buffer: {:.6}", best_params.latency_buffer);
             println!("   Volatility Cap: {:.6}", best_params.volatility_cap);
+        }
+        Commands::Report { 
+            data_path, 
+            strategy_name, 
+            symbol, 
+            timeframe, 
+            output_dir, 
+            formats,
+            initial_capital,
+        } => {
+            println!("📊 Generating Comprehensive Backtest Report...");
+            
+            // Create output configuration from CLI arguments
+            let mut export_formats = formats;
+            if export_formats.is_empty() {
+                export_formats = vec!["html".to_string(), "json".to_string(), "csv".to_string()];
+            }
+            
+            let output_config = OutputConfig {
+                results_dir: output_dir.clone(),
+                reports_dir: output_dir.clone(),
+                charts_enabled: true,
+                export_formats,
+            };
+            
+            // Run a sample backtest to get results (in real usage, this would come from stored results)
+            println!("🚀 Running sample backtest to generate report data...");
+            let data = load_market_data(&data_path).await;
+            
+            // Create backtest engine
+            let strategy_manager = StrategyManager::new();
+            let config = OrderBookConfig::default();
+            let orderbook = OrderBook::new(symbol.clone(), "EXCHANGE".to_string(), config);
+            let portfolio = PortfolioState::default();
+            let risk_manager = RiskManager::new();
+            let simulation = SimulationLoop::new();
+            
+            let mut engine = BacktestEngine::new(
+                strategy_manager,
+                orderbook,
+                portfolio,
+                risk_manager,
+                simulation,
+            );
+            
+            // Run backtest
+            let result = engine.run(data).await;
+            
+            // Generate report using the new reporting system
+            let start_date = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+            let end_date = NaiveDate::from_ymd_opt(2024, 12, 31).unwrap();
+            
+            match engine.generate_report(
+                &result,
+                &strategy_name,
+                &symbol,
+                &timeframe,
+                start_date,
+                end_date,
+                initial_capital,
+                &output_config,
+            ) {
+                Ok(generated_files) => {
+                    println!("✅ Report generation completed successfully!");
+                    println!("📁 Generated {} report file(s):", generated_files.len());
+                    for file_path in &generated_files {
+                        println!("  📄 {}", file_path.display());
+                    }
+                    
+                    // Display key metrics
+                    println!("\n📈 Performance Summary:");
+                    println!("💰 Total P&L: ${:.2}", result.total_pnl.to_string());
+                    println!("🔢 Number of trades: {}", result.num_trades);
+                    if let Some(sharpe) = result.sharpe_ratio {
+                        println!("🎯 Sharpe Ratio: {:.4}", sharpe);
+                    }
+                    if let Some(pf) = result.profit_factor {
+                        println!("💸 Profit Factor: {:.2}", pf);
+                    }
+                    println!("📉 Max Drawdown: ${:.2}", result.max_drawdown.to_string());
+                    
+                    // Suggest next steps
+                    println!("\n💡 Next Steps:");
+                    println!("  • Open the HTML report in your browser for detailed analysis");
+                    println!("  • Use the CSV data for further analysis in Excel/Python");
+                    println!("  • Review the JSON output for programmatic integration");
+                }
+                Err(e) => {
+                    eprintln!("❌ Report generation failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
     }
 }

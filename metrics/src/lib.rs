@@ -8,6 +8,13 @@ pub mod performance;
 /// Risk-related metrics (e.g., maximum drawdown, volatility)
 pub mod risk;
 
+/// Report generation for comprehensive backtest analysis
+pub mod reporting;
+
+/// Database persistence for reports and metrics
+#[cfg(feature = "persistence")]
+pub mod persistence;
+
 /// Trade statistics (e.g., win rate, average trade duration)
 pub mod trade_stats;
 
@@ -63,3 +70,14 @@ impl PerformanceMetrics {
         }
     }
 }
+
+// Re-export reporting components
+pub use reporting::{
+    ReportGenerator, BacktestReport,
+    ReportMetadata, BacktestAnalysis, RiskMetrics, TradeDistribution,
+    PerformanceAttribution, BenchmarkComparison, TradeRecord,
+    EquityPoint, DrawdownPeriod, create_basic_report
+};
+
+// Re-export config types used by reporting
+pub use config::{ReportConfig, ReportFormat};

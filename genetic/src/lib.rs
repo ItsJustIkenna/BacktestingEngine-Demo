@@ -1,4 +1,13 @@
-//! Genetic Algorithm module for strategy parameter optimization
+//! Genetic Algorithm op/// Async fitness function type
+pub type AsyncFitnessFn<C> = Arc<dyn Fn(&C) -> std::pin::Pin<Box<dyn std::future::Future<Output = f64> + Send>> + Send + Sync>;
+
+/// Main genetic algorithm optimizer (async fitness)or trading strategies
+//! 
+//! Provides async genetic algorithm optimization for finding optimal
+//! trading strategy parameters.
+
+use std::sync::Arc;
+use config::GeneticConfig;
 
 use rand::prelude::*;
 use std::sync::Arc;

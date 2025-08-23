@@ -2,16 +2,9 @@
 
 use dataloader::MarketData;
 use bigdecimal::ToPrimitive;
-// use config::MonteCarloConfig; // TODO: Fix this import
+use config::MonteCarloConfig;
 use crate::BacktestEngine;
 use metrics::PerformanceMetrics;
-
-// Temporary struct to replace MonteCarloConfig
-#[derive(Debug, Clone)]
-pub struct MonteCarloConfig {
-    pub num_simulations: usize,
-    pub confidence_level: f64,
-}
 
 pub struct MonteCarloResult {
     pub all_metrics: Vec<PerformanceMetrics>,

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 use thiserror::Error;
 
 /// Configuration validation errors
@@ -83,6 +84,156 @@ pub struct MonteCarloConfig {
     // Add more config options as needed
 }
 
+/// Report generation configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReportConfig {
+    pub output_dir: PathBuf,
+    pub formats: Vec<ReportFormat>,
+    pub include_trades: bool,
+    pub include_charts: bool,
+    pub template_dir: Option<PathBuf>,
+    pub custom_css: Option<String>,
+    /// Whether to persist report metadata to database
+    pub persist_to_database: bool,
+    /// Database connection for persistence (if enabled)
+    pub database_url: Option<String>,
+    /// User or system generating the report
+    pub generated_by: Option<String>,
+    /// Source of report generation
+    pub generation_source: String,
+}
+
+/// Supported report formats
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ReportFormat {
+    Html,
+    Json,
+    Csv,
+    Pdf,
+}
+
+impl std::fmt::Display for ReportFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReportFormat::Html => write!(f, "html"),
+            ReportFormat::Json => write!(f, "json"),
+            ReportFormat::Csv => write!(f, "csv"),
+            ReportFormat::Pdf => write!(f, "pdf"),
+        }
+    }
+}
+
+/// Genetic algorithm configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeneticConfig {
+    pub population_size: usize,
+    pub generations: usize,
+    pub crossover_rate: f64,
+    pub mutation_rate: f64,
+}
+
+/// Configuration for order book reconstruction
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderBookConfig {
+    /// Maximum number of price levels to maintain on each side
+    pub max_levels: Option<usize>,
+    /// Whether to maintain detailed order information
+    pub track_individual_orders: bool,
+    /// Snapshot validation frequency (in events)
+    pub snapshot_validation_frequency: Option<usize>,
+    /// Whether to enable strict validation
+    pub strict_validation: bool,
+}
+
+/// Batch processing configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchConfig {
+    pub batch_size: usize,
+    pub max_parallel: usize,
+    pub retry_attempts: usize,
+}
+
+/// Strategy configuration parameters
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StrategyConfig {
+    /// Unique strategy identifier
+    pub id: String,
+    /// Human-readable strategy name
+    pub name: String,
+    /// Strategy type/category
+    pub strategy_type: String,
+    /// Symbol to trade
+    pub symbol: String,
+    /// Exchange to trade on
+    pub exchange: String,
+    /// Strategy-specific parameters
+    pub parameters: HashMap<String, ParameterValue>,
+    /// Risk management settings
+    pub risk_limits: RiskLimits,
+    /// Whether the strategy is enabled
+    pub enabled: bool,
+}
+
+/// Parameter value that can hold different types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum ParameterValue {
+    Integer(i64),
+    Float(f64),
+    String(String),
+    Boolean(bool),
+}
+
+impl ParameterValue {
+    /// Get as integer
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            ParameterValue::Integer(v) => Some(*v),
+            ParameterValue::Float(v) => Some(*v as i64),
+            _ => None,
+        }
+    }
+
+    /// Get as float
+    pub fn as_float(&self) -> Option<f64> {
+        match self {
+            ParameterValue::Float(v) => Some(*v),
+            ParameterValue::Integer(v) => Some(*v as f64),
+            _ => None,
+        }
+    }
+
+    /// Get as string
+    pub fn as_string(&self) -> Option<&str> {
+        match self {
+            ParameterValue::String(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Get as boolean
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            ParameterValue::Boolean(v) => Some(*v),
+            _ => None,
+        }
+    }
+}
+
+/// Risk management limits
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RiskLimits {
+    /// Maximum position size
+    pub max_position_size: f64,
+    /// Maximum order size
+    pub max_order_size: f64,
+    /// Maximum daily loss threshold
+    pub max_daily_loss: f64,
+    /// Maximum portfolio value at risk
+    pub max_var: Option<f64>,
+    /// Stop loss percentage
+    pub stop_loss_pct: Option<f64>,
+}
+
 impl Default for BacktestConfig {
     fn default() -> Self {
         Self {
@@ -138,6 +289,82 @@ impl Default for OutputConfig {
             reports_dir: "./reports".to_string(),
             charts_enabled: true,
             export_formats: vec!["json".to_string(), "csv".to_string()],
+        }
+    }
+}
+
+impl Default for ReportConfig {
+    fn default() -> Self {
+        Self {
+            output_dir: PathBuf::from("./reports"),
+            formats: vec![ReportFormat::Html, ReportFormat::Json],
+            include_trades: true,
+            include_charts: true,
+            template_dir: None,
+            custom_css: None,
+            persist_to_database: false,
+            database_url: None,
+            generated_by: None,
+            generation_source: "cli".to_string(),
+        }
+    }
+}
+
+impl Default for GeneticConfig {
+    fn default() -> Self {
+        Self {
+            population_size: 50,
+            generations: 100,
+            crossover_rate: 0.8,
+            mutation_rate: 0.1,
+        }
+    }
+}
+
+impl Default for OrderBookConfig {
+    fn default() -> Self {
+        Self {
+            max_levels: Some(100), // Keep top 100 levels by default
+            track_individual_orders: true,
+            snapshot_validation_frequency: Some(1000),
+            strict_validation: true,
+        }
+    }
+}
+
+impl Default for BatchConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: 1000,
+            max_parallel: 4,
+            retry_attempts: 3,
+        }
+    }
+}
+
+impl Default for StrategyConfig {
+    fn default() -> Self {
+        Self {
+            id: "default".to_string(),
+            name: "Default Strategy".to_string(),
+            strategy_type: "basic".to_string(),
+            symbol: "BTCUSD".to_string(),
+            exchange: "default".to_string(),
+            parameters: HashMap::new(),
+            risk_limits: RiskLimits::default(),
+            enabled: true,
+        }
+    }
+}
+
+impl Default for RiskLimits {
+    fn default() -> Self {
+        Self {
+            max_position_size: 1.0,
+            max_order_size: 0.1,
+            max_daily_loss: 1000.0,
+            max_var: None,
+            stop_loss_pct: None,
         }
     }
 }

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
+use config::BatchConfig;
 use databaseschema::{
     CustomAsyncPgConnectionManager,
     models::{
@@ -87,24 +88,6 @@ pub struct QueryMetadata {
     pub sort_applied: bool,
     pub pagination_applied: bool,
     pub cache_hit: bool,
-}
-
-/// Batch processing configuration
-#[derive(Debug, Clone)]
-pub struct BatchConfig {
-    pub batch_size: usize,
-    pub max_parallel: usize,
-    pub retry_attempts: usize,
-}
-
-impl Default for BatchConfig {
-    fn default() -> Self {
-        Self {
-            batch_size: 1000,
-            max_parallel: 4,
-            retry_attempts: 3,
-        }
-    }
 }
 
 impl QueryBuilder {

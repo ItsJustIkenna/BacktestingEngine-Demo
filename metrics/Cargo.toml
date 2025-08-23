@@ -3,5 +3,21 @@ name = "metrics"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+persistence = ["diesel", "uuid", "rust_decimal", "databaseschema"]
+
 [dependencies]
-serde = "1.0.219"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+tempfile = "3.0"
+config = { path = "../config" }
+
+# Database persistence dependencies (optional)
+diesel = { version = "2.2", features = ["postgres", "uuid", "chrono", "r2d2", "numeric"], optional = true }
+uuid = { version = "1.0", features = ["v4", "serde"], optional = true }
+rust_decimal = { version = "1.35", features = ["serde"], optional = true }
+tokio = { version = "1.0", features = ["rt-multi-thread"], optional = true }
+databaseschema = { path = "../../databaseschema", optional = true }

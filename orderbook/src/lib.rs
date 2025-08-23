@@ -14,33 +14,10 @@ pub use order_book::OrderBook;
 pub use level::Level;
 pub use reconstructor::OrderBookReconstructor;
 pub use types::{BookSide, OrderBookEvent, OrderBookSnapshot};
+pub use config::OrderBookConfig;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-
-/// Configuration for order book reconstruction
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OrderBookConfig {
-    /// Maximum number of price levels to maintain on each side
-    pub max_levels: Option<usize>,
-    /// Whether to maintain detailed order information
-    pub track_individual_orders: bool,
-    /// Snapshot validation frequency (in events)
-    pub snapshot_validation_frequency: Option<usize>,
-    /// Whether to enable strict validation
-    pub strict_validation: bool,
-}
-
-impl Default for OrderBookConfig {
-    fn default() -> Self {
-        Self {
-            max_levels: Some(100), // Keep top 100 levels by default
-            track_individual_orders: true,
-            snapshot_validation_frequency: Some(1000),
-            strict_validation: true,
-        }
-    }
-}
 
 /// Market depth information
 #[derive(Debug, Clone, Serialize, Deserialize)]

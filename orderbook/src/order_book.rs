@@ -45,43 +45,80 @@ impl OrderBook {
         self.apply_event(event)
     }
 
-    /// Match all possible orders (simple fill model for backtesting)
+    /// Match all possible orders (comprehensive matching engine)
     pub fn match_all_orders(&mut self, timestamp: DateTime<Utc>) -> Vec<crate::types::OrderInfo> {
-        // Simple model: match best bid and best ask if crossed
         let mut fills = Vec::new();
+        
         while self.is_crossed() {
-            let best_bid = self.bids.values().next_back().cloned();
-            let best_ask = self.asks.values().next().cloned();
-            if let (Some(bid_level), Some(ask_level)) = (best_bid, best_ask) {
-                let fill_qty = bid_level.total_quantity.min(ask_level.total_quantity.clone());
-                // Remove from both sides
-                // (In a real engine, would update orders and levels, here just simulate fill)
-                // For now, just record a fill event
-                // TODO: Actually update order quantities and remove filled orders
-                fills.push(crate::types::OrderInfo {
-                    order_id: "sim_fill_bid".to_string(),
-                    side: crate::types::BookSide::Bid,
-                    original_quantity: fill_qty.clone(),
-                    remaining_quantity: BigDecimal::from(0),
-                    price: bid_level.price.clone(),
-                    timestamp,
-                    order_type: crate::types::OrderType::Limit,
-                });
-                fills.push(crate::types::OrderInfo {
-                    order_id: "sim_fill_ask".to_string(),
-                    side: crate::types::BookSide::Ask,
-                    original_quantity: fill_qty.clone(),
-                    remaining_quantity: BigDecimal::from(0),
-                    price: ask_level.price.clone(),
-                    timestamp,
-                    order_type: crate::types::OrderType::Limit,
-                });
-                // Remove filled quantities (not implemented in this stub)
-                break;
+            // Get the best bid and ask price keys
+            let best_bid_key = self.bids.keys().next_back().copied();
+            let best_ask_key = self.asks.keys().next().copied();
+            
+            if let (Some(bid_key), Some(ask_key)) = (best_bid_key, best_ask_key) {
+                // Get the matching price (use the ask price as the execution price)
+                let execution_price = self.asks.get(&ask_key).unwrap().price.clone();
+                
+                // Calculate the maximum quantity that can be matched
+                let bid_quantity = self.bids.get(&bid_key).unwrap().total_quantity.clone();
+                let ask_quantity = self.asks.get(&ask_key).unwrap().total_quantity.clone();
+                let match_quantity = bid_quantity.min(ask_quantity);
+                
+                if match_quantity <= BigDecimal::from(0) {
+                    break;
+                }
+                
+                // Execute trade on ask side (taking liquidity)
+                let ask_executed_orders = {
+                    let ask_level = self.asks.get_mut(&ask_key).unwrap();
+                    ask_level.execute_trade(&match_quantity, timestamp).unwrap_or_default()
+                };
+                
+                // Execute trade on bid side (taking liquidity)  
+                let bid_executed_orders = {
+                    let bid_level = self.bids.get_mut(&bid_key).unwrap();
+                    bid_level.execute_trade(&match_quantity, timestamp).unwrap_or_default()
+                };
+                
+                // Create fill records for bid orders (they bought at execution_price)
+                for bid_order in bid_executed_orders {
+                    fills.push(crate::types::OrderInfo {
+                        order_id: bid_order.order_id,
+                        side: crate::types::BookSide::Bid,
+                        original_quantity: bid_order.original_quantity,
+                        remaining_quantity: bid_order.remaining_quantity, // This is the filled quantity
+                        price: execution_price.clone(),
+                        timestamp,
+                        order_type: bid_order.order_type,
+                    });
+                }
+                
+                // Create fill records for ask orders (they sold at execution_price)
+                for ask_order in ask_executed_orders {
+                    fills.push(crate::types::OrderInfo {
+                        order_id: ask_order.order_id,
+                        side: crate::types::BookSide::Ask,
+                        original_quantity: ask_order.original_quantity,
+                        remaining_quantity: ask_order.remaining_quantity, // This is the filled quantity
+                        price: execution_price.clone(),
+                        timestamp,
+                        order_type: ask_order.order_type,
+                    });
+                }
+                
+                // Remove empty levels
+                if self.bids.get(&bid_key).map_or(true, |level| level.is_empty()) {
+                    self.bids.remove(&bid_key);
+                }
+                if self.asks.get(&ask_key).map_or(true, |level| level.is_empty()) {
+                    self.asks.remove(&ask_key);
+                }
+                
+                self.last_updated = timestamp;
             } else {
                 break;
             }
         }
+        
         fills
     }
     /// Create a new empty order book
@@ -356,6 +393,95 @@ impl OrderBook {
             (Some(ask), Some(bid)) => Some(ask - bid),
             _ => None,
         }
+    }
+
+    /// Execute a market order against the book
+    pub fn execute_market_order(
+        &mut self,
+        order_id: String,
+        side: BookSide,
+        quantity: BigDecimal,
+        timestamp: DateTime<Utc>,
+    ) -> Result<Vec<crate::types::OrderInfo>> {
+        let mut fills = Vec::new();
+        let mut remaining_quantity = quantity.clone();
+        
+        // Get the appropriate side of the book to execute against
+        let levels_to_execute = match side {
+            BookSide::Bid => {
+                // Market buy order (bid side) executes against asks (starting from lowest price)
+                self.asks.clone()
+            }
+            BookSide::Ask => {
+                // Market sell order (ask side) executes against bids (starting from highest price)  
+                self.bids.clone()
+            }
+        };
+        
+        // Execute against levels in price-time priority
+        let price_keys: Vec<_> = match side {
+            BookSide::Bid => levels_to_execute.keys().cloned().collect(), // Ascending for asks
+            BookSide::Ask => levels_to_execute.keys().rev().cloned().collect(), // Descending for bids
+        };
+        
+        for price_key in price_keys {
+            if remaining_quantity <= BigDecimal::from(0) {
+                break;
+            }
+            
+            let execution_quantity = {
+                let levels = match side {
+                    BookSide::Bid => &self.asks,
+                    BookSide::Ask => &self.bids,
+                };
+                
+                if let Some(level) = levels.get(&price_key) {
+                    remaining_quantity.clone().min(level.total_quantity.clone())
+                } else {
+                    continue;
+                }
+            };
+            
+            if execution_quantity > BigDecimal::from(0) {
+                // Execute the trade
+                let _executed_orders = {
+                    let levels = match side {
+                        BookSide::Bid => &mut self.asks,
+                        BookSide::Ask => &mut self.bids,
+                    };
+                    
+                    if let Some(level) = levels.get_mut(&price_key) {
+                        level.execute_trade(&execution_quantity, timestamp)?
+                    } else {
+                        Vec::new()
+                    }
+                };
+                
+                // Create fill record for the market order
+                let execution_price = match side {
+                    BookSide::Bid => self.asks.get(&price_key).unwrap().price.clone(),
+                    BookSide::Ask => self.bids.get(&price_key).unwrap().price.clone(),
+                };
+                
+                fills.push(crate::types::OrderInfo {
+                    order_id: order_id.clone(),
+                    side,
+                    original_quantity: quantity.clone(),
+                    remaining_quantity: execution_quantity.clone(),
+                    price: execution_price,
+                    timestamp,
+                    order_type: crate::types::OrderType::Market,
+                });
+                
+                remaining_quantity -= &execution_quantity;
+            }
+        }
+        
+        // Remove empty levels after execution
+        self.cleanup_empty_levels();
+        self.last_updated = timestamp;
+        
+        Ok(fills)
     }
 
     /// Remove empty levels from the book
