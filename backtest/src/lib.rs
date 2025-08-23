@@ -1,19 +1,17 @@
 //! Backtest library entry point
 pub mod simulation;
 pub mod types;
-pub mod config;
 pub mod monte_carlo;
 
 // Main simulation orchestrator
 // Coordinates data loading, strategy execution, order matching, portfolio/risk updates, and reporting.
-use crate::strategy::StrategyManager;
-use crate::orderbook::OrderBook;
-use crate::portfoliomanager::PortfolioState;
-use crate::riskmanager::RiskManager;
-use crate::dataloader::MarketData;
-use crate::backtest::simulation::SimulationLoop;
-use crate::backtest::report::BacktestReport;
-use crate::backtest::types::*;
+use strategy::StrategyManager;
+use orderbook::OrderBook;
+use portfoliomanager::PortfolioState;
+use riskmanager::RiskManager;
+use dataloader::MarketData;
+use crate::simulation::SimulationLoop;
+use crate::types::*;
 
 pub struct BacktestEngine {
 	pub strategy_manager: StrategyManager,
@@ -41,13 +39,15 @@ impl BacktestEngine {
 	}
 
 	/// Run the backtest simulation
-	pub async fn run(&mut self, market_data: Vec<MarketData>) -> BacktestReport {
+	pub async fn run(&mut self, market_data: Vec<MarketData>) -> BacktestResult {
+		let default_config = config::BacktestConfig::default();
 		self.simulation.run(
 			&mut self.strategy_manager,
 			&mut self.orderbook,
 			&mut self.portfolio,
 			&mut self.risk_manager,
 			market_data,
+			&default_config,
 		).await
 	}
 }

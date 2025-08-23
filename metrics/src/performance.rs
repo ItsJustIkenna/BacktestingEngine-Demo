@@ -1,3 +1,7 @@
+//! Performance metrics for market making strategies
+//
+// Includes Sharpe ratio, profit factor, net/gross profit, average/median trade return, number of trades.
+
 /// Calculates the Sharpe ratio given returns and risk-free rate.
 pub fn sharpe_ratio(returns: &[f64], risk_free_rate: f64) -> Option<f64> {
 	if returns.is_empty() {
@@ -73,7 +77,4 @@ fn std_dev(data: &[f64]) -> Option<f64> {
 	let var = data.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / data.len() as f64;
 	Some(var.sqrt())
 }
-//! Performance metrics for market making strategies
-//
-// Includes Sharpe ratio, profit factor, net/gross profit, average/median trade return, number of trades.
 

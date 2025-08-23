@@ -1,3 +1,7 @@
+//! Risk metrics for market making strategies
+//
+// Includes maximum drawdown, volatility.
+
 /// Calculates the maximum drawdown from a list of equity values.
 pub fn max_drawdown(equity_curve: &[f64]) -> Option<f64> {
 	if equity_curve.is_empty() {
@@ -33,7 +37,4 @@ fn mean(data: &[f64]) -> Option<f64> {
 	}
 	Some(data.iter().sum::<f64>() / data.len() as f64)
 }
-//! Risk metrics for market making strategies
-//
-// Includes maximum drawdown, volatility.
 

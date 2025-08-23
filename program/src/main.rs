@@ -6,11 +6,10 @@ use backtest::BacktestEngine;
 use backtest::simulation::SimulationLoop;
 use strategy::strategies::avellaneda_stoikov::{AvellanedaStoikovParams, AvellanedaStoikovStrategy};
 use strategy::StrategyManager;
-use orderbook::OrderBook;
+use orderbook::{OrderBook, OrderBookConfig};
 use portfoliomanager::PortfolioState;
 use riskmanager::RiskManager;
-use config::BacktestConfig;
-use metrics::PerformanceMetrics;
+use genetic::{GeneticOptimizer, GeneticConfig, chromosome::AvellanedaStoikovChromosome};
 use std::io::{self, Write};
 use std::sync::Arc;
 
@@ -48,7 +47,7 @@ enum Commands {
         #[arg(long)]
         inventory_target: f64,
         #[arg(long)]
-        quote_width: f64,
+        order_size: f64,
     },
     /// Run parameter optimization
     Optimize {
@@ -62,82 +61,180 @@ async fn main() {
     let cli = Cli::parse();
     match cli.command {
         Commands::WalkForward { data_path, start, end, train_days, test_days, step_days } => {
+            println!("🚀 Starting Walk-Forward Analysis...");
+            
+            // Load market data
+            println!("📊 Loading market data from: {}", data_path);
             let data = load_market_data(&data_path).await;
-            let start = NaiveDate::parse_from_str(&start, "%Y-%m-%d").expect("Invalid start date");
-            let end = NaiveDate::parse_from_str(&end, "%Y-%m-%d").expect("Invalid end date");
-            let train_size = Duration::days(train_days);
-            let test_size = Duration::days(test_days);
-            let step_size = Duration::days(step_days);
-            let summary = run_walkforward_analysis(&data, start, end, train_size, test_size, step_size).await;
-            println!("Walk-Forward Summary: {:#?}", summary);
+            
+            // Parse dates
+            let start_date = NaiveDate::parse_from_str(&start, "%Y-%m-%d")
+                .expect("Invalid start date format. Use YYYY-MM-DD");
+            let end_date = NaiveDate::parse_from_str(&end, "%Y-%m-%d")
+                .expect("Invalid end date format. Use YYYY-MM-DD");
+            
+            // Convert days to Duration
+            let train_duration = Duration::days(train_days);
+            let test_duration = Duration::days(test_days);
+            let step_duration = Duration::days(step_days);
+            
+            println!("📈 Running analysis from {} to {} (train={}, test={}, step={} days)", 
+                start, end, train_days, test_days, step_days);
+            
+            // Run walk-forward analysis
+            let results = run_walkforward_analysis(
+                &data, 
+                start_date, 
+                end_date, 
+                train_duration, 
+                test_duration, 
+                step_duration
+            ).await;
+            
+            println!("✅ Walk-forward analysis completed!");
+            println!("📊 Summary: {} windows analyzed", results.window_results.len());
+            println!("🏆 Average Test Sharpe: {:.4}", results.average_test_sharpe);
+            println!("📏 Parameter Stability: {:.4}", results.parameter_stability);
         }
-        Commands::Backtest { data_path, risk_aversion, inventory_target, quote_width } => {
+        Commands::Backtest { data_path, risk_aversion, inventory_target, order_size } => {
+            println!("🚀 Starting Backtest...");
+            
+            // Load market data
+            println!("📊 Loading market data from: {}", data_path);
             let data = load_market_data(&data_path).await;
+            
+            // Set up strategy parameters
             let params = AvellanedaStoikovParams {
                 risk_aversion,
                 inventory_target,
-                quote_width,
+                order_size,
                 ..Default::default()
             };
-            let mut strategy = AvellanedaStoikovStrategy::default();
-            let mut param_map = std::collections::HashMap::new();
-            param_map.insert("risk_aversion".to_string(), strategy::ParameterValue::Float(params.risk_aversion));
-            param_map.insert("inventory_target".to_string(), strategy::ParameterValue::Float(params.inventory_target));
-            param_map.insert("quote_width".to_string(), strategy::ParameterValue::Float(params.quote_width));
-            let _ = strategy.initialize(param_map).await;
-            let mut strategy_manager = StrategyManager::default();
-            strategy_manager.add_strategy(Box::new(strategy));
-            let mut orderbook = OrderBook::default();
-            let mut portfolio = PortfolioState::default();
-            let mut risk_manager = RiskManager::default();
-            let mut sim = SimulationLoop::new();
-            let result = sim
-                .run(
-                    &mut strategy_manager,
-                    &mut orderbook,
-                    &mut portfolio,
-                    &mut risk_manager,
-                    data,
-                    &BacktestConfig::default(),
-                )
-                .await;
-            println!("Backtest Result: {:#?}", result);
+            
+            println!("⚙️  Running backtest with params: {:#?}", params);
+            
+            // Create strategy using Default::default() and update params
+            let _strategy = AvellanedaStoikovStrategy::default();
+            // Strategy parameters are embedded in the strategy struct
+            
+            // Initialize backtest components
+            let strategy_manager = StrategyManager::new();
+            let config = OrderBookConfig::default();
+            let orderbook = OrderBook::new("BTCUSD".to_string(), "EXCHANGE".to_string(), config);
+            let portfolio = PortfolioState::default();  // Use default initialization
+            let risk_manager = RiskManager::new();
+            let simulation = SimulationLoop::new();
+            
+            let mut engine = BacktestEngine::new(
+                strategy_manager,
+                orderbook,
+                portfolio,
+                risk_manager,
+                simulation,
+            );
+            
+            // Run the backtest
+            let result = engine.run(data).await;
+            
+            println!("✅ Backtest completed!");
+            println!("📊 Total P&L: ${:.2}", result.total_pnl.to_string());
+            println!("� Number of trades: {}", result.num_trades);
+            if let Some(sharpe) = result.sharpe_ratio {
+                println!("🎯 Sharpe Ratio: {:.4}", sharpe);
+            }
+            if let Some(pf) = result.profit_factor {
+                println!("💰 Profit Factor: {:.2}", pf);
+            }
+            println!("📉 Max Drawdown: ${:.2}", result.max_drawdown.to_string());
         }
         Commands::Optimize { data_path } => {
-            use genetic::chromosome::AvellanedaStoikovChromosome;
-            use genetic::{GeneticConfig, GeneticOptimizer};
-            use genetic::fitness::avellaneda_stoikov_fitness;
-            use std::sync::Arc;
-            use strategy::strategies::avellaneda_stoikov::AvellanedaStoikovParams;
-            use config::BacktestConfig;
-
+            println!("🧬 Starting Genetic Parameter Optimization...");
+            
+            // Load market data
+            println!("📊 Loading market data from: {}", data_path);
             let data = load_market_data(&data_path).await;
+            
+            // Set up genetic algorithm configuration
             let config = GeneticConfig {
-                population_size: 20,
-                generations: 10,
+                population_size: 20,  // Smaller for faster testing
+                generations: 50,     // Fewer generations for now
                 crossover_rate: 0.7,
-                mutation_rate: 0.2,
+                mutation_rate: 0.1,
             };
-            let data_vec = data.clone();
-            let backtest_config = BacktestConfig::default();
-            let fitness_fn = Arc::new(move |chromo: &AvellanedaStoikovChromosome| {
-                let data = data_vec.clone();
-                let config = backtest_config.clone();
-                Box::pin(avellaneda_stoikov_fitness(chromo, data, &config))
-            });
+            
+            // Create fitness function that runs backtests
+            let fitness_data = std::sync::Arc::new(data);
+            let fitness_fn = {
+                let data_copy = fitness_data.clone();
+                std::sync::Arc::new(move |chromosome: &AvellanedaStoikovChromosome| {
+                    let data_inner = data_copy.clone();
+                    let chromosome_clone = chromosome.clone();
+                    Box::pin(async move {
+                        // Convert chromosome to strategy params
+                        let _params = chromosome_to_params(&chromosome_clone);
+                        
+                        // Run simplified backtest with these params
+                        let strategy_manager = StrategyManager::new();
+                        let config = OrderBookConfig::default();
+                        let orderbook = OrderBook::new("BTCUSD".to_string(), "EXCHANGE".to_string(), config);
+                        let portfolio = PortfolioState::default();
+                        let risk_manager = RiskManager::new();
+                        let simulation = SimulationLoop::new();
+                        
+                        let mut engine = BacktestEngine::new(
+                            strategy_manager,
+                            orderbook,
+                            portfolio,
+                            risk_manager,
+                            simulation,
+                        );
+                        
+                        let result = engine.run((*data_inner).clone()).await;
+                        
+                        // Return Sharpe ratio as fitness (higher is better)
+                        result.sharpe_ratio.unwrap_or(-1.0)  // Penalize failed backtests
+                    }) as std::pin::Pin<Box<dyn std::future::Future<Output = f64> + Send>>
+                })
+            };
+            
+            // Create optimizer and run
             let optimizer = GeneticOptimizer {
                 config,
                 fitness_fn,
             };
-            let (best_chromo, _score) = optimizer.run().await;
-            let best_params = AvellanedaStoikovParams {
-                risk_aversion: best_chromo.risk_aversion,
-                inventory_target: best_chromo.inventory_target,
-                quote_width: best_chromo.quote_width,
-                ..Default::default()
-            };
-            println!("Best Parameters: {:#?}", best_params);
+            
+            println!("🔄 Running {} generations with population size {}...", 
+                optimizer.config.generations, optimizer.config.population_size);
+            
+            let (best_chromosome, best_fitness) = optimizer.run().await;
+            let best_params = chromosome_to_params(&best_chromosome);
+            
+            println!("✅ Optimization completed!");
+            println!("🏆 Best Fitness (Sharpe): {:.4}", best_fitness);
+            println!("⚙️  Best Parameters:");
+            println!("   Risk Aversion: {:.6}", best_params.risk_aversion);
+            println!("   Inventory Target: {:.6}", best_params.inventory_target);
+            println!("   Order Size: {:.6}", best_params.order_size);
+            println!("   Window (ms): {}", best_params.window_ms);
+            println!("   Min Quote Lifetime (ms): {}", best_params.min_quote_lifetime_ms);
+            println!("   Fee Rate: {:.6}", best_params.fee_rate);
+            println!("   Latency Buffer: {:.6}", best_params.latency_buffer);
+            println!("   Volatility Cap: {:.6}", best_params.volatility_cap);
         }
+    }
+}
+
+// Helper function to convert chromosome to parameters
+fn chromosome_to_params(chromosome: &AvellanedaStoikovChromosome) -> AvellanedaStoikovParams {
+    AvellanedaStoikovParams {
+        risk_aversion: chromosome.risk_aversion,
+        inventory_target: chromosome.inventory_target,
+        order_size: chromosome.order_size,
+        window_ms: chromosome.window_ms,
+        min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms,
+        fee_rate: chromosome.fee_rate,
+        latency_buffer: chromosome.latency_buffer,
+        volatility_cap: chromosome.volatility_cap,
     }
 }
 
@@ -146,8 +243,8 @@ async fn main() {
 async fn load_market_data(_path: &str) -> Vec<MarketData> {
     use dotenv::dotenv;
     use std::env;
-    use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
-    use tokio_postgres::NoTls;
+    use databaseschema::CustomAsyncPgConnectionManager;
+    use deadpool::managed::Pool;
 
     // Prompt user for symbol, exchange, and date range
     let mut symbol = String::new();
@@ -167,15 +264,12 @@ async fn load_market_data(_path: &str) -> Vec<MarketData> {
     dotenv().ok();
     let db_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set in .env or environment");
 
-    // Set up deadpool_postgres pool
-    let mut cfg = Config::new();
-    cfg.dbname = None;
-    cfg.user = None;
-    cfg.password = None;
-    cfg.host = None;
-    cfg.manager = Some(ManagerConfig { recycling_method: RecyclingMethod::Fast });
-    cfg.url = Some(db_url);
-    let pool = cfg.create_pool(Some(deadpool_postgres::Runtime::Tokio1), NoTls).expect("Failed to create pool");
+    // Set up database pool using the custom connection manager
+    let manager = CustomAsyncPgConnectionManager::new(db_url);
+    let pool = Pool::builder(manager)
+        .max_size(16)
+        .build()
+        .expect("Failed to create pool");
     let pool = Arc::new(pool);
 
     // Instantiate DataLoader

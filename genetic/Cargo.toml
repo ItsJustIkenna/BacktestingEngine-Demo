@@ -5,3 +5,24 @@ edition = "2021"
 
 [dependencies]
 rand = "0.8"
+dataloader = { path = "../dataloader" }
+config = { path = "../config" }
+backtest = { path = "../backtest" }
+strategy = { path = "../strategy" }
+orderbook = { path = "../orderbook" }
+portfoliomanager = { path = "../portfoliomanager" }
+riskmanager = { path = "../riskmanager" }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full", "test-util"] }
+chrono = { version = "0.4", features = ["serde"] }
+bigdecimal = "0.4"
+config = { path = "../config" }
+dataloader = { path = "../dataloader" }
+databaseschema = { path = "../../databaseschema" }
+uuid = "1.0"
+backtest = { path = "../backtest" }
+strategy = { path = "../strategy" }
+orderbook = { path = "../orderbook" }
+portfoliomanager = { path = "../portfoliomanager" }
+riskmanager = { path = "../riskmanager" }

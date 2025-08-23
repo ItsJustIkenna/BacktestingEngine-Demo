@@ -13,6 +13,12 @@ pub mod trade_stats;
 
 use serde::{Serialize, Deserialize};
 
+// Re-export commonly used functions for convenience
+pub use performance::{sharpe_ratio, profit_factor, net_profit, gross_profit, gross_loss, 
+                     average_trade_return, median_trade_return, number_of_trades};
+pub use risk::{max_drawdown, volatility};
+pub use trade_stats::{win_rate, average_trade_duration};
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PerformanceMetrics {
     pub sharpe_ratio: f64,
@@ -28,4 +34,32 @@ pub struct PerformanceMetrics {
     pub win_rate: f64,
     pub average_trade_duration: f64,
     // Add more fields as needed
+}
+
+impl PerformanceMetrics {
+    /// Create PerformanceMetrics from raw trading data
+    pub fn from_trade_data(
+        trade_returns: &[f64],
+        equity_curve: &[f64], 
+        trade_durations: &[f64],
+        risk_free_rate: f64,
+    ) -> Self {
+        Self {
+            sharpe_ratio: sharpe_ratio(trade_returns, risk_free_rate).unwrap_or(0.0),
+            profit_factor: profit_factor(
+                gross_profit(trade_returns), 
+                gross_loss(trade_returns)
+            ).unwrap_or(0.0),
+            net_profit: net_profit(trade_returns),
+            gross_profit: gross_profit(trade_returns),
+            gross_loss: gross_loss(trade_returns),
+            average_trade_return: average_trade_return(trade_returns).unwrap_or(0.0),
+            median_trade_return: median_trade_return(trade_returns).unwrap_or(0.0),
+            number_of_trades: number_of_trades(trade_returns),
+            max_drawdown: max_drawdown(equity_curve).unwrap_or(0.0),
+            volatility: volatility(trade_returns).unwrap_or(0.0),
+            win_rate: win_rate(trade_returns).unwrap_or(0.0),
+            average_trade_duration: average_trade_duration(trade_durations).unwrap_or(0.0),
+        }
+    }
 }

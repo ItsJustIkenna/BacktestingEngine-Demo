@@ -22,7 +22,6 @@ indexmap = { version = "2.0", features = ["serde"] }
 databaseschema = { path = "../../databaseschema" }
 dataloader = { path = "../dataloader" }
 config = { path = "../config" }
-strategy = { path = "../strategy" }
 
 # Database connection pooling (for tests)
 deadpool = "0.12"

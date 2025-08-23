@@ -4,24 +4,25 @@ use backtest::simulation::SimulationLoop;
 use backtest::types::BacktestResult;
 use config::BacktestConfig;
 use strategy::StrategyManager;
-use orderbook::OrderBook;
+use orderbook::{OrderBook, OrderBookConfig};
 use portfoliomanager::{PortfolioState, Position, PositionSide};
 use riskmanager::RiskManager;
-use dataloader::MarketData;
 use chrono::{Utc, Duration};
 use bigdecimal::BigDecimal;
 
-#[tokio::test]
-async fn test_backtest_metrics_integration() {
-    // Setup mock components
-    let mut strategy_manager = StrategyManager::default();
-    let mut orderbook = OrderBook::default();
-    let mut portfolio = PortfolioState::default();
-    let mut risk_manager = RiskManager::default();
-    let config = BacktestConfig::default();
-    let mut sim = SimulationLoop::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    // Simulate 3 closed BTC positions with varying PnL and durations
+    #[tokio::test]
+    async fn test_backtest_metrics_integration() {
+        // Setup mock components
+        let mut strategy_manager = StrategyManager::default();
+        let mut orderbook = OrderBook::new("BTC/USDT".to_string(), "binance".to_string(), OrderBookConfig::default());
+        let mut portfolio = PortfolioState::default();
+        let mut risk_manager = RiskManager::new();
+        let config = BacktestConfig::default();
+        let mut sim = SimulationLoop::new();    // Simulate 3 closed BTC positions with varying PnL and durations
     let now = Utc::now();
     portfolio.positions = vec![
         Position {
@@ -85,4 +86,5 @@ async fn test_backtest_metrics_integration() {
     assert!(result.avg_trade_duration.unwrap() > 0.0);
     assert!(result.volatility.unwrap() >= 0.0);
     assert!(result.max_drawdown >= BigDecimal::from(0));
+    }
 }

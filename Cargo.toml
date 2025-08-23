@@ -7,5 +7,10 @@ members = [
     "orderbook",
     "strategy",
     "metrics",
-    "backtest"
+    "backtest",
+    "genetic",
+    "walkforward",
+    "portfoliomanager",
+    "riskmanager",
+    "signal"
 ]

@@ -26,7 +26,6 @@ indexmap = { version = "2.0", features = ["serde"] }
 # Integration with existing modules
 databaseschema = { path = "../../databaseschema" }
 dataloader = { path = "../dataloader" }
-orderbook = { path = "../orderbook" }
 config = { path = "../config" }
 
 # Portfolio manager integration

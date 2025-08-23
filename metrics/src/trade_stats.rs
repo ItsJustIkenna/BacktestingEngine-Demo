@@ -1,3 +1,7 @@
+//! Trade statistics for market making strategies
+//
+// Includes win rate, average trade duration.
+
 /// Calculates the win rate from a list of trade returns.
 pub fn win_rate(trade_returns: &[f64]) -> Option<f64> {
 	if trade_returns.is_empty() {
@@ -14,7 +18,4 @@ pub fn average_trade_duration(trade_durations: &[f64]) -> Option<f64> {
 	}
 	Some(trade_durations.iter().sum::<f64>() / trade_durations.len() as f64)
 }
-//! Trade statistics for market making strategies
-//
-// Includes win rate, average trade duration.
 

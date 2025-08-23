@@ -2,14 +2,16 @@
 //!
 //! Steps through market data, triggers strategies, matches orders, and updates state.
 
-use crate::strategy::{StrategyManager, StrategyContext, Signal};
-use crate::orderbook::OrderBook;
-use crate::portfoliomanager::PortfolioState;
-use crate::riskmanager::RiskManager;
-use crate::dataloader::MarketData;
-use crate::backtest::types::{BacktestEvent, BacktestResult};
-use crate::metrics::{performance, risk, trade_stats};
-use chrono::{DateTime, Utc};
+use strategy::{StrategyManager, StrategyContext};
+use strategy::traits::{MarketSession, SessionType};
+use signal::Signal;
+use orderbook::OrderBook;
+use portfoliomanager::PortfolioState;
+use riskmanager::RiskManager;
+use dataloader::MarketData;
+use crate::types::{BacktestEvent, BacktestResult};
+use metrics::{performance, risk, trade_stats};
+use bigdecimal::{BigDecimal, ToPrimitive, FromPrimitive};
 
 pub struct SimulationLoop;
 
@@ -25,7 +27,7 @@ impl SimulationLoop {
         portfolio: &mut PortfolioState,
         risk_manager: &mut RiskManager,
         market_data: Vec<MarketData>,
-    config: &config::BacktestConfig,
+        config: &config::BacktestConfig,
     ) -> BacktestResult {
     let mut events: Vec<BacktestEvent> = Vec::new();
     let mut result = BacktestResult::default();
@@ -60,7 +62,15 @@ impl SimulationLoop {
             let context = StrategyContext {
                 timestamp,
                 portfolio_state: portfolio.clone(),
-                // ...add more context fields as needed
+                price_history: Vec::new(), // Empty for simplicity, could be filled from historical data
+                volume_history: Vec::new(), // Empty for simplicity 
+                spread: None,
+                market_session: MarketSession {
+                    is_open: true,
+                    session_type: SessionType::Regular,
+                    next_open: None,
+                    next_close: None,
+                }, // Default session
             };
 
             // 3. Run all enabled strategies, collect signals
@@ -79,7 +89,7 @@ impl SimulationLoop {
 
                     // 7. Record event
                     events.push(BacktestEvent::OrderSubmitted {
-                        order_id: signal.id().to_string(),
+                        order_id: signal.id.clone(),
                         timestamp,
                     });
                 }
@@ -106,7 +116,7 @@ impl SimulationLoop {
         result.net_profit = Some(performance::net_profit(&trade_returns));
         result.avg_trade_return = performance::average_trade_return(&trade_returns);
         result.median_trade_return = performance::median_trade_return(&trade_returns);
-        result.sharpe_ratio = performance::sharpe_ratio(&trade_returns, config.risk_free_rate);
+        result.sharpe_ratio = performance::sharpe_ratio(&trade_returns, config.trading.risk_free_rate);
         result.profit_factor = performance::profit_factor(
             result.gross_profit.unwrap_or(0.0),
             result.gross_loss.unwrap_or(0.0),
@@ -115,7 +125,7 @@ impl SimulationLoop {
         result.avg_trade_duration = trade_stats::average_trade_duration(&trade_durations);
         result.volatility = risk::volatility(&trade_returns);
         result.max_drawdown = risk::max_drawdown(&equity_curve)
-            .map(|v| num_bigdecimal::BigDecimal::from_f64(v).unwrap_or_default())
+            .map(|v| BigDecimal::from_f64(v).unwrap_or_default())
             .unwrap_or_default();
         // result.total_pnl: set as needed from portfolio or trade_returns
 

@@ -48,10 +48,6 @@ pub struct StrategyContext {
     pub timestamp: DateTime<Utc>,
     /// Current portfolio state
     pub portfolio_state: PortfolioState,
-    /// Order book data (if available)
-    pub order_book: Option<orderbook::OrderBook>,
-    /// Market depth information
-    pub market_depth: Option<orderbook::MarketDepth>,
     /// Historical price data window
     pub price_history: Vec<PricePoint>,
     /// Volume history
@@ -249,6 +245,7 @@ impl StrategyMetrics {
             crate::signal::SignalStrength::Weak => 1.0,
             crate::signal::SignalStrength::Medium => 2.0,
             crate::signal::SignalStrength::Strong => 3.0,
+            crate::signal::SignalStrength::Custom(val) => val,
         };
         
         self.avg_signal_strength = ((self.avg_signal_strength * (self.total_signals - 1) as f64) 

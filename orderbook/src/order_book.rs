@@ -39,7 +39,7 @@ pub struct OrderBook {
 impl OrderBook {
 
     /// Submit an order from a Signal (convenience for simulation)
-    pub fn submit_order_from_signal(&mut self, signal: &strategy::Signal, timestamp: DateTime<Utc>) -> anyhow::Result<()> {
+    pub fn submit_order_from_signal(&mut self, signal: &signal::Signal, timestamp: DateTime<Utc>) -> anyhow::Result<()> {
         // Use the utility function from order_utils
         let event = order_utils::signal_to_order_event(signal, timestamp);
         self.apply_event(event)

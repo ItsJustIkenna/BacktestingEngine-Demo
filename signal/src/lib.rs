@@ -39,7 +39,6 @@ pub enum SignalStrength {
     Custom(f64),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SignalReason {

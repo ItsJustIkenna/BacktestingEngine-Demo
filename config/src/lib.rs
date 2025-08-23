@@ -78,9 +78,8 @@ pub struct OutputConfig {
 /// Monte Carlo simulation configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonteCarloConfig {
-    pub dataloader: crate::dataloader::DataLoader,
-    pub query_params: crate::dataloader::QueryParams,
-    pub mc_params: crate::dataloader::MonteCarloParams,
+    pub num_simulations: usize,
+    pub confidence_level: f64,
     // Add more config options as needed
 }
 
