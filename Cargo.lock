@@ -393,6 +393,7 @@ dependencies = [
  "anyhow",
  "serde",
  "serde_yaml",
+ "tempfile",
  "thiserror",
 ]
 
@@ -1460,6 +1461,7 @@ dependencies = [
  "bigdecimal",
  "chrono",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1769,6 +1771,7 @@ name = "riskmanager"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1996,6 +1999,7 @@ dependencies = [
  "bigdecimal",
  "chrono",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
