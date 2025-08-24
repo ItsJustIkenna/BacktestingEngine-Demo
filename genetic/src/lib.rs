@@ -1,16 +1,11 @@
-//! Genetic Algorithm op/// Async fitness function type
-pub type AsyncFitnessFn<C> = Arc<dyn Fn(&C) -> std::pin::Pin<Box<dyn std::future::Future<Output = f64> + Send>> + Send + Sync>;
-
-/// Main genetic algorithm optimizer (async fitness)or trading strategies
-//! 
-//! Provides async genetic algorithm optimization for finding optimal
-//! trading strategy parameters.
+/// Genetic Algorithm optimization for trading strategies
+/// 
+/// Provides async genetic algorithm optimization for finding optimal
+/// trading strategy parameters.
 
 use std::sync::Arc;
 use config::GeneticConfig;
-
 use rand::prelude::*;
-use std::sync::Arc;
 
 pub mod chromosome;
 pub mod fitness;
@@ -27,14 +22,6 @@ pub trait Chromosome: Clone + Send + Sync {
 
 /// Async fitness function type alias
 pub type AsyncFitnessFn<C> = Arc<dyn Fn(&C) -> std::pin::Pin<Box<dyn std::future::Future<Output = f64> + Send>> + Send + Sync>;
-
-/// Genetic algorithm configuration
-pub struct GeneticConfig {
-    pub population_size: usize,
-    pub generations: usize,
-    pub crossover_rate: f64,
-    pub mutation_rate: f64,
-}
 
 /// Main genetic algorithm optimizer (async fitness)
 pub struct GeneticOptimizer<C: Chromosome> {

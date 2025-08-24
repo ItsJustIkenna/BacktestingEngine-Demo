@@ -19,10 +19,7 @@ pub use riskmanager::{RiskManager, RiskMetrics};
 pub use config::{StrategyConfig, ParameterValue, RiskLimits};
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
-use bigdecimal::BigDecimal;
 use std::collections::HashMap;
-use config::{StrategyConfig, ParameterValue, RiskLimits};
 
 /// Strategy manager that coordinates multiple strategies
 #[derive(Debug)]

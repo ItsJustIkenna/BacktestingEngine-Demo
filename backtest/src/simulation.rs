@@ -4,7 +4,6 @@
 
 use strategy::{StrategyManager, StrategyContext};
 use strategy::traits::{MarketSession, SessionType};
-use signal::Signal;
 use orderbook::OrderBook;
 use portfoliomanager::PortfolioState;
 use riskmanager::RiskManager;

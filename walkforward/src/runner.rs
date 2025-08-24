@@ -83,7 +83,8 @@ fn in_range(d: &MarketData, start: NaiveDate, end: NaiveDate) -> bool {
 
 
 use genetic::chromosome::AvellanedaStoikovChromosome;
-use genetic::{GeneticConfig, GeneticOptimizer};
+use genetic::GeneticOptimizer;
+use config::GeneticConfig;
 use std::sync::Arc;
 use std::pin::Pin;
 use std::future::Future;

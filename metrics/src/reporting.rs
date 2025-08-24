@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc, NaiveDate};
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Complete backtest report containing all analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]

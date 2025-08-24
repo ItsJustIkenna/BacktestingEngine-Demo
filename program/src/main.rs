@@ -9,12 +9,10 @@ use strategy::StrategyManager;
 use orderbook::{OrderBook, OrderBookConfig};
 use portfoliomanager::PortfolioState;
 use riskmanager::RiskManager;
-use genetic::{GeneticOptimizer, GeneticConfig, chromosome::AvellanedaStoikovChromosome};
-use metrics::{PerformanceMetrics, create_basic_report, ReportGenerator, ReportConfig, ReportFormat, EquityPoint};
+use genetic::{GeneticOptimizer, chromosome::AvellanedaStoikovChromosome};
+use config::GeneticConfig;
 use config::OutputConfig;
-use std::io::{self, Write};
 use std::sync::Arc;
-use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "TradingPlatform")]
@@ -85,7 +83,13 @@ async fn main() {
             
             // Load market data
             println!("📊 Loading market data from: {}", data_path);
-            let data = load_market_data(&data_path).await;
+            let data = match load_market_data(&data_path).await {
+                Ok(data) => data,
+                Err(e) => {
+                    eprintln!("❌ Failed to load market data: {}", e);
+                    std::process::exit(1);
+                }
+            };
             
             // Parse dates
             let start_date = NaiveDate::parse_from_str(&start, "%Y-%m-%d")
@@ -121,7 +125,13 @@ async fn main() {
             
             // Load market data
             println!("📊 Loading market data from: {}", data_path);
-            let data = load_market_data(&data_path).await;
+            let data = match load_market_data(&data_path).await {
+                Ok(data) => data,
+                Err(e) => {
+                    eprintln!("❌ Failed to load market data: {}", e);
+                    std::process::exit(1);
+                }
+            };
             
             // Set up strategy parameters
             let params = AvellanedaStoikovParams {
@@ -172,7 +182,13 @@ async fn main() {
             
             // Load market data
             println!("📊 Loading market data from: {}", data_path);
-            let data = load_market_data(&data_path).await;
+            let data = match load_market_data(&data_path).await {
+                Ok(data) => data,
+                Err(e) => {
+                    eprintln!("❌ Failed to load market data: {}", e);
+                    std::process::exit(1);
+                }
+            };
             
             // Set up genetic algorithm configuration
             let config = GeneticConfig {
@@ -267,7 +283,13 @@ async fn main() {
             
             // Run a sample backtest to get results (in real usage, this would come from stored results)
             println!("🚀 Running sample backtest to generate report data...");
-            let data = load_market_data(&data_path).await;
+            let data = match load_market_data(&data_path).await {
+                Ok(data) => data,
+                Err(e) => {
+                    eprintln!("❌ Failed to load market data: {}", e);
+                    std::process::exit(1);
+                }
+            };
             
             // Create backtest engine
             let strategy_manager = StrategyManager::new();
@@ -351,50 +373,83 @@ fn chromosome_to_params(chromosome: &AvellanedaStoikovChromosome) -> AvellanedaS
 }
 
 
-// Example async loader stub. Replace with your actual DataLoader logic.
-async fn load_market_data(_path: &str) -> Vec<MarketData> {
+/// Load market data from file or database
+async fn load_market_data(path: &str) -> Result<Vec<MarketData>, Box<dyn std::error::Error>> {
     use dotenv::dotenv;
     use std::env;
     use databaseschema::CustomAsyncPgConnectionManager;
     use deadpool::managed::Pool;
+    use std::path::Path;
 
-    // Prompt user for symbol, exchange, and date range
-    let mut symbol = String::new();
-    let mut exchange = String::new();
-    let mut start = String::new();
-    let mut end = String::new();
-    print!("Enter symbol (e.g. BTCUSD): "); io::stdout().flush().unwrap(); io::stdin().read_line(&mut symbol).unwrap();
-    print!("Enter exchange (e.g. BINANCE): "); io::stdout().flush().unwrap(); io::stdin().read_line(&mut exchange).unwrap();
-    print!("Enter start datetime (YYYY-MM-DDTHH:MM:SS): "); io::stdout().flush().unwrap(); io::stdin().read_line(&mut start).unwrap();
-    print!("Enter end datetime (YYYY-MM-DDTHH:MM:SS): "); io::stdout().flush().unwrap(); io::stdin().read_line(&mut end).unwrap();
-    let symbol = symbol.trim().to_string();
-    let exchange = exchange.trim().to_string();
-    let start_time = chrono::DateTime::parse_from_rfc3339(&format!("{}:00Z", start.trim())).ok().map(|dt| dt.with_timezone(&chrono::Utc));
-    let end_time = chrono::DateTime::parse_from_rfc3339(&format!("{}:00Z", end.trim())).ok().map(|dt| dt.with_timezone(&chrono::Utc));
+    // Check if path is a file or database query
+    if Path::new(path).exists() {
+        // TODO: Implement file-based data loading (CSV, JSON, Parquet)
+        return Err("File-based data loading not yet implemented".into());
+    }
 
-    // Load .env and get DATABASE_URL
+    // Database loading with proper error handling
     dotenv().ok();
-    let db_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set in .env or environment");
+    let db_url = env::var("DATABASE_URL")
+        .map_err(|_| "DATABASE_URL must be set in .env or environment")?;
 
-    // Set up database pool using the custom connection manager
     let manager = CustomAsyncPgConnectionManager::new(db_url);
     let pool = Pool::builder(manager)
         .max_size(16)
         .build()
-        .expect("Failed to create pool");
+        .map_err(|e| format!("Failed to create database pool: {}", e))?;
     let pool = Arc::new(pool);
 
-    // Instantiate DataLoader
-    let loader = dataloader::DataLoader::new(pool);
+    // For now, use default parameters - in production this should come from config
     let params = dataloader::QueryParams {
-        symbol,
-        exchange,
-        start_time,
-        end_time,
-        limit: None,
+        symbol: "BTCUSD".to_string(),
+        exchange: "BINANCE".to_string(), 
+        start_time: Some(chrono::Utc::now() - chrono::Duration::days(30)),
+        end_time: Some(chrono::Utc::now()),
+        limit: Some(10000), // Reasonable default limit
     };
-    // Load snapshots as MarketData
-    let snapshots = loader.load_historical_snapshots(&params).await.unwrap_or_default();
-    let market_data = snapshots.into_iter().map(MarketData::Snapshot).collect();
-    market_data
+
+    let loader = dataloader::DataLoader::new(pool);
+    
+    // Load multiple data types for comprehensive backtesting
+    let mut market_data = Vec::new();
+    
+    // Load historical snapshots
+    match loader.load_historical_snapshots(&params).await {
+        Ok(snapshots) => {
+            market_data.extend(snapshots.into_iter().map(MarketData::Snapshot));
+        }
+        Err(e) => eprintln!("Warning: Failed to load snapshots: {}", e),
+    }
+
+    // Load historical orders
+    match loader.load_historical_orders(&params).await {
+        Ok(orders) => {
+            market_data.extend(orders.into_iter().map(MarketData::Order));
+        }
+        Err(e) => eprintln!("Warning: Failed to load orders: {}", e),
+    }
+
+    if market_data.is_empty() {
+        return Err("No market data loaded from database".into());
+    }
+
+    // Sort by timestamp for proper chronological order
+    market_data.sort_by(|a, b| {
+        let timestamp_a = match a {
+            MarketData::Order(o) => o.get_timestamp(),
+            MarketData::Snapshot(s) => &s.get_timestamp(),
+            MarketData::Candle(c) => &c.timestamp,
+            MarketData::Trade(t) => &t.timestamp,
+        };
+        let timestamp_b = match b {
+            MarketData::Order(o) => o.get_timestamp(),
+            MarketData::Snapshot(s) => &s.get_timestamp(),
+            MarketData::Candle(c) => &c.timestamp,
+            MarketData::Trade(t) => &t.timestamp,
+        };
+        timestamp_a.cmp(timestamp_b)
+    });
+
+    println!("📊 Loaded {} market data points", market_data.len());
+    Ok(market_data)
 }

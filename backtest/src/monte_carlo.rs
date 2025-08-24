@@ -1,7 +1,5 @@
 //! Monte Carlo simulation module for backtesting
 
-use dataloader::MarketData;
-use bigdecimal::ToPrimitive;
 use config::MonteCarloConfig;
 use crate::BacktestEngine;
 use metrics::PerformanceMetrics;
@@ -54,18 +52,18 @@ fn aggregate_metrics(
         ($field:ident) => { metrics.iter().map(|m| m.$field).collect::<Vec<_>>() };
     }
     // Collect all fields
-    let mut sharpe_ratios = collect!(sharpe_ratio);
-    let mut profit_factors = collect!(profit_factor);
-    let mut net_profits = collect!(net_profit);
-    let mut gross_profits = collect!(gross_profit);
-    let mut gross_losses = collect!(gross_loss);
-    let mut avg_trade_returns = collect!(average_trade_return);
-    let mut median_trade_returns = collect!(median_trade_return);
-    let mut num_trades = collect!(number_of_trades).into_iter().map(|v| v as f64).collect::<Vec<_>>();
-    let mut max_drawdowns = collect!(max_drawdown);
-    let mut volatilities = collect!(volatility);
-    let mut win_rates = collect!(win_rate);
-    let mut avg_trade_durations = collect!(average_trade_duration);
+    let sharpe_ratios = collect!(sharpe_ratio);
+    let profit_factors = collect!(profit_factor);
+    let net_profits = collect!(net_profit);
+    let gross_profits = collect!(gross_profit);
+    let gross_losses = collect!(gross_loss);
+    let avg_trade_returns = collect!(average_trade_return);
+    let median_trade_returns = collect!(median_trade_return);
+    let num_trades = collect!(number_of_trades).into_iter().map(|v| v as f64).collect::<Vec<_>>();
+    let max_drawdowns = collect!(max_drawdown);
+    let volatilities = collect!(volatility);
+    let win_rates = collect!(win_rate);
+    let avg_trade_durations = collect!(average_trade_duration);
     let percentiles = [5.0, 50.0, 95.0];
     // Mean
     let mut mean_metrics = PerformanceMetrics::default();
