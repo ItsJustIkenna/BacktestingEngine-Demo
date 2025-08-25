@@ -1,7 +1,7 @@
 //! Integration tests for the orderbook module core data structures
 
 use orderbook::{MarketDepth, DepthLevel};
-use chrono::{DateTime, Utc, TimeZone};
+use chrono::{Utc, TimeZone};
 
 #[test]
 fn test_depth_level_creation() {

@@ -39,12 +39,12 @@ mod tests {
     fn test_available_strategies() {
         let strategies = get_available_strategies();
         assert!(!strategies.is_empty());
-        assert!(strategies.contains(&"MovingAverageCrossover"));
+        assert!(strategies.contains(&"AvellanedaStoikovMarketMaker"));
     }
 
     #[test]
     fn test_create_strategy() {
-        let strategy = create_strategy("MovingAverageCrossover");
+        let strategy = create_strategy("AvellanedaStoikovMarketMaker");
         assert!(strategy.is_some());
         
         let invalid_strategy = create_strategy("NonExistentStrategy");

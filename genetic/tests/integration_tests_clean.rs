@@ -1,0 +1,303 @@
+//! Integration tests for the genetic algorithm module
+
+use genetic::{GeneticOptimizer, Chromosome, AsyncFitnessFn};
+use genetic::chromosome::AvellanedaStoikovChromosome;
+use config::GeneticConfig;
+use rand::prelude::*;
+use std::sync::Arc;
+use tokio;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Test chromosome implementation for testing
+    #[derive(Clone, Debug, PartialEq)]
+    struct TestChromosome {
+        pub values: Vec<f64>,
+    }
+
+    impl Chromosome for TestChromosome {
+        fn random<R: Rng + ?Sized>(rng: &mut R) -> Self {
+            Self {
+                values: (0..5).map(|_| rng.gen_range(-10.0..10.0)).collect(),
+            }
+        }
+
+        fn crossover(&self, other: &Self, rng: &mut impl Rng) -> Self {
+            let mut new_values = Vec::new();
+            for (a, b) in self.values.iter().zip(&other.values) {
+                if rng.gen_bool(0.5) {
+                    new_values.push(*a);
+                } else {
+                    new_values.push(*b);
+                }
+            }
+            Self { values: new_values }
+        }
+
+        fn mutate(&mut self, rng: &mut impl Rng) {
+            for value in &mut self.values {
+                if rng.gen_bool(0.1) { // 10% mutation rate per gene
+                    *value += rng.gen_range(-1.0..1.0);
+                }
+            }
+        }
+    }
+
+    fn create_test_fitness_fn() -> AsyncFitnessFn<TestChromosome> {
+        Arc::new(|chromosome: &TestChromosome| {
+            let values = chromosome.values.clone();
+            Box::pin(async move {
+                // Simple fitness function: minimize sum of squares
+                -values.iter().map(|&x| x * x).sum::<f64>()
+            })
+        })
+    }
+
+    #[tokio::test]
+    async fn test_genetic_optimizer_creation() {
+        let config = GeneticConfig {
+            population_size: 50,
+            generations: 100,
+            crossover_rate: 0.7,
+            mutation_rate: 0.1,
+        };
+
+        let fitness_fn = create_test_fitness_fn();
+
+        let optimizer = GeneticOptimizer {
+            config,
+            fitness_fn,
+        };
+
+        // Test that we can run the optimizer
+        let (best, fitness) = optimizer.run().await;
+        
+        // Should find values close to zero (minimum of sum of squares)
+        assert!(fitness > -100.0);
+        assert_eq!(best.values.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_genetic_optimizer_convergence() {
+        let config = GeneticConfig {
+            population_size: 30,
+            generations: 10, // Small for fast test
+            crossover_rate: 0.8,
+            mutation_rate: 0.2,
+        };
+
+        let fitness_fn = create_test_fitness_fn();
+
+        let optimizer = GeneticOptimizer {
+            config,
+            fitness_fn,
+        };
+
+        let (best, fitness) = optimizer.run().await;
+
+        // Basic sanity checks
+        assert!(fitness <= 0.0); // Our fitness is negative sum of squares
+        assert_eq!(best.values.len(), 5);
+        
+        // Values should be reasonable (not extreme)
+        for &value in &best.values {
+            assert!(value.abs() < 20.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_avellaneda_stoikov_chromosome() {
+        let mut rng = rand::thread_rng();
+        
+        // Test random generation
+        let chromo1 = AvellanedaStoikovChromosome::random(&mut rng);
+        let chromo2 = AvellanedaStoikovChromosome::random(&mut rng);
+        
+        // Test that values are in expected ranges
+        assert!(chromo1.risk_aversion >= 0.001 && chromo1.risk_aversion <= 0.1);
+        assert!(chromo1.order_size >= 0.001 && chromo1.order_size <= 1.0);
+        assert!(chromo1.window_ms >= 10_000 && chromo1.window_ms <= 300_000);
+        assert!(chromo1.fee_rate >= 0.0001 && chromo1.fee_rate <= 0.01);
+        
+        // Test crossover
+        let child = chromo1.crossover(&chromo2, &mut rng);
+        assert!(child.risk_aversion >= 0.001 && child.risk_aversion <= 0.1);
+        assert!(child.order_size >= 0.001 && child.order_size <= 1.0);
+        
+        // Test mutation
+        let mut chromo_mut = chromo1.clone();
+        chromo_mut.mutate(&mut rng);
+        // Values should stay in bounds after mutation
+        assert!(chromo_mut.risk_aversion >= 0.001 && chromo_mut.risk_aversion <= 0.1);
+        assert!(chromo_mut.order_size >= 0.001 && chromo_mut.order_size <= 1.0);
+    }
+
+    #[tokio::test]
+    async fn test_genetic_optimizer_with_avellaneda_stoikov() {
+        let config = GeneticConfig {
+            population_size: 20,
+            generations: 50,
+            crossover_rate: 0.7,
+            mutation_rate: 0.1,
+        };
+
+        // Simple fitness function for A-S parameters
+        let fitness_fn: AsyncFitnessFn<AvellanedaStoikovChromosome> = Arc::new(|chromo| {
+            let risk = chromo.risk_aversion;
+            let size = chromo.order_size;
+            let inv_target = chromo.inventory_target;
+            Box::pin(async move {
+                // Prefer moderate risk aversion and reasonable order sizes
+                let risk_score = if risk > 0.01 && risk < 0.05 { 10.0 } else { 1.0 };
+                let size_score = if size > 0.1 && size < 0.5 { 10.0 } else { 1.0 };
+                let inv_score = if inv_target.abs() < 0.5 { 5.0 } else { 1.0 };
+                risk_score + size_score + inv_score
+            })
+        });
+
+        let optimizer = GeneticOptimizer {
+            config,
+            fitness_fn,
+        };
+
+        let (best, fitness) = optimizer.run().await;
+
+        // Should find decent parameters
+        assert!(fitness > 10.0);
+        assert!(best.risk_aversion > 0.001);
+        assert!(best.order_size > 0.001);
+    }
+
+    #[tokio::test]
+    async fn test_async_fitness_evaluation() {
+        let config = GeneticConfig {
+            population_size: 5,
+            generations: 3,
+            crossover_rate: 0.5,
+            mutation_rate: 0.1,
+        };
+
+        // Async fitness function that simulates delay
+        let slow_fitness_fn: AsyncFitnessFn<TestChromosome> = Arc::new(|chromo| {
+            let values = chromo.values.clone();
+            Box::pin(async move {
+                // Simulate some async work
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                // Return fitness based on first value
+                values.get(0).copied().unwrap_or(0.0)
+            })
+        });
+
+        let optimizer = GeneticOptimizer {
+            config,
+            fitness_fn: slow_fitness_fn,
+        };
+
+        let start_time = std::time::Instant::now();
+        let (_best, _fitness) = optimizer.run().await;
+        let elapsed = start_time.elapsed();
+
+        // Should have taken some time due to async delays
+        assert!(elapsed.as_millis() > 50); // At least 50ms for async work
+    }
+
+    #[tokio::test]
+    async fn test_genetic_config_validation() {
+        // Valid config
+        let config = GeneticConfig {
+            population_size: 100,
+            generations: 50,
+            crossover_rate: 0.7,
+            mutation_rate: 0.1,
+        };
+        
+        assert!(config.population_size > 0);
+        assert!(config.generations > 0);
+        assert!(config.crossover_rate >= 0.0 && config.crossover_rate <= 1.0);
+        assert!(config.mutation_rate >= 0.0 && config.mutation_rate <= 1.0);
+
+        // Test edge cases
+        let edge_config = GeneticConfig {
+            population_size: 1,
+            generations: 1,
+            crossover_rate: 0.0,
+            mutation_rate: 0.0,
+        };
+        
+        assert!(edge_config.population_size > 0);
+        assert!(edge_config.generations > 0);
+    }
+
+    #[tokio::test]
+    async fn test_tournament_selection() {
+        let config = GeneticConfig {
+            population_size: 10,
+            generations: 1,
+            crossover_rate: 0.0, // No crossover for this test
+            mutation_rate: 0.0,  // No mutation for this test
+        };
+
+        // Fitness function that returns the first value
+        let fitness_fn: AsyncFitnessFn<TestChromosome> = Arc::new(|chromo| {
+            let first_val = chromo.values.get(0).copied().unwrap_or(0.0);
+            Box::pin(async move { first_val })
+        });
+
+        let optimizer = GeneticOptimizer {
+            config,
+            fitness_fn,
+        };
+
+        let (best, fitness) = optimizer.run().await;
+
+        // Should find reasonable solution
+        assert_eq!(best.values.len(), 5);
+        assert!(fitness >= -10.0); // Should be reasonable given random initialization
+    }
+
+    #[tokio::test]
+    async fn test_chromosome_trait_implementation() {
+        let mut rng = rand::thread_rng();
+        
+        // Test TestChromosome
+        let chromo1 = TestChromosome::random(&mut rng);
+        let chromo2 = TestChromosome::random(&mut rng);
+        
+        assert_eq!(chromo1.values.len(), 5);
+        assert_eq!(chromo2.values.len(), 5);
+        
+        // Test crossover
+        let child = chromo1.crossover(&chromo2, &mut rng);
+        assert_eq!(child.values.len(), 5);
+        
+        // Test mutation
+        let mut mutant = chromo1.clone();
+        mutant.mutate(&mut rng);
+        assert_eq!(mutant.values.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_population_diversity() {
+        let config = GeneticConfig {
+            population_size: 20,
+            generations: 5,
+            crossover_rate: 0.9,
+            mutation_rate: 0.3,
+        };
+
+        let fitness_fn = create_test_fitness_fn();
+
+        let optimizer = GeneticOptimizer {
+            config,
+            fitness_fn,
+        };
+
+        let (best, fitness) = optimizer.run().await;
+
+        // Basic checks
+        assert!(fitness <= 0.0);
+        assert_eq!(best.values.len(), 5);
+    }
+}

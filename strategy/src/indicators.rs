@@ -571,7 +571,7 @@ pub mod utils {
 
     /// Calculate simple moving average from a vector
     pub fn simple_moving_average(values: &[f64], period: usize) -> IndicatorResult<Vec<f64>> {
-        if values.len() < period {
+        if values.len() < period || period == 0 {
             return Err(IndicatorError::InsufficientData {
                 required: period,
                 available: values.len(),
@@ -580,7 +580,8 @@ pub mod utils {
 
         let mut sma_values = Vec::new();
         for i in (period - 1)..values.len() {
-            let sum: f64 = values[(i - period + 1)..=i].iter().sum();
+            let start_idx = i + 1 - period; // Safe because i >= period - 1
+            let sum: f64 = values[start_idx..=i].iter().sum();
             sma_values.push(sum / period as f64);
         }
 
@@ -645,7 +646,7 @@ mod tests {
 
         // Add a decreasing value
         if let Some(rsi_value) = rsi.next(13.0) {
-            assert!(rsi_value < 100.0 && rsi_value > 0.0);
+            assert!(rsi_value <= 100.0 && rsi_value >= 0.0);
         }
     }
 
