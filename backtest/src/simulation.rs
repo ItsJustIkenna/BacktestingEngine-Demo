@@ -96,15 +96,15 @@ impl SimulationLoop {
 
             // Collect equity value at each step
             equity_curve.push(portfolio.balance.to_f64().unwrap_or(0.0));
+        }
 
-            // Collect trade returns and durations from closed positions
-            for pos in &portfolio.positions {
-                if let Some(close_time) = pos.close_time {
-                    // Only consider closed positions
-                    trade_returns.push(pos.realized_pnl.to_f64().unwrap_or(0.0));
-                    let duration = (close_time - pos.open_time).num_seconds() as f64;
-                    trade_durations.push(duration);
-                }
+        // Collect trade returns and durations from closed positions (do this after market data processing)
+        for pos in &portfolio.positions {
+            if let Some(close_time) = pos.close_time {
+                // Only consider closed positions
+                trade_returns.push(pos.realized_pnl.to_f64().unwrap_or(0.0));
+                let duration = (close_time - pos.open_time).num_seconds() as f64;
+                trade_durations.push(duration);
             }
         }
 
