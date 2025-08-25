@@ -1,0 +1,321 @@
+# QA Environment Values for BacktestingEngine
+# This file contains values optimized for quality assurance testing
+
+# Application image configuration for QA
+image:
+  registry: docker.io
+  repository: backtesting-engine
+  tag: "qa-latest"         # Use QA-specific tag
+  pullPolicy: IfNotPresent
+
+# Multiple replicas for load testing
+replicaCount: 2
+
+# Moderate resource requirements for QA testing
+resources:
+  limits:
+    cpu: 1500m
+    memory: 3Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+# Enable autoscaling for load testing
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+
+# QA-specific configuration
+config:
+  # Database configuration (QA PostgreSQL)
+  database:
+    host: postgresql
+    port: 5432
+    database: backtesting_qa
+    username: postgres
+    password: qa-secure-password
+    max_connections: 15
+    connection_timeout: 30
+
+  # Trading configuration with realistic amounts for testing
+  trading:
+    commission_rate: 0.001
+    slippage_bps: 2
+    initial_capital: 100000  # Production-like capital
+    max_position_size: 0.1   # Conservative position sizing
+    risk_free_rate: 0.02
+
+  # Data configuration
+  data:
+    default_timeframe: "1d"  # Production-like timeframe
+    data_sources:
+      - "yahoo"
+      - "alpha_vantage"
+      - "test_data"         # Include test datasets
+    cache_enabled: true
+    cache_duration_hours: 12  # Moderate cache duration
+
+  # Output configuration
+  output:
+    results_dir: "/app/results"
+    reports_dir: "/app/reports"
+    charts_enabled: true
+    export_formats:
+      - "json"
+      - "csv"
+      - "parquet"
+
+  # Genetic algorithm with moderate parameters for comprehensive testing
+  genetic:
+    population_size: 50      # Medium population for thorough testing
+    generations: 25          # Moderate generations
+    mutation_rate: 0.15
+    crossover_rate: 0.75
+    elite_size: 5
+
+  # Walk-forward with realistic windows
+  walkforward:
+    optimization_window_days: 126  # Moderate optimization window
+    test_window_days: 21           # Moderate test window
+    step_size_days: 7              # Weekly steps
+    min_trades_per_period: 5       # Reasonable trade threshold
+
+  # Risk management - production-like settings
+  risk:
+    max_drawdown: 0.25       # Reasonable drawdown limit
+    max_position_size: 0.1   # Conservative positions
+    stop_loss: 0.05          # Tight stop loss
+    var_confidence: 0.95
+
+  # Logging configuration - detailed for QA analysis
+  logging:
+    level: "info"            # Info level logging
+    format: "json"           # Structured logging for analysis
+    file_enabled: true
+    file_path: "/app/logs/backtesting-qa.log"
+
+# PostgreSQL configuration for QA
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: "qa-secure-password"
+    username: "postgres"
+    password: "qa-secure-password"
+    database: "backtesting_qa"
+  primary:
+    persistence:
+      enabled: true          # Enable persistence for QA data
+      size: 10Gi
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 1Gi
+      requests:
+        cpu: 500m
+        memory: 512Mi
+
+# Redis enabled for caching tests
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: "qa-redis-password"
+  master:
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 250m
+        memory: 256Mi
+
+# Persistence enabled for QA testing
+persistence:
+  enabled: true
+  size: 20Gi
+  accessModes:
+    - ReadWriteOnce
+  logs:
+    enabled: true
+    size: 5Gi
+
+# Enable both job and cronjob for comprehensive testing
+job:
+  enabled: true
+  name: "qa-backtest"
+  annotations:
+    description: "QA backtest job for testing"
+  ttlSecondsAfterFinished: 86400  # Keep results for 24 hours
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+
+# Enable scheduled testing
+cronjob:
+  enabled: true
+  schedule: "0 3 * * *"      # Run daily at 3 AM
+  annotations:
+    description: "Daily QA regression tests"
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 3
+
+# Enable monitoring for QA metrics
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+    path: /metrics
+
+# Service configuration for QA
+service:
+  type: ClusterIP
+  port: 8080
+  targetPort: 8080
+  metricsPort: 9090
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+
+# Enable ingress for QA environment access
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: backtesting-qa.internal
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: backtesting-qa-tls
+      hosts:
+        - backtesting-qa.internal
+
+# Production-like security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  fsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  capabilities:
+    drop:
+      - ALL
+
+# Node selector for QA environment
+nodeSelector:
+  environment: "qa"
+  node-type: "compute"
+
+# Tolerations for QA workloads
+tolerations:
+  - key: "qa-workload"
+    operator: "Equal"
+    value: "true"
+    effect: "NoSchedule"
+
+# Environment variables for QA
+env: "info"
+
+# QA-specific probe settings
+probes:
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+  
+  readiness:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+
+  startup:
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 20
+    successThreshold: 1
+
+# Additional QA-specific environment variables
+extraEnvVars:
+  - name: QA_ENVIRONMENT
+    value: "true"
+  - name: TEST_MODE
+    value: "automated"
+  - name: RUST_LOG
+    value: "info"
+  - name: PERFORMANCE_MONITORING
+    value: "enabled"
+
+# RBAC with additional permissions for QA testing
+rbac:
+  create: true
+  extraRules:
+    - apiGroups: [""]
+      resources: ["events"]
+      verbs: ["create", "get", "list"]
+    - apiGroups: ["batch"]
+      resources: ["jobs"]
+      verbs: ["create", "get", "list", "delete"]
+
+# Service account with additional annotations for QA
+serviceAccount:
+  create: true
+  annotations:
+    environment: "qa"
+    purpose: "backtesting-qa-testing"
+
+# Priority class for QA workloads
+priorityClassName: "qa-priority"
+
+# Network policies for QA security testing (optional)
+networkPolicy:
+  enabled: false
+  policyTypes:
+    - Ingress
+    - Egress
+
+# Pod disruption budget for availability testing
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Horizontal Pod Autoscaler behavior for testing (extends the autoscaling section above)
+# This is merged with the autoscaling configuration defined earlier

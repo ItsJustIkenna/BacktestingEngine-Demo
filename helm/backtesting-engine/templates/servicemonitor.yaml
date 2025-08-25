@@ -1,0 +1,95 @@
+{{- if and .Values.monitoring .Values.monitoring.enabled .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "backtesting-engine.fullname" . }}
+  labels:
+    {{- include "backtesting-engine.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  namespace: {{ .Values.monitoring.serviceMonitor.namespace | default .Release.Namespace | quote }}
+  {{- with .Values.monitoring.serviceMonitor.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "backtesting-engine.selectorLabels" . | nindent 6 }}
+      {{- with .Values.monitoring.serviceMonitor.selector }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+  endpoints:
+    - port: {{ .Values.monitoring.serviceMonitor.portName | default "metrics" }}
+      {{- with .Values.monitoring.serviceMonitor.interval }}
+      interval: {{ . }}
+      {{- end }}
+      {{- with .Values.monitoring.serviceMonitor.scrapeTimeout }}
+      scrapeTimeout: {{ . }}
+      {{- end }}
+      {{- with .Values.monitoring.serviceMonitor.path }}
+      path: {{ . }}
+      {{- end }}
+      {{- with .Values.monitoring.serviceMonitor.scheme }}
+      scheme: {{ . }}
+      {{- end }}
+      {{- with .Values.monitoring.serviceMonitor.tlsConfig }}
+      tlsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.monitoring.serviceMonitor.bearerTokenFile }}
+      bearerTokenFile: {{ . }}
+      {{- end }}
+      {{- with .Values.monitoring.serviceMonitor.bearerTokenSecret }}
+      bearerTokenSecret:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.monitoring.serviceMonitor.basicAuth }}
+      basicAuth:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.monitoring.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.monitoring.serviceMonitor.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.monitoring.serviceMonitor.proxyUrl }}
+      proxyUrl: {{ . }}
+      {{- end }}
+      {{- with .Values.monitoring.serviceMonitor.honorLabels }}
+      honorLabels: {{ . }}
+      {{- end }}
+      {{- with .Values.monitoring.serviceMonitor.honorTimestamps }}
+      honorTimestamps: {{ . }}
+      {{- end }}
+  {{- with .Values.monitoring.serviceMonitor.jobLabel }}
+  jobLabel: {{ . }}
+  {{- end }}
+  {{- with .Values.monitoring.serviceMonitor.targetLabels }}
+  targetLabels:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.monitoring.serviceMonitor.podTargetLabels }}
+  podTargetLabels:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.monitoring.serviceMonitor.sampleLimit }}
+  sampleLimit: {{ . }}
+  {{- end }}
+  {{- with .Values.monitoring.serviceMonitor.targetLimit }}
+  targetLimit: {{ . }}
+  {{- end }}
+  {{- with .Values.monitoring.serviceMonitor.labelLimit }}
+  labelLimit: {{ . }}
+  {{- end }}
+  {{- with .Values.monitoring.serviceMonitor.labelNameLengthLimit }}
+  labelNameLengthLimit: {{ . }}
+  {{- end }}
+  {{- with .Values.monitoring.serviceMonitor.labelValueLengthLimit }}
+  labelValueLengthLimit: {{ . }}
+  {{- end }}
+{{- end }}

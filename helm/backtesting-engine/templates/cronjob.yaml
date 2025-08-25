@@ -1,0 +1,180 @@
+{{- if .Values.cronjob.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "backtesting-engine.fullname" . }}-cronjob
+  labels:
+    {{- include "backtesting-engine.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cronjob
+  namespace: {{ .Release.Namespace | quote }}
+  {{- with .Values.cronjob.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  schedule: {{ .Values.cronjob.schedule | quote }}
+  {{- if .Values.cronjob.timezone }}
+  timeZone: {{ .Values.cronjob.timezone | quote }}
+  {{- end }}
+  {{- if .Values.cronjob.startingDeadlineSeconds }}
+  startingDeadlineSeconds: {{ .Values.cronjob.startingDeadlineSeconds }}
+  {{- end }}
+  {{- if .Values.cronjob.concurrencyPolicy }}
+  concurrencyPolicy: {{ .Values.cronjob.concurrencyPolicy }}
+  {{- end }}
+  {{- if .Values.cronjob.suspend }}
+  suspend: {{ .Values.cronjob.suspend }}
+  {{- end }}
+  {{- if .Values.cronjob.successfulJobsHistoryLimit }}
+  successfulJobsHistoryLimit: {{ .Values.cronjob.successfulJobsHistoryLimit }}
+  {{- end }}
+  {{- if .Values.cronjob.failedJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.cronjob.failedJobsHistoryLimit }}
+  {{- end }}
+  jobTemplate:
+    spec:
+      {{- if .Values.cronjob.job.ttlSecondsAfterFinished }}
+      ttlSecondsAfterFinished: {{ .Values.cronjob.job.ttlSecondsAfterFinished }}
+      {{- end }}
+      {{- if .Values.cronjob.job.activeDeadlineSeconds }}
+      activeDeadlineSeconds: {{ .Values.cronjob.job.activeDeadlineSeconds }}
+      {{- end }}
+      {{- if .Values.cronjob.job.backoffLimit }}
+      backoffLimit: {{ .Values.cronjob.job.backoffLimit }}
+      {{- end }}
+      template:
+        metadata:
+          labels:
+            {{- include "backtesting-engine.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: cronjob
+          annotations:
+            checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+            checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+            {{- with .Values.cronjob.podAnnotations }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        spec:
+          restartPolicy: {{ .Values.cronjob.job.restartPolicy | default "OnFailure" }}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          serviceAccountName: {{ include "backtesting-engine.serviceAccountName" . }}
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          initContainers:
+            - name: wait-for-postgresql
+              image: "postgres:15-alpine"
+              command:
+                - sh
+                - -c
+                - |
+                  until pg_isready -h {{ include "backtesting-engine.postgresql.servicename" . }} -p {{ include "backtesting-engine.postgresql.port" . }} -U {{ include "backtesting-engine.postgresql.username" . }}; do
+                    echo "Waiting for PostgreSQL to be ready..."
+                    sleep 2
+                  done
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "backtesting-engine.fullname" . }}-secret
+                      key: database-password
+          containers:
+            - name: {{ .Chart.Name }}-cronjob
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command:
+                {{- if .Values.cronjob.command }}
+                {{- toYaml .Values.cronjob.command | nindent 16 }}
+                {{- else }}
+                - "/app/backtesting-engine"
+                {{- end }}
+              args:
+                {{- if .Values.cronjob.args }}
+                {{- toYaml .Values.cronjob.args | nindent 16 }}
+                {{- else }}
+                - "--config"
+                - "/app/config/config.yaml"
+                - "--scheduled"
+                {{- end }}
+              env:
+                - name: DATABASE_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "backtesting-engine.fullname" . }}-secret
+                      key: database-password
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "backtesting-engine.fullname" . }}-secret
+                      key: database-url
+                {{- if .Values.redis.enabled }}
+                - name: REDIS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "backtesting-engine.fullname" . }}-secret
+                      key: redis-url
+                {{- end }}
+              # Load all config from ConfigMap as environment variables
+              envFrom:
+                - configMapRef:
+                    name: {{ include "backtesting-engine.fullname" . }}-config
+              {{- with .Values.cronjob.env }}
+              env:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              volumeMounts:
+                - name: config-volume
+                  mountPath: /app/config/config.yaml
+                  subPath: config.yaml
+                  readOnly: true
+                {{- if .Values.persistence.enabled }}
+                - name: data-volume
+                  mountPath: {{ .Values.config.output.results_dir }}
+                  subPath: results
+                - name: data-volume
+                  mountPath: {{ .Values.config.output.reports_dir }}
+                  subPath: reports
+                {{- end }}
+                {{- with .Values.cronjob.volumeMounts }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              resources:
+                {{- if .Values.cronjob.resources }}
+                {{- toYaml .Values.cronjob.resources | nindent 16 }}
+                {{- else }}
+                {{- toYaml .Values.resources | nindent 16 }}
+                {{- end }}
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+          volumes:
+            - name: config-volume
+              configMap:
+                name: {{ include "backtesting-engine.fullname" . }}-config
+                items:
+                  - key: config.yaml
+                    path: config.yaml
+            {{- if .Values.persistence.enabled }}
+            - name: data-volume
+              persistentVolumeClaim:
+                claimName: {{ include "backtesting-engine.fullname" . }}-data
+            {{- else }}
+            - name: data-volume
+              emptyDir: {}
+            {{- end }}
+            {{- with .Values.cronjob.volumes }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

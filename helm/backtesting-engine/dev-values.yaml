@@ -1,0 +1,216 @@
+# Development Environment Values for BacktestingEngine
+# This file contains values optimized for local development and testing
+
+# Application image configuration for development
+image:
+  registry: docker.io
+  repository: backtesting-engine
+  tag: "latest"
+  pullPolicy: Always  # Always pull latest during development
+
+# Single replica for development
+replicaCount: 1
+
+# Reduced resource requirements for local development
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+  requests:
+    cpu: 250m
+    memory: 512Mi
+
+# Disable autoscaling for development
+autoscaling:
+  enabled: false
+
+# Development-specific configuration
+config:
+  # Database configuration (local PostgreSQL)
+  database:
+    host: postgresql
+    port: 5432
+    database: backtesting_dev
+    username: postgres
+    password: dev-password
+    max_connections: 10
+    connection_timeout: 30
+
+  # Trading configuration with smaller amounts for testing
+  trading:
+    commission_rate: 0.001
+    slippage_bps: 5
+    initial_capital: 10000  # Smaller capital for dev testing
+    max_position_size: 0.2  # Allow larger positions for testing
+    risk_free_rate: 0.02
+
+  # Data configuration
+  data:
+    default_timeframe: "1h"  # Faster timeframe for dev
+    data_sources:
+      - "yahoo"
+      - "mock"  # Include mock data for testing
+    cache_enabled: true
+    cache_duration_hours: 1  # Shorter cache for development
+
+  # Output configuration
+  output:
+    results_dir: "/app/results"
+    reports_dir: "/app/reports"
+    charts_enabled: true
+    export_formats:
+      - "json"
+      - "csv"
+
+  # Genetic algorithm with smaller parameters for faster testing
+  genetic:
+    population_size: 20      # Small population for quick tests
+    generations: 10          # Few generations for speed
+    mutation_rate: 0.2       # Higher mutation for exploration
+    crossover_rate: 0.8
+    elite_size: 2
+
+  # Walk-forward with shorter windows
+  walkforward:
+    optimization_window_days: 30  # Shorter optimization window
+    test_window_days: 7           # Shorter test window
+    step_size_days: 3             # Smaller steps
+    min_trades_per_period: 1      # Allow fewer trades for testing
+
+  # Risk management - more relaxed for testing
+  risk:
+    max_drawdown: 0.5        # Allow higher drawdown
+    max_position_size: 0.3   # Allow larger positions
+    stop_loss: 0.1           # Wider stop loss
+    var_confidence: 0.95
+
+  # Logging configuration - verbose for development
+  logging:
+    level: "debug"           # Debug level logging
+    format: "pretty"         # Human-readable format
+    file_enabled: true
+    file_path: "/app/logs/backtesting-dev.log"
+
+# PostgreSQL configuration for development
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: "dev-password"
+    username: "postgres"
+    password: "dev-password"
+    database: "backtesting_dev"
+  primary:
+    persistence:
+      enabled: false         # No persistence needed in dev
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 250m
+        memory: 256Mi
+
+# Redis disabled for development (optional)
+redis:
+  enabled: false
+
+# Persistence disabled for development (use emptyDir)
+persistence:
+  enabled: false
+  logs:
+    enabled: false
+
+# Enable job for manual testing
+job:
+  enabled: true
+  name: "dev-backtest"
+  annotations:
+    description: "Development backtest job"
+  ttlSecondsAfterFinished: 3600  # Cleanup after 1 hour
+
+# Disable cronjob for development
+cronjob:
+  enabled: false
+
+# Disable monitoring for development
+monitoring:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+
+# Service configuration for development
+service:
+  type: NodePort           # Use NodePort for easy local access
+  port: 8080
+  targetPort: 8080
+  metricsPort: 9090
+  nodePort: 30080         # Fixed port for consistency
+
+# Enable ingress for local development (optional)
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: backtesting-dev.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# Relaxed security context for development
+podSecurityContext:
+  runAsNonRoot: false      # Allow root for easier debugging
+  runAsUser: 0
+  runAsGroup: 0
+  fsGroup: 0
+
+securityContext:
+  allowPrivilegeEscalation: true   # Allow for debugging tools
+  readOnlyRootFilesystem: false    # Allow writes for debugging
+  runAsNonRoot: false
+  runAsUser: 0
+  capabilities:
+    add:
+      - SYS_PTRACE         # Allow debugging tools
+
+# Node selector for development (optional)
+nodeSelector:
+  environment: "development"
+
+# Environment variables for development
+env: "debug"
+
+# Development-specific probe settings
+probes:
+  liveness:
+    initialDelaySeconds: 10   # Faster startup
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 5       # More tolerant
+    successThreshold: 1
+  
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 5
+    successThreshold: 1
+
+  startup:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 60      # Very tolerant for slow dev environments
+    successThreshold: 1
+
+# Additional environment variables for debugging
+extraEnvVars:
+  - name: DEBUG_MODE
+    value: "true"
+  - name: DEV_ENVIRONMENT
+    value: "local"
+  - name: RUST_BACKTRACE
+    value: "full"
+  - name: RUST_LOG
+    value: "debug"

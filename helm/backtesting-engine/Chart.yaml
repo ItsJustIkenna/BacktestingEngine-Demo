@@ -1,0 +1,45 @@
+apiVersion: v2
+name: backtesting-engine
+description: A Helm chart for BacktestingEngine - High-performance quantitative trading backtesting platform
+
+# Chart version - increment this when you make changes to the chart
+version: 0.1.0
+
+# Application version - this is the version of the application being deployed
+appVersion: "1.0.0"
+
+type: application
+
+keywords:
+  - trading
+  - backtesting
+  - quantitative
+  - finance
+  - rust
+  - kubernetes
+
+maintainers:
+  - name: Nwagbara Group LLC
+    email: support@nwagbara-group.com
+    url: https://github.com/Nwagbara-Group-LLC
+
+sources:
+  - https://github.com/Nwagbara-Group-LLC/BacktestingEngine
+
+home: https://github.com/Nwagbara-Group-LLC/BacktestingEngine
+
+annotations:
+  category: Analytics
+  licenses: MIT
+  
+dependencies:
+  - name: postgresql
+    version: 15.5.17
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+    alias: postgresql
+  - name: redis
+    version: 19.6.4
+    repository: https://charts.bitnami.com/bitnami 
+    condition: redis.enabled
+    alias: redis

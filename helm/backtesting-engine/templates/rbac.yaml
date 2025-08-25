@@ -1,0 +1,77 @@
+{{- if and .Values.rbac .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "backtesting-engine.fullname" . }}
+  labels:
+    {{- include "backtesting-engine.labels" . | nindent 4 }}
+  namespace: {{ .Release.Namespace | quote }}
+rules:
+  # Allow reading ConfigMaps and Secrets for configuration
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+  # Allow reading own pod information for health checks and metrics
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+    resourceNames: []
+  # Allow reading services for service discovery
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+  {{- if .Values.rbac.extraRules }}
+  {{- toYaml .Values.rbac.extraRules | nindent 2 }}
+  {{- end }}
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "backtesting-engine.fullname" . }}
+  labels:
+    {{- include "backtesting-engine.labels" . | nindent 4 }}
+  namespace: {{ .Release.Namespace | quote }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "backtesting-engine.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "backtesting-engine.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io
+
+{{- if and .Values.rbac .Values.rbac.clusterRole .Values.rbac.clusterRole.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "backtesting-engine.fullname" . }}
+  labels:
+    {{- include "backtesting-engine.labels" . | nindent 4 }}
+rules:
+  # Minimal cluster-level permissions for monitoring and health checks
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+  {{- if .Values.rbac.clusterRole.extraRules }}
+  {{- toYaml .Values.rbac.clusterRole.extraRules | nindent 2 }}
+  {{- end }}
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "backtesting-engine.fullname" . }}
+  labels:
+    {{- include "backtesting-engine.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "backtesting-engine.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "backtesting-engine.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}

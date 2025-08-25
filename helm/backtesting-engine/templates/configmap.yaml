@@ -1,0 +1,123 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "backtesting-engine.fullname" . }}-config
+  labels:
+    {{- include "backtesting-engine.labels" . | nindent 4 }}
+  namespace: {{ .Release.Namespace | quote }}
+data:
+  # Application configuration file
+  config.yaml: |
+    # Database configuration
+    database:
+      host: {{ include "backtesting-engine.postgresql.servicename" . }}
+      port: {{ include "backtesting-engine.postgresql.port" . }}
+      database: {{ include "backtesting-engine.postgresql.database" . }}
+      username: {{ include "backtesting-engine.postgresql.username" . }}
+      max_connections: {{ .Values.config.database.max_connections }}
+      connection_timeout: {{ .Values.config.database.connection_timeout }}
+
+    # Trading configuration
+    trading:
+      commission_rate: {{ .Values.config.trading.commission_rate }}
+      slippage_bps: {{ .Values.config.trading.slippage_bps }}
+      initial_capital: {{ .Values.config.trading.initial_capital }}
+      max_position_size: {{ .Values.config.trading.max_position_size }}
+      risk_free_rate: {{ .Values.config.trading.risk_free_rate }}
+
+    # Data configuration
+    data:
+      default_timeframe: {{ .Values.config.data.default_timeframe | quote }}
+      data_sources:
+        {{- range .Values.config.data.data_sources }}
+        - {{ . | quote }}
+        {{- end }}
+      cache_enabled: {{ .Values.config.data.cache_enabled }}
+      cache_duration_hours: {{ .Values.config.data.cache_duration_hours }}
+
+    # Output configuration
+    output:
+      results_dir: {{ .Values.config.output.results_dir | quote }}
+      reports_dir: {{ .Values.config.output.reports_dir | quote }}
+      charts_enabled: {{ .Values.config.output.charts_enabled }}
+      export_formats:
+        {{- range .Values.config.output.export_formats }}
+        - {{ . | quote }}
+        {{- end }}
+
+    # Genetic algorithm configuration
+    genetic:
+      population_size: {{ .Values.config.genetic.population_size }}
+      generations: {{ .Values.config.genetic.generations }}
+      mutation_rate: {{ .Values.config.genetic.mutation_rate }}
+      crossover_rate: {{ .Values.config.genetic.crossover_rate }}
+      elite_size: {{ .Values.config.genetic.elite_size }}
+
+    # Walk-forward configuration
+    walkforward:
+      optimization_window_days: {{ .Values.config.walkforward.optimization_window_days }}
+      test_window_days: {{ .Values.config.walkforward.test_window_days }}
+      step_size_days: {{ .Values.config.walkforward.step_size_days }}
+      min_trades_per_period: {{ .Values.config.walkforward.min_trades_per_period }}
+
+    # Risk management configuration
+    risk:
+      max_drawdown: {{ .Values.config.risk.max_drawdown }}
+      max_position_size: {{ .Values.config.risk.max_position_size }}
+      stop_loss: {{ .Values.config.risk.stop_loss }}
+      var_confidence: {{ .Values.config.risk.var_confidence }}
+
+  # Environment variables
+  DATABASE_HOST: {{ include "backtesting-engine.postgresql.servicename" . }}
+  DATABASE_PORT: {{ include "backtesting-engine.postgresql.port" . | quote }}
+  DATABASE_NAME: {{ include "backtesting-engine.postgresql.database" . }}
+  DATABASE_USER: {{ include "backtesting-engine.postgresql.username" . }}
+  
+  {{- if .Values.redis.enabled }}
+  REDIS_HOST: {{ include "backtesting-engine.redis.servicename" . }}
+  REDIS_PORT: {{ include "backtesting-engine.redis.port" . | quote }}
+  {{- end }}
+  
+  # Application settings
+  APP_PORT: {{ .Values.service.targetPort | quote }}
+  RESULTS_DIR: {{ .Values.config.output.results_dir | quote }}
+  REPORTS_DIR: {{ .Values.config.output.reports_dir | quote }}
+  
+  # Logging configuration
+  LOG_LEVEL: {{ .Values.config.logging.level | quote }}
+  LOG_FORMAT: {{ .Values.config.logging.format | quote }}
+  LOG_FILE_ENABLED: {{ .Values.config.logging.file_enabled | quote }}
+  LOG_FILE_PATH: {{ .Values.config.logging.file_path | quote }}
+  
+  # Performance tuning
+  RUST_LOG: {{ .Values.env | default "info" | quote }}
+  RUST_BACKTRACE: "1"
+  
+  # Trading specific environment variables
+  COMMISSION_RATE: {{ .Values.config.trading.commission_rate | quote }}
+  SLIPPAGE_BPS: {{ .Values.config.trading.slippage_bps | quote }}
+  INITIAL_CAPITAL: {{ .Values.config.trading.initial_capital | quote }}
+  MAX_POSITION_SIZE: {{ .Values.config.trading.max_position_size | quote }}
+  RISK_FREE_RATE: {{ .Values.config.trading.risk_free_rate | quote }}
+  
+  # Data source configuration
+  DEFAULT_TIMEFRAME: {{ .Values.config.data.default_timeframe | quote }}
+  CACHE_ENABLED: {{ .Values.config.data.cache_enabled | quote }}
+  CACHE_DURATION_HOURS: {{ .Values.config.data.cache_duration_hours | quote }}
+  
+  # Optimization settings
+  GENETIC_POPULATION_SIZE: {{ .Values.config.genetic.population_size | quote }}
+  GENETIC_GENERATIONS: {{ .Values.config.genetic.generations | quote }}
+  GENETIC_MUTATION_RATE: {{ .Values.config.genetic.mutation_rate | quote }}
+  GENETIC_CROSSOVER_RATE: {{ .Values.config.genetic.crossover_rate | quote }}
+  
+  # Walk-forward settings
+  WF_OPTIMIZATION_WINDOW_DAYS: {{ .Values.config.walkforward.optimization_window_days | quote }}
+  WF_TEST_WINDOW_DAYS: {{ .Values.config.walkforward.test_window_days | quote }}
+  WF_STEP_SIZE_DAYS: {{ .Values.config.walkforward.step_size_days | quote }}
+  WF_MIN_TRADES_PER_PERIOD: {{ .Values.config.walkforward.min_trades_per_period | quote }}
+  
+  # Risk management settings
+  MAX_DRAWDOWN: {{ .Values.config.risk.max_drawdown | quote }}
+  STOP_LOSS: {{ .Values.config.risk.stop_loss | quote }}
+  VAR_CONFIDENCE: {{ .Values.config.risk.var_confidence | quote }}

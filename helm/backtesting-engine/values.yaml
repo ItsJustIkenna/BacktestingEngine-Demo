@@ -1,0 +1,340 @@
+# Default values for backtesting-engine.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Global configurations
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+
+# Deployment configuration
+replicaCount: 1
+
+# Application image configuration  
+image:
+  registry: docker.io
+  repository: backtesting-engine
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# ServiceAccount configuration
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+  imagePullSecrets: []
+
+# RBAC configuration
+rbac:
+  create: true
+  extraRules: []
+  clusterRole:
+    create: false
+    extraRules: []
+
+# Pod configuration
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  fsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  capabilities:
+    drop:
+      - ALL
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 8080
+  targetPort: 8080
+  metricsPort: 9090
+  nodePort: ""
+  loadBalancerIP: ""
+  loadBalancerSourceRanges: []
+  externalName: ""
+  annotations: {}
+  sessionAffinity: ""
+  sessionAffinityConfig: {}
+  extraPorts: []
+  headless:
+    enabled: false
+    publishNotReadyAddresses: false
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: backtesting-engine.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  extraIngresses: {}
+
+# Resource configuration
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+# Autoscaling configuration
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 85
+  customMetrics: []
+  behavior: {}
+
+# Probes configuration
+probes:
+  liveness:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+  
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+    successThreshold: 1
+
+  startup:
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 30
+    successThreshold: 1
+
+# Node selector, affinity, and tolerations
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Persistence configuration
+persistence:
+  enabled: true
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+  storageClass: ""
+  annotations: {}
+  selector: {}
+  dataSource: {}
+  dataSourceRef: {}
+  volumeMode: Filesystem
+  
+  logs:
+    enabled: false
+    accessModes:
+      - ReadWriteOnce
+    size: 5Gi
+    storageClass: ""
+    annotations: {}
+    volumeMode: Filesystem
+
+# Application configuration (all pulled from ConfigMap)
+config:
+  # Load all environment variables from ConfigMap
+  envFromConfigMap: true
+  
+  # Database configuration
+  database:
+    host: postgresql
+    port: 5432
+    database: backtesting
+    username: postgres
+    password: changeme
+    max_connections: 20
+    connection_timeout: 30
+
+  # Trading configuration
+  trading:
+    commission_rate: 0.001
+    slippage_bps: 1
+    initial_capital: 100000
+    max_position_size: 0.1
+    risk_free_rate: 0.02
+
+  # Data configuration
+  data:
+    default_timeframe: "1d"
+    data_sources:
+      - "yahoo"
+      - "alpha_vantage"
+    cache_enabled: true
+    cache_duration_hours: 24
+
+  # Output configuration
+  output:
+    results_dir: "/app/results"
+    reports_dir: "/app/reports"
+    charts_enabled: true
+    export_formats:
+      - "json"
+      - "csv"
+      - "parquet"
+
+  # Genetic algorithm configuration
+  genetic:
+    population_size: 100
+    generations: 50
+    mutation_rate: 0.1
+    crossover_rate: 0.7
+    elite_size: 10
+
+  # Walk-forward configuration
+  walkforward:
+    optimization_window_days: 252
+    test_window_days: 63
+    step_size_days: 21
+    min_trades_per_period: 10
+
+  # Risk management configuration
+  risk:
+    max_drawdown: 0.2
+    max_position_size: 0.1
+    stop_loss: 0.05
+    var_confidence: 0.95
+
+  # Logging configuration
+  logging:
+    level: "info"
+    format: "json"
+    file_enabled: true
+    file_path: "/app/logs/backtesting.log"
+
+  # Redis configuration (when enabled)
+  redis:
+    password: ""
+
+  # Secrets configuration
+  secrets:
+    jwt_secret: ""
+    encryption_key: ""
+    api_keys: {}
+
+# Environment variables
+env: "info"
+
+# Job configuration for one-time backtests
+job:
+  enabled: false
+  name: "backtest"
+  annotations: {}
+  podAnnotations: {}
+  ttlSecondsAfterFinished: 86400
+  activeDeadlineSeconds: 3600
+  backoffLimit: 3
+  completions: 1
+  parallelism: 1
+  restartPolicy: Never
+  command: []
+  args: []
+  env: []
+  resources: {}
+  volumeMounts: []
+  volumes: []
+
+# CronJob configuration for scheduled backtests
+cronjob:
+  enabled: false
+  schedule: "0 2 * * *"
+  timezone: ""
+  startingDeadlineSeconds: 200
+  concurrencyPolicy: Forbid
+  suspend: false
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  annotations: {}
+  podAnnotations: {}
+  command: []
+  args: []
+  env: []
+  resources: {}
+  volumeMounts: []
+  volumes: []
+  job:
+    ttlSecondsAfterFinished: 86400
+    activeDeadlineSeconds: 3600
+    backoffLimit: 3
+    restartPolicy: OnFailure
+
+# Monitoring and observability
+monitoring:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    labels: {}
+    annotations: {}
+    interval: 30s
+    scrapeTimeout: 10s
+    path: /metrics
+    scheme: http
+    portName: metrics
+    selector: {}
+    metricRelabelings: []
+    relabelings: []
+    targetLabels: []
+    podTargetLabels: []
+
+# Additional volumes and volume mounts
+extraVolumes: []
+extraVolumeMounts: []
+
+# Priority class and termination
+priorityClassName: ""
+terminationGracePeriodSeconds: 30
+
+# PostgreSQL dependency configuration
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: changeme
+    username: postgres
+    password: changeme
+    database: backtesting
+  primary:
+    service:
+      ports:
+        postgresql: 5432
+  architecture: standalone
+
+# Redis dependency configuration  
+redis:
+  enabled: false
+  auth:
+    enabled: false
+    password: ""
+  master:
+    service:
+      ports:
+        redis: 6379

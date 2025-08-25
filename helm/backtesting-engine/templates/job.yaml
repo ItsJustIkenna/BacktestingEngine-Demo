@@ -1,0 +1,165 @@
+{{- if .Values.job.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "backtesting-engine.fullname" . }}-job-{{ .Values.job.name | default "backtest" }}
+  labels:
+    {{- include "backtesting-engine.labels" . | nindent 4 }}
+    app.kubernetes.io/component: job
+  namespace: {{ .Release.Namespace | quote }}
+  {{- with .Values.job.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.job.ttlSecondsAfterFinished }}
+  ttlSecondsAfterFinished: {{ .Values.job.ttlSecondsAfterFinished }}
+  {{- end }}
+  {{- if .Values.job.activeDeadlineSeconds }}
+  activeDeadlineSeconds: {{ .Values.job.activeDeadlineSeconds }}
+  {{- end }}
+  {{- if .Values.job.backoffLimit }}
+  backoffLimit: {{ .Values.job.backoffLimit }}
+  {{- end }}
+  {{- if .Values.job.completions }}
+  completions: {{ .Values.job.completions }}
+  {{- end }}
+  {{- if .Values.job.parallelism }}
+  parallelism: {{ .Values.job.parallelism }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "backtesting-engine.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: job
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.job.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      restartPolicy: {{ .Values.job.restartPolicy | default "Never" }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "backtesting-engine.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: wait-for-postgresql
+          image: "postgres:15-alpine"
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h {{ include "backtesting-engine.postgresql.servicename" . }} -p {{ include "backtesting-engine.postgresql.port" . }} -U {{ include "backtesting-engine.postgresql.username" . }}; do
+                echo "Waiting for PostgreSQL to be ready..."
+                sleep 2
+              done
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  key: database-password
+      containers:
+        - name: {{ .Chart.Name }}-job
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            {{- if .Values.job.command }}
+            {{- toYaml .Values.job.command | nindent 12 }}
+            {{- else }}
+            - "/app/backtesting-engine"
+            {{- end }}
+          args:
+            {{- if .Values.job.args }}
+            {{- toYaml .Values.job.args | nindent 12 }}
+            {{- else }}
+            - "--config"
+            - "/app/config/config.yaml"
+            - "--job"
+            {{- end }}
+          env:
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  key: database-password
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  key: database-url
+            {{- if .Values.redis.enabled }}
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  key: redis-url
+            {{- end }}
+          # Load all config from ConfigMap as environment variables
+          envFrom:
+            - configMapRef:
+                name: {{ include "backtesting-engine.fullname" . }}-config
+          {{- with .Values.job.env }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            {{- if .Values.persistence.enabled }}
+            - name: data-volume
+              mountPath: {{ .Values.config.output.results_dir }}
+              subPath: results
+            - name: data-volume
+              mountPath: {{ .Values.config.output.reports_dir }}
+              subPath: reports
+            {{- end }}
+            {{- with .Values.job.volumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- if .Values.job.resources }}
+            {{- toYaml .Values.job.resources | nindent 12 }}
+            {{- else }}
+            {{- toYaml .Values.resources | nindent 12 }}
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      volumes:
+        - name: config-volume
+          configMap:
+            name: {{ include "backtesting-engine.fullname" . }}-config
+            items:
+              - key: config.yaml
+                path: config.yaml
+        {{- if .Values.persistence.enabled }}
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: {{ include "backtesting-engine.fullname" . }}-data
+        {{- else }}
+        - name: data-volume
+          emptyDir: {}
+        {{- end }}
+        {{- with .Values.job.volumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

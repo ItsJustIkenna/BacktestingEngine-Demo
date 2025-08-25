@@ -1,0 +1,86 @@
+1. Get the application URL by running these commands:
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+  {{- range .paths }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+{{- else if contains "NodePort" .Values.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "backtesting-engine.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo http://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.service.type }}
+     NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+           You can watch the status of by running 'kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "backtesting-engine.fullname" . }}'
+  export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "backtesting-engine.fullname" . }} --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
+  echo http://$SERVICE_IP:{{ .Values.service.port }}
+{{- else if contains "ClusterIP" .Values.service.type }}
+  export POD_NAME=$(kubectl get pods --namespace {{ .Release.Namespace }} -l "{{ include "backtesting-engine.selectorLabels" . }}" -o jsonpath="{.items[0].metadata.name}")
+  export CONTAINER_PORT=$(kubectl get pod --namespace {{ .Release.Namespace }} $POD_NAME -o jsonpath="{.spec.containers[0].ports[0].containerPort}")
+  echo "Visit http://127.0.0.1:8080 to use your application"
+  kubectl --namespace {{ .Release.Namespace }} port-forward $POD_NAME 8080:$CONTAINER_PORT
+{{- end }}
+
+2. Monitor the deployment status:
+  kubectl get pods --namespace {{ .Release.Namespace }} -l "{{ include "backtesting-engine.selectorLabels" . }}"
+
+3. View application logs:
+  kubectl logs --namespace {{ .Release.Namespace }} -l "{{ include "backtesting-engine.selectorLabels" . }}" --follow
+
+4. Check the configuration:
+  kubectl get configmap --namespace {{ .Release.Namespace }} {{ include "backtesting-engine.fullname" . }}-config -o yaml
+
+{{- if .Values.persistence.enabled }}
+
+5. Access persistent storage:
+  The application data is stored in the PersistentVolumeClaim: {{ include "backtesting-engine.fullname" . }}-data
+  Results directory: {{ .Values.config.output.results_dir }}
+  Reports directory: {{ .Values.config.output.reports_dir }}
+
+{{- end }}
+
+{{- if .Values.job.enabled }}
+
+6. Run a one-time backtest job:
+  kubectl create job --namespace {{ .Release.Namespace }} --from=job/{{ include "backtesting-engine.fullname" . }}-job-{{ .Values.job.name | default "backtest" }} manual-backtest-$(date +%s)
+
+{{- end }}
+
+{{- if .Values.cronjob.enabled }}
+
+7. Monitor scheduled backtests:
+  kubectl get cronjobs --namespace {{ .Release.Namespace }} {{ include "backtesting-engine.fullname" . }}-cronjob
+  kubectl get jobs --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/component=cronjob"
+
+{{- end }}
+
+{{- if .Values.autoscaling.enabled }}
+
+8. Monitor auto-scaling:
+  kubectl get hpa --namespace {{ .Release.Namespace }} {{ include "backtesting-engine.fullname" . }}
+
+{{- end }}
+
+{{- if and .Values.monitoring.enabled .Values.monitoring.serviceMonitor.enabled }}
+
+9. Prometheus monitoring is enabled:
+  ServiceMonitor: {{ include "backtesting-engine.fullname" . }}
+  Metrics endpoint: http://{{ include "backtesting-engine.fullname" . }}:{{ .Values.service.metricsPort | default 9090 }}/metrics
+
+{{- end }}
+
+Configuration Summary:
+- Database: {{ include "backtesting-engine.postgresql.servicename" . }}:{{ include "backtesting-engine.postgresql.port" . }}/{{ include "backtesting-engine.postgresql.database" . }}
+{{- if .Values.redis.enabled }}
+- Redis: {{ include "backtesting-engine.redis.servicename" . }}:{{ include "backtesting-engine.redis.port" . }}
+{{- end }}
+- Initial Capital: ${{ .Values.config.trading.initial_capital }}
+- Commission Rate: {{ .Values.config.trading.commission_rate }}%
+- Max Drawdown: {{ .Values.config.risk.max_drawdown }}%
+- Genetic Algorithm: {{ .Values.config.genetic.population_size }} population, {{ .Values.config.genetic.generations }} generations
+- Walk-Forward: {{ .Values.config.walkforward.optimization_window_days }}d optimization, {{ .Values.config.walkforward.test_window_days }}d test window
+
+For more information about the BacktestingEngine, visit:
+https://github.com/your-org/backtesting-engine
+
+Happy backtesting! 🚀📈

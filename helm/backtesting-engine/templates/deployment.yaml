@@ -1,0 +1,244 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "backtesting-engine.fullname" . }}
+  labels:
+    {{- include "backtesting-engine.labels" . | nindent 4 }}
+  namespace: {{ .Release.Namespace | quote }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "backtesting-engine.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "backtesting-engine.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "backtesting-engine.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: wait-for-postgresql
+          image: "postgres:15-alpine"
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h {{ include "backtesting-engine.postgresql.servicename" . }} -p {{ include "backtesting-engine.postgresql.port" . }} -U {{ include "backtesting-engine.postgresql.username" . }}; do
+                echo "Waiting for PostgreSQL to be ready..."
+                sleep 2
+              done
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  key: database-password
+        {{- if .Values.redis.enabled }}
+        - name: wait-for-redis
+          image: "redis:7-alpine"
+          command:
+            - sh
+            - -c
+            - |
+              until redis-cli -h {{ include "backtesting-engine.redis.servicename" . }} -p {{ include "backtesting-engine.redis.port" . }} ping; do
+                echo "Waiting for Redis to be ready..."
+                sleep 2
+              done
+        {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.targetPort }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.service.metricsPort | default 9090 }}
+              protocol: TCP
+          env:
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  key: database-password
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  key: database-url
+            {{- if .Values.redis.enabled }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  key: redis-password
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  key: redis-url
+            {{- end }}
+            {{- if .Values.config.secrets.jwt_secret }}
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  key: jwt-secret
+            {{- end }}
+            {{- if .Values.config.secrets.encryption_key }}
+            - name: ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  key: encryption-key
+            {{- end }}
+            # Load all config from ConfigMap as environment variables
+          {{- if .Values.config.envFromConfigMap }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "backtesting-engine.fullname" . }}-config
+          {{- else }}
+          env:
+            # Individual environment variables from ConfigMap
+            - name: DATABASE_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-config
+                  key: DATABASE_HOST
+            - name: DATABASE_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-config
+                  key: DATABASE_PORT
+            - name: DATABASE_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-config
+                  key: DATABASE_NAME
+            - name: DATABASE_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-config
+                  key: DATABASE_USER
+            - name: APP_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-config
+                  key: APP_PORT
+            - name: LOG_LEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-config
+                  key: LOG_LEVEL
+            - name: RUST_LOG
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-config
+                  key: RUST_LOG
+            {{- end }}
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            {{- if .Values.persistence.enabled }}
+            - name: data-volume
+              mountPath: {{ .Values.config.output.results_dir }}
+              subPath: results
+            - name: data-volume
+              mountPath: {{ .Values.config.output.reports_dir }}
+              subPath: reports
+            {{- end }}
+            {{- if .Values.config.logging.file_enabled }}
+            - name: logs-volume
+              mountPath: /app/logs
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      volumes:
+        - name: config-volume
+          configMap:
+            name: {{ include "backtesting-engine.fullname" . }}-config
+            items:
+              - key: config.yaml
+                path: config.yaml
+        {{- if .Values.persistence.enabled }}
+        - name: data-volume
+          persistentVolumeClaim:
+            claimName: {{ include "backtesting-engine.fullname" . }}-data
+        {{- else }}
+        - name: data-volume
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.config.logging.file_enabled }}
+        - name: logs-volume
+          {{- if .Values.persistence.logs.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "backtesting-engine.fullname" . }}-logs
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      {{- end }}
+      {{- if .Values.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- end }}
