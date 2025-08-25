@@ -2,24 +2,32 @@
 //!
 //! This module provides a comprehensive framework for implementing and managing
 //! trading strategies with support for technical analysis, market data processing,
-//! and signal generation.
+//! signal generation, and strategy export to live trading systems.
 
 pub mod traits;
 pub mod signal;
 pub mod indicators;
 pub mod strategies;
-// No portfolio_state module; use portfoliomanager directly
-// No local riskmanager module; use riskmanager crate
+pub mod export;
+pub mod integration;
+pub mod config_export;
 
 // Re-export main types for convenience
-pub use traits::{Strategy, StrategyContext, StrategyError, StrategyResult};
+pub use traits::{Strategy, StrategyContext, StrategyError, StrategyResult, StrategyMetrics};
 pub use signal::{Signal, SignalType, SignalStrength, SignalReason};
 pub use indicators::{IndicatorValue};
+pub use export::{
+    StrategyExporter, BacktestResults, ExportableStrategy,
+    LiveTradingConfig, ExportEvaluation, ApprovalLevel,
+};
+pub use integration::{BacktestIntegration, ExportStatistics};
+pub use config_export::{ExportConfig, PerformanceThresholds};
+pub use config::ParameterValue;
 pub use riskmanager::{RiskManager, RiskMetrics};
-pub use config::{StrategyConfig, ParameterValue, RiskLimits};
 
 use anyhow::Result;
 use std::collections::HashMap;
+use config::{StrategyConfig};
 
 /// Strategy manager that coordinates multiple strategies
 #[derive(Debug)]

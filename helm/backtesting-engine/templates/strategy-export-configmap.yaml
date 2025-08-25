@@ -1,0 +1,166 @@
+{{/* Strategy Export ConfigMap Template */}}
+{{- if .Values.strategyExport.configMap.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "backtesting-engine.fullname" . }}-strategy-export-config
+  labels:
+    {{- include "backtesting-engine.labels" . | nindent 4 }}
+    app.kubernetes.io/component: strategy-export
+  namespace: {{ .Release.Namespace | quote }}
+data:
+  strategy-export-config.yaml: |
+    # Strategy Export Configuration
+    # Generated from Helm values - Environment: {{ .Values.global.environment }}
+    
+    # Performance evaluation thresholds
+    performance_thresholds:
+      # Base thresholds
+      min_sharpe_ratio: {{ .Values.strategyExport.performance.minSharpeRatio | default 1.5 }}
+      min_profit_factor: {{ .Values.strategyExport.performance.minProfitFactor | default 1.3 }}
+      min_win_rate: {{ .Values.strategyExport.performance.minWinRate | default 0.55 }}
+      max_drawdown: {{ .Values.strategyExport.performance.maxDrawdown | default 0.15 }}
+      min_trades: {{ .Values.strategyExport.performance.minTrades | default 100 }}
+      min_net_profit: {{ .Values.strategyExport.performance.minNetProfit | default 10000.0 }}
+      max_avg_trade_duration: {{ .Values.strategyExport.performance.maxAvgTradeDuration | default 24.0 }}
+      min_volatility_adjusted_return: {{ .Values.strategyExport.performance.minVolatilityAdjustedReturn | default 0.8 }}
+      min_calmar_ratio: {{ .Values.strategyExport.performance.minCalmarRatio | default 1.2 }}
+      require_positive_skew: {{ .Values.strategyExport.performance.requirePositiveSkew | default true }}
+      
+      # Environment-specific overrides
+      environment_overrides:
+        {{- if eq .Values.global.environment "development" }}
+        development:
+          min_sharpe_ratio: {{ .Values.strategyExport.performance.dev.minSharpeRatio | default 1.0 }}
+          min_profit_factor: {{ .Values.strategyExport.performance.dev.minProfitFactor | default 1.1 }}
+          min_win_rate: {{ .Values.strategyExport.performance.dev.minWinRate | default 0.50 }}
+          min_trades: {{ .Values.strategyExport.performance.dev.minTrades | default 50 }}
+          min_net_profit: {{ .Values.strategyExport.performance.dev.minNetProfit | default 1000.0 }}
+        {{- else if eq .Values.global.environment "staging" }}
+        staging:
+          min_sharpe_ratio: {{ .Values.strategyExport.performance.staging.minSharpeRatio | default 1.3 }}
+          min_profit_factor: {{ .Values.strategyExport.performance.staging.minProfitFactor | default 1.2 }}
+          min_win_rate: {{ .Values.strategyExport.performance.staging.minWinRate | default 0.52 }}
+          min_trades: {{ .Values.strategyExport.performance.staging.minTrades | default 75 }}
+          min_net_profit: {{ .Values.strategyExport.performance.staging.minNetProfit | default 5000.0 }}
+        {{- else if eq .Values.global.environment "production" }}
+        production:
+          min_sharpe_ratio: {{ .Values.strategyExport.performance.prod.minSharpeRatio | default 2.0 }}
+          min_profit_factor: {{ .Values.strategyExport.performance.prod.minProfitFactor | default 1.5 }}
+          min_win_rate: {{ .Values.strategyExport.performance.prod.minWinRate | default 0.60 }}
+          max_drawdown: {{ .Values.strategyExport.performance.prod.maxDrawdown | default 0.10 }}
+          min_trades: {{ .Values.strategyExport.performance.prod.minTrades | default 200 }}
+          min_net_profit: {{ .Values.strategyExport.performance.prod.minNetProfit | default 25000.0 }}
+        {{- end }}
+
+    # Deployment configuration
+    deployment:
+      signal_engine_path: {{ .Values.strategyExport.deployment.signalEnginePath | default "/app/signal-engine" }}
+      
+      environments:
+        development:
+          path: {{ .Values.strategyExport.deployment.environments.development.path | default "/app/signal-engine/strategies/development" }}
+          enabled: {{ .Values.strategyExport.deployment.environments.development.enabled | default true }}
+          max_strategies: {{ .Values.strategyExport.deployment.environments.development.maxStrategies | default 10 }}
+          approval_required: {{ .Values.strategyExport.deployment.environments.development.approvalRequired | default false }}
+        
+        staging:
+          path: {{ .Values.strategyExport.deployment.environments.staging.path | default "/app/signal-engine/strategies/staging" }}
+          enabled: {{ .Values.strategyExport.deployment.environments.staging.enabled | default true }}
+          max_strategies: {{ .Values.strategyExport.deployment.environments.staging.maxStrategies | default 5 }}
+          approval_required: {{ .Values.strategyExport.deployment.environments.staging.approvalRequired | default true }}
+        
+        production:
+          path: {{ .Values.strategyExport.deployment.environments.production.path | default "/app/signal-engine/strategies/production" }}
+          enabled: {{ .Values.strategyExport.deployment.environments.production.enabled | default true }}
+          max_strategies: {{ .Values.strategyExport.deployment.environments.production.maxStrategies | default 3 }}
+          approval_required: {{ .Values.strategyExport.deployment.environments.production.approvalRequired | default true }}
+      
+      auto_deployment:
+        enabled: {{ .Values.strategyExport.deployment.autoDeployment.enabled | default true }}
+        target_environment: {{ .Values.strategyExport.deployment.autoDeployment.targetEnvironment | default "development" }}
+        batch_size: {{ .Values.strategyExport.deployment.autoDeployment.batchSize | default 1 }}
+        delay_between_deployments: {{ .Values.strategyExport.deployment.autoDeployment.delayBetweenDeployments | default 300 }}
+
+    # Filesystem configuration  
+    filesystem:
+      export_base_path: {{ .Values.strategyExport.filesystem.exportBasePath | default "/app/exports" }}
+      strategy_source_path: {{ .Values.strategyExport.filesystem.strategySourcePath | default "/app/backtesting-engine/strategy/src/strategies" }}
+      backup_enabled: {{ .Values.strategyExport.filesystem.backupEnabled | default true }}
+      backup_retention_days: {{ .Values.strategyExport.filesystem.backupRetentionDays | default 30 }}
+
+    # Approval workflow configuration
+    approval:
+      environments:
+        development:
+          required_approvers: {{ .Values.strategyExport.approval.development.requiredApprovers | default 0 }}
+          allowed_roles: 
+            {{- range .Values.strategyExport.approval.development.allowedRoles | default (list "developer" "trader" "admin") }}
+            - {{ . | quote }}
+            {{- end }}
+          auto_approve_threshold: {{ .Values.strategyExport.approval.development.autoApproveThreshold | default 75.0 }}
+          timeout_hours: {{ .Values.strategyExport.approval.development.timeoutHours | default 1 }}
+        
+        staging:
+          required_approvers: {{ .Values.strategyExport.approval.staging.requiredApprovers | default 1 }}
+          allowed_roles:
+            {{- range .Values.strategyExport.approval.staging.allowedRoles | default (list "senior_trader" "risk_manager" "admin") }}
+            - {{ . | quote }}
+            {{- end }}
+          auto_approve_threshold: {{ .Values.strategyExport.approval.staging.autoApproveThreshold | default 85.0 }}
+          timeout_hours: {{ .Values.strategyExport.approval.staging.timeoutHours | default 24 }}
+        
+        production:
+          required_approvers: {{ .Values.strategyExport.approval.production.requiredApprovers | default 2 }}
+          allowed_roles:
+            {{- range .Values.strategyExport.approval.production.allowedRoles | default (list "risk_manager" "head_of_trading" "admin") }}
+            - {{ . | quote }}
+            {{- end }}
+          auto_approve_threshold: {{ .Values.strategyExport.approval.production.autoApproveThreshold | default 95.0 }}
+          timeout_hours: {{ .Values.strategyExport.approval.production.timeoutHours | default 72 }}
+      
+      notifications:
+        enabled: {{ .Values.strategyExport.approval.notifications.enabled | default true }}
+        email_recipients:
+          {{- range .Values.strategyExport.approval.notifications.emailRecipients | default (list "trading-team@company.com") }}
+          - {{ . | quote }}
+          {{- end }}
+      
+      audit:
+        enabled: {{ .Values.strategyExport.approval.audit.enabled | default true }}
+        retention_days: {{ .Values.strategyExport.approval.audit.retentionDays | default 90 }}
+        include_performance_data: {{ .Values.strategyExport.approval.audit.includePerformanceData | default true }}
+        include_parameters: {{ .Values.strategyExport.approval.audit.includeParameters | default true }}
+
+    # Risk management configuration
+    risk_management:
+      global_limits:
+        max_total_exposure: {{ .Values.strategyExport.risk.globalLimits.maxTotalExposure | default 1000000.0 }}
+        max_strategies_per_symbol: {{ .Values.strategyExport.risk.globalLimits.maxStrategiesPerSymbol | default 3 }}
+        max_strategies_per_exchange: {{ .Values.strategyExport.risk.globalLimits.maxStrategiesPerExchange | default 10 }}
+        emergency_stop_enabled: {{ .Values.strategyExport.risk.globalLimits.emergencyStopEnabled | default true }}
+      
+      strategy_limits:
+        max_position_size: {{ .Values.strategyExport.risk.strategyLimits.maxPositionSize | default 100000.0 }}
+        max_order_size: {{ .Values.strategyExport.risk.strategyLimits.maxOrderSize | default 10000.0 }}
+        max_daily_loss: {{ .Values.strategyExport.risk.strategyLimits.maxDailyLoss | default 5000.0 }}
+        max_leverage: {{ .Values.strategyExport.risk.strategyLimits.maxLeverage | default 3.0 }}
+        position_concentration_limit: {{ .Values.strategyExport.risk.strategyLimits.positionConcentrationLimit | default 0.2 }}
+      
+      environment_limits:
+        development:
+          capital_allocation_limit: {{ .Values.strategyExport.risk.environmentLimits.development.capitalAllocationLimit | default 50000.0 }}
+          max_concurrent_strategies: {{ .Values.strategyExport.risk.environmentLimits.development.maxConcurrentStrategies | default 5 }}
+          testing_mode: {{ .Values.strategyExport.risk.environmentLimits.development.testingMode | default true }}
+        
+        staging:
+          capital_allocation_limit: {{ .Values.strategyExport.risk.environmentLimits.staging.capitalAllocationLimit | default 200000.0 }}
+          max_concurrent_strategies: {{ .Values.strategyExport.risk.environmentLimits.staging.maxConcurrentStrategies | default 3 }}
+          testing_mode: {{ .Values.strategyExport.risk.environmentLimits.staging.testingMode | default false }}
+        
+        production:
+          capital_allocation_limit: {{ .Values.strategyExport.risk.environmentLimits.production.capitalAllocationLimit | default 1000000.0 }}
+          max_concurrent_strategies: {{ .Values.strategyExport.risk.environmentLimits.production.maxConcurrentStrategies | default 3 }}
+          testing_mode: {{ .Values.strategyExport.risk.environmentLimits.production.testingMode | default false }}
+
+{{- end }}

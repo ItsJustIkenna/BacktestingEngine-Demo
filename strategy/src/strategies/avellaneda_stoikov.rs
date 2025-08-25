@@ -9,7 +9,7 @@ use crate::signal::*;
 // use crate::indicators::*;
 // use portfoliomanager::PortfolioState;
 use riskmanager::RiskLimits;
-use crate::ParameterValue;
+use config::ParameterValue;
 // use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc, Duration};

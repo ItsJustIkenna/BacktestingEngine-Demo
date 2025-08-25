@@ -8,6 +8,7 @@ use portfoliomanager::PortfolioState;
 use riskmanager::RiskLimits;
 use anyhow::Result;
 use async_trait::async_trait;
+use config::ParameterValue;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::{fmt::Debug, collections::HashMap};
@@ -126,7 +127,7 @@ pub trait Strategy: Send + Sync + Debug {
     }
     
     /// Initialize the strategy with parameters
-    async fn initialize(&mut self, parameters: HashMap<String, crate::ParameterValue>) -> StrategyResult<()>;
+    async fn initialize(&mut self, parameters: HashMap<String, ParameterValue>) -> StrategyResult<()>;
     
     /// Generate trading signals based on market data
     async fn generate_signals(
@@ -147,10 +148,10 @@ pub trait Strategy: Send + Sync + Debug {
     }
     
     /// Get current strategy parameters
-    fn get_parameters(&self) -> HashMap<String, crate::ParameterValue>;
+    fn get_parameters(&self) -> HashMap<String, ParameterValue>;
     
     /// Update strategy parameters
-    async fn update_parameters(&mut self, parameters: HashMap<String, crate::ParameterValue>) -> StrategyResult<()>;
+    async fn update_parameters(&mut self, parameters: HashMap<String, ParameterValue>) -> StrategyResult<()>;
     
     /// Get strategy risk limits
     fn get_risk_limits(&self) -> RiskLimits;
@@ -190,7 +191,7 @@ pub trait Strategy: Send + Sync + Debug {
     }
     
     /// Validate strategy configuration
-    fn validate_config(&self, parameters: &HashMap<String, crate::ParameterValue>) -> StrategyResult<()> {
+    fn validate_config(&self, parameters: &HashMap<String, ParameterValue>) -> StrategyResult<()> {
         // Default implementation accepts all parameters
         let _ = parameters;
         Ok(())
