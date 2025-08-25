@@ -134,28 +134,125 @@ impl DataLoader {
         Ok(self.filter_snapshots(snapshots, params))
     }
 
-    /// Convert historical orders to trade data
+    /// Load trade data directly from trades table (more efficient)
     pub async fn load_trade_data(&self, params: &QueryParams) -> Result<Vec<TradeData>> {
-        let orders = self.load_historical_orders(params).await?;
-        
-        let trades: Vec<TradeData> = orders
+        // Load directly from trades table instead of historical_orders
+        let trades = databaseschema::ops::trades_ops::get_trades_by_symbol(
+            self.pool.clone(),
+            &params.symbol,
+            &params.exchange,
+        ).await.map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+
+        let trade_data: Vec<TradeData> = trades
             .into_iter()
-            .filter(|order| order.get_event_type() == "TRADE" || order.get_event_type() == "FILL")
-            .map(|order| TradeData {
-                timestamp: *order.get_timestamp(),
-                symbol: order.get_symbol().to_string(),
-                exchange: order.get_exchange().to_string(),
-                price: order.get_price_level().clone(),
-                quantity: order.get_quantity().clone(),
-                side: order.get_side().to_string(),
-                trade_id: order.get_order_id().to_string(),
+            .map(|trade| TradeData {
+                timestamp: trade.created_at,
+                symbol: trade.symbol,
+                exchange: trade.exchange,
+                price: trade.price,
+                quantity: trade.quantity,
+                side: trade.side,
+                trade_id: trade.trade_id,
             })
             .collect();
 
-        Ok(trades)
+        Ok(self.filter_trades(trade_data, params))
     }
 
-    /// Generate OHLCV candles from trade data
+    /// Load candles using TimescaleDB continuous aggregates (extremely fast)
+    pub async fn load_candles(&self, params: &QueryParams, interval_minutes: i32) -> Result<Vec<Candle>> {
+        let cache_key = format!("candles_{}_{}_{}", params.symbol, params.exchange, interval_minutes);
+        
+        // Check cache first
+        if let Some(cached_candles) = self.cache.get_candles(&cache_key).await {
+            return Ok(self.filter_candles(cached_candles, params));
+        }
+
+        // Determine which continuous aggregate view to query based on interval
+        let view_name = match interval_minutes {
+            1 => "candles_1m",
+            5 => "candles_5m", 
+            15 => "candles_15m",
+            60 => "candles_1h",
+            1440 => "candles_1d", // 24 * 60 minutes = 1 day
+            _ => {
+                // For non-standard intervals, fall back to generating from trades
+                tracing::warn!("Non-standard interval {}, generating from trades", interval_minutes);
+                return self.generate_candles(params, interval_minutes).await;
+            }
+        };
+
+        // Query the continuous aggregate view directly
+        let query = format!(
+            "SELECT timestamp, symbol, exchange, open_price, high_price, low_price, close_price, volume, trade_count 
+             FROM {} 
+             WHERE symbol = $1 AND exchange = $2 
+             {} 
+             ORDER BY timestamp ASC 
+             {}",
+            view_name,
+            if params.start_time.is_some() || params.end_time.is_some() {
+                let mut conditions = Vec::new();
+                if params.start_time.is_some() {
+                    conditions.push("AND timestamp >= $3");
+                }
+                if params.end_time.is_some() {
+                    let param_num = if params.start_time.is_some() { 4 } else { 3 };
+                    conditions.push(&format!("AND timestamp <= ${}", param_num));
+                }
+                conditions.join(" ")
+            } else {
+                String::new()
+            },
+            if let Some(limit) = params.limit {
+                format!("LIMIT {}", limit)
+            } else {
+                String::new()
+            }
+        );
+
+        // Execute the query using the connection pool
+        let conn = self.pool.get().await.map_err(|e| anyhow::anyhow!("Connection error: {}", e))?;
+        
+        // Build parameter vector based on what's provided
+        let mut query_params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&params.symbol, &params.exchange];
+        if let Some(ref start) = params.start_time {
+            query_params.push(start);
+        }
+        if let Some(ref end) = params.end_time {
+            query_params.push(end);
+        }
+
+        let rows = conn.query(&query, &query_params).await.map_err(|e| anyhow::anyhow!("Query error: {}", e))?;
+
+        let candles: Vec<Candle> = rows
+            .into_iter()
+            .map(|row| Candle {
+                timestamp: row.get(0),
+                symbol: row.get(1),
+                exchange: row.get(2),
+                open: row.get(3),
+                high: row.get(4),
+                low: row.get(5),
+                close: row.get(6),
+                volume: row.get(7),
+                trade_count: row.get(8),
+            })
+            .collect();
+
+        // Update cache
+        self.cache.put_candles(cache_key, candles.clone()).await;
+
+        Ok(candles)
+    }
+
+    /// Load pre-computed candles from continuous aggregates (replaced by load_candles)
+    async fn load_precomputed_candles(&self, params: &QueryParams, interval_minutes: i32) -> Result<Vec<Candle>> {
+        // This method is now replaced by the continuous aggregate approach in load_candles
+        self.load_candles(params, interval_minutes).await
+    }
+
+    /// Generate OHLCV candles from trade data (fallback method)
     pub async fn generate_candles(&self, params: &QueryParams, interval_minutes: i32) -> Result<Vec<Candle>> {
         let trades = self.load_trade_data(params).await?;
         
@@ -319,6 +416,42 @@ impl DataLoader {
         }
 
         snapshots
+    }
+
+    /// Filter trades based on query parameters
+    fn filter_trades(&self, mut trades: Vec<TradeData>, params: &QueryParams) -> Vec<TradeData> {
+        // Filter by time range
+        if let Some(start) = params.start_time {
+            trades.retain(|trade| trade.timestamp >= start);
+        }
+        if let Some(end) = params.end_time {
+            trades.retain(|trade| trade.timestamp <= end);
+        }
+
+        // Apply limit
+        if let Some(limit) = params.limit {
+            trades.truncate(limit);
+        }
+
+        trades
+    }
+
+    /// Filter candles based on query parameters
+    fn filter_candles(&self, mut candles: Vec<Candle>, params: &QueryParams) -> Vec<Candle> {
+        // Filter by time range
+        if let Some(start) = params.start_time {
+            candles.retain(|candle| candle.timestamp >= start);
+        }
+        if let Some(end) = params.end_time {
+            candles.retain(|candle| candle.timestamp <= end);
+        }
+
+        // Apply limit
+        if let Some(limit) = params.limit {
+            candles.truncate(limit);
+        }
+
+        candles
     }
 }
 

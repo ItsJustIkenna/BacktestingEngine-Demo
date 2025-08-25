@@ -5,6 +5,7 @@ use databaseschema::models::{
     historical_order::HistoricalOrder,
     historical_snapshot::HistoricalSnapshot,
 };
+use crate::Candle;
 
 /// Cache entry with TTL support
 #[derive(Debug, Clone)]
@@ -32,6 +33,7 @@ impl<T> CacheEntry<T> {
 pub struct DataCache {
     orders: RwLock<HashMap<String, CacheEntry<Vec<HistoricalOrder>>>>,
     snapshots: RwLock<HashMap<String, CacheEntry<Vec<HistoricalSnapshot>>>>,
+    candles: RwLock<HashMap<String, CacheEntry<Vec<Candle>>>>,
     default_ttl: Duration,
 }
 
@@ -46,6 +48,7 @@ impl DataCache {
         Self {
             orders: RwLock::new(HashMap::new()),
             snapshots: RwLock::new(HashMap::new()),
+            candles: RwLock::new(HashMap::new()),
             default_ttl,
         }
     }
@@ -94,12 +97,36 @@ impl DataCache {
         snapshots.insert(key, CacheEntry::new(data, ttl));
     }
 
+    /// Get cached candles for a key
+    pub async fn get_candles(&self, key: &str) -> Option<Vec<Candle>> {
+        let candles = self.candles.read().await;
+        if let Some(entry) = candles.get(key) {
+            if !entry.is_expired() {
+                return Some(entry.data.clone());
+            }
+        }
+        None
+    }
+
+    /// Cache candles with default TTL
+    pub async fn put_candles(&self, key: String, data: Vec<Candle>) {
+        self.put_candles_with_ttl(key, data, self.default_ttl).await;
+    }
+
+    /// Cache candles with custom TTL
+    pub async fn put_candles_with_ttl(&self, key: String, data: Vec<Candle>, ttl: Duration) {
+        let mut candles = self.candles.write().await;
+        candles.insert(key, CacheEntry::new(data, ttl));
+    }
+
     /// Clear all cached data
     pub async fn clear(&self) {
         let mut orders = self.orders.write().await;
         let mut snapshots = self.snapshots.write().await;
+        let mut candles = self.candles.write().await;
         orders.clear();
         snapshots.clear();
+        candles.clear();
     }
 
     /// Remove expired entries from all caches
@@ -111,6 +138,10 @@ impl DataCache {
         {
             let mut snapshots = self.snapshots.write().await;
             snapshots.retain(|_, entry| !entry.is_expired());
+        }
+        {
+            let mut candles = self.candles.write().await;
+            candles.retain(|_, entry| !entry.is_expired());
         }
     }
 }
