@@ -13,7 +13,11 @@ pub mod types;
 pub use order_book::OrderBook;
 pub use level::Level;
 pub use reconstructor::OrderBookReconstructor;
-pub use types::{BookSide, OrderBookEvent, OrderBookSnapshot};
+pub use types::{
+    BookSide, Fill, LiquidityType, OrderBookEvent, OrderInfo,
+    SnapshotLevel, VolumeEntry, SlippageConfig, OrderBookSnapshot,
+    ExecutionLevel, MarketOrderExecution,
+};
 pub use config::OrderBookConfig;
 
 use chrono::{DateTime, Utc};

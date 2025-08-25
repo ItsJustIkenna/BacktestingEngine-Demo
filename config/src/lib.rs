@@ -51,11 +51,29 @@ pub struct DatabaseConfig {
 /// Trading-specific configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingConfig {
-    pub commission_rate: f64,      // e.g., 0.001 for 0.1%
+    pub commission_rate: f64,      // e.g., 0.001 for 0.1% (fallback for simple fee)
     pub slippage_bps: f64,         // basis points
     pub initial_capital: f64,
     pub max_position_size: Option<f64>, // as percentage of portfolio
     pub risk_free_rate: f64,       // for Sharpe ratio calculation
+    pub exchange_fees: Option<ExchangeFeeConfig>, // Maker/taker fee configuration
+}
+
+/// Exchange-specific fee configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExchangeFeeConfig {
+    pub exchange: String,          // "kraken", "coinbase", "binance", etc.
+    pub maker_fee: f64,           // e.g., -0.0025 (negative = rebate)
+    pub taker_fee: f64,           // e.g., 0.0040
+    pub volume_tiers: Vec<VolumeTier>,
+}
+
+/// Volume-based fee tier
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VolumeTier {
+    pub min_volume_30d: f64,      // Minimum 30-day volume in USD
+    pub maker_fee: f64,
+    pub taker_fee: f64,
 }
 
 /// Data source configuration
@@ -267,6 +285,79 @@ impl Default for TradingConfig {
             initial_capital: 100000.0, // $100,000
             max_position_size: Some(0.1), // 10%
             risk_free_rate: 0.02,      // 2%
+            exchange_fees: Some(ExchangeFeeConfig::kraken_default()),
+        }
+    }
+}
+
+impl ExchangeFeeConfig {
+    /// Kraken exchange fee configuration (Pro tier)
+    pub fn kraken_default() -> Self {
+        Self {
+            exchange: "kraken".to_string(),
+            maker_fee: -0.0025,    // -0.25% (rebate)
+            taker_fee: 0.0040,     // 0.40%
+            volume_tiers: vec![
+                VolumeTier {
+                    min_volume_30d: 0.0,
+                    maker_fee: -0.0025,
+                    taker_fee: 0.0040,
+                },
+                VolumeTier {
+                    min_volume_30d: 50_000.0,
+                    maker_fee: -0.0025,
+                    taker_fee: 0.0035,
+                },
+                VolumeTier {
+                    min_volume_30d: 100_000.0,
+                    maker_fee: -0.0025,
+                    taker_fee: 0.0030,
+                },
+            ],
+        }
+    }
+
+    /// Coinbase Pro exchange fee configuration
+    pub fn coinbase_default() -> Self {
+        Self {
+            exchange: "coinbase".to_string(),
+            maker_fee: 0.0000,     // 0.00%
+            taker_fee: 0.0060,     // 0.60%
+            volume_tiers: vec![
+                VolumeTier {
+                    min_volume_30d: 0.0,
+                    maker_fee: 0.0000,
+                    taker_fee: 0.0060,
+                },
+                VolumeTier {
+                    min_volume_30d: 10_000.0,
+                    maker_fee: 0.0000,
+                    taker_fee: 0.0040,
+                },
+            ],
+        }
+    }
+
+    /// Get applicable fee rate based on volume and liquidity type
+    pub fn get_fee_rate(&self, volume_30d: f64, is_maker: bool) -> f64 {
+        // Create a fallback tier
+        let fallback_tier = VolumeTier {
+            min_volume_30d: 0.0,
+            maker_fee: self.maker_fee,
+            taker_fee: self.taker_fee,
+        };
+
+        // Find the highest applicable tier
+        let applicable_tier = self.volume_tiers
+            .iter()
+            .filter(|tier| volume_30d >= tier.min_volume_30d)
+            .max_by(|a, b| a.min_volume_30d.partial_cmp(&b.min_volume_30d).unwrap())
+            .unwrap_or(&fallback_tier);
+
+        if is_maker {
+            applicable_tier.maker_fee
+        } else {
+            applicable_tier.taker_fee
         }
     }
 }

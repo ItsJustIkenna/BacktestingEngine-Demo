@@ -148,6 +148,7 @@ impl Level {
                     price: order.price.clone(),
                     timestamp,
                     order_type: order.order_type,
+                    liquidity_type: None, // Will be set by the caller
                 });
             }
 

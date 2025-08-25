@@ -3,6 +3,14 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use bigdecimal::BigDecimal;
+use std::collections::BTreeMap;
+
+/// Type of liquidity provided/removed
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum LiquidityType {
+    Maker,  // Added liquidity to the book (limit order that rests)
+    Taker,  // Removed liquidity from the book (market order or aggressive limit)
+}
 
 /// Side of the order book (bid or ask)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,6 +106,22 @@ pub struct OrderInfo {
     pub price: BigDecimal,
     pub timestamp: DateTime<Utc>,
     pub order_type: OrderType,
+    pub liquidity_type: Option<LiquidityType>, // Set when order is filled
+}
+
+/// Trade fill information with fee calculation and slippage
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Fill {
+    pub order_id: String,
+    pub side: BookSide,
+    pub price: BigDecimal,          // Execution price (includes slippage)
+    pub base_price: Option<BigDecimal>, // Original price before slippage
+    pub quantity: BigDecimal,
+    pub liquidity_type: LiquidityType,
+    pub fee_rate: f64,              // Applied fee rate
+    pub fee_amount: BigDecimal,     // Calculated fee amount
+    pub slippage_bps: Option<f64>,  // Applied slippage in basis points
+    pub timestamp: DateTime<Utc>,
 }
 
 /// Type of order
@@ -112,6 +136,62 @@ pub enum OrderType {
 impl Default for OrderType {
     fn default() -> Self {
         OrderType::Limit
+    }
+}
+
+/// Volume tracking entry for fee tier calculation
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VolumeEntry {
+    pub timestamp: DateTime<Utc>,
+    pub volume_usd: f64,
+}
+
+impl VolumeEntry {
+    pub fn new(volume_usd: f64, timestamp: DateTime<Utc>) -> Self {
+        Self { timestamp, volume_usd }
+    }
+}
+
+/// Details of how an order was executed across multiple price levels
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionLevel {
+    pub price: BigDecimal,
+    pub quantity: BigDecimal,
+    pub cumulative_quantity: BigDecimal,
+}
+
+/// Result of executing a market order against the order book
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketOrderExecution {
+    pub requested_quantity: BigDecimal,
+    pub executed_quantity: BigDecimal,
+    pub vwap: BigDecimal,
+    pub execution_levels: Vec<ExecutionLevel>,
+    pub total_cost: BigDecimal,
+    pub slippage_bps: f64,
+}
+
+/// Slippage configuration for realistic execution modeling
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlippageConfig {
+    pub enabled: bool,
+    pub base_slippage_bps: f64,    // Base slippage in basis points
+    pub impact_coefficient: f64,   // How much order size affects slippage
+    pub depth_levels: usize,       // Number of book levels to analyze
+    pub min_slippage_bps: f64,     // Minimum slippage floor
+    pub max_slippage_bps: f64,     // Maximum slippage cap
+}
+
+impl Default for SlippageConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            base_slippage_bps: 1.0,    // 1 basis point base
+            impact_coefficient: 0.1,    // 10% impact factor
+            depth_levels: 5,            // Analyze 5 levels deep
+            min_slippage_bps: 0.5,     // 0.5 bps minimum
+            max_slippage_bps: 50.0,    // 50 bps maximum
+        }
     }
 }
 

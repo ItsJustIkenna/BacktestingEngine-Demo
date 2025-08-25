@@ -150,7 +150,9 @@ async fn main() {
             // Initialize backtest components
             let strategy_manager = StrategyManager::new();
             let config = OrderBookConfig::default();
-            let orderbook = OrderBook::new("BTCUSD".to_string(), "EXCHANGE".to_string(), config);
+            let fee_config = config::ExchangeFeeConfig::kraken_default();
+            let mut orderbook = OrderBook::new("BTCUSD".to_string(), "kraken".to_string(), config);
+            orderbook.set_fee_config(fee_config);
             let portfolio = PortfolioState::default();  // Use default initialization
             let risk_manager = RiskManager::new();
             let simulation = SimulationLoop::new();
@@ -212,7 +214,9 @@ async fn main() {
                         // Run simplified backtest with these params
                         let strategy_manager = StrategyManager::new();
                         let config = OrderBookConfig::default();
-                        let orderbook = OrderBook::new("BTCUSD".to_string(), "EXCHANGE".to_string(), config);
+                        let fee_config = config::ExchangeFeeConfig::kraken_default();
+                        let mut orderbook = OrderBook::new("BTCUSD".to_string(), "kraken".to_string(), config);
+                        orderbook.set_fee_config(fee_config);
                         let portfolio = PortfolioState::default();
                         let risk_manager = RiskManager::new();
                         let simulation = SimulationLoop::new();
@@ -294,7 +298,9 @@ async fn main() {
             // Create backtest engine
             let strategy_manager = StrategyManager::new();
             let config = OrderBookConfig::default();
-            let orderbook = OrderBook::new(symbol.clone(), "EXCHANGE".to_string(), config);
+            let fee_config = config::ExchangeFeeConfig::kraken_default();
+            let mut orderbook = OrderBook::new(symbol.clone(), "kraken".to_string(), config);
+            orderbook.set_fee_config(fee_config);
             let portfolio = PortfolioState::default();
             let risk_manager = RiskManager::new();
             let simulation = SimulationLoop::new();

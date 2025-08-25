@@ -79,12 +79,14 @@ impl SimulationLoop {
                     // 4. Submit order to orderbook
                     let _ = orderbook.submit_order_from_signal(&signal, timestamp);
 
-                    // 5. Simulate order matching/fills
+                    // 5. Simulate order matching/fills with proper fee calculation
                     let fills = orderbook.match_all_orders(timestamp);
 
                     // 6. Update portfolio and risk manager with fills
-                    // portfolio.apply_fills(&fills); // Implement this method in PortfolioState
-                    // risk_manager.update(&portfolio, &fills); // Implement this method in RiskManager
+                    if let Err(e) = portfolio.apply_fills(&fills) {
+                        eprintln!("Error applying fills: {}", e);
+                    }
+                    // risk_manager.update(&portfolio, &fills); // TODO: Implement this method in RiskManager
 
                     // 7. Record event
                     events.push(BacktestEvent::OrderSubmitted {

@@ -529,6 +529,7 @@ dependencies = [
  "deadpool 0.12.2",
  "diesel",
  "diesel-async",
+ "fastrand",
  "futures",
  "log",
  "rand 0.8.5",
@@ -537,6 +538,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-retry",
+ "tracing",
  "uuid 1.18.0",
 ]
 
@@ -1461,6 +1463,8 @@ dependencies = [
  "anyhow",
  "bigdecimal",
  "chrono",
+ "num-traits",
+ "orderbook",
  "serde",
  "serde_json",
 ]

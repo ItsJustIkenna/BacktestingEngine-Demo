@@ -90,7 +90,7 @@ impl DataLoader {
         }
     }
 
-    /// Load historical orders for a symbol and exchange
+    /// Load historical orders for a symbol and exchange with enhanced error handling
     pub async fn load_historical_orders(&self, params: &QueryParams) -> Result<Vec<HistoricalOrder>> {
         let cache_key = format!("orders_{}_{}", params.symbol, params.exchange);
         
@@ -99,12 +99,14 @@ impl DataLoader {
             return Ok(self.filter_orders(cached_orders, params));
         }
 
-        // Load from database
-        let orders = historical_order_ops::get_historical_orders(
-            self.pool.clone(),
-            &params.symbol,
-            &params.exchange,
-        ).await.map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+        // Load from database with retry strategy
+        let orders = self.retry_database_operation(|| {
+            historical_order_ops::get_historical_orders(
+                self.pool.clone(),
+                &params.symbol,
+                &params.exchange,
+            )
+        }).await.map_err(|e| anyhow::anyhow!("Failed to load historical orders after retries: {}", e))?;
 
         // Update cache
         self.cache.put_orders(cache_key, orders.clone()).await;
@@ -112,7 +114,7 @@ impl DataLoader {
         Ok(self.filter_orders(orders, params))
     }
 
-    /// Load historical snapshots for a symbol and exchange
+    /// Load historical snapshots for a symbol and exchange with enhanced error handling
     pub async fn load_historical_snapshots(&self, params: &QueryParams) -> Result<Vec<HistoricalSnapshot>> {
         let cache_key = format!("snapshots_{}_{}", params.symbol, params.exchange);
         
@@ -121,12 +123,14 @@ impl DataLoader {
             return Ok(self.filter_snapshots(cached_snapshots, params));
         }
 
-        // Load from database
-        let snapshots = historical_snapshot_ops::get_historical_snapshot(
-            self.pool.clone(),
-            &params.symbol,
-            &params.exchange,
-        ).await.map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+        // Load from database with retry strategy
+        let snapshots = self.retry_database_operation(|| {
+            historical_snapshot_ops::get_historical_snapshot(
+                self.pool.clone(),
+                &params.symbol,
+                &params.exchange,
+            )
+        }).await.map_err(|e| anyhow::anyhow!("Failed to load historical snapshots after retries: {}", e))?;
 
         // Update cache
         self.cache.put_snapshots(cache_key, snapshots.clone()).await;
@@ -134,14 +138,16 @@ impl DataLoader {
         Ok(self.filter_snapshots(snapshots, params))
     }
 
-    /// Load trade data directly from trades table (more efficient)
+    /// Load trade data directly from trades table with enhanced error handling
     pub async fn load_trade_data(&self, params: &QueryParams) -> Result<Vec<TradeData>> {
         // Load directly from trades table instead of historical_orders
-        let trades = databaseschema::ops::trades_ops::get_trades_by_symbol(
-            self.pool.clone(),
-            &params.symbol,
-            &params.exchange,
-        ).await.map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+        let trades = self.retry_database_operation(|| {
+            databaseschema::ops::trades_ops::get_trades_by_symbol(
+                self.pool.clone(),
+                &params.symbol,
+                &params.exchange,
+            )
+        }).await.map_err(|e| anyhow::anyhow!("Failed to load trades after retries: {}", e))?;
 
         let trade_data: Vec<TradeData> = trades
             .into_iter()
@@ -163,18 +169,123 @@ impl DataLoader {
     pub async fn load_candles(&self, params: &QueryParams, interval_minutes: i32) -> Result<Vec<Candle>> {
         let cache_key = format!("candles_{}_{}_{}", params.symbol, params.exchange, interval_minutes);
         
-        // Check cache first
+        // Check cache first with shorter TTL for real-time data
         if let Some(cached_candles) = self.cache.get_candles(&cache_key).await {
             return Ok(self.filter_candles(cached_candles, params));
         }
 
-        // Determine which continuous aggregate view to query based on interval
-        let view_name = match interval_minutes {
-            1 => "candles_1m",
-            5 => "candles_5m", 
-            15 => "candles_15m",
-            60 => "candles_1h",
-            1440 => "candles_1d", // 24 * 60 minutes = 1 day
+        // Load from continuous aggregates based on interval
+        let candles = match interval_minutes {
+            1 => {
+                let db_candles = databaseschema::ops::candles_ops::get_candles_1m(
+                    self.pool.clone(),
+                    &params.symbol,
+                    &params.exchange,
+                    params.start_time,
+                    params.end_time,
+                    params.limit,
+                ).await.map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+                
+                db_candles.into_iter().map(|candle| Candle {
+                    timestamp: candle.timestamp,
+                    symbol: candle.symbol,
+                    exchange: candle.exchange,
+                    open: candle.open_price,
+                    high: candle.high_price,
+                    low: candle.low_price,
+                    close: candle.close_price,
+                    volume: candle.volume,
+                    trade_count: candle.trade_count,
+                }).collect::<Vec<Candle>>()
+            },
+            5 => {
+                let db_candles = databaseschema::ops::candles_ops::get_candles_5m(
+                    self.pool.clone(),
+                    &params.symbol,
+                    &params.exchange,
+                    params.start_time,
+                    params.end_time,
+                    params.limit,
+                ).await.map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+                
+                db_candles.into_iter().map(|candle| Candle {
+                    timestamp: candle.timestamp,
+                    symbol: candle.symbol,
+                    exchange: candle.exchange,
+                    open: candle.open_price,
+                    high: candle.high_price,
+                    low: candle.low_price,
+                    close: candle.close_price,
+                    volume: candle.volume,
+                    trade_count: candle.trade_count,
+                }).collect::<Vec<Candle>>()
+            },
+            15 => {
+                let db_candles = databaseschema::ops::candles_ops::get_candles_15m(
+                    self.pool.clone(),
+                    &params.symbol,
+                    &params.exchange,
+                    params.start_time,
+                    params.end_time,
+                    params.limit,
+                ).await.map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+                
+                db_candles.into_iter().map(|candle| Candle {
+                    timestamp: candle.timestamp,
+                    symbol: candle.symbol,
+                    exchange: candle.exchange,
+                    open: candle.open_price,
+                    high: candle.high_price,
+                    low: candle.low_price,
+                    close: candle.close_price,
+                    volume: candle.volume,
+                    trade_count: candle.trade_count,
+                }).collect::<Vec<Candle>>()
+            },
+            60 => {
+                let db_candles = databaseschema::ops::candles_ops::get_candles_1h(
+                    self.pool.clone(),
+                    &params.symbol,
+                    &params.exchange,
+                    params.start_time,
+                    params.end_time,
+                    params.limit,
+                ).await.map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+                
+                db_candles.into_iter().map(|candle| Candle {
+                    timestamp: candle.timestamp,
+                    symbol: candle.symbol,
+                    exchange: candle.exchange,
+                    open: candle.open_price,
+                    high: candle.high_price,
+                    low: candle.low_price,
+                    close: candle.close_price,
+                    volume: candle.volume,
+                    trade_count: candle.trade_count,
+                }).collect::<Vec<Candle>>()
+            },
+            1440 => { // 24 * 60 minutes = 1 day
+                let db_candles = databaseschema::ops::candles_ops::get_candles_1d(
+                    self.pool.clone(),
+                    &params.symbol,
+                    &params.exchange,
+                    params.start_time,
+                    params.end_time,
+                    params.limit,
+                ).await.map_err(|e| anyhow::anyhow!("Database error: {}", e))?;
+                
+                db_candles.into_iter().map(|candle| Candle {
+                    timestamp: candle.timestamp,
+                    symbol: candle.symbol,
+                    exchange: candle.exchange,
+                    open: candle.open_price,
+                    high: candle.high_price,
+                    low: candle.low_price,
+                    close: candle.close_price,
+                    volume: candle.volume,
+                    trade_count: candle.trade_count,
+                }).collect::<Vec<Candle>>()
+            },
             _ => {
                 // For non-standard intervals, fall back to generating from trades
                 tracing::warn!("Non-standard interval {}, generating from trades", interval_minutes);
@@ -182,66 +293,17 @@ impl DataLoader {
             }
         };
 
-        // Query the continuous aggregate view directly
-        let query = format!(
-            "SELECT timestamp, symbol, exchange, open_price, high_price, low_price, close_price, volume, trade_count 
-             FROM {} 
-             WHERE symbol = $1 AND exchange = $2 
-             {} 
-             ORDER BY timestamp ASC 
-             {}",
-            view_name,
-            if params.start_time.is_some() || params.end_time.is_some() {
-                let mut conditions = Vec::new();
-                if params.start_time.is_some() {
-                    conditions.push("AND timestamp >= $3");
-                }
-                if params.end_time.is_some() {
-                    let param_num = if params.start_time.is_some() { 4 } else { 3 };
-                    conditions.push(&format!("AND timestamp <= ${}", param_num));
-                }
-                conditions.join(" ")
-            } else {
-                String::new()
-            },
-            if let Some(limit) = params.limit {
-                format!("LIMIT {}", limit)
-            } else {
-                String::new()
-            }
-        );
-
-        // Execute the query using the connection pool
-        let conn = self.pool.get().await.map_err(|e| anyhow::anyhow!("Connection error: {}", e))?;
+        // Cache with optimized TTL based on interval
+        let cache_ttl = match interval_minutes {
+            1 => std::time::Duration::from_secs(60),      // 1m candles: 1 minute cache
+            5 => std::time::Duration::from_secs(300),     // 5m candles: 5 minute cache
+            15 => std::time::Duration::from_secs(900),    // 15m candles: 15 minute cache
+            60 => std::time::Duration::from_secs(3600),   // 1h candles: 1 hour cache
+            1440 => std::time::Duration::from_secs(86400), // 1d candles: 1 day cache
+            _ => std::time::Duration::from_secs(300),     // Default: 5 minutes
+        };
         
-        // Build parameter vector based on what's provided
-        let mut query_params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![&params.symbol, &params.exchange];
-        if let Some(ref start) = params.start_time {
-            query_params.push(start);
-        }
-        if let Some(ref end) = params.end_time {
-            query_params.push(end);
-        }
-
-        let rows = conn.query(&query, &query_params).await.map_err(|e| anyhow::anyhow!("Query error: {}", e))?;
-
-        let candles: Vec<Candle> = rows
-            .into_iter()
-            .map(|row| Candle {
-                timestamp: row.get(0),
-                symbol: row.get(1),
-                exchange: row.get(2),
-                open: row.get(3),
-                high: row.get(4),
-                low: row.get(5),
-                close: row.get(6),
-                volume: row.get(7),
-                trade_count: row.get(8),
-            })
-            .collect();
-
-        // Update cache
-        self.cache.put_candles(cache_key, candles.clone()).await;
+        self.cache.put_candles_with_ttl(cache_key, candles.clone(), cache_ttl).await;
 
         Ok(candles)
     }
@@ -380,6 +442,40 @@ impl DataLoader {
     /// Clear the cache
     pub async fn invalidate_cache(&self) {
         self.cache.clear().await;
+    }
+
+    /// Enhanced retry logic for database operations
+    async fn retry_database_operation<T, F, Fut>(&self, operation: F) -> Result<T>
+    where
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<T, diesel::result::Error>>,
+    {
+        use tokio::time::{sleep, Duration};
+        
+        let mut attempts = 0;
+        const MAX_ATTEMPTS: usize = 3;
+        const BASE_DELAY_MS: u64 = 100;
+
+        loop {
+            match operation().await {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    attempts += 1;
+                    if attempts >= MAX_ATTEMPTS {
+                        return Err(anyhow::anyhow!("Database operation failed after {} attempts: {}", MAX_ATTEMPTS, e));
+                    }
+
+                    // Exponential backoff with jitter
+                    let delay = Duration::from_millis(BASE_DELAY_MS * 2_u64.pow(attempts as u32 - 1));
+                    let jitter = Duration::from_millis(fastrand::u64(0..=50));
+                    
+                    tracing::warn!("Database operation failed (attempt {}/{}): {}. Retrying in {:?}...", 
+                                 attempts, MAX_ATTEMPTS, e, delay + jitter);
+                    
+                    sleep(delay + jitter).await;
+                }
+            }
+        }
     }
 
     /// Filter orders based on query parameters
