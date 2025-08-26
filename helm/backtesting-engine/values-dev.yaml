@@ -1,0 +1,55 @@
+# Development values for backtesting-engine
+replicaCount: 1
+
+image:
+  repository: tradingplatformacr.azurecr.io/backtesting-engine
+  pullPolicy: Always
+  tag: "develop"
+
+# Resource limits for development
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Disable autoscaling in dev
+autoscaling:
+  enabled: false
+
+# Simplified configuration for development
+config:
+  environment: development
+  logging:
+    level: debug
+  performance:
+    worker_threads: 2
+  
+# Development persistence settings
+persistence:
+  enabled: false
+  
+# Service configuration
+service:
+  type: ClusterIP
+  port: 8080
+
+# Ingress disabled in dev
+ingress:
+  enabled: false
+
+# Metrics enabled for testing
+metrics:
+  enabled: true
+  port: 9090
+
+# Development environment variables
+env:
+  RUST_LOG: debug
+  ENVIRONMENT: development
+  
+# Node selector for development nodes
+nodeSelector:
+  environment: development
