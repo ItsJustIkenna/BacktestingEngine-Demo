@@ -480,25 +480,9 @@ mod tests {
     #[test]
     fn test_strategy_evaluation_passing() {
         // Create a test configuration for the exporter
-        use crate::config_export::{ExportConfig, PerformanceThresholds, RiskManagement, Deployment, ApprovalWorkflow};
-        use bigdecimal::BigDecimal;
+        use crate::config_export::ExportConfig;
         
-        let test_config = ExportConfig {
-            performance_thresholds: PerformanceThresholds {
-                min_sharpe_ratio: 1.5,
-                min_profit_factor: 1.3,
-                min_win_rate: 0.55,
-                max_drawdown: 0.15,
-                min_trades: 100,
-                min_backtest_days: 90,
-                min_total_pnl: BigDecimal::from(1000),
-                min_avg_trade_return: 0.001,
-                max_volatility: 0.30,
-            },
-            risk_management: RiskManagement::default(),
-            deployment: Deployment::default(),
-            approval_workflow: ApprovalWorkflow::default(),
-        };
+        let test_config = ExportConfig::default();
         
         let exporter = StrategyExporter::with_config("test".to_string(), test_config);
         let results = BacktestResults {

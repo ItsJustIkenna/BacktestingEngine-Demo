@@ -22,12 +22,11 @@ pub use export::{
 };
 pub use integration::{BacktestIntegration, ExportStatistics};
 pub use config_export::{ExportConfig, PerformanceThresholds};
-pub use config::ParameterValue;
+pub use config::{ParameterValue, StrategyConfig};
 pub use riskmanager::{RiskManager, RiskMetrics};
 
 use anyhow::Result;
 use std::collections::HashMap;
-use config::{StrategyConfig};
 
 /// Strategy manager that coordinates multiple strategies
 #[derive(Debug)]

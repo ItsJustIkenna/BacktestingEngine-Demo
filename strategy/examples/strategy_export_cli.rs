@@ -6,8 +6,8 @@
 use strategy::{
     BacktestIntegration, StrategyExporter, PerformanceThresholds, 
     StrategyConfig, ParameterValue, ApprovalLevel,
+    BacktestResults,
 };
-use backtest::BacktestResult;
 use bigdecimal::BigDecimal;
 use clap::{Parser, Subcommand};
 use anyhow::Result;
@@ -110,7 +110,7 @@ async fn evaluate_strategy(
 ) -> Result<()> {
     println!("🔍 Evaluating strategy for export eligibility...");
     
-    let exporter = StrategyExporter::new(signal_engine_path.to_string());
+    let exporter = StrategyExporter::new(signal_engine_path.to_string())?;
     
     // Load strategy configuration and results (simplified for example)
     let example_results = create_example_results();
@@ -141,7 +141,7 @@ async fn export_strategy(
 ) -> Result<()> {
     println!("🚀 Exporting strategy to SignalEngine...");
     
-    let integration = BacktestIntegration::new(signal_engine_path.to_string());
+    let integration = BacktestIntegration::new(signal_engine_path.to_string())?;
     
     // Parse approval level
     let approval = match approval_level.to_lowercase().as_str() {
@@ -160,7 +160,7 @@ async fn export_strategy(
     let strategy_metrics = strategy::StrategyMetrics::default();
     let optimized_parameters = strategy_config.parameters.clone();
     
-    match integration.manual_export(
+    match integration?.manual_export(
         strategy_config,
         backtest_result,
         strategy_metrics,
@@ -186,7 +186,7 @@ async fn export_strategy(
 async fn list_exported_strategies(signal_engine_path: &str) -> Result<()> {
     println!("📋 Listing exported strategies...");
     
-    let exporter = StrategyExporter::new(signal_engine_path.to_string());
+    let exporter = StrategyExporter::new(signal_engine_path.to_string())?;
     let strategies = exporter.list_exported_strategies().await?;
     
     if strategies.is_empty() {
@@ -206,7 +206,7 @@ async fn show_export_statistics(signal_engine_path: &str) -> Result<()> {
     println!("📊 Export Statistics");
     println!("==================");
     
-    let integration = BacktestIntegration::new(signal_engine_path.to_string());
+    let integration = BacktestIntegration::new(signal_engine_path.to_string())?;
     let stats = integration.get_export_statistics().await?;
     
     println!("Total Exported: {}", stats.total_exported);
@@ -268,8 +268,8 @@ fn create_example_strategy_config() -> StrategyConfig {
     }
 }
 
-fn create_example_backtest_result() -> BacktestResult {
-    BacktestResult {
+fn create_example_backtest_result() -> BacktestResults {
+    BacktestResults {
         total_pnl: BigDecimal::from(15000),
         num_trades: 450,
         max_drawdown: BigDecimal::from(1200),

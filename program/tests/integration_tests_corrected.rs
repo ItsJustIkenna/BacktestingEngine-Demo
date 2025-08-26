@@ -40,6 +40,7 @@ mod tests {
                 initial_capital: 10000.0,
                 max_position_size: Some(0.1),
                 risk_free_rate: 0.02,
+                exchange_fees: None,
             },
             data: DataConfig {
                 default_timeframe: "1d".to_string(),
@@ -112,6 +113,7 @@ mod tests {
                 initial_capital: 10000.0,
                 max_position_size: Some(0.1),
                 risk_free_rate: 0.02,
+                exchange_fees: None,
             },
             data: DataConfig {
                 default_timeframe: "1d".to_string(),
@@ -155,6 +157,7 @@ mod tests {
                 initial_capital: 100000.0,
                 max_position_size: Some(0.2),
                 risk_free_rate: 0.025,
+                exchange_fees: None,
             },
             data: DataConfig {
                 default_timeframe: "1h".to_string(),

@@ -196,7 +196,7 @@ impl Level {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{BookSide, OrderType};
+    use crate::types::{BookSide, OrderType, LiquidityType};
 
     fn create_test_order(id: &str, price: i32, quantity: i32, side: BookSide) -> OrderInfo {
         OrderInfo {
@@ -207,6 +207,7 @@ mod tests {
             price: BigDecimal::from(price),
             timestamp: Utc::now(),
             order_type: OrderType::Limit,
+            liquidity_type: Some(LiquidityType::Maker), // Default to maker for test
         }
     }
 

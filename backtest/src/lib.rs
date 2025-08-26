@@ -3,6 +3,9 @@ pub mod simulation;
 pub mod types;
 pub mod monte_carlo;
 
+// Re-export main types
+pub use types::{BacktestResult, BacktestEvent};
+
 // Main simulation orchestrator
 // Coordinates data loading, strategy execution, order matching, portfolio/risk updates, and reporting.
 use strategy::StrategyManager;
@@ -11,7 +14,6 @@ use portfoliomanager::PortfolioState;
 use riskmanager::RiskManager;
 use dataloader::MarketData;
 use crate::simulation::SimulationLoop;
-use crate::types::*;
 use metrics::{PerformanceMetrics, ReportGenerator, ReportConfig, ReportFormat, create_basic_report, EquityPoint};
 use config::OutputConfig;
 use chrono::NaiveDate;
@@ -79,7 +81,7 @@ impl BacktestEngine {
 	}
 
 	/// Run the backtest simulation
-	pub async fn run(&mut self, market_data: Vec<MarketData>) -> BacktestResult {
+	pub async fn run(&mut self, market_data: Vec<MarketData>) -> types::BacktestResult {
 		let default_config = config::BacktestConfig::default();
 		self.simulation.run(
 			&mut self.strategy_manager,
@@ -94,7 +96,7 @@ impl BacktestEngine {
 	/// Generate comprehensive report from backtest results
 	pub fn generate_report(
 		&self, 
-		result: &BacktestResult,
+		result: &types::BacktestResult,
 		strategy_name: &str,
 		symbol: &str,
 		timeframe: &str,

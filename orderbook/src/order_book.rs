@@ -884,8 +884,8 @@ mod tests {
     fn test_realistic_slippage_modeling() {
         let mut order_book = OrderBook::new(
             "BTC-USD".to_string(),
-            None, // No fee config for test
-            None, // Default slippage config
+            "test_exchange".to_string(),
+            config::OrderBookConfig::default(),
         );
         
         let now = Utc::now();
