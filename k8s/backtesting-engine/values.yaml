@@ -338,3 +338,110 @@ redis:
     service:
       ports:
         redis: 6379
+
+# Strategy Export configuration
+strategyExport:
+  configMap:
+    enabled: true
+  performance:
+    minSharpeRatio: 1.5
+    minProfitFactor: 1.3
+    minWinRate: 0.55
+    maxDrawdown: 0.15
+    minTrades: 100
+    minNetProfit: 10000.0
+    maxAvgTradeDuration: 24.0
+    minVolatilityAdjustedReturn: 0.8
+    minCalmarRatio: 1.2
+    requirePositiveSkew: true
+  deployment:
+    signalEnginePath: "/app/signal-engine"
+    environments:
+      development:
+        path: "/app/signal-engine/strategies/development"
+        enabled: true
+        maxStrategies: 10
+        approvalRequired: false
+      staging:
+        path: "/app/signal-engine/strategies/staging"
+        enabled: true
+        maxStrategies: 5
+        approvalRequired: true
+      production:
+        path: "/app/signal-engine/strategies/production"
+        enabled: true
+        maxStrategies: 3
+        approvalRequired: true
+    autoDeployment:
+      enabled: true
+      cronSchedule: "0 2 * * *"
+      maxConcurrentDeployments: 3
+      timeoutSeconds: 600
+      targetEnvironment: "development"
+      batchSize: 1
+      delayBetweenDeployments: 300
+  filesystem:
+    exportBasePath: "/app/exports"
+    strategySourcePath: "/app/backtesting-engine/strategy/src/strategies"
+    backupEnabled: true
+    backupRetentionDays: 30
+  approval:
+    development:
+      requiredApprovers: 0
+      allowedRoles:
+        - "developer"
+        - "trader"
+        - "admin"
+      autoApproveThreshold: 75.0
+      timeoutHours: 1
+    staging:
+      requiredApprovers: 1
+      allowedRoles:
+        - "senior_trader"
+        - "risk_manager"
+        - "admin"
+      autoApproveThreshold: 85.0
+      timeoutHours: 24
+    production:
+      requiredApprovers: 2
+      allowedRoles:
+        - "risk_manager"
+        - "head_of_trading"
+        - "admin"
+      autoApproveThreshold: 95.0
+      timeoutHours: 72
+    notifications:
+      enabled: true
+      emailRecipients:
+        - "trading-team@company.com"
+        - "risk-management@company.com"
+    audit:
+      enabled: true
+      retentionDays: 90
+      includePerformanceData: true
+      includeParameters: true
+  risk:
+    globalLimits:
+      maxTotalExposure: 1000000.0
+      maxStrategiesPerSymbol: 3
+      maxStrategiesPerExchange: 10
+      emergencyStopEnabled: true
+    strategyLimits:
+      maxPositionSize: 100000.0
+      maxOrderSize: 10000.0
+      maxDailyLoss: 5000.0
+      maxLeverage: 3.0
+      positionConcentrationLimit: 0.2
+    environmentLimits:
+      development:
+        capitalAllocationLimit: 50000.0
+        maxConcurrentStrategies: 5
+        testingMode: true
+      staging:
+        capitalAllocationLimit: 200000.0
+        maxConcurrentStrategies: 3
+        testingMode: false
+      production:
+        capitalAllocationLimit: 1000000.0
+        maxConcurrentStrategies: 3
+        testingMode: false

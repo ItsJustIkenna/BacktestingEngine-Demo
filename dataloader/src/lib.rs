@@ -43,6 +43,11 @@ impl DataLoader {
     pub fn mock() -> Self {
         Self::new()
     }
+
+    /// Clear the cache
+    pub async fn invalidate_cache(&self) {
+        self.cache.clear().await;
+    }
 }
 
 #[cfg(feature = "postgres")]

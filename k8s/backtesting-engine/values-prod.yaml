@@ -151,3 +151,111 @@ affinity:
 nodeSelector:
   kubernetes.io/os: linux
   node.kubernetes.io/instance-type: Standard_D8s_v3
+
+# Strategy Export configuration (production settings)
+strategyExport:
+  configMap:
+    enabled: true
+  performance:
+    minSharpeRatio: 1.5        # Standard production threshold
+    minProfitFactor: 1.3       # Standard production threshold
+    minWinRate: 0.55           # Standard production threshold
+    maxDrawdown: 0.15          # Strict production limit
+    minTrades: 100             # Standard production minimum
+    minNetProfit: 10000.0      # Standard production minimum
+    maxAvgTradeDuration: 24.0  # Standard production limit
+    minVolatilityAdjustedReturn: 0.8  # Standard production threshold
+    minCalmarRatio: 1.2        # Standard production threshold
+    requirePositiveSkew: true  # Required for production
+  deployment:
+    signalEnginePath: "/app/signal-engine"
+    environments:
+      development:
+        path: "/app/signal-engine/strategies/development"
+        enabled: false           # Disabled in production
+        maxStrategies: 0
+        approvalRequired: false
+      staging:
+        path: "/app/signal-engine/strategies/staging"
+        enabled: true            # Enabled for pre-production validation
+        maxStrategies: 3         # Limited staging strategies
+        approvalRequired: true   # Strict approval required
+      production:
+        path: "/app/signal-engine/strategies/production"
+        enabled: true            # Production deployment enabled
+        maxStrategies: 3         # Limited production strategies
+        approvalRequired: true   # Strict approval required
+    autoDeployment:
+      enabled: true
+      cronSchedule: "0 2 * * 0"     # Weekly on Sunday at 2 AM
+      maxConcurrentDeployments: 1   # Conservative concurrent for prod
+      timeoutSeconds: 900           # Longer timeout for production
+      targetEnvironment: "production"
+      batchSize: 1                  # Conservative batch size for prod
+      delayBetweenDeployments: 600  # Longer delay for prod safety
+  filesystem:
+    exportBasePath: "/app/exports"
+    strategySourcePath: "/app/backtesting-engine/strategy/src/strategies"
+    backupEnabled: true             # Required backups for production
+    backupRetentionDays: 90         # Long retention for production
+  approval:
+    development:
+      requiredApprovers: 999        # Disabled in production
+      allowedRoles: []
+      autoApproveThreshold: 100.0
+      timeoutHours: 1
+    staging:
+      requiredApprovers: 2          # Two approvals for staging in prod
+      allowedRoles:
+        - "senior_trader"
+        - "risk_manager"
+        - "head_of_trading"
+        - "admin"
+      autoApproveThreshold: 90.0    # High threshold for staging
+      timeoutHours: 48              # Longer timeout for staging
+    production:
+      requiredApprovers: 3          # Three approvals for production
+      allowedRoles:
+        - "risk_manager"
+        - "head_of_trading"
+        - "cto"                 # Additional high-level role
+        - "admin"
+      autoApproveThreshold: 98.0    # Very high threshold for production
+      timeoutHours: 168             # One week timeout for production
+    notifications:
+      enabled: true                 # Required notifications for prod
+      emailRecipients:
+        - "trading-team@company.com"
+        - "risk-management@company.com"
+        - "cto@company.com"
+        - "head-of-trading@company.com"
+    audit:
+      enabled: true                 # Required audit for production
+      retentionDays: 365            # Long retention for production
+      includePerformanceData: true
+      includeParameters: true
+  risk:
+    globalLimits:
+      maxTotalExposure: 2000000.0   # High limits for production
+      maxStrategiesPerSymbol: 2     # Conservative limits for production
+      maxStrategiesPerExchange: 5
+      emergencyStopEnabled: true    # Required for production
+    strategyLimits:
+      maxPositionSize: 200000.0     # High position sizes for production
+      maxOrderSize: 20000.0         # High order sizes for production
+      maxDailyLoss: 10000.0         # High daily loss limits for production
+      maxLeverage: 2.0              # Conservative leverage for production
+      positionConcentrationLimit: 0.15  # Conservative concentration for production
+    environmentLimits:
+      development:
+        capitalAllocationLimit: 0.0    # Disabled in production
+        maxConcurrentStrategies: 0
+        testingMode: true
+      staging:
+        capitalAllocationLimit: 500000.0  # High staging allocation
+        maxConcurrentStrategies: 2        # Conservative staging concurrent
+        testingMode: false
+      production:
+        capitalAllocationLimit: 2000000.0  # Full production allocation
+        maxConcurrentStrategies: 3         # Conservative production concurrent
+        testingMode: false

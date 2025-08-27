@@ -1,62 +1,65 @@
 use dataloader::*;
-use databaseschema::{
-    CustomAsyncPgConnectionManager,
-    models::{
-        historical_order::NewHistoricalOrder,
-        historical_snapshot::NewHistoricalSnapshot,
-    },
-};
-use deadpool::managed::Pool;
+
+// Remove database imports for now since they're optional
+// use databaseschema::{
+//     CustomAsyncPgConnectionManager,
+//     models::{
+//         historical_order::NewHistoricalOrder,
+//         historical_snapshot::NewHistoricalSnapshot,
+//     },
+// };
+// use deadpool::managed::Pool;
+
 use bigdecimal::BigDecimal;
 use chrono::{Utc, TimeZone};
 use tokio;
 use uuid::Uuid;
-use std::sync::Arc;
 use std::str::FromStr;
 
-// Mock data fixtures
-fn create_test_historical_order() -> NewHistoricalOrder {
-    NewHistoricalOrder::new(
-        Utc::now(),
-        &Uuid::new_v4().to_string(),
-        "NEW",
-        "BUY",
-        &BigDecimal::from_str("45000.00").unwrap(),
-        &BigDecimal::from_str("1.5").unwrap(),
-        None,
-        None,
-        "ACTIVE",
-        "BINANCE",
-        "BTCUSD"
-    )
+// Mock data fixtures for non-postgres builds
+fn create_test_trade_data() -> TradeData {
+    TradeData {
+        timestamp: Utc::now(),
+        symbol: "BTCUSD".to_string(),
+        exchange: "BINANCE".to_string(),
+        price: BigDecimal::from_str("45000.00").unwrap(),
+        quantity: BigDecimal::from_str("1.5").unwrap(),
+        side: "BUY".to_string(),
+        trade_id: Uuid::new_v4().to_string(),
+    }
 }
 
-fn create_test_historical_snapshot() -> NewHistoricalSnapshot {
-    NewHistoricalSnapshot::new(
-        Utc::now(),
-        &Uuid::new_v4().to_string(),
-        "SNAPSHOT",
-        "BUY",
-        &BigDecimal::from_str("45000.00").unwrap(),
-        &BigDecimal::from_str("1.5").unwrap(),
-        "ACTIVE",
-        "BINANCE",
-        "BTCUSD"
-    )
+fn create_test_candle() -> Candle {
+    Candle {
+        timestamp: Utc::now(),
+        symbol: "BTCUSD".to_string(),
+        exchange: "BINANCE".to_string(),
+        open: BigDecimal::from_str("45000.00").unwrap(),
+        high: BigDecimal::from_str("45100.00").unwrap(),
+        low: BigDecimal::from_str("44900.00").unwrap(),
+        close: BigDecimal::from_str("45050.00").unwrap(),
+        volume: BigDecimal::from_str("10.5").unwrap(),
+        trade_count: 25,
+    }
 }
 
 #[tokio::test]
 async fn test_dataloader_creation() {
-    // Create mock pool - this is a minimal test since we can't easily create real connections
-    let manager = CustomAsyncPgConnectionManager::new("postgresql://test:test@localhost/test".to_string());
-    let pool = Arc::new(Pool::builder(manager).build().unwrap());
-    
-    let _loader = DataLoader::new(pool);
+    // Test non-postgres DataLoader creation
+    let _loader = DataLoader::new();
     
     // Test that the loader was created successfully
-    // In a real implementation, we'd test actual functionality
-    // For now, this verifies the constructor works
-    assert!(true); // Placeholder - would test actual properties
+    // Verify the operation completed without errors
+    assert!(true); // Placeholder - DataLoader created successfully
+}
+
+#[tokio::test]
+async fn test_dataloader_mock_creation() {
+    // Test mock DataLoader creation for testing
+    let _loader = DataLoader::mock();
+    
+    // Verify the mock loader was created successfully
+    assert!(true); // Mock DataLoader created successfully
 }
 
 #[tokio::test]
@@ -98,21 +101,10 @@ async fn test_monte_carlo_params() {
 
 #[tokio::test]
 async fn test_market_data_serialization() {
-    let _order = create_test_historical_order();
+    let _trade = create_test_trade_data();
     
     // Create a mock Candle for testing
-    // In real implementation, this would use actual database models
-    let candle = Candle {
-        timestamp: Utc::now(),
-        symbol: "BTCUSD".to_string(),
-        exchange: "BINANCE".to_string(),
-        open: BigDecimal::from_str("45000.00").unwrap(),
-        high: BigDecimal::from_str("45100.00").unwrap(),
-        low: BigDecimal::from_str("44900.00").unwrap(),
-        close: BigDecimal::from_str("45050.00").unwrap(),
-        volume: BigDecimal::from_str("10.5").unwrap(),
-        trade_count: 25,
-    };
+    let candle = create_test_candle();
     
     // Test serialization
     let json = serde_json::to_string(&candle).unwrap();
@@ -129,15 +121,7 @@ async fn test_market_data_serialization() {
 
 #[tokio::test]
 async fn test_trade_data_structure() {
-    let trade = TradeData {
-        timestamp: Utc::now(),
-        symbol: "BTCUSD".to_string(),
-        exchange: "BINANCE".to_string(),
-        price: BigDecimal::from_str("45000.00").unwrap(),
-        quantity: BigDecimal::from_str("1.5").unwrap(),
-        side: "BUY".to_string(),
-        trade_id: Uuid::new_v4().to_string(),
-    };
+    let trade = create_test_trade_data();
     
     assert_eq!(trade.symbol, "BTCUSD");
     assert_eq!(trade.exchange, "BINANCE");
@@ -178,14 +162,10 @@ async fn test_candle_ohlc_logic() {
 
 #[tokio::test]
 async fn test_cache_invalidation() {
-    // This test would verify that cache invalidation works properly
-    // For now, it's a placeholder that tests basic functionality
-    let manager = CustomAsyncPgConnectionManager::new("postgresql://test:test@localhost/test".to_string());
-    let pool = Arc::new(Pool::builder(manager).build().unwrap());
+    // Test basic DataLoader functionality without database
+    let loader = DataLoader::new();
     
-    let loader = DataLoader::new(pool);
-    
-    // Test cache invalidation - this would be more comprehensive in real implementation
+    // Test cache invalidation - this method exists in both postgres and non-postgres versions
     loader.invalidate_cache().await;
     
     // Verify the operation completed without errors
@@ -241,30 +221,11 @@ async fn test_empty_data_handling() {
 
 #[tokio::test]
 async fn test_market_data_variants() {
-    let _order = create_test_historical_order();
-    let _snapshot = create_test_historical_snapshot();
+    let _trade = create_test_trade_data();
+    let _candle = create_test_candle();
     
-    let candle = Candle {
-        timestamp: Utc::now(),
-        symbol: "BTCUSD".to_string(),
-        exchange: "BINANCE".to_string(),
-        open: BigDecimal::from_str("45000.00").unwrap(),
-        high: BigDecimal::from_str("45100.00").unwrap(),
-        low: BigDecimal::from_str("44900.00").unwrap(),
-        close: BigDecimal::from_str("45050.00").unwrap(),
-        volume: BigDecimal::from_str("10.5").unwrap(),
-        trade_count: 25,
-    };
-    
-    let trade = TradeData {
-        timestamp: Utc::now(),
-        symbol: "BTCUSD".to_string(),
-        exchange: "BINANCE".to_string(),
-        price: BigDecimal::from_str("45000.00").unwrap(),
-        quantity: BigDecimal::from_str("1.5").unwrap(),
-        side: "BUY".to_string(),
-        trade_id: Uuid::new_v4().to_string(),
-    };
+    let candle = create_test_candle();
+    let trade = create_test_trade_data();
     
     // Test that we can create MarketData variants
     let market_data_candle = MarketData::Candle(candle);
