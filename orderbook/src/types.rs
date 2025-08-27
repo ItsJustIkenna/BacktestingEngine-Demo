@@ -3,7 +3,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use bigdecimal::BigDecimal;
-use std::collections::BTreeMap;
 
 /// Type of liquidity provided/removed
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

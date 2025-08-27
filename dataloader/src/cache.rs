@@ -225,7 +225,7 @@ impl DataCache {
             let evict_count = cache.len() - (self.max_entries_per_cache * 3 / 4); // Remove 25% when full
             
             // Collect keys of oldest entries to remove
-            let mut entries_to_remove: Vec<String> = {
+            let entries_to_remove: Vec<String> = {
                 let mut entries: Vec<_> = cache.iter().collect();
                 entries.sort_by_key(|(_, entry)| entry.last_accessed);
                 entries.into_iter()
