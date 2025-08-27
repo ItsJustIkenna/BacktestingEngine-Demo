@@ -3,6 +3,10 @@ name = "backtest"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+postgres = ["dataloader/postgres", "strategy/postgres"]
+
 [dependencies]
 # External dependencies
 chrono = { version = "0.4", features = ["serde"] }

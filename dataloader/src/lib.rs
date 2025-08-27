@@ -5,6 +5,10 @@ pub mod query;
 use anyhow::Result;
 use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+#[cfg(feature = "postgres")]
 use databaseschema::{
     CustomAsyncPgConnectionManager,
     models::{
@@ -16,21 +20,49 @@ use databaseschema::{
         historical_snapshot_ops,
     },
 };
+#[cfg(feature = "postgres")]
 use deadpool::managed::Pool;
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 /// Core data loader for market data processing
 pub struct DataLoader {
+    #[cfg(feature = "postgres")]
     pool: Arc<Pool<CustomAsyncPgConnectionManager>>,
     cache: Arc<cache::DataCache>,
 }
 
+#[cfg(not(feature = "postgres"))]
+impl DataLoader {
+    /// Create a new DataLoader instance without database
+    pub fn new() -> Self {
+        Self {
+            cache: Arc::new(cache::DataCache::new()),
+        }
+    }
+
+    /// Create a mock DataLoader instance for testing
+    pub fn mock() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(feature = "postgres")]
+
 /// Market data types supported by the loader
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MarketData {
+    #[cfg(feature = "postgres")]
     Order(HistoricalOrder),
+    #[cfg(feature = "postgres")]
     Snapshot(HistoricalSnapshot),
+    Candle(Candle),
+    Trade(TradeData),
+}
+
+#[cfg(not(feature = "postgres"))]
+
+/// Market data types supported by the loader (without postgres types)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum MarketData {
     Candle(Candle),
     Trade(TradeData),
 }
@@ -81,6 +113,7 @@ pub struct MonteCarloParams {
     pub block_size: Option<usize>,
 }
 
+#[cfg(feature = "postgres")]
 impl DataLoader {
     /// Create a new DataLoader instance
     pub fn new(pool: Arc<Pool<CustomAsyncPgConnectionManager>>) -> Self {
@@ -91,6 +124,7 @@ impl DataLoader {
     }
 
     /// Load historical orders for a symbol and exchange with enhanced error handling
+    #[cfg(feature = "postgres")]
     pub async fn load_historical_orders(&self, params: &QueryParams) -> Result<Vec<HistoricalOrder>> {
         let cache_key = format!("orders_{}_{}", params.symbol, params.exchange);
         
@@ -115,6 +149,7 @@ impl DataLoader {
     }
 
     /// Load historical snapshots for a symbol and exchange with enhanced error handling
+    #[cfg(feature = "postgres")]
     pub async fn load_historical_snapshots(&self, params: &QueryParams) -> Result<Vec<HistoricalSnapshot>> {
         let cache_key = format!("snapshots_{}_{}", params.symbol, params.exchange);
         
@@ -139,6 +174,7 @@ impl DataLoader {
     }
 
     /// Load trade data directly from trades table with enhanced error handling
+    #[cfg(feature = "postgres")]
     pub async fn load_trade_data(&self, params: &QueryParams) -> Result<Vec<TradeData>> {
         // Load directly from trades table instead of historical_orders
         let trades = self.retry_database_operation(|| {
@@ -166,6 +202,7 @@ impl DataLoader {
     }
 
     /// Load candles using TimescaleDB continuous aggregates (extremely fast)
+    #[cfg(feature = "postgres")]
     pub async fn load_candles(&self, params: &QueryParams, interval_minutes: i32) -> Result<Vec<Candle>> {
         let cache_key = format!("candles_{}_{}_{}", params.symbol, params.exchange, interval_minutes);
         
@@ -408,6 +445,7 @@ impl DataLoader {
     }
 
     /// Insert new historical orders
+    #[cfg(feature = "postgres")]
     pub async fn insert_historical_orders(&self, orders: Vec<NewHistoricalOrder>) -> Result<Vec<HistoricalOrder>> {
         if orders.is_empty() {
             return Ok(vec![]);
@@ -423,7 +461,15 @@ impl DataLoader {
         Ok(result)
     }
 
+    /// Insert new historical orders (mock implementation)
+    #[cfg(not(feature = "postgres"))]
+    pub async fn insert_historical_orders(&self, orders: Vec<NewHistoricalOrder>) -> Result<Vec<HistoricalOrder>> {
+        // Mock implementation - return empty vec
+        Ok(vec![])
+    }
+
     /// Insert new historical snapshots
+    #[cfg(feature = "postgres")]
     pub async fn insert_historical_snapshots(&self, snapshots: Vec<NewHistoricalSnapshot>) -> Result<Vec<HistoricalSnapshot>> {
         if snapshots.is_empty() {
             return Ok(vec![]);
@@ -439,12 +485,20 @@ impl DataLoader {
         Ok(result)
     }
 
+    /// Insert new historical snapshots (mock implementation)
+    #[cfg(not(feature = "postgres"))]
+    pub async fn insert_historical_snapshots(&self, snapshots: Vec<NewHistoricalSnapshot>) -> Result<Vec<HistoricalSnapshot>> {
+        // Mock implementation - return empty vec
+        Ok(vec![])
+    }
+
     /// Clear the cache
     pub async fn invalidate_cache(&self) {
         self.cache.clear().await;
     }
 
     /// Enhanced retry logic for database operations
+    #[cfg(feature = "postgres")]
     async fn retry_database_operation<T, F, Fut>(&self, operation: F) -> Result<T>
     where
         F: Fn() -> Fut,

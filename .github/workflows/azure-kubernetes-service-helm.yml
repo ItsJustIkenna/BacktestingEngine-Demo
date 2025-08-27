@@ -44,9 +44,9 @@ env:
   CONTAINER_NAME: "backtesting-engine"
   RESOURCE_GROUP: "prod-aks-trading-bot-rg"
   CLUSTER_NAME: "prod-trading-bot-cluster"
-  CHART_PATH: "./backtesting-engine-helm"
-  BASE_CHART_OVERRIDE_PATH: "./backtesting-engine-helm/values.yaml"
-  ENV_CHART_OVERRIDE_PATH: "./backtesting-engine-helm/values-prod.yaml"
+  CHART_PATH: "./k8s/backtesting-engine"
+  BASE_CHART_OVERRIDE_PATH: "./k8s/backtesting-engine/values.yaml"
+  ENV_CHART_OVERRIDE_PATH: "./k8s/backtesting-engine/values-prod.yaml"
 
 jobs:
   buildImage:
@@ -68,12 +68,6 @@ jobs:
         with:
           repository: Nwagbara-Group-LLC/databaseschema
           path: databaseschema
-
-      - name: Checkout redisutils
-        uses: actions/checkout@v4
-        with:
-          repository: Nwagbara-Group-LLC/redisutils
-          path: redisutils
 
       # Logs in with your Azure credentials
       - name: Azure login

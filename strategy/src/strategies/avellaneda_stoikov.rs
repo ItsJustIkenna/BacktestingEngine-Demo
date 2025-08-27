@@ -118,12 +118,22 @@ impl Strategy for AvellanedaStoikovStrategy {
         let now = context.timestamp;
         // Compute mid price from market data (assume Snapshot variant)
         let mid = match market_data {
+            #[cfg(feature = "postgres")]
             dataloader::MarketData::Snapshot(snapshot) => {
                 // For a single snapshot, use price_level directly
                 snapshot.price_level.clone()
             }
-            dataloader::MarketData::Order(_) | dataloader::MarketData::Candle(_) | dataloader::MarketData::Trade(_) => {
+            #[cfg(feature = "postgres")]
+            dataloader::MarketData::Order(_) => {
                 return Err(StrategyError::MarketDataError("No mid price available".to_string()));
+            }
+            dataloader::MarketData::Candle(candle) => {
+                // Use close price as mid price approximation
+                candle.close.clone()
+            }
+            dataloader::MarketData::Trade(trade) => {
+                // Use trade price as mid price approximation
+                trade.price.clone()
             }
         };
         self.price_history.push((now, mid.clone()));

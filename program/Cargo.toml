@@ -3,6 +3,10 @@ name = "program"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+postgres = ["databaseschema", "dataloader/postgres", "strategy/postgres", "orderbook/postgres"]
+
 [dependencies]
 # CLI framework
 clap = { version = "4.0", features = ["derive"] }
@@ -33,4 +37,4 @@ config = { path = "../config" }
 metrics = { path = "../metrics" }
 dataloader = { path = "../dataloader" }
 genetic = { path = "../genetic" }
-databaseschema = { path = "../../databaseschema" }
+databaseschema = { path = "../../databaseschema", optional = true }

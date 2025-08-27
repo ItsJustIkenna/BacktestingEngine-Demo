@@ -1,8 +1,7 @@
 //! Benchmarks for the config module
 
-use config::{BacktestConfig, DatabaseConfig, TradingConfig, DataConfig, OutputConfig};
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
-use std::path::PathBuf;
+use config::BacktestConfig;
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tempfile::TempDir;
 
 fn bench_config_creation(c: &mut Criterion) {
@@ -49,10 +48,10 @@ fn bench_config_file_operations(c: &mut Criterion) {
             let config_path = temp_dir.path().join("bench_config.yaml");
             
             // Save
-            black_box(config.save_to_file(&config_path)).unwrap();
+            black_box(config.to_file(&config_path)).unwrap();
             
             // Load
-            black_box(BacktestConfig::load_from_file(&config_path)).unwrap()
+            black_box(BacktestConfig::from_file(&config_path)).unwrap()
         })
     });
 }

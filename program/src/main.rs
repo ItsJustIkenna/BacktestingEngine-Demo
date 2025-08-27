@@ -381,11 +381,13 @@ fn chromosome_to_params(chromosome: &AvellanedaStoikovChromosome) -> AvellanedaS
 
 /// Load market data from file or database
 async fn load_market_data(path: &str) -> Result<Vec<MarketData>, Box<dyn std::error::Error>> {
-    use dotenv::dotenv;
-    use std::env;
-    use databaseschema::CustomAsyncPgConnectionManager;
-    use deadpool::managed::Pool;
-    use std::path::Path;
+    #[cfg(feature = "postgres")]
+    {
+        use dotenv::dotenv;
+        use std::env;
+        use databaseschema::CustomAsyncPgConnectionManager;
+        use deadpool::managed::Pool;
+        use std::path::Path;
 
     // Check if path is a file or database query
     if Path::new(path).exists() {
@@ -458,4 +460,43 @@ async fn load_market_data(path: &str) -> Result<Vec<MarketData>, Box<dyn std::er
 
     println!("📊 Loaded {} market data points", market_data.len());
     Ok(market_data)
+    }
+
+    #[cfg(not(feature = "postgres"))]
+    {
+        // Mock implementation for non-postgres builds
+        println!("📊 Mock data loading (postgres feature disabled)");
+        
+        // Create some mock candle data for testing
+        use bigdecimal::BigDecimal;
+        
+        let now = chrono::Utc::now();
+        let mock_candles = vec![
+            MarketData::Candle(dataloader::Candle {
+                symbol: "BTCUSD".to_string(),
+                exchange: "MOCK".to_string(),
+                timestamp: now - chrono::Duration::minutes(5),
+                open: BigDecimal::from(50000),
+                high: BigDecimal::from(50100),
+                low: BigDecimal::from(49900),
+                close: BigDecimal::from(50050),
+                volume: BigDecimal::from(100),
+                trade_count: 50,
+            }),
+            MarketData::Candle(dataloader::Candle {
+                symbol: "BTCUSD".to_string(),
+                exchange: "MOCK".to_string(),
+                timestamp: now,
+                open: BigDecimal::from(50050),
+                high: BigDecimal::from(50200),
+                low: BigDecimal::from(50000),
+                close: BigDecimal::from(50150),
+                volume: BigDecimal::from(150),
+                trade_count: 75,
+            }),
+        ];
+        
+        println!("📊 Generated {} mock candles", mock_candles.len());
+        Ok(mock_candles)
+    }
 }

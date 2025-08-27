@@ -3,6 +3,10 @@ name = "genetic"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+postgres = ["databaseschema", "dataloader/postgres", "strategy/postgres", "orderbook/postgres"]
+
 [dependencies]
 rand = "0.8"
 dataloader = { path = "../dataloader" }
@@ -15,7 +19,7 @@ riskmanager = { path = "../riskmanager" }
 tokio = { version = "1.0", features = ["full"] }
 chrono = { version = "0.4", features = ["serde"] }
 bigdecimal = "0.4"
-databaseschema = { path = "../../databaseschema" }
+databaseschema = { path = "../../databaseschema", optional = true }
 uuid = "1.0"
 
 [dev-dependencies]
@@ -24,3 +28,8 @@ strategy = { path = "../strategy" }
 orderbook = { path = "../orderbook" }
 portfoliomanager = { path = "../portfoliomanager" }
 riskmanager = { path = "../riskmanager" }
+criterion = "0.5"
+
+[[bench]]
+name = "genetic_benchmark"
+harness = false

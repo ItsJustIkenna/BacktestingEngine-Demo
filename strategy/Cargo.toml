@@ -3,6 +3,10 @@ name = "strategy"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+postgres = ["databaseschema", "dataloader/postgres", "portfoliomanager/postgres", "riskmanager/postgres"]
+
 [[bin]]
 name = "demo"
 path = "examples/demo.rs"
@@ -39,7 +43,7 @@ ta = "0.5"  # Technical analysis library
 indexmap = { version = "2.0", features = ["serde"] }
 
 # Integration with existing modules
-databaseschema = { path = "../../databaseschema" }
+databaseschema = { path = "../../databaseschema", optional = true }
 dataloader = { path = "../dataloader" }
 
 # Portfolio manager integration
@@ -61,3 +65,8 @@ num-traits = "0.2"
 [dev-dependencies]
 tokio-test = "0.4"
 approx = "0.5"  # For floating point comparisons in tests
+criterion = "0.5"
+
+[[bench]]
+name = "strategy_benchmark"
+harness = false

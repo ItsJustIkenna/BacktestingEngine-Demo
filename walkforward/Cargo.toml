@@ -3,6 +3,10 @@ name = "walkforward"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+postgres = ["dataloader/postgres"]
+
 [dependencies]
 # External dependencies
 chrono = "0.4"

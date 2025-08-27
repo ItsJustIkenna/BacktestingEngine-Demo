@@ -9,6 +9,7 @@ use crate::OrderBookConfig;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use dataloader::DataLoader;
+#[cfg(feature = "postgres")]
 use databaseschema::models::{
     historical_order::HistoricalOrder,
     historical_snapshot::HistoricalSnapshot,
@@ -58,6 +59,7 @@ impl OrderBookReconstructor {
     }
 
     /// Load and process historical orders for reconstruction
+    #[cfg(feature = "postgres")]
     pub async fn load_historical_orders(
         &mut self,
         symbol: &str,
@@ -99,6 +101,7 @@ impl OrderBookReconstructor {
     }
 
     /// Load and process historical snapshots for reconstruction
+    #[cfg(feature = "postgres")]
     pub async fn load_historical_snapshots(
         &mut self,
         symbol: &str,
@@ -188,6 +191,7 @@ impl OrderBookReconstructor {
     }
 
     /// Convert a historical order to an order book event
+    #[cfg(feature = "postgres")]
     fn convert_order_to_event(&self, order: &HistoricalOrder) -> Option<OrderBookEvent> {
         let side = BookSide::from_str(order.get_side())?;
         let timestamp = *order.get_timestamp();
@@ -225,6 +229,7 @@ impl OrderBookReconstructor {
     }
 
     /// Convert a historical snapshot to an order book event
+    #[cfg(feature = "postgres")]
     fn convert_snapshot_to_event(&self, snapshot: &HistoricalSnapshot) -> Option<OrderBookEvent> {
         // This is a simplified conversion - in practice, you'd need to parse
         // the snapshot data structure to extract bid/ask levels
@@ -260,6 +265,7 @@ impl OrderBookReconstructor {
     }
 
     /// Reconstruct order book for a specific symbol/exchange pair over a time range
+    #[cfg(feature = "postgres")]
     pub async fn reconstruct_book(
         &mut self,
         symbol: &str,
@@ -285,12 +291,52 @@ impl OrderBookReconstructor {
         // Return the reconstructed book
         Ok(self.get_or_create_book(symbol, exchange))
     }
+
+    /// Load and process historical orders for reconstruction (mock implementation)
+    #[cfg(not(feature = "postgres"))]
+    pub async fn load_historical_orders(
+        &mut self,
+        _symbol: &str,
+        _exchange: &str,
+        _start_time: Option<DateTime<Utc>>,
+        _end_time: Option<DateTime<Utc>>,
+    ) -> Result<()> {
+        // Mock implementation - does nothing
+        Ok(())
+    }
+
+    /// Load and process historical snapshots for reconstruction (mock implementation)
+    #[cfg(not(feature = "postgres"))]
+    pub async fn load_historical_snapshots(
+        &mut self,
+        _symbol: &str,
+        _exchange: &str,
+        _start_time: Option<DateTime<Utc>>,
+        _end_time: Option<DateTime<Utc>>,
+    ) -> Result<()> {
+        // Mock implementation - does nothing
+        Ok(())
+    }
+
+    /// Reconstruct order book for a specific symbol/exchange pair over a time range (mock implementation)
+    #[cfg(not(feature = "postgres"))]
+    pub async fn reconstruct_book(
+        &mut self,
+        symbol: &str,
+        exchange: &str,
+        _start_time: DateTime<Utc>,
+        _end_time: DateTime<Utc>,
+    ) -> Result<&OrderBook> {
+        // Mock implementation - just return empty book
+        Ok(self.get_or_create_book(symbol, exchange))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(feature = "postgres")]
     fn create_mock_dataloader() -> Arc<DataLoader> {
         // This is a mock for testing - the actual pool creation would be handled elsewhere
         // For unit tests, we'll create a minimal DataLoader that won't be used for actual DB operations
@@ -302,7 +348,14 @@ mod tests {
         Arc::new(DataLoader::new(Arc::new(pool)))
     }
 
+    #[cfg(not(feature = "postgres"))]
+    fn create_mock_dataloader() -> Arc<DataLoader> {
+        // Mock implementation without database
+        Arc::new(DataLoader::mock())
+    }
+
     #[test]
+    #[cfg(feature = "postgres")]
     fn test_reconstructor_creation() {
         let dataloader = create_mock_dataloader();
         let config = OrderBookConfig::default();

@@ -6,12 +6,13 @@
 use strategy::{
     BacktestIntegration, StrategyExporter, PerformanceThresholds, 
     StrategyConfig, ParameterValue, ApprovalLevel,
-    BacktestResults,
+    BacktestResults, StrategyMetrics,
 };
 use bigdecimal::BigDecimal;
 use clap::{Parser, Subcommand};
 use anyhow::Result;
 use std::collections::HashMap;
+use chrono::{Duration, Utc};
 
 #[derive(Parser)]
 #[command(name = "strategy-export")]
@@ -105,8 +106,8 @@ async fn main() -> Result<()> {
 
 async fn evaluate_strategy(
     signal_engine_path: &str,
-    strategy_config_path: &str,
-    results_path: &str,
+    _strategy_config_path: &str,
+    _results_path: &str,
 ) -> Result<()> {
     println!("🔍 Evaluating strategy for export eligibility...");
     
@@ -133,8 +134,8 @@ async fn evaluate_strategy(
 
 async fn export_strategy(
     signal_engine_path: &str,
-    strategy_config_path: &str,
-    results_path: &str,
+    _strategy_config_path: &str,
+    _results_path: &str,
     authorized_by: &str,
     approval_level: &str,
     notes: Option<String>,
@@ -160,7 +161,7 @@ async fn export_strategy(
     let strategy_metrics = strategy::StrategyMetrics::default();
     let optimized_parameters = strategy_config.parameters.clone();
     
-    match integration?.manual_export(
+    match integration.manual_export(
         strategy_config,
         backtest_result,
         strategy_metrics,
@@ -273,16 +274,20 @@ fn create_example_backtest_result() -> BacktestResults {
         total_pnl: BigDecimal::from(15000),
         num_trades: 450,
         max_drawdown: BigDecimal::from(1200),
-        sharpe_ratio: Some(2.3),
-        profit_factor: Some(1.8),
-        win_rate: Some(0.64),
-        avg_trade_return: Some(0.0034),
-        median_trade_return: Some(0.0025),
-        avg_trade_duration: Some(2.1),
-        volatility: Some(0.22),
-        gross_profit: Some(20000.0),
-        gross_loss: Some(5000.0),
-        net_profit: Some(15000.0),
+        sharpe_ratio: 2.3,
+        profit_factor: 1.8,
+        win_rate: 0.64,
+        avg_trade_return: 0.0034,
+        median_trade_return: 0.0025,
+        avg_trade_duration_hours: 2.1,
+        volatility: 0.22,
+        gross_profit: 20000.0,
+        gross_loss: 5000.0,
+        net_profit: 15000.0,
+        backtest_start: Utc::now() - Duration::days(30),
+        backtest_end: Utc::now(),
+        signals_generated: 890,
+        strategy_metrics: StrategyMetrics::default(),
     }
 }
 

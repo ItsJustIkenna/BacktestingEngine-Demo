@@ -2,7 +2,7 @@
 replicaCount: 5
 
 image:
-  repository: tradingplatformacr.azurecr.io/backtesting-engine
+  repository: prodtradingbotregistry.azurecr.io/backtesting-engine
   pullPolicy: IfNotPresent
   tag: ""
 

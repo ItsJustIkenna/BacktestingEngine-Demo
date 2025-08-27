@@ -109,12 +109,14 @@ impl StrategyManager {
 
                 // Check if this strategy applies to this market data
                 match market_data {
+                    #[cfg(feature = "postgres")]
                     dataloader::MarketData::Order(order) => {
                         if order.get_symbol() != &config.symbol || 
                            order.get_exchange() != &config.exchange {
                             continue;
                         }
                     }
+                    #[cfg(feature = "postgres")]
                     dataloader::MarketData::Snapshot(snapshot) => {
                         if snapshot.get_symbol() != &config.symbol || 
                            snapshot.get_exchange() != &config.exchange {

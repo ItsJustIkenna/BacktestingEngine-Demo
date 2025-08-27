@@ -3,8 +3,17 @@ name = "riskmanager"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+postgres = []
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
 serde_json = "1.0"
+criterion = "0.5"
+
+[[bench]]
+name = "riskmanager_benchmark"
+harness = false

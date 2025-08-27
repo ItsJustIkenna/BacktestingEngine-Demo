@@ -80,11 +80,11 @@ fn bench_chromosome_operations(c: &mut Criterion) {
         })
     });
     
-    let mut chromosome = BenchChromosome::random(&mut rng);
     c.bench_function("chromosome_mutation", |b| {
         b.iter(|| {
-            chromosome.mutate(&mut rng);
-            black_box(&chromosome)
+            let mut chromosome = BenchChromosome::random(&mut rand::thread_rng());
+            chromosome.mutate(&mut rand::thread_rng());
+            black_box(chromosome)
         })
     });
 }
@@ -96,13 +96,14 @@ fn bench_genetic_optimizer_creation(c: &mut Criterion) {
         b.iter(|| {
             let config = GeneticConfig {
                 population_size: 50,
-                max_generations: 100,
+                generations: 100,
                 mutation_rate: 0.01,
                 crossover_rate: 0.8,
-                elitism_count: 5,
-                convergence_threshold: 0.001,
             };
-            black_box(GeneticOptimizer::new(config, fitness_fn.clone()))
+            black_box(GeneticOptimizer {
+                config,
+                fitness_fn: fitness_fn.clone(),
+            })
         })
     });
 }
@@ -184,120 +185,23 @@ fn bench_genetic_optimization_full(c: &mut Criterion) {
     for pop_size in [20, 50].iter() {
         let config = GeneticConfig {
             population_size: *pop_size,
-            max_generations: 10, // Keep generations low for benchmarking
+            generations: 10, // Keep generations low for benchmarking
             mutation_rate: 0.01,
             crossover_rate: 0.8,
-            elitism_count: 2,
-            convergence_threshold: 0.001,
         };
         
         group.bench_with_input(BenchmarkId::new("full_optimization", pop_size), &config, |b, config| {
             b.iter(|| {
+                let optimizer = GeneticOptimizer {
+                    config: config.clone(),
+                    fitness_fn: fast_fitness.clone(),
+                };
                 rt.block_on(async {
-                    let mut optimizer = GeneticOptimizer::new(config.clone(), fast_fitness.clone());
-                    black_box(optimizer.optimize().await.unwrap())
+                    black_box(optimizer.run().await)
                 })
             })
         });
     }
-    
-    group.finish();
-}
-
-fn bench_parameter_optimization_scenarios(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
-    let mut group = c.benchmark_group("parameter_optimization_scenarios");
-    group.sample_size(10);
-    
-    // Benchmark different chromosome sizes (parameter counts)
-    for param_count in [5, 10, 20].iter() {
-        // Create chromosome with specific parameter count
-        #[derive(Clone, Debug)]
-        struct VariableChromosome {
-            values: Vec<f64>,
-        }
-        
-        impl Chromosome for VariableChromosome {
-            fn random<R: Rng + ?Sized>(rng: &mut R) -> Self {
-                Self {
-                    values: (0..*param_count).map(|_| rng.gen_range(-10.0..10.0)).collect(),
-                }
-            }
-            
-            fn crossover(&self, other: &Self, rng: &mut impl Rng) -> Self {
-                let mut new_values = Vec::new();
-                for (a, b) in self.values.iter().zip(&other.values) {
-                    if rng.gen_bool(0.5) {
-                        new_values.push(*a);
-                    } else {
-                        new_values.push(*b);
-                    }
-                }
-                Self { values: new_values }
-            }
-            
-            fn mutate(&mut self, rng: &mut impl Rng) {
-                for value in &mut self.values {
-                    if rng.gen_bool(0.1) {
-                        *value += rng.gen_range(-1.0..1.0);
-                    }
-                }
-            }
-        }
-        
-        let fitness_fn: AsyncFitnessFn<VariableChromosome> = Arc::new(|chromosome: &VariableChromosome| {
-            let values = chromosome.values.clone();
-            Box::pin(async move {
-                -values.iter().map(|x| x * x).sum::<f64>()
-            })
-        });
-        
-        let config = GeneticConfig {
-            population_size: 30,
-            max_generations: 5,
-            mutation_rate: 0.01,
-            crossover_rate: 0.8,
-            elitism_count: 2,
-            convergence_threshold: 0.001,
-        };
-        
-        group.bench_with_input(BenchmarkId::new("param_optimization", param_count), param_count, |b, _| {
-            b.iter(|| {
-                rt.block_on(async {
-                    let mut optimizer = GeneticOptimizer::new(config.clone(), fitness_fn.clone());
-                    black_box(optimizer.optimize().await.unwrap())
-                })
-            })
-        });
-    }
-    
-    group.finish();
-}
-
-fn bench_memory_usage(c: &mut Criterion) {
-    let mut group = c.benchmark_group("memory_usage");
-    let mut rng = thread_rng();
-    
-    // Benchmark memory allocation patterns
-    group.bench_function("large_population_allocation", |b| {
-        b.iter(|| {
-            let population: Vec<BenchChromosome> = (0..1000)
-                .map(|_| BenchChromosome::random(&mut rng))
-                .collect();
-            black_box(population)
-        })
-    });
-    
-    // Benchmark cloning operations
-    let population: Vec<BenchChromosome> = (0..100)
-        .map(|_| BenchChromosome::random(&mut rng))
-        .collect();
-    
-    group.bench_function("population_cloning", |b| {
-        b.iter(|| {
-            black_box(population.clone())
-        })
-    });
     
     group.finish();
 }
@@ -308,9 +212,7 @@ criterion_group!(
     bench_genetic_optimizer_creation,
     bench_fitness_evaluation,
     bench_population_operations,
-    bench_genetic_optimization_full,
-    bench_parameter_optimization_scenarios,
-    bench_memory_usage
+    bench_genetic_optimization_full
 );
 
 criterion_main!(genetic_benches);

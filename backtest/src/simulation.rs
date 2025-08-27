@@ -39,21 +39,26 @@ impl SimulationLoop {
     for data in market_data {
             // 1. Update orderbook with new market data if needed
             match &data {
+                #[cfg(feature = "postgres")]
                 MarketData::Snapshot(snapshot) => {
                     // Convert snapshot to OrderBookEvent::Snapshot and apply
                     // (Assume conversion function exists)
                     // orderbook.apply_event(OrderBookEvent::Snapshot { ... })
                 }
-                MarketData::Trade(trade) => {
+                MarketData::Trade(_trade) => {
                     // Convert trade to OrderBookEvent::Trade and apply
                     // orderbook.apply_event(OrderBookEvent::Trade { ... })
                 }
-                _ => {}
+                MarketData::Candle(_) => {
+                    // Candles don't directly update orderbook
+                }
             }
 
             // 2. Build strategy context (timestamp, portfolio, etc.)
             let timestamp = match &data {
+                #[cfg(feature = "postgres")]
                 MarketData::Snapshot(s) => s.timestamp,
+                #[cfg(feature = "postgres")]
                 MarketData::Order(o) => o.timestamp,
                 MarketData::Candle(c) => c.timestamp,
                 MarketData::Trade(t) => t.timestamp,

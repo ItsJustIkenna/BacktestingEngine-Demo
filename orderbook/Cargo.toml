@@ -3,6 +3,10 @@ name = "orderbook"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+postgres = ["databaseschema", "dataloader/postgres"]
+
 [dependencies]
 signal = { path = "../signal" }
 config = { path = "../config" }
@@ -19,8 +23,8 @@ bigdecimal = { version = "0.4", features = ["serde"] }
 ordered-float = { version = "4.0", features = ["serde"] }
 indexmap = { version = "2.0", features = ["serde"] }
 
-# Integration with existing modules
-databaseschema = { path = "../../databaseschema" }
+# Integration with existing modules (optional for database features)
+databaseschema = { path = "../../databaseschema", optional = true }
 dataloader = { path = "../dataloader" }
 
 # Database connection pooling (for tests)

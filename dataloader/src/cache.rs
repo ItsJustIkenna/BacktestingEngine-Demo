@@ -1,10 +1,6 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use databaseschema::models::{
-    historical_order::HistoricalOrder,
-    historical_snapshot::HistoricalSnapshot,
-};
 use crate::Candle;
 
 /// Cache entry with TTL and LRU support
@@ -34,212 +30,121 @@ impl<T> CacheEntry<T> {
     fn touch(&mut self) {
         self.last_accessed = Instant::now();
     }
-
-    fn age(&self) -> Duration {
-        self.last_accessed.elapsed()
-    }
 }
 
-/// High-performance in-memory cache for market data with adaptive TTL and LRU eviction
+/// In-memory cache for historical data with TTL and LRU eviction
 pub struct DataCache {
-    orders: RwLock<HashMap<String, CacheEntry<Vec<HistoricalOrder>>>>,
-    snapshots: RwLock<HashMap<String, CacheEntry<Vec<HistoricalSnapshot>>>>,
     candles: RwLock<HashMap<String, CacheEntry<Vec<Candle>>>>,
+    max_entries: usize,
     default_ttl: Duration,
-    orders_ttl: Duration,
-    snapshots_ttl: Duration,
-    max_entries_per_cache: usize,
 }
 
 impl DataCache {
-    /// Create a new cache with optimized TTL defaults and memory limits
+    /// Create a new cache with default settings
     pub fn new() -> Self {
-        Self::with_adaptive_ttl(
-            Duration::from_secs(300),  // 5 minutes default
-            Duration::from_secs(900),  // 15 minutes for historical orders
-            Duration::from_secs(300),  // 5 minutes for snapshots
-        )
+        Self::with_capacity(1000)
     }
 
-    /// Create a new cache with custom TTL
-    pub fn with_ttl(default_ttl: Duration) -> Self {
-        Self::with_adaptive_ttl(
-            default_ttl,
-            default_ttl,
-            default_ttl,
-        )
-    }
-
-    /// Create a new cache with adaptive TTL for different data types and memory limits
-    pub fn with_adaptive_ttl(default_ttl: Duration, orders_ttl: Duration, snapshots_ttl: Duration) -> Self {
+    /// Create a new cache with specified capacity
+    pub fn with_capacity(max_entries: usize) -> Self {
         Self {
-            orders: RwLock::new(HashMap::new()),
-            snapshots: RwLock::new(HashMap::new()),
             candles: RwLock::new(HashMap::new()),
-            default_ttl,
-            orders_ttl,
-            snapshots_ttl,
-            max_entries_per_cache: 1000, // Limit to 1000 entries per cache type
+            max_entries,
+            default_ttl: Duration::from_secs(300), // 5 minutes default TTL
         }
     }
 
-    /// Create a cache with custom memory limits
-    pub fn with_memory_limits(default_ttl: Duration, max_entries: usize) -> Self {
-        Self {
-            orders: RwLock::new(HashMap::new()),
-            snapshots: RwLock::new(HashMap::new()),
-            candles: RwLock::new(HashMap::new()),
-            default_ttl,
-            orders_ttl: default_ttl,
-            snapshots_ttl: default_ttl,
-            max_entries_per_cache: max_entries,
-        }
-    }
-
-    /// Get cached orders for a key with LRU tracking
-    pub async fn get_orders(&self, key: &str) -> Option<Vec<HistoricalOrder>> {
-        let mut orders = self.orders.write().await;
-        if let Some(entry) = orders.get_mut(key) {
-            if !entry.is_expired() {
-                entry.touch(); // Update LRU timestamp
-                return Some(entry.data.clone());
-            } else {
-                orders.remove(key); // Remove expired entry
-            }
-        }
-        None
-    }
-
-    /// Cache orders with optimized TTL and LRU eviction
-    pub async fn put_orders(&self, key: String, data: Vec<HistoricalOrder>) {
-        self.put_orders_with_ttl(key, data, self.orders_ttl).await;
-    }
-
-    /// Cache orders with custom TTL and LRU eviction
-    pub async fn put_orders_with_ttl(&self, key: String, data: Vec<HistoricalOrder>, ttl: Duration) {
-        let mut orders = self.orders.write().await;
-        
-        // Perform LRU eviction if needed
-        if orders.len() >= self.max_entries_per_cache {
-            self.evict_lru_entries(&mut orders);
-        }
-        
-        orders.insert(key, CacheEntry::new(data, ttl));
-    }
-
-    /// Get cached snapshots for a key with LRU tracking
-    pub async fn get_snapshots(&self, key: &str) -> Option<Vec<HistoricalSnapshot>> {
-        let mut snapshots = self.snapshots.write().await;
-        if let Some(entry) = snapshots.get_mut(key) {
-            if !entry.is_expired() {
-                entry.touch(); // Update LRU timestamp
-                return Some(entry.data.clone());
-            } else {
-                snapshots.remove(key); // Remove expired entry
-            }
-        }
-        None
-    }
-
-    /// Cache snapshots with optimized TTL and LRU eviction
-    pub async fn put_snapshots(&self, key: String, data: Vec<HistoricalSnapshot>) {
-        self.put_snapshots_with_ttl(key, data, self.snapshots_ttl).await;
-    }
-
-    /// Cache snapshots with custom TTL and LRU eviction
-    pub async fn put_snapshots_with_ttl(&self, key: String, data: Vec<HistoricalSnapshot>, ttl: Duration) {
-        let mut snapshots = self.snapshots.write().await;
-        
-        // Perform LRU eviction if needed
-        if snapshots.len() >= self.max_entries_per_cache {
-            self.evict_lru_entries(&mut snapshots);
-        }
-        
-        snapshots.insert(key, CacheEntry::new(data, ttl));
-    }
-
-    /// Get cached candles for a key with LRU tracking
+    /// Get candles from cache
     pub async fn get_candles(&self, key: &str) -> Option<Vec<Candle>> {
         let mut candles = self.candles.write().await;
+        
         if let Some(entry) = candles.get_mut(key) {
             if !entry.is_expired() {
-                entry.touch(); // Update LRU timestamp
+                entry.touch();
                 return Some(entry.data.clone());
             } else {
-                candles.remove(key); // Remove expired entry
+                candles.remove(key);
             }
         }
         None
     }
 
-    /// Cache candles with default TTL and LRU eviction
+    /// Put candles in cache with default TTL
     pub async fn put_candles(&self, key: String, data: Vec<Candle>) {
         self.put_candles_with_ttl(key, data, self.default_ttl).await;
     }
 
-    /// Cache candles with custom TTL and LRU eviction
+    /// Put candles in cache with custom TTL
     pub async fn put_candles_with_ttl(&self, key: String, data: Vec<Candle>, ttl: Duration) {
         let mut candles = self.candles.write().await;
         
-        // Perform LRU eviction if needed
-        if candles.len() >= self.max_entries_per_cache {
-            self.evict_lru_entries(&mut candles);
+        // Check if we need to evict entries
+        if candles.len() >= self.max_entries {
+            self.evict_lru(&mut candles);
         }
         
-        candles.insert(key, CacheEntry::new(data, ttl));
+        let entry = CacheEntry::new(data, ttl);
+        candles.insert(key, entry);
     }
 
     /// Clear all cached data
     pub async fn clear(&self) {
-        let mut orders = self.orders.write().await;
-        let mut snapshots = self.snapshots.write().await;
         let mut candles = self.candles.write().await;
-        orders.clear();
-        snapshots.clear();
         candles.clear();
     }
 
-    /// Remove expired entries from all caches
-    pub async fn cleanup_expired(&self) {
-        {
-            let mut orders = self.orders.write().await;
-            orders.retain(|_, entry| !entry.is_expired());
-        }
-        {
-            let mut snapshots = self.snapshots.write().await;
-            snapshots.retain(|_, entry| !entry.is_expired());
-        }
-        {
-            let mut candles = self.candles.write().await;
-            candles.retain(|_, entry| !entry.is_expired());
+    /// Get cache statistics
+    pub async fn stats(&self) -> CacheStats {
+        let candles = self.candles.read().await;
+        
+        let total_entries = candles.len();
+        let expired_entries = candles.values()
+            .filter(|entry| entry.is_expired())
+            .count();
+
+        CacheStats {
+            total_entries,
+            expired_entries,
+            capacity: self.max_entries,
+            candles_cached: candles.len(),
         }
     }
 
-    /// Evict least recently used entries when cache is full
-    fn evict_lru_entries<T>(&self, cache: &mut HashMap<String, CacheEntry<T>>) {
+    /// Evict least recently used entries
+    fn evict_lru(&self, cache: &mut HashMap<String, CacheEntry<Vec<Candle>>>) {
         // Remove expired entries first
         cache.retain(|_, entry| !entry.is_expired());
         
-        // If still over limit, remove oldest accessed entries
-        if cache.len() >= self.max_entries_per_cache {
-            let evict_count = cache.len() - (self.max_entries_per_cache * 3 / 4); // Remove 25% when full
+        // If still over capacity, remove oldest accessed entries
+        if cache.len() >= self.max_entries {
+            // Collect keys to remove (oldest accessed entries)
+            let mut entries: Vec<(String, Instant)> = cache.iter()
+                .map(|(key, entry)| (key.clone(), entry.last_accessed))
+                .collect();
+            entries.sort_by_key(|(_, last_accessed)| *last_accessed);
             
-            // Collect keys of oldest entries to remove
-            let entries_to_remove: Vec<String> = {
-                let mut entries: Vec<_> = cache.iter().collect();
-                entries.sort_by_key(|(_, entry)| entry.last_accessed);
-                entries.into_iter()
-                    .take(evict_count)
-                    .map(|(key, _)| key.clone())
-                    .collect()
-            };
-            
-            // Remove the collected keys
-            for key in entries_to_remove {
-                cache.remove(&key);
+            // Remove the oldest 25% of entries
+            let to_remove = cache.len() / 4;
+            for (key, _) in entries.iter().take(to_remove) {
+                cache.remove(key);
             }
         }
     }
+
+    /// Cleanup expired entries
+    pub async fn cleanup_expired(&self) {
+        let mut candles = self.candles.write().await;
+        candles.retain(|_, entry| !entry.is_expired());
+    }
+}
+
+/// Cache statistics
+#[derive(Debug, Clone)]
+pub struct CacheStats {
+    pub total_entries: usize,
+    pub expired_entries: usize,
+    pub capacity: usize,
+    pub candles_cached: usize,
 }
 
 impl Default for DataCache {
@@ -254,25 +159,62 @@ mod tests {
     use std::time::Duration;
 
     #[tokio::test]
-    async fn test_cache_entry_expiration() {
-        let entry = CacheEntry::new(Vec::<HistoricalOrder>::new(), Duration::from_millis(50));
-        assert!(!entry.is_expired());
+    async fn test_cache_basic_operations() {
+        let cache = DataCache::new();
+        let key = "BTCUSD_1m".to_string();
+        let candles = vec![]; // Empty candles for testing
         
-        tokio::time::sleep(Duration::from_millis(60)).await;
-        assert!(entry.is_expired());
+        // Test put and get
+        cache.put_candles(key.clone(), candles.clone()).await;
+        let retrieved = cache.get_candles(&key).await;
+        assert!(retrieved.is_some());
     }
 
     #[tokio::test]
-    async fn test_cache_operations() {
+    async fn test_cache_expiry() {
         let cache = DataCache::new();
-        let key = "test_key".to_string();
-        let data = Vec::<HistoricalOrder>::new();
+        let key = "BTCUSD_1m".to_string();
+        let candles = vec![]; // Empty candles for testing
+        
+        // Put with very short TTL
+        cache.put_candles_with_ttl(key.clone(), candles, Duration::from_millis(50)).await;
+        
+        // Should be available immediately
+        assert!(cache.get_candles(&key).await.is_some());
+        
+        // Wait for expiry
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        
+        // Should be expired
+        assert!(cache.get_candles(&key).await.is_none());
+    }
 
-        // Test miss
-        assert!(cache.get_orders(&key).await.is_none());
+    #[tokio::test]
+    async fn test_cache_clear() {
+        let cache = DataCache::new();
+        let candles = vec![]; // Empty candles for testing
+        
+        cache.put_candles("key1".to_string(), candles.clone()).await;
+        cache.put_candles("key2".to_string(), candles).await;
+        
+        // Clear all
+        cache.clear().await;
+        
+        // Should be empty
+        assert!(cache.get_candles("key1").await.is_none());
+        assert!(cache.get_candles("key2").await.is_none());
+    }
 
-        // Test put and hit
-        cache.put_orders(key.clone(), data.clone()).await;
-        assert!(cache.get_orders(&key).await.is_some());
+    #[test]
+    fn test_cache_entry_expiry() {
+        let data: Vec<Candle> = vec![];
+        let entry = CacheEntry::new(data, Duration::from_millis(50));
+        
+        // Should not be expired immediately
+        assert!(!entry.is_expired());
+        
+        // Wait and check
+        std::thread::sleep(Duration::from_millis(60));
+        assert!(entry.is_expired());
     }
 }

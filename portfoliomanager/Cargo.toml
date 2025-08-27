@@ -3,6 +3,10 @@ name = "portfoliomanager"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+postgres = ["orderbook/postgres"]
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 bigdecimal = { version = "0.4", features = ["serde"] }
@@ -13,3 +17,8 @@ num-traits = "0.2"
 
 [dev-dependencies]
 serde_json = "1.0"
+criterion = "0.5"
+
+[[bench]]
+name = "portfoliomanager_benchmark"
+harness = false
