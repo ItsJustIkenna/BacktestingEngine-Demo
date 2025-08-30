@@ -19,6 +19,9 @@ use std::sync::Arc;
 use program::logging_facade::MAIN_LOGGER;
 use program::{log_info, log_warn, log_error, log_debug};
 
+// Development optimization system
+use development::{DevCommands, execute_dev_command, init};
+
 #[derive(Parser)]
 #[command(name = "TradingPlatform")]
 #[command(about = "CLI for Backtesting, Optimization, and Walk-Forward Analysis", long_about = None)]
@@ -29,6 +32,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Development workflow optimization
+    Dev {
+        #[command(flatten)]
+        args: DevCommands,
+    },
     /// Run walk-forward analysis
     WalkForward {
         #[arg(long)]
@@ -110,8 +118,20 @@ enum Commands {
 
 #[tokio::main]
 async fn main() {
+    // Initialize development optimization system
+    if let Err(e) = init().await {
+        eprintln!("Failed to initialize development system: {}", e);
+        std::process::exit(1);
+    }
+
     let cli = Cli::parse();
     match cli.command {
+        Commands::Dev { args } => {
+            if let Err(e) = execute_dev_command(args.command).await {
+                eprintln!("Development command failed: {}", e);
+                std::process::exit(1);
+            }
+        },
         Commands::WalkForward { data_path, start, end, train_days, test_days, step_days } => {
             log_info!(MAIN_LOGGER, "🚀 Starting Walk-Forward Analysis...");
             

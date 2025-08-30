@@ -27,6 +27,7 @@ chrono = { version = "0.4", features = ["serde"] }
 bigdecimal = "0.4"
 
 # Internal dependencies
+development = { path = "../development" }
 walkforward = { path = "../walkforward" }
 backtest = { path = "../backtest" }
 strategy = { path = "../strategy" }

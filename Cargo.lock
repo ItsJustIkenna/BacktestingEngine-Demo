@@ -723,6 +723,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "development"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "tokio",
+]
+
+[[package]]
 name = "diesel"
 version = "2.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1953,6 +1962,7 @@ dependencies = [
  "dataloader",
  "deadpool 0.12.2",
  "deadpool-postgres",
+ "development",
  "dotenv",
  "genetic",
  "metrics",

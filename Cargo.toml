@@ -13,5 +13,6 @@ members = [
     "walkforward",
     "portfoliomanager",
     "riskmanager",
-    "signal"
+    "signal",
+    "development"
 ]
