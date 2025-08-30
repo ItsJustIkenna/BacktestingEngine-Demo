@@ -12,8 +12,8 @@ use strategy::{
 };
 use std::collections::HashMap;
 use config::ParameterValue;
-use tracing::{info, Level};
-use tracing_subscriber;
+use strategy::logging_facade::STRATEGY_LOGGER;
+use strategy::log_info;
 
 #[derive(Parser)]
 #[command(name = "automated-export")]
@@ -85,11 +85,8 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_max_level(Level::INFO)
-        .init();
-
+    // No need for tracing initialization with UltraLogger
+    
     let cli = Cli::parse();
 
     match cli.command {
@@ -138,7 +135,7 @@ async fn export_strategy_automated(
     environments: String,
     _notes: Option<String>,
 ) -> Result<()> {
-    info!("🚀 Starting fully automated strategy export");
+    log_info!(STRATEGY_LOGGER, "🚀 Starting fully automated strategy export");
     println!("Strategy: {}", strategy_name);
     println!("Target: {}", signal_engine_path);
     println!("Ultra-fast mode: {}", ultra_fast);

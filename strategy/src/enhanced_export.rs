@@ -6,13 +6,14 @@
 use crate::translation::{AutomatedExportPipeline, TranslationConfig, TranslationMetrics};
 use crate::export::{StrategyExporter, ExportableStrategy, BacktestResults};
 use crate::traits::Strategy as BacktestingStrategy;
+use crate::logging_facade::STRATEGY_LOGGER;
+use crate::{log_info, log_warn, log_error};
 use anyhow::{Result, Context};
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::path::Path;
 use tokio::fs;
-use tracing::{info, warn, error};
 
 /// Enhanced export configuration with automation settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,7 +165,7 @@ impl EnhancedStrategyExporter {
     where 
         T: BacktestingStrategy + Clone + 'static
     {
-        info!("Starting fully automated strategy export for: {}", strategy.name());
+        log_info!(STRATEGY_LOGGER, "Starting fully automated strategy export for: {}", strategy.name());
 
         let start_time = std::time::Instant::now();
         let mut result = AutomatedExportResult::new(strategy.name().to_string());
@@ -214,7 +215,7 @@ impl EnhancedStrategyExporter {
         result.total_time_ms = start_time.elapsed().as_millis() as u64;
         result.success = true;
 
-        info!("Fully automated export completed successfully in {}ms", result.total_time_ms);
+        log_info!(STRATEGY_LOGGER, "Fully automated export completed successfully in {}ms", result.total_time_ms);
         Ok(result)
     }
 
@@ -245,7 +246,7 @@ impl EnhancedStrategyExporter {
     where 
         T: BacktestingStrategy
     {
-        info!("Running quality assurance tests...");
+        log_info!(STRATEGY_LOGGER, "Running quality assurance tests...");
 
         let mut qa_results = QualityAssuranceResults::default();
 
@@ -277,7 +278,7 @@ impl EnhancedStrategyExporter {
     async fn validate_translated_performance(&self, 
         exportable: &ExportableStrategy
     ) -> Result<PerformanceValidationResults> {
-        info!("Validating translated strategy performance...");
+        log_info!(STRATEGY_LOGGER, "Validating translated strategy performance...");
 
         // Simulate performance validation
         let results = PerformanceValidationResults {
@@ -296,7 +297,7 @@ impl EnhancedStrategyExporter {
     async fn deploy_to_environments(&self, 
         exportable: &ExportableStrategy
     ) -> Result<DeploymentResults> {
-        info!("Deploying to configured environments...");
+        log_info!(STRATEGY_LOGGER, "Deploying to configured environments...");
 
         let mut deployment_results = DeploymentResults::default();
 
@@ -330,7 +331,7 @@ impl EnhancedStrategyExporter {
 
     /// Setup monitoring for deployed strategy
     async fn setup_monitoring(&self, exportable: &ExportableStrategy) -> Result<MonitoringSetup> {
-        info!("Setting up monitoring for strategy: {}", exportable.config.name);
+        log_info!(STRATEGY_LOGGER, "Setting up monitoring for strategy: {}", exportable.config.name);
 
         // Generate monitoring configuration
         let monitoring_config = format!(r#"
@@ -410,7 +411,7 @@ dashboard:
 
     async fn deploy_to_production(&self, exportable: &ExportableStrategy) -> Result<EnvironmentDeployment> {
         // Production deployments require additional validation
-        warn!("Production deployment requires manual approval");
+        log_warn!(STRATEGY_LOGGER, "Production deployment requires manual approval");
         Ok(EnvironmentDeployment {
             environment: "production".to_string(),
             deployed: false,

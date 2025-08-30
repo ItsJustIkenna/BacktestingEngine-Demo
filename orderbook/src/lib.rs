@@ -8,6 +8,7 @@ pub mod order_book;
 pub mod level;
 pub mod reconstructor;
 pub mod types;
+pub mod logging_facade;
 
 // Re-export main types for convenience
 pub use order_book::OrderBook;

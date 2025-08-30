@@ -8,6 +8,7 @@ pub mod window;
 pub mod runner;
 pub mod result;
 pub mod auto_export;
+pub mod logging_facade;
 
 // Trading performance metrics for walkforward analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]

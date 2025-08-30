@@ -6,6 +6,8 @@
 use crate::traits::{Strategy as BacktestingStrategy, StrategyContext, StrategyResult};
 use crate::signal::Signal as BacktestingSignal;
 use crate::export::{ExportableStrategy, BacktestResults};
+use crate::logging_facade::STRATEGY_LOGGER;
+use crate::{log_info, log_warn, log_error};
 use anyhow::{Result, Context};
 use async_trait::async_trait;
 use num_traits::ToPrimitive;
@@ -14,7 +16,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Instant, Duration};
 use tokio::fs;
-use tracing::{info, warn, error};
 
 /// Translation configuration for strategy conversion
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,7 +167,7 @@ impl StrategyTranslator {
     {
         let start_time = Instant::now();
         
-        info!("Starting automated strategy translation for: {}", original_strategy.name());
+        log_info!(STRATEGY_LOGGER, "Starting automated strategy translation for: {}", original_strategy.name());
 
         // Step 1: Analyze original strategy performance
         let original_metrics = self.analyze_original_performance(&original_strategy).await?;
@@ -185,7 +186,7 @@ impl StrategyTranslator {
         self.test_compatibility(&optimized_strategy).await?;
 
         let translation_time = start_time.elapsed().as_millis() as u64;
-        info!("Strategy translation completed in {}ms", translation_time);
+        log_info!(STRATEGY_LOGGER, "Strategy translation completed in {}ms", translation_time);
 
         Ok(optimized_strategy)
     }
@@ -195,7 +196,7 @@ impl StrategyTranslator {
     where 
         T: BacktestingStrategy 
     {
-        info!("Analyzing original strategy performance...");
+        log_info!(STRATEGY_LOGGER, "Analyzing original strategy performance...");
         
         // Simulate market data for performance testing
         let test_market_data = self.create_test_market_data();
@@ -236,7 +237,7 @@ impl StrategyTranslator {
     where 
         T: BacktestingStrategy + Clone + 'static
     {
-        info!("Creating optimized strategy wrapper...");
+        log_info!(STRATEGY_LOGGER, "Creating optimized strategy wrapper...");
 
         let wrapper = OptimizedStrategyWrapper::new(
             original_strategy,
@@ -252,7 +253,7 @@ impl StrategyTranslator {
     async fn apply_performance_optimizations(&self, 
         mut strategy: Box<dyn TranslatedStrategy>
     ) -> Result<Box<dyn TranslatedStrategy>> {
-        info!("Applying performance optimizations...");
+        log_info!(STRATEGY_LOGGER, "Applying performance optimizations...");
 
         // Performance optimizations are applied during wrapper creation
         // Additional optimizations could be applied here
@@ -262,7 +263,7 @@ impl StrategyTranslator {
 
     /// Test compatibility with SignalEngine
     async fn test_compatibility(&self, strategy: &Box<dyn TranslatedStrategy>) -> Result<()> {
-        info!("Testing SignalEngine compatibility...");
+        log_info!(STRATEGY_LOGGER, "Testing SignalEngine compatibility...");
 
         let test_data = self.create_signal_engine_test_data();
         
@@ -277,9 +278,9 @@ impl StrategyTranslator {
         };
 
         if signals.is_empty() {
-            warn!("Strategy generated no signals during compatibility test");
+            log_warn!(STRATEGY_LOGGER, "Strategy generated no signals during compatibility test");
         } else {
-            info!("Compatibility test passed - generated {} signals", signals.len());
+            log_info!(STRATEGY_LOGGER, "Compatibility test passed - generated {} signals", signals.len());
         }
 
         Ok(())
@@ -514,7 +515,7 @@ impl AutomatedExportPipeline {
     where 
         T: BacktestingStrategy + Clone + 'static
     {
-        info!("Starting automated export with translation pipeline");
+        log_info!(STRATEGY_LOGGER, "Starting automated export with translation pipeline");
 
         // Step 1: Translate strategy
         let translated_strategy = self.translator.translate_strategy(
@@ -534,7 +535,7 @@ impl AutomatedExportPipeline {
         // Step 5: Update SignalEngine registry
         self.update_signal_engine_registry(&exportable_strategy).await?;
 
-        info!("Automated export completed successfully: {}", output_path);
+        log_info!(STRATEGY_LOGGER, "Automated export completed successfully: {}", output_path);
         Ok(output_path)
     }
 
@@ -659,7 +660,7 @@ impl Strategy for {} {{
         fs::write(&path, code).await
             .context("Failed to write translated strategy file")?;
 
-        info!("Generated SignalEngine strategy: {}", path);
+        log_info!(STRATEGY_LOGGER, "Generated SignalEngine strategy: {}", path);
         Ok(path)
     }
 
@@ -699,7 +700,7 @@ impl StrategyManager {{
             self.signal_engine_path, exportable.config.name.to_lowercase());
         
         fs::write(&integration_path, integration_code).await?;
-        info!("Generated integration file: {}", integration_path);
+        log_info!(STRATEGY_LOGGER, "Generated integration file: {}", integration_path);
         Ok(())
     }
 
@@ -718,7 +719,7 @@ impl StrategyManager {{
         if !existing_content.contains(&mod_entry) {
             let updated_content = format!("{}\n{}\n", existing_content, mod_entry);
             fs::write(&mod_path, updated_content).await?;
-            info!("Updated SignalEngine module registry");
+            log_info!(STRATEGY_LOGGER, "Updated SignalEngine module registry");
         }
 
         Ok(())

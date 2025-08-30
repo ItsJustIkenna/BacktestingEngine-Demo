@@ -9,6 +9,8 @@ use portfoliomanager::PortfolioState;
 use riskmanager::RiskManager;
 use dataloader::MarketData;
 use crate::types::{BacktestEvent, BacktestResult};
+use crate::logging_facade::BACKTEST_LOGGER;
+use crate::log_error;
 use metrics::{performance, risk, trade_stats};
 use bigdecimal::{BigDecimal, ToPrimitive, FromPrimitive};
 
@@ -89,7 +91,7 @@ impl SimulationLoop {
 
                     // 6. Update portfolio and risk manager with fills
                     if let Err(e) = portfolio.apply_fills(&fills) {
-                        eprintln!("Error applying fills: {}", e);
+                        log_error!(BACKTEST_LOGGER, "Error applying fills: {}", e);
                     }
                     // risk_manager.update(&portfolio, &fills); // TODO: Implement this method in RiskManager
 

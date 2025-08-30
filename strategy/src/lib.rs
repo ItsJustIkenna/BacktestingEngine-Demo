@@ -13,6 +13,7 @@ pub mod integration;
 pub mod config;
 pub mod config_export;
 pub mod translation;
+pub mod logging_facade;
 pub mod enhanced_export;
 
 // Re-export main types for convenience
@@ -38,6 +39,7 @@ pub use riskmanager::{RiskManager, RiskMetrics};
 
 use anyhow::Result;
 use std::collections::HashMap;
+use crate::logging_facade::STRATEGY_LOGGER;
 
 /// Strategy manager that coordinates multiple strategies
 #[derive(Debug)]
@@ -145,7 +147,7 @@ impl StrategyManager {
                         }
                     }
                     Err(e) => {
-                        tracing::warn!("Strategy {} failed to generate signals: {}", strategy_id, e);
+                        log_warn!(STRATEGY_LOGGER, "Strategy {} failed to generate signals: {}", strategy_id, e);
                     }
                 }
             }

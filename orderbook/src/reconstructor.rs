@@ -14,9 +14,10 @@ use databaseschema::models::{
     historical_order::HistoricalOrder,
     historical_snapshot::HistoricalSnapshot,
 };
+use crate::logging_facade::ORDERBOOK_LOGGER;
+use crate::{log_debug, log_info, log_warn};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
-use tracing::{debug, info, warn};
 
 /// Order book reconstructor that maintains order books from historical data
 pub struct OrderBookReconstructor {
@@ -76,7 +77,7 @@ impl OrderBookReconstructor {
         };
 
         let orders = self.dataloader.load_historical_orders(&params).await?;
-        info!(
+        log_info!(ORDERBOOK_LOGGER, 
             "Loaded {} historical orders for {}:{} between {:?} and {:?}",
             orders.len(),
             symbol,
@@ -118,7 +119,7 @@ impl OrderBookReconstructor {
         };
 
         let snapshots = self.dataloader.load_historical_snapshots(&params).await?;
-        info!(
+        log_info!(ORDERBOOK_LOGGER, 
             "Loaded {} historical snapshots for {}:{} between {:?} and {:?}",
             snapshots.len(),
             symbol,
@@ -153,7 +154,7 @@ impl OrderBookReconstructor {
             }
         }
 
-        debug!("Processed {} events until {}", processed_count, until_timestamp);
+        log_debug!(ORDERBOOK_LOGGER, "Processed {} events until {}", processed_count, until_timestamp);
         Ok(processed_count)
     }
 
@@ -167,7 +168,7 @@ impl OrderBookReconstructor {
             processed_count += 1;
         }
 
-        info!("Processed all {} remaining events", processed_count);
+        log_info!(ORDERBOOK_LOGGER, "Processed all {} remaining events", processed_count);
         Ok(processed_count)
     }
 
@@ -179,11 +180,11 @@ impl OrderBookReconstructor {
             | OrderBookEvent::CancelOrder { .. }
             | OrderBookEvent::Trade { .. } => {
                 // Extract symbol and exchange from event (we'll need to enhance events with this info)
-                warn!("Individual order events not yet supported - need symbol/exchange context");
+                log_warn!(ORDERBOOK_LOGGER, "Individual order events not yet supported - need symbol/exchange context");
             }
             OrderBookEvent::Snapshot { .. } => {
                 // For snapshots, we'll need to enhance the event structure to include symbol/exchange
-                warn!("Snapshot events need symbol/exchange context");
+                log_warn!(ORDERBOOK_LOGGER, "Snapshot events need symbol/exchange context");
             }
         }
 
@@ -222,7 +223,7 @@ impl OrderBookReconstructor {
                 timestamp,
             }),
             _ => {
-                debug!("Unknown event type: {}", order.get_event_type());
+                log_debug!(ORDERBOOK_LOGGER, "Unknown event type: {}", order.get_event_type());
                 None
             }
         }
@@ -273,7 +274,7 @@ impl OrderBookReconstructor {
         start_time: DateTime<Utc>,
         end_time: DateTime<Utc>,
     ) -> Result<&OrderBook> {
-        info!(
+        log_info!(ORDERBOOK_LOGGER, 
             "Starting order book reconstruction for {}:{} from {} to {}",
             symbol, exchange, start_time, end_time
         );
@@ -286,7 +287,7 @@ impl OrderBookReconstructor {
 
         // Process all events
         let processed_count = self.process_all_events()?;
-        info!("Reconstruction complete. Processed {} events", processed_count);
+        log_info!(ORDERBOOK_LOGGER, "Reconstruction complete. Processed {} events", processed_count);
 
         // Return the reconstructed book
         Ok(self.get_or_create_book(symbol, exchange))

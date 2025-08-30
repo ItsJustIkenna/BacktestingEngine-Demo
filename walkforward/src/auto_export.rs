@@ -4,11 +4,12 @@
 //! when they pass profitability thresholds during walk-forward analysis.
 
 use crate::result::WalkForwardSummary;
+use crate::logging_facade::WALKFORWARD_LOGGER;
+use crate::{log_info, log_warn};
 use strategy::export::BacktestResults;
 use strategy::strategies::avellaneda_stoikov::AvellanedaStoikovStrategy;
 use anyhow::Result;
 use bigdecimal::BigDecimal;
-use tracing::{info, warn};
 use std::sync::Arc;
 use std::collections::HashMap;
 use config::ParameterValue;
@@ -56,25 +57,25 @@ impl AutoExporter {
         _strategy: Arc<AvellanedaStoikovStrategy>,
         strategy_name: &str,
     ) -> Result<bool> {
-        info!("🔍 Evaluating walk-forward results for automatic export...");
+        log_info!(WALKFORWARD_LOGGER, "🔍 Evaluating walk-forward results for automatic export...");
         
         // 1. Check overall performance thresholds
         if !self.meets_performance_thresholds(wf_summary) {
-            info!("❌ Strategy did not meet performance thresholds - skipping export");
+            log_info!(WALKFORWARD_LOGGER, "❌ Strategy did not meet performance thresholds - skipping export");
             return Ok(false);
         }
 
         // 2. Check consistency across windows
         if !self.meets_consistency_thresholds(wf_summary) {
-            info!("❌ Strategy did not meet consistency thresholds - skipping export");
+            log_info!(WALKFORWARD_LOGGER, "❌ Strategy did not meet consistency thresholds - skipping export");
             return Ok(false);
         }
 
-        info!("✅ Strategy passed all profitability thresholds!");
-        info!("📈 Performance Summary:");
-        info!("   • Average Sharpe Ratio: {:.2}", wf_summary.average_test_sharpe);
-        info!("   • Parameter Stability: {:.2}", wf_summary.parameter_stability);
-        info!("   • Profitable Windows: {}/{}", 
+        log_info!(WALKFORWARD_LOGGER, "✅ Strategy passed all profitability thresholds!");
+        log_info!(WALKFORWARD_LOGGER, "📈 Performance Summary:");
+        log_info!(WALKFORWARD_LOGGER, "   • Average Sharpe Ratio: {:.2}", wf_summary.average_test_sharpe);
+        log_info!(WALKFORWARD_LOGGER, "   • Parameter Stability: {:.2}", wf_summary.parameter_stability);
+        log_info!(WALKFORWARD_LOGGER, "   • Profitable Windows: {}/{}", 
               self.count_profitable_windows(wf_summary), 
               wf_summary.window_results.len());
 
@@ -85,19 +86,19 @@ impl AutoExporter {
         let _optimized_parameters = self.extract_optimized_parameters(wf_summary);
 
         // 5. Execute automatic export using enhanced strategy exporter
-        info!("🚀 Starting automatic export to SignalEngine...");
+        log_info!(WALKFORWARD_LOGGER, "🚀 Starting automatic export to SignalEngine...");
         
         // For now, we'll return success based on threshold evaluation since we can't
         // directly call the enhanced exporter without Clone trait implementation
         // In a real implementation, this would create the proper export
-        info!("✅ Strategy evaluation completed successfully!");
-        info!("📄 Strategy Name: {}", strategy_name);
-        info!("📈 Performance Summary:");
-        info!("   • Average Sharpe Ratio: {:.2}", wf_summary.average_test_sharpe);
-        info!("   • Average Profit Factor: {:.2}", backtest_results.profit_factor);
-        info!("   • Win Rate: {:.2}", backtest_results.win_rate);
-        info!("   • Total Trades: {}", backtest_results.num_trades);
-        info!("🚀 Ready for SignalEngine export");
+        log_info!(WALKFORWARD_LOGGER, "✅ Strategy evaluation completed successfully!");
+        log_info!(WALKFORWARD_LOGGER, "📄 Strategy Name: {}", strategy_name);
+        log_info!(WALKFORWARD_LOGGER, "📈 Performance Summary:");
+        log_info!(WALKFORWARD_LOGGER, "   • Average Sharpe Ratio: {:.2}", wf_summary.average_test_sharpe);
+        log_info!(WALKFORWARD_LOGGER, "   • Average Profit Factor: {:.2}", backtest_results.profit_factor);
+        log_info!(WALKFORWARD_LOGGER, "   • Win Rate: {:.2}", backtest_results.win_rate);
+        log_info!(WALKFORWARD_LOGGER, "   • Total Trades: {}", backtest_results.num_trades);
+        log_info!(WALKFORWARD_LOGGER, "🚀 Ready for SignalEngine export");
         
         Ok(true)
     }
@@ -106,7 +107,7 @@ impl AutoExporter {
     fn meets_performance_thresholds(&self, wf_summary: &WalkForwardSummary) -> bool {
         // Check average Sharpe ratio
         if wf_summary.average_test_sharpe < self.thresholds.min_sharpe_ratio {
-            warn!("Sharpe ratio {:.2} below threshold {:.2}", 
+            log_warn!(WALKFORWARD_LOGGER, "Sharpe ratio {:.2} below threshold {:.2}", 
                   wf_summary.average_test_sharpe, self.thresholds.min_sharpe_ratio);
             return false;
         }
@@ -117,7 +118,7 @@ impl AutoExporter {
             .sum::<f64>() / wf_summary.window_results.len() as f64;
         
         if avg_profit_factor < self.thresholds.min_profit_factor {
-            warn!("Average profit factor {:.2} below threshold {:.2}", 
+            log_warn!(WALKFORWARD_LOGGER, "Average profit factor {:.2} below threshold {:.2}", 
                   avg_profit_factor, self.thresholds.min_profit_factor);
             return false;
         }
@@ -127,7 +128,7 @@ impl AutoExporter {
             .sum::<f64>() / wf_summary.window_results.len() as f64;
         
         if avg_win_rate < self.thresholds.min_win_rate {
-            warn!("Average win rate {:.2} below threshold {:.2}", 
+            log_warn!(WALKFORWARD_LOGGER, "Average win rate {:.2} below threshold {:.2}", 
                   avg_win_rate, self.thresholds.min_win_rate);
             return false;
         }
@@ -137,7 +138,7 @@ impl AutoExporter {
             .fold(0.0, f64::max);
         
         if max_drawdown > self.thresholds.max_drawdown {
-            warn!("Maximum drawdown {:.2} above threshold {:.2}", 
+            log_warn!(WALKFORWARD_LOGGER, "Maximum drawdown {:.2} above threshold {:.2}", 
                   max_drawdown, self.thresholds.max_drawdown);
             return false;
         }
@@ -151,7 +152,7 @@ impl AutoExporter {
         let total_windows = wf_summary.window_results.len();
         
         if profitable_windows < self.thresholds.min_consistency_windows {
-            warn!("Only {}/{} windows profitable, need at least {}", 
+            log_warn!(WALKFORWARD_LOGGER, "Only {}/{} windows profitable, need at least {}", 
                   profitable_windows, total_windows, self.thresholds.min_consistency_windows);
             return false;
         }
@@ -162,7 +163,7 @@ impl AutoExporter {
             .count();
         
         if insufficient_volume_windows > total_windows / 3 {
-            warn!("Too many windows with insufficient trade volume: {}/{}", 
+            log_warn!(WALKFORWARD_LOGGER, "Too many windows with insufficient trade volume: {}/{}", 
                   insufficient_volume_windows, total_windows);
             return false;
         }

@@ -15,6 +15,10 @@ use config::GeneticConfig;
 use config::OutputConfig;
 use std::sync::Arc;
 
+// UltraLogger integration
+use program::logging_facade::MAIN_LOGGER;
+use program::{log_info, log_warn, log_error, log_debug};
+
 #[derive(Parser)]
 #[command(name = "TradingPlatform")]
 #[command(about = "CLI for Backtesting, Optimization, and Walk-Forward Analysis", long_about = None)]
@@ -109,14 +113,14 @@ async fn main() {
     let cli = Cli::parse();
     match cli.command {
         Commands::WalkForward { data_path, start, end, train_days, test_days, step_days } => {
-            println!("🚀 Starting Walk-Forward Analysis...");
+            log_info!(MAIN_LOGGER, "🚀 Starting Walk-Forward Analysis...");
             
             // Load market data
-            println!("📊 Loading market data from: {}", data_path);
+            log_info!(MAIN_LOGGER, "📊 Loading market data from: {}", data_path);
             let data = match load_market_data(&data_path).await {
                 Ok(data) => data,
                 Err(e) => {
-                    eprintln!("❌ Failed to load market data: {}", e);
+                    log_error!(MAIN_LOGGER, "❌ Failed to load market data: {}", e);
                     std::process::exit(1);
                 }
             };

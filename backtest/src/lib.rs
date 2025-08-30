@@ -2,6 +2,7 @@
 pub mod simulation;
 pub mod types;
 pub mod monte_carlo;
+pub mod logging_facade;
 
 // Re-export main types
 pub use types::{BacktestResult, BacktestEvent};
@@ -14,6 +15,8 @@ use portfoliomanager::PortfolioState;
 use riskmanager::RiskManager;
 use dataloader::MarketData;
 use crate::simulation::SimulationLoop;
+use crate::logging_facade::BACKTEST_LOGGER;
+
 use metrics::{PerformanceMetrics, ReportGenerator, ReportConfig, ReportFormat, create_basic_report, EquityPoint};
 use config::OutputConfig;
 use chrono::NaiveDate;
@@ -32,7 +35,7 @@ pub fn create_report_config(output_config: &OutputConfig) -> Result<ReportConfig
             "json" => formats.push(ReportFormat::Json),
             "csv" => formats.push(ReportFormat::Csv),
             "pdf" => formats.push(ReportFormat::Pdf),
-            _ => eprintln!("Warning: Unknown export format '{}' ignored", format_str),
+            _ => log_warn!(BACKTEST_LOGGER, "Unknown export format '{}' ignored", format_str),
         }
     }
     

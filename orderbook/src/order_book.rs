@@ -13,13 +13,14 @@ use crate::types::{
 };
 use crate::{DepthLevel, MarketDepth, OrderBookConfig};
 use config::ExchangeFeeConfig;
+use crate::logging_facade::ORDERBOOK_LOGGER;
+use crate::{log_debug, log_warn};
 use anyhow::Result;
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use chrono::{DateTime, Utc, Duration};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
-use tracing::{debug, warn};
 
 /// Main order book structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -640,7 +641,7 @@ impl OrderBook {
         level.add_order(order)?;
         self.last_updated = timestamp;
 
-        debug!(
+        log_debug!(ORDERBOOK_LOGGER, 
             "Added order {} to {} side at price {} with quantity {}",
             order_id,
             match side {
@@ -709,7 +710,7 @@ impl OrderBook {
             self.last_updated = timestamp;
             Ok(executed_orders)
         } else {
-            warn!("Trade execution attempted at non-existent price level: {}", price);
+            log_warn!(ORDERBOOK_LOGGER, "Trade execution attempted at non-existent price level: {}", price);
             Ok(Vec::new())
         }
     }
