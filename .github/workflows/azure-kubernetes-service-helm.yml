@@ -44,9 +44,9 @@ env:
   CONTAINER_NAME: "backtesting-engine"
   RESOURCE_GROUP: "prod-aks-trading-bot-rg"
   CLUSTER_NAME: "prod-trading-bot-cluster"
-  CHART_PATH: "./k8s/backtesting-engine"
-  BASE_CHART_OVERRIDE_PATH: "./k8s/backtesting-engine/values.yaml"
-  ENV_CHART_OVERRIDE_PATH: "./k8s/backtesting-engine/values-prod.yaml"
+  CHART_PATH: "./k8s/backtesting-engine-helm"
+  BASE_CHART_OVERRIDE_PATH: "./k8s/backtesting-engine-helm/values.yaml"
+  ENV_CHART_OVERRIDE_PATH: "./k8s/backtesting-engine-helm/values-prod.yaml"
 
 jobs:
   buildImage:
