@@ -108,7 +108,7 @@ impl From<crate::config_export::ApprovalLevel> for ApprovalLevel {
 }
 
 /// Strategy export evaluation result
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportEvaluation {
     pub eligible: bool,
     pub passed_checks: Vec<String>,

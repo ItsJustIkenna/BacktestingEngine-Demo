@@ -5,8 +5,8 @@
 
 use strategy::{
     BacktestIntegration, StrategyExporter, PerformanceThresholds, 
-    StrategyConfig, ParameterValue, ApprovalLevel,
-    BacktestResults, StrategyMetrics,
+    config::{StrategyConfig, ParameterValue}, ApprovalLevel,
+    BacktestResults, traits::StrategyMetrics,
 };
 use bigdecimal::BigDecimal;
 use clap::{Parser, Subcommand};
@@ -158,14 +158,18 @@ async fn export_strategy(
     // Create example data (in real implementation, load from files)
     let strategy_config = create_example_strategy_config();
     let backtest_result = create_example_backtest_result();
-    let strategy_metrics = strategy::StrategyMetrics::default();
+    let strategy_metrics = StrategyMetrics::default();
     let optimized_parameters = strategy_config.parameters.clone();
     
+    // Convert to config crate types for manual_export
+    let config_strategy_config = convert_to_config_strategy_config(&strategy_config);
+    let config_parameters = convert_to_config_parameters(&optimized_parameters);
+    
     match integration.manual_export(
-        strategy_config,
+        config_strategy_config,
         backtest_result,
         strategy_metrics,
-        optimized_parameters,
+        config_parameters,
         authorized_by.to_string(),
         approval,
         notes,
@@ -309,6 +313,63 @@ fn create_example_results() -> strategy::BacktestResults {
         backtest_start: chrono::Utc::now() - chrono::Duration::days(120),
         backtest_end: chrono::Utc::now(),
         signals_generated: 500,
-        strategy_metrics: strategy::StrategyMetrics::default(),
+        strategy_metrics: StrategyMetrics::default(),
     }
+}
+
+// Helper functions to convert between strategy crate types and config crate types
+fn convert_to_config_strategy_config(strategy_config: &StrategyConfig) -> config::StrategyConfig {
+    let mut config_params = HashMap::new();
+    for (key, value) in &strategy_config.parameters {
+        let config_value = match value {
+            ParameterValue::Float(f) => config::ParameterValue::Float(*f),
+            ParameterValue::Int(i) => config::ParameterValue::Integer(*i),
+            ParameterValue::String(s) => config::ParameterValue::String(s.clone()),
+            ParameterValue::Bool(b) => config::ParameterValue::Boolean(*b),
+            ParameterValue::Array(arr) => {
+                // For arrays, just take the first element or default to 0.0
+                let first_value = arr.first().map(|v| match v {
+                    ParameterValue::Float(f) => *f,
+                    ParameterValue::Int(i) => *i as f64,
+                    _ => 0.0,
+                }).unwrap_or(0.0);
+                config::ParameterValue::Float(first_value)
+            }
+        };
+        config_params.insert(key.clone(), config_value);
+    }
+    
+    config::StrategyConfig {
+        id: strategy_config.id.clone(),
+        name: strategy_config.name.clone(),
+        strategy_type: strategy_config.strategy_type.clone(),
+        symbol: strategy_config.symbol.clone(),
+        exchange: strategy_config.exchange.clone(),
+        parameters: config_params,
+        risk_limits: Default::default(), // Convert if needed
+        enabled: strategy_config.enabled,
+    }
+}
+
+fn convert_to_config_parameters(params: &HashMap<String, ParameterValue>) -> HashMap<String, config::ParameterValue> {
+    let mut config_params = HashMap::new();
+    for (key, value) in params {
+        let config_value = match value {
+            ParameterValue::Float(f) => config::ParameterValue::Float(*f),
+            ParameterValue::Int(i) => config::ParameterValue::Integer(*i),
+            ParameterValue::String(s) => config::ParameterValue::String(s.clone()),
+            ParameterValue::Bool(b) => config::ParameterValue::Boolean(*b),
+            ParameterValue::Array(arr) => {
+                // For arrays, just take the first element or default to 0.0
+                let first_value = arr.first().map(|v| match v {
+                    ParameterValue::Float(f) => *f,
+                    ParameterValue::Int(i) => *i as f64,
+                    _ => 0.0,
+                }).unwrap_or(0.0);
+                config::ParameterValue::Float(first_value)
+            }
+        };
+        config_params.insert(key.clone(), config_value);
+    }
+    config_params
 }

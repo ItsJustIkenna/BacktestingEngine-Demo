@@ -250,11 +250,11 @@ export const Dashboard: React.FC = () => {
           size="large"
           onClick={() => window.location.href = '/new-backtest'}
           sx={{
-            background: `linear-gradient(45deg, ${theme.palette.primary.main}, ${theme.palette.primary.dark})`,
-            boxShadow: `0 3px 5px 2px ${theme.palette.primary.main}30`,
+            background: `linear-gradient(45deg, ${theme.palette.secondary.main}, ${theme.palette.secondary.dark})`,
+            boxShadow: `0 3px 5px 2px ${theme.palette.secondary.main}30`,
           }}
         >
-          New Backtest
+          View Strategies
         </Button>
         <Button
           variant="outlined"

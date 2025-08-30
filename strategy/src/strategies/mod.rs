@@ -5,9 +5,11 @@
 
 // Common strategy implementations
 pub mod avellaneda_stoikov;
+pub mod rsi_mean_reversion;
 
 // Re-export all strategy implementations for convenience
 pub use avellaneda_stoikov::*;
+pub use rsi_mean_reversion::*;
 
 /// Registry of all available strategy types for dynamic creation
 pub fn get_available_strategies() -> Vec<&'static str> {
@@ -27,6 +29,7 @@ pub fn get_available_strategies() -> Vec<&'static str> {
 pub fn create_strategy(strategy_name: &str) -> Option<Box<dyn crate::Strategy>> {
     match strategy_name {
         "AvellanedaStoikovMarketMaker" => Some(Box::new(AvellanedaStoikovStrategy::default())),
+        "RSIMeanReversion" => Some(Box::new(RSIMeanReversionStrategy::default())),
         _ => None,
     }
 }

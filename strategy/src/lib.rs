@@ -10,7 +10,10 @@ pub mod indicators;
 pub mod strategies;
 pub mod export;
 pub mod integration;
+pub mod config;
 pub mod config_export;
+pub mod translation;
+pub mod enhanced_export;
 
 // Re-export main types for convenience
 pub use traits::{Strategy, StrategyContext, StrategyError, StrategyResult, StrategyMetrics};
@@ -20,9 +23,17 @@ pub use export::{
     StrategyExporter, BacktestResults, ExportableStrategy,
     LiveTradingConfig, ExportEvaluation, ApprovalLevel,
 };
+pub use enhanced_export::{
+    EnhancedStrategyExporter, EnhancedExportConfig, AutomatedExportResult,
+    DeploymentConfig, QualityConfig,
+};
+pub use translation::{
+    StrategyTranslator, TranslatedStrategy, TranslationMetrics,
+    AutomatedExportPipeline,
+};
 pub use integration::{BacktestIntegration, ExportStatistics};
 pub use config_export::{ExportConfig, PerformanceThresholds};
-pub use config::{ParameterValue, StrategyConfig};
+pub use config::{ParameterValue, StrategyConfig, RiskLimits as StrategyRiskLimits};
 pub use riskmanager::{RiskManager, RiskMetrics};
 
 use anyhow::Result;
@@ -216,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_parameter_value_conversions() {
-        let int_param = ParameterValue::Integer(42);
+        let int_param = ParameterValue::Int(42);
         assert_eq!(int_param.as_int(), Some(42));
         assert_eq!(int_param.as_float(), Some(42.0));
 
@@ -226,7 +237,7 @@ mod tests {
         let string_param = ParameterValue::String("test".to_string());
         assert_eq!(string_param.as_string(), Some("test"));
 
-        let bool_param = ParameterValue::Boolean(true);
+        let bool_param = ParameterValue::Bool(true);
         assert_eq!(bool_param.as_bool(), Some(true));
     }
 

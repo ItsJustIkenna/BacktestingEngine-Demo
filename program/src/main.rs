@@ -1,7 +1,8 @@
 use clap::{Parser, Subcommand};
 use chrono::{NaiveDate, Duration};
 use dataloader::MarketData;
-use walkforward::runner::run_walkforward_analysis;
+use walkforward::runner::{run_walkforward_analysis, run_walkforward_with_auto_export};
+use walkforward::auto_export::ExportThresholds;
 use backtest::BacktestEngine;
 use backtest::simulation::SimulationLoop;
 use strategy::strategies::avellaneda_stoikov::{AvellanedaStoikovParams, AvellanedaStoikovStrategy};
@@ -38,6 +39,35 @@ enum Commands {
         test_days: i64,
         #[arg(long)]
         step_days: i64,
+    },
+    /// Run enhanced walk-forward analysis with automatic strategy export
+    WalkForwardAutoExport {
+        #[arg(long)]
+        data_path: String,
+        #[arg(long)]
+        start: String,
+        #[arg(long)]
+        end: String,
+        #[arg(long)]
+        train_days: i64,
+        #[arg(long)]
+        test_days: i64,
+        #[arg(long)]
+        step_days: i64,
+        #[arg(long)]
+        strategy_name: String,
+        #[arg(long, default_value = "1.0")]
+        min_sharpe_ratio: f64,
+        #[arg(long, default_value = "1.3")]
+        min_profit_factor: f64,
+        #[arg(long, default_value = "0.55")]
+        min_win_rate: f64,
+        #[arg(long, default_value = "0.15")]
+        max_drawdown: f64,
+        #[arg(long, default_value = "50")]
+        min_trades: usize,
+        #[arg(long, default_value = "3")]
+        min_profitable_windows: usize,
     },
     /// Run a single backtest
     Backtest {
@@ -119,6 +149,81 @@ async fn main() {
             println!("📊 Summary: {} windows analyzed", results.window_results.len());
             println!("🏆 Average Test Sharpe: {:.4}", results.average_test_sharpe);
             println!("📏 Parameter Stability: {:.4}", results.parameter_stability);
+        }
+        Commands::WalkForwardAutoExport { 
+            data_path, start, end, train_days, test_days, step_days,
+            strategy_name, min_sharpe_ratio, min_profit_factor, min_win_rate,
+            max_drawdown, min_trades, min_profitable_windows
+        } => {
+            println!("🚀 Starting Enhanced Walk-Forward Analysis with Auto-Export...");
+            
+            // Load market data
+            println!("📊 Loading market data from: {}", data_path);
+            let data = match load_market_data(&data_path).await {
+                Ok(data) => data,
+                Err(e) => {
+                    eprintln!("❌ Failed to load market data: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            
+            // Parse dates
+            let start_date = NaiveDate::parse_from_str(&start, "%Y-%m-%d")
+                .expect("Invalid start date format. Use YYYY-MM-DD");
+            let end_date = NaiveDate::parse_from_str(&end, "%Y-%m-%d")
+                .expect("Invalid end date format. Use YYYY-MM-DD");
+            
+            // Convert days to Duration
+            let train_duration = Duration::days(train_days);
+            let test_duration = Duration::days(test_days);
+            let step_duration = Duration::days(step_days);
+            
+            println!("📈 Running enhanced analysis from {} to {} (train={}, test={}, step={} days)", 
+                start, end, train_days, test_days, step_days);
+            println!("🎯 Strategy: {}", strategy_name);
+            println!("📋 Export Thresholds: Sharpe≥{:.2}, PF≥{:.2}, WinRate≥{:.2}, DD≤{:.2}%", 
+                min_sharpe_ratio, min_profit_factor, min_win_rate, max_drawdown*100.0);
+            
+            // Configure export thresholds
+            let export_thresholds = ExportThresholds {
+                min_sharpe_ratio,
+                min_profit_factor,
+                min_win_rate,
+                max_drawdown,
+                min_number_of_trades: min_trades,
+                min_consistency_windows: min_profitable_windows,
+            };
+            
+            // Run enhanced walk-forward analysis with automatic export
+            match run_walkforward_with_auto_export(
+                &data, 
+                start_date, 
+                end_date, 
+                train_duration, 
+                test_duration, 
+                step_duration,
+                &strategy_name,
+                Some(export_thresholds)
+            ).await {
+                Ok((results, exported)) => {
+                    println!("✅ Enhanced walk-forward analysis completed!");
+                    println!("📊 Summary: {} windows analyzed", results.window_results.len());
+                    println!("🏆 Average Test Sharpe: {:.4}", results.average_test_sharpe);
+                    println!("📏 Parameter Stability: {:.4}", results.parameter_stability);
+                    
+                    if exported {
+                        println!("🎉 Strategy successfully exported to SignalEngine!");
+                        println!("🚀 Ready for live trading deployment");
+                    } else {
+                        println!("⚠️  Strategy did not meet export thresholds");
+                        println!("🔧 Consider adjusting parameters or improving strategy");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("❌ Enhanced walk-forward analysis failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
         Commands::Backtest { data_path, risk_aversion, inventory_target, order_size } => {
             println!("🚀 Starting Backtest...");

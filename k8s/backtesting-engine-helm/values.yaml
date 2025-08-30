@@ -63,8 +63,13 @@ securityContext:
 # Service configuration
 service:
   type: ClusterIP
+  # UI port (nginx serving React app)
+  uiPort: 80
+  uiTargetPort: 80
+  # API port (backend service)
   port: 8080
   targetPort: 8080
+  # Metrics port
   metricsPort: 9090
   nodePort: ""
   loadBalancerIP: ""

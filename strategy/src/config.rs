@@ -41,6 +41,50 @@ pub enum ParameterValue {
     Array(Vec<ParameterValue>),
 }
 
+impl ParameterValue {
+    /// Convert to integer if possible
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            ParameterValue::Int(i) => Some(*i),
+            ParameterValue::Float(f) => Some(*f as i64),
+            _ => None,
+        }
+    }
+
+    /// Convert to float if possible
+    pub fn as_float(&self) -> Option<f64> {
+        match self {
+            ParameterValue::Float(f) => Some(*f),
+            ParameterValue::Int(i) => Some(*i as f64),
+            _ => None,
+        }
+    }
+
+    /// Convert to string if possible
+    pub fn as_string(&self) -> Option<&str> {
+        match self {
+            ParameterValue::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Convert to boolean if possible
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            ParameterValue::Bool(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    /// Convert to array if possible
+    pub fn as_array(&self) -> Option<&Vec<ParameterValue>> {
+        match self {
+            ParameterValue::Array(a) => Some(a),
+            _ => None,
+        }
+    }
+}
+
 /// Risk management limits for a strategy
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RiskLimits {
