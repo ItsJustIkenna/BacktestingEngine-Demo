@@ -1,21 +1,43 @@
-//! Strategy Export Integration
+//! Strategy Export Integration System
 //!
-//! This module provides integration between the backtesting engine and strategy export system
-//! to automatically export successful strategies to the SignalEngine for live trading.
+//! This module provides a comprehensive integration layer between the backtesting engine 
+//! and strategy export system to automatically export successful strategies for live trading.
+//!
+//! ## Features
+//! - Automatic export based on performance thresholds
+//! - Manual force export capabilities
+//! - Export statistics and monitoring
+//! - Customizable export configurations
+//! - Integration with backtesting workflow
+//!
+//! ## Usage
+//! ```rust
+//! use strategy::integration::BacktestIntegration;
+//! 
+//! let mut integration = BacktestIntegration::new()?;
+//! integration.enable_auto_export(None); // Use default config
+//! 
+//! // Process backtest results and potentially auto-export
+//! let export_path = integration.process_backtest_results(
+//!     strategy_config,
+//!     backtest_result,
+//!     strategy_metrics,
+//!     optimized_parameters,
+//! ).await?;
+//! ```
 
-use crate::{
-    export::{StrategyExporter},
-    traits::StrategyMetrics,
-    BacktestResults, ApprovalLevel,
-    config_export::ExportConfig,
-};
+use crate::simple_export::{StrategyExporter, ExportConfig, StrategyMetrics, BacktestResults};
 use config::{StrategyConfig, ParameterValue};
 use bigdecimal::BigDecimal;
 use chrono::{Utc, Duration};
 use std::collections::HashMap;
 use anyhow::Result;
 
-/// Integration layer between backtesting engine and strategy export system
+/// Comprehensive integration layer between backtesting engine and strategy export system
+/// 
+/// This struct manages the automatic export of successful trading strategies based on
+/// configurable performance criteria. It bridges the gap between backtesting results
+/// and live trading deployment.
 pub struct BacktestIntegration {
     exporter: StrategyExporter,
     auto_export_enabled: bool,
@@ -24,8 +46,8 @@ pub struct BacktestIntegration {
 
 impl BacktestIntegration {
     /// Create new backtest integration
-    pub fn new(signal_engine_path: String) -> Result<Self> {
-        let exporter = StrategyExporter::new(signal_engine_path)?;
+    pub fn new() -> Result<Self> {
+        let exporter = StrategyExporter::new();
         Ok(Self {
             exporter,
             auto_export_enabled: false,
@@ -33,10 +55,15 @@ impl BacktestIntegration {
         })
     }
 
-    /// Enable automatic export of successful strategies
+    /// Enable automatic export with optional custom configuration
     pub fn enable_auto_export(&mut self, config: Option<ExportConfig>) {
         self.auto_export_enabled = true;
         self.custom_config = config;
+    }
+
+    /// Disable automatic export
+    pub fn disable_auto_export(&mut self) {
+        self.auto_export_enabled = false;
     }
 
     /// Process backtest results and potentially export strategy
@@ -44,164 +71,170 @@ impl BacktestIntegration {
         &self,
         strategy_config: StrategyConfig,
         backtest_result: BacktestResults,
-        strategy_metrics: StrategyMetrics,
+        _strategy_metrics: StrategyMetrics,
         optimized_parameters: HashMap<String, ParameterValue>,
     ) -> Result<Option<String>> {
         if !self.auto_export_enabled {
             return Ok(None);
         }
 
-        // Evaluate strategy performance
-        let evaluation = self.exporter.evaluate_strategy(&backtest_result);
-        
-        if evaluation.eligible {
-            println!("✅ Strategy meets export criteria! Auto-exporting...");
-            
-            match self.exporter.export_strategy(
-                strategy_config,
-                backtest_result,
-                optimized_parameters,
-                "BacktestEngine-AutoExport".to_string(),
-                Some("Automatically exported after successful backtest".to_string()),
-            ).await {
-                Ok(exported_strategy) => {
-                    let export_path = format!("exported_strategies/{}_{}.json", 
-                        exported_strategy.config.id,
-                        exported_strategy.export_metadata.export_time.format("%Y%m%d_%H%M%S"));
-                    
-                    println!("✅ Strategy successfully exported for live trading!");
-                    println!("📁 Export location: {}", export_path);
-                    println!("📊 Performance score: {:.1}%", evaluation.score * 100.0);
-                    
-                    return Ok(Some(export_path));
-                }
-                Err(e) => {
-                    println!("❌ Failed to export strategy: {}", e);
-                }
-            }
+        // Use custom config if available, otherwise default
+        let exporter = if let Some(config) = &self.custom_config {
+            StrategyExporter::with_config(config.clone())
         } else {
-            println!("❌ Strategy does not meet export criteria");
-            println!("Failed checks:");
-            for check in evaluation.failed_checks {
-                println!("  - {}", check);
-            }
-            
-            if !evaluation.warnings.is_empty() {
-                println!("Warnings:");
-                for warning in evaluation.warnings {
-                    println!("  ⚠️  {}", warning);
-                }
-            }
-        }
+            StrategyExporter::new()
+        };
 
-        Ok(None)
-    }
+        // Convert ParameterValue to f64 for export
+        let parameters: HashMap<String, f64> = optimized_parameters.iter()
+            .filter_map(|(k, v)| match v {
+                ParameterValue::Float(f) => Some((k.clone(), *f)),
+                ParameterValue::Integer(i) => Some((k.clone(), *i as f64)),
+                ParameterValue::Boolean(b) => Some((k.clone(), if *b { 1.0 } else { 0.0 })),
+                ParameterValue::String(_) => None, // Skip strings for simplicity
+            }).collect();
 
-    /// Manual export with custom approval
-    pub async fn manual_export(
-        &self,
-        strategy_config: StrategyConfig,
-        backtest_result: BacktestResults,
-        strategy_metrics: StrategyMetrics,
-        optimized_parameters: HashMap<String, ParameterValue>,
-        authorized_by: String,
-        approval_level: ApprovalLevel,
-        notes: Option<String>,
-    ) -> Result<String> {
-        let mut exported_strategy = self.exporter.export_strategy(
-            strategy_config,
+        // Export strategy if it meets criteria
+        let export_path = exporter.export_strategy(
+            &strategy_config.name,
+            &strategy_config.symbol,
+            &strategy_config.exchange,
+            parameters,
             backtest_result,
-            optimized_parameters,
-            authorized_by,
-            notes,
         ).await?;
 
-        // Update approval level for manual exports
-        exported_strategy.export_metadata.approval_level = approval_level;
-
-        let export_path = format!("exported_strategies/{}_{}.json", 
-            exported_strategy.config.id,
-            exported_strategy.export_metadata.export_time.format("%Y%m%d_%H%M%S"));
+        if let Some(path) = &export_path {
+            println!("✅ Strategy auto-exported to: {}", path);
+        }
 
         Ok(export_path)
     }
 
-    /// Get export statistics
+    /// Force export a strategy regardless of criteria
+    pub async fn force_export_strategy(
+        &self,
+        strategy_config: StrategyConfig,
+        backtest_result: BacktestResults,
+        optimized_parameters: HashMap<String, ParameterValue>,
+    ) -> Result<String> {
+        let exporter = if let Some(config) = &self.custom_config {
+            StrategyExporter::with_config(config.clone())
+        } else {
+            StrategyExporter::new()
+        };
+
+        // Convert ParameterValue to f64 for export
+        let parameters: HashMap<String, f64> = optimized_parameters.iter()
+            .filter_map(|(k, v)| match v {
+                ParameterValue::Float(f) => Some((k.clone(), *f)),
+                ParameterValue::Integer(i) => Some((k.clone(), *i as f64)),
+                ParameterValue::Boolean(b) => Some((k.clone(), if *b { 1.0 } else { 0.0 })),
+                ParameterValue::String(_) => None,
+            }).collect();
+
+        let export_path = exporter.force_export(
+            &strategy_config.name,
+            &strategy_config.symbol,
+            &strategy_config.exchange,
+            parameters,
+            backtest_result,
+        ).await?;
+
+        println!("📤 Strategy force exported to: {}", export_path);
+        Ok(export_path)
+    }
+
+    /// Get list of exported strategies
+    pub async fn get_exported_strategies(&self) -> Result<Vec<String>> {
+        self.exporter.list_exported_strategies().await
+    }
+
+    /// Get simple export statistics
     pub async fn get_export_statistics(&self) -> Result<ExportStatistics> {
-        let exported_strategies = self.exporter.list_exported_strategies().await?;
-        
-        let mut stats = ExportStatistics::default();
-        stats.total_exported = exported_strategies.len();
+        let exported_strategies = self.get_exported_strategies().await?;
+        Ok(ExportStatistics {
+            total_exported: exported_strategies.len(),
+            strategies_exported: exported_strategies,
+        })
+    }
 
-        for filename in exported_strategies {
-            if let Ok(strategy) = self.exporter.load_exported_strategy(&filename).await {
-                stats.by_approval_level.entry(format!("{:?}", strategy.export_metadata.approval_level))
-                    .and_modify(|count| *count += 1)
-                    .or_insert(1);
+    /// Check if a strategy would meet export criteria without actually exporting
+    pub fn would_export(&self, backtest_result: &BacktestResults) -> bool {
+        let exporter = if let Some(config) = &self.custom_config {
+            StrategyExporter::with_config(config.clone())
+        } else {
+            StrategyExporter::new()
+        };
+        exporter.should_export(backtest_result)
+    }
 
-                if strategy.live_trading_config.paper_trading {
-                    stats.paper_trading_count += 1;
-                } else {
-                    stats.live_trading_count += 1;
-                }
-            }
-        }
+    /// Get current export configuration
+    pub fn get_export_config(&self) -> ExportConfig {
+        self.custom_config.clone().unwrap_or_default()
+    }
 
-        Ok(stats)
+    /// Update export configuration
+    pub fn set_export_config(&mut self, config: ExportConfig) {
+        self.custom_config = Some(config);
+    }
+
+    /// Get auto-export status
+    pub fn is_auto_export_enabled(&self) -> bool {
+        self.auto_export_enabled
     }
 }
 
-/// Export statistics for monitoring
-#[derive(Debug, Default)]
-pub struct ExportStatistics {
-    pub total_exported: usize,
-    pub paper_trading_count: usize,
-    pub live_trading_count: usize,
-    pub by_approval_level: HashMap<String, usize>,
+impl Default for BacktestIntegration {
+    fn default() -> Self {
+        Self::new().expect("Failed to create BacktestIntegration")
+    }
 }
 
-/// Example usage function
-pub async fn example_usage() -> Result<()> {
+/// Export statistics for monitoring and analytics
+#[derive(Debug, Default)]
+pub struct ExportStatistics {
+    /// Total number of exported strategies
+    pub total_exported: usize,
+    /// List of exported strategy filenames
+    pub strategies_exported: Vec<String>,
+}
+
+impl ExportStatistics {
+    /// Get statistics summary as formatted string
+    pub fn summary(&self) -> String {
+        format!(
+            "Export Statistics:\n  Total Exported: {}\n  Strategies: [{}]",
+            self.total_exported,
+            self.strategies_exported.join(", ")
+        )
+    }
+    
+    /// Check if any strategies have been exported
+    pub fn has_exports(&self) -> bool {
+        self.total_exported > 0
+    }
+}
+
+/// Simple integration example
+pub async fn simple_integration_example() -> Result<()> {
     // Initialize the integration
-    let mut integration = BacktestIntegration::new(
-        "../SignalEngine".to_string()
-    )?;
+    let mut integration = BacktestIntegration::new()?;
 
-    // Set custom export configuration
-    let custom_config = ExportConfig {
-        performance_thresholds: crate::config_export::PerformanceThresholds {
-            min_sharpe_ratio: 2.0,
-            min_profit_factor: 1.5,
-            min_win_rate: 0.6,
-            max_drawdown: 0.1,
-            min_trades: 200,
-            ..crate::config_export::PerformanceThresholds::default()
-        },
-        ..ExportConfig::default()
-    };
+    // Enable auto export with default config
+    integration.enable_auto_export(None);
 
-    integration.enable_auto_export(Some(custom_config));
-
-    // Example strategy configuration
-    let mut strategy_config = StrategyConfig {
-        id: "avellaneda_stoikov_v1".to_string(),
-        name: "Avellaneda-Stoikov Market Maker".to_string(),
-        strategy_type: "AvellanedaStoikov".to_string(),
-        symbol: "BTCUSD".to_string(),
-        exchange: "kraken".to_string(),
-        parameters: HashMap::new(),
-        risk_limits: Default::default(),
-        enabled: true,
-    };
-
-    // Add optimized parameters
+    // Create example strategy configuration
+    let mut strategy_config = StrategyConfig::default();
+    strategy_config.name = "SimpleMA".to_string();
+    strategy_config.symbol = "BTCUSDT".to_string();
+    strategy_config.exchange = "binance".to_string();
     strategy_config.parameters.insert(
-        "risk_aversion".to_string(), 
-        ParameterValue::Float(0.008)
+        "fast_period".to_string(), 
+        ParameterValue::Float(12.0)
     );
     strategy_config.parameters.insert(
-        "order_size".to_string(), 
-        ParameterValue::Float(0.05)
+        "slow_period".to_string(), 
+        ParameterValue::Float(26.0)
     );
 
     // Example backtest results (successful strategy)
@@ -211,7 +244,7 @@ pub async fn example_usage() -> Result<()> {
         max_drawdown: BigDecimal::from(300),
         sharpe_ratio: 2.1,
         profit_factor: 1.6,
-        win_rate: 0.62,
+        win_rate: 62.0,
         avg_trade_return: 0.0025,
         median_trade_return: 0.002,
         avg_trade_duration_hours: 1.5,
@@ -219,10 +252,10 @@ pub async fn example_usage() -> Result<()> {
         gross_profit: 8000.0,
         gross_loss: 3000.0,
         net_profit: 5000.0,
-        backtest_start: Utc::now() - Duration::days(90),
-        backtest_end: Utc::now(),
         signals_generated: 280,
         strategy_metrics: StrategyMetrics::default(),
+        backtest_start: Utc::now() - Duration::days(90),
+        backtest_end: Utc::now(),
     };
 
     let strategy_metrics = StrategyMetrics {
@@ -249,56 +282,13 @@ pub async fn example_usage() -> Result<()> {
         // Get export statistics
         let stats = integration.get_export_statistics().await?;
         println!("Export Statistics: {:#?}", stats);
+        
+        // List exported strategies
+        let exported = integration.get_exported_strategies().await?;
+        println!("Exported strategies: {:?}", exported);
+    } else {
+        println!("Strategy did not meet export criteria");
     }
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_backtest_integration() {
-        let integration = BacktestIntegration::new("test".to_string());
-        
-        // Create test data
-        let strategy_config = StrategyConfig {
-            id: "test_strategy".to_string(),
-            name: "Test Strategy".to_string(),
-            strategy_type: "TestStrategy".to_string(),
-            symbol: "BTCUSD".to_string(),
-            exchange: "test".to_string(),
-            parameters: HashMap::new(),
-            risk_limits: Default::default(),
-            enabled: true,
-        };
-
-        let backtest_result = BacktestResults {
-            total_pnl: BigDecimal::from(1000),
-            num_trades: 100,
-            max_drawdown: BigDecimal::from(50),
-            sharpe_ratio: 1.5,
-            profit_factor: 1.3,
-            win_rate: 0.55,
-            avg_trade_return: 0.001,
-            median_trade_return: 0.0008,
-            avg_trade_duration_hours: 2.0,
-            volatility: 0.15,
-            gross_profit: 1500.0,
-            gross_loss: 500.0,
-            net_profit: 1000.0,
-            backtest_start: Utc::now() - Duration::days(30),
-            backtest_end: Utc::now(),
-            signals_generated: 150,
-            strategy_metrics: StrategyMetrics::default(),
-        };
-
-        let _metrics = StrategyMetrics::default();
-
-        // Test that the results are properly structured
-        assert_eq!(backtest_result.total_pnl, BigDecimal::from(1000));
-        assert_eq!(backtest_result.num_trades, 100);
-        assert_eq!(backtest_result.sharpe_ratio, 1.5);
-    }
 }

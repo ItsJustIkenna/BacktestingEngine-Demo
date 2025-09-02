@@ -1,39 +1,26 @@
 //! Trading Strategy Module
 //!
 //! This module provides a comprehensive framework for implementing and managing
-//! trading strategies with support for technical analysis, market data processing,
-//! signal generation, and strategy export to live trading systems.
+//! trading strategies with technical analysis, market data processing,
+//! signal generation, and simple strategy export.
 
 pub mod traits;
 pub mod signal;
 pub mod indicators;
 pub mod strategies;
-pub mod export;
+pub mod simple_export;
 pub mod integration;
 pub mod config;
-pub mod config_export;
-pub mod translation;
 pub mod logging_facade;
-pub mod enhanced_export;
 
 // Re-export main types for convenience
 pub use traits::{Strategy, StrategyContext, StrategyError, StrategyResult, StrategyMetrics};
 pub use signal::{Signal, SignalType, SignalStrength, SignalReason};
 pub use indicators::{IndicatorValue};
-pub use export::{
-    StrategyExporter, BacktestResults, ExportableStrategy,
-    LiveTradingConfig, ExportEvaluation, ApprovalLevel,
+pub use simple_export::{
+    StrategyExporter, BacktestResults, ExportableStrategy, ExportConfig,
 };
-pub use enhanced_export::{
-    EnhancedStrategyExporter, EnhancedExportConfig, AutomatedExportResult,
-    DeploymentConfig, QualityConfig,
-};
-pub use translation::{
-    StrategyTranslator, TranslatedStrategy, TranslationMetrics,
-    AutomatedExportPipeline,
-};
-pub use integration::{BacktestIntegration, ExportStatistics};
-pub use config_export::{ExportConfig, PerformanceThresholds};
+pub use integration::{BacktestIntegration};
 pub use config::{ParameterValue, StrategyConfig, RiskLimits as StrategyRiskLimits};
 pub use riskmanager::{RiskManager, RiskMetrics};
 

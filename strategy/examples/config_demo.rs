@@ -1,152 +1,82 @@
-//! Simple configuration demo without database dependencies
-//!
-//! This demo tests the ConfigMap-driven configuration system for strategy export.
-
-use anyhow::Result;
-use bigdecimal::{BigDecimal, ToPrimitive};
+use strategy::simple_export::{StrategyExporter, ExportConfig};
+use strategy::BacktestResults;
+use bigdecimal::BigDecimal;
+use chrono::{Utc, Duration};
 use std::collections::HashMap;
-use chrono::Utc;
+use anyhow::Result;
 
-use strategy::{
-    ExportConfig, StrategyExporter, BacktestResults,
-    StrategyMetrics,
-};
-use config::{StrategyConfig, RiskLimits};
-
+/// Demo of custom export configuration
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("🚀 ConfigMap-Driven Strategy Export System Demo");
-    println!("==============================================\n");
+    println!("⚙️  Export Configuration Demo");
+    println!("==============================\n");
 
-    // 1. Test ExportConfig loading from environment/defaults
-    println!("📋 Loading Export Configuration...");
-    let export_config = ExportConfig::from_env().unwrap_or_else(|_| {
-        println!("⚠️  No ConfigMap found, using default configuration");
-        ExportConfig::default()
-    });
+    // 1. Create custom export configuration
+    let export_config = ExportConfig {
+        min_sharpe_ratio: 1.8,
+        min_profit_factor: 1.5,
+        min_win_rate: 65.0,
+        export_path: "./custom_exports".to_string(),
+    };
 
-    println!("✅ Configuration loaded successfully!");
-    println!("   Performance Thresholds:");
-    println!("   - Min Sharpe Ratio: {}", export_config.performance_thresholds.min_sharpe_ratio);
-    println!("   - Min Profit Factor: {}", export_config.performance_thresholds.min_profit_factor);
-    println!("   - Min Win Rate: {}%", export_config.performance_thresholds.min_win_rate * 100.0);
-    println!("   - Max Drawdown: {}%", export_config.performance_thresholds.max_drawdown * 100.0);
-    println!("   - Min Trades: {}", export_config.performance_thresholds.min_trades);
-    println!();
+    println!("🔧 Custom Export Configuration:");
+    println!("  Min Sharpe Ratio: {}", export_config.min_sharpe_ratio);
+    println!("  Min Profit Factor: {}", export_config.min_profit_factor);
+    println!("  Min Win Rate: {}%", export_config.min_win_rate);
+    println!("  Export Path: {}\n", export_config.export_path);
 
-    // 2. Create mock backtest results
+    // 2. Create sample backtest results
     let backtest_results = BacktestResults {
-        total_pnl: BigDecimal::from(2500),
-        num_trades: 150,
-        max_drawdown: BigDecimal::from(250),
-        sharpe_ratio: 1.8,
-        profit_factor: 1.4,
-        win_rate: 0.62,
-        avg_trade_return: 0.0025,
-        median_trade_return: 0.002,
-        avg_trade_duration_hours: 4.5,
-        volatility: 0.22,
-        gross_profit: 3500.0,
-        gross_loss: 2500.0,
-        net_profit: 1000.0,
-        backtest_start: Utc::now() - chrono::Duration::days(120),
+        total_pnl: BigDecimal::from(5200),
+        num_trades: 89,
+        max_drawdown: BigDecimal::from(650),
+        sharpe_ratio: 1.9,
+        profit_factor: 1.6,
+        win_rate: 67.0,
+        avg_trade_return: 0.0035,
+        median_trade_return: 0.0028,
+        avg_trade_duration_hours: 3.2,
+        volatility: 0.25,
+        gross_profit: 9800.0,
+        gross_loss: 4600.0,
+        net_profit: 5200.0,
+        signals_generated: 120,
+        strategy_metrics: strategy::simple_export::StrategyMetrics::default(),
+        backtest_start: Utc::now() - Duration::days(45),
         backtest_end: Utc::now(),
-        signals_generated: 300,
-        strategy_metrics: StrategyMetrics::default(),
     };
 
-    println!("📊 Mock Backtest Results:");
-    println!("  Total PnL: ${:.2}", backtest_results.total_pnl.to_f64().unwrap_or(0.0));
-    println!("  Number of Trades: {}", backtest_results.num_trades);
-    println!("  Sharpe Ratio: {:.2}", backtest_results.sharpe_ratio);
-    println!("  Win Rate: {:.1}%", backtest_results.win_rate * 100.0);
-    println!("  Max Drawdown: ${:.2}\n", backtest_results.max_drawdown.to_f64().unwrap_or(0.0));
+    // 3. Initialize exporter with custom config
+    let exporter = StrategyExporter::with_config(export_config);
 
-    // 3. Initialize strategy exporter with config
-    println!("🔧 Initializing Strategy Exporter with ConfigMap settings...");
-    let exporter = StrategyExporter::with_config("../SignalEngine".to_string(), export_config.clone());
-
-    // 4. Test configuration-driven evaluation
-    println!("🔍 Evaluating strategy performance with ConfigMap thresholds...");
-    let evaluation = exporter.evaluate_strategy(&backtest_results);
+    // 4. Test evaluation
+    println!("🔍 Evaluating strategy with custom thresholds...");
+    let evaluation = exporter.should_export(&backtest_results);
     
-    if evaluation.eligible {
-        println!("✅ Strategy is ELIGIBLE for export!");
-        println!("💯 Performance Score: {:.1}%", evaluation.score * 100.0);
-        
-        if !evaluation.warnings.is_empty() {
-            println!("⚠️  Warnings:");
-            for warning in &evaluation.warnings {
-                println!("    - {}", warning);
-            }
-        }
-        
-        println!("\n✅ Passed Checks:");
-        for check in &evaluation.passed_checks {
-            println!("    ✓ {}", check);
-        }
+    if evaluation {
+        println!("✅ Strategy PASSED custom criteria!");
     } else {
-        println!("❌ Strategy is NOT eligible for export");
-        println!("💯 Performance Score: {:.1}%", evaluation.score * 100.0);
-        
-        println!("\n❌ Failed Checks:");
-        for check in &evaluation.failed_checks {
-            println!("    ✗ {}", check);
-        }
+        println!("❌ Strategy FAILED custom criteria");
     }
 
-    // 5. Test configuration fields access
-    println!("\n🔧 Testing Configuration Access:");
-    let thresholds = exporter.get_thresholds();
-    println!("✅ ConfigMap Performance Thresholds accessed:");
-    println!("   - Sharpe Ratio: {} (from ConfigMap)", thresholds.min_sharpe_ratio);
-    println!("   - Profit Factor: {} (from ConfigMap)", thresholds.min_profit_factor);
+    // 5. Export attempt
+    let mut parameters = HashMap::new();
+    parameters.insert("fast_ma".to_string(), 10.0);
+    parameters.insert("slow_ma".to_string(), 30.0);
 
-    // 6. Test live trading config generation
-    println!("\n⚙️  Testing Live Trading Config Generation:");
-    let strategy_config = StrategyConfig {
-        id: "test_strategy".to_string(),
-        name: "ConfigMap Test Strategy".to_string(),
-        strategy_type: "TestStrategy".to_string(),
-        symbol: "BTCUSD".to_string(),
-        exchange: "test_exchange".to_string(),
-        parameters: HashMap::new(),
-        risk_limits: RiskLimits::default(),
-        enabled: true,
-    };
+    let export_result = exporter.export_if_qualified(
+        "CustomMAStrategy",
+        "ETHUSDT",
+        "binance",
+        parameters,
+        backtest_results,
+    ).await?;
 
-    // Test the configuration without actually exporting (to avoid file system operations)
-    println!("✅ Live trading configuration would be generated from:");
-    println!("   - Risk Management Config: Strategy limits");
-    println!("   - Deployment Config: Environment settings");
-    println!("   - ConfigMap values: Paper trading, risk scaling, etc.");
-
-    // 7. Test environment-specific overrides
-    println!("\n🌍 Testing Environment-Specific Configuration:");
-    if !export_config.performance_thresholds.environment_overrides.is_empty() {
-        println!("✅ Environment overrides configured:");
-        for (env, overrides) in &export_config.performance_thresholds.environment_overrides {
-            println!("   - {}: Custom thresholds available", env);
-            if let Some(sharpe) = overrides.min_sharpe_ratio {
-                println!("     * Min Sharpe Ratio: {}", sharpe);
-            }
-        }
-    } else {
-        println!("ℹ️  No environment-specific overrides configured (using defaults)");
+    match export_result {
+        Some(path) => println!("📁 Exported to: {}", path),
+        None => println!("📋 Strategy did not meet export criteria"),
     }
 
-    // 8. Summary
-    println!("\n🎉 ConfigMap Integration Demo Complete!");
-    println!("✅ All configuration loaded from ConfigMap/environment");
-    println!("✅ Strategy evaluation using ConfigMap thresholds");
-    println!("✅ Live trading config generation from ConfigMap");
-    println!("✅ Environment-specific override support");
-    
-    println!("\n📋 Integration Status:");
-    println!("✅ Configuration is now fully driven by Kubernetes ConfigMaps");
-    println!("✅ No hardcoded defaults in strategy export system");
-    println!("✅ Environment-specific settings supported");
-    println!("✅ Fallback to defaults when ConfigMap unavailable");
-
+    println!("\n✅ Configuration demo completed!");
     Ok(())
 }
