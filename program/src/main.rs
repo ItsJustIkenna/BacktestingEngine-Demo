@@ -1,26 +1,28 @@
 use clap::{Parser, Subcommand};
 use chrono::{NaiveDate, Duration};
+use bigdecimal::{BigDecimal, FromPrimitive};
 use dataloader::MarketData;
 use walkforward::runner::{run_walkforward_analysis, run_walkforward_with_auto_export};
 use walkforward::auto_export::ExportThresholds;
 use backtest::BacktestEngine;
 use backtest::simulation::SimulationLoop;
 use strategy::strategies::avellaneda_stoikov::{AvellanedaStoikovParams, AvellanedaStoikovStrategy};
-use strategy::StrategyManager;
+use strategy::{StrategyManager, StrategyConfig, Strategy, StrategyRiskLimits};
+use riskmanager::RiskManager;
 use orderbook::{OrderBook, OrderBookConfig};
 use portfoliomanager::PortfolioState;
-use riskmanager::RiskManager;
 use genetic::{GeneticOptimizer, chromosome::AvellanedaStoikovChromosome};
 use config::GeneticConfig;
 use config::OutputConfig;
-use std::sync::Arc;
+use std::collections::HashMap;
 
 // UltraLogger integration
 use program::logging_facade::MAIN_LOGGER;
-use program::{log_info, log_warn, log_error, log_debug};
+use program::{log_info, log_error};
 
-// Development optimization system
-use development::{DevCommands, execute_dev_command, init};
+// CLI Visualizer for enhanced terminal output
+use program::cli_visualizer::CliVisualizer;
+use program::config::VisualizationConfig;
 
 #[derive(Parser)]
 #[command(name = "TradingPlatform")]
@@ -32,15 +34,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Development workflow optimization
-    Dev {
-        #[command(flatten)]
-        args: DevCommands,
-    },
     /// Run walk-forward analysis
     WalkForward {
         #[arg(long)]
-        data_path: String,
+        symbol: String,
+        #[arg(long)]
+        exchange: String,
         #[arg(long)]
         start: String,
         #[arg(long)]
@@ -55,7 +54,9 @@ enum Commands {
     /// Run enhanced walk-forward analysis with automatic strategy export
     WalkForwardAutoExport {
         #[arg(long)]
-        data_path: String,
+        symbol: String,
+        #[arg(long)]
+        exchange: String,
         #[arg(long)]
         start: String,
         #[arg(long)]
@@ -84,27 +85,35 @@ enum Commands {
     /// Run a single backtest
     Backtest {
         #[arg(long)]
-        data_path: String,
+        symbol: String,
+        #[arg(long)]
+        exchange: String,
         #[arg(long)]
         risk_aversion: f64,
         #[arg(long)]
         inventory_target: f64,
         #[arg(long)]
         order_size: f64,
+        #[arg(long, default_value = "100000.0")]
+        initial_capital: f64,
+        #[arg(long, default_value = "0.001")]
+        commission_rate: f64,
     },
     /// Run parameter optimization
     Optimize {
         #[arg(long)]
-        data_path: String,
+        symbol: String,
+        #[arg(long)]
+        exchange: String,
     },
     /// Generate comprehensive backtest report
     Report {
         #[arg(long)]
-        data_path: String,
+        symbol: String,
+        #[arg(long)]
+        exchange: String,
         #[arg(long)]
         strategy_name: String,
-        #[arg(long)]
-        symbol: String,
         #[arg(long)]
         timeframe: String,
         #[arg(long)]
@@ -114,30 +123,22 @@ enum Commands {
         #[arg(long, default_value = "10000.0")]
         initial_capital: f64,
     },
+    /// Demonstrate enhanced CLI visualization
+    Demo {
+    },
 }
 
 #[tokio::main]
 async fn main() {
-    // Initialize development optimization system
-    if let Err(e) = init().await {
-        eprintln!("Failed to initialize development system: {}", e);
-        std::process::exit(1);
-    }
-
     let cli = Cli::parse();
     match cli.command {
-        Commands::Dev { args } => {
-            if let Err(e) = execute_dev_command(args.command).await {
-                eprintln!("Development command failed: {}", e);
-                std::process::exit(1);
-            }
-        },
-        Commands::WalkForward { data_path, start, end, train_days, test_days, step_days } => {
+        Commands::WalkForward { symbol, exchange, start, end, train_days, test_days, step_days } => {
             log_info!(MAIN_LOGGER, "🚀 Starting Walk-Forward Analysis...");
             
             // Load market data
-            log_info!(MAIN_LOGGER, "📊 Loading market data from: {}", data_path);
-            let data = match load_market_data(&data_path).await {
+            // Load market data from database automatically
+            log_info!(MAIN_LOGGER, "📊 Loading market data from database for {} on {}", symbol, exchange);
+            let data = match load_market_data(&symbol, &exchange).await {
                 Ok(data) => data,
                 Err(e) => {
                     log_error!(MAIN_LOGGER, "❌ Failed to load market data: {}", e);
@@ -175,15 +176,15 @@ async fn main() {
             println!("📏 Parameter Stability: {:.4}", results.parameter_stability);
         }
         Commands::WalkForwardAutoExport { 
-            data_path, start, end, train_days, test_days, step_days,
+            symbol, exchange, start, end, train_days, test_days, step_days,
             strategy_name, min_sharpe_ratio, min_profit_factor, min_win_rate,
             max_drawdown, min_trades, min_profitable_windows
         } => {
             println!("🚀 Starting Enhanced Walk-Forward Analysis with Auto-Export...");
             
             // Load market data
-            println!("📊 Loading market data from: {}", data_path);
-            let data = match load_market_data(&data_path).await {
+            println!("📊 Loading market data for: {}/{}", symbol, exchange);
+            let data = match load_market_data(&symbol, &exchange).await {
                 Ok(data) => data,
                 Err(e) => {
                     eprintln!("❌ Failed to load market data: {}", e);
@@ -249,12 +250,16 @@ async fn main() {
                 }
             }
         }
-        Commands::Backtest { data_path, risk_aversion, inventory_target, order_size } => {
+        Commands::Backtest { symbol, exchange, risk_aversion, inventory_target, order_size, initial_capital, commission_rate } => {
             println!("🚀 Starting Backtest...");
+            println!("💰 Initial Capital: ${:.2}", initial_capital);
+            println!("📈 Symbol: {}", symbol);
+            println!("🏦 Exchange: {}", exchange);
+            println!("💸 Commission Rate: {:.3}%", commission_rate * 100.0);
             
-            // Load market data
-            println!("📊 Loading market data from: {}", data_path);
-            let data = match load_market_data(&data_path).await {
+            // Load market data from database automatically
+            println!("📊 Loading market data from database for {} on {}", symbol, exchange);
+            let data = match load_market_data(&symbol, &exchange).await {
                 Ok(data) => data,
                 Err(e) => {
                     eprintln!("❌ Failed to load market data: {}", e);
@@ -273,16 +278,88 @@ async fn main() {
             println!("⚙️  Running backtest with params: {:#?}", params);
             
             // Create strategy using Default::default() and update params
-            let _strategy = AvellanedaStoikovStrategy::default();
-            // Strategy parameters are embedded in the strategy struct
+            let mut strategy = AvellanedaStoikovStrategy::default();
+            
+            // Initialize strategy parameters using the params from CLI
+            let mut strategy_params = HashMap::new();
+            strategy_params.insert("risk_aversion".to_string(), config::ParameterValue::Float(params.risk_aversion));
+            strategy_params.insert("order_size".to_string(), config::ParameterValue::Float(params.order_size));
+            strategy_params.insert("fee_rate".to_string(), config::ParameterValue::Float(params.fee_rate));
+            strategy_params.insert("latency_buffer".to_string(), config::ParameterValue::Float(params.latency_buffer));
+            strategy_params.insert("inventory_target".to_string(), config::ParameterValue::Float(params.inventory_target));
+            strategy_params.insert("volatility_cap".to_string(), config::ParameterValue::Float(params.volatility_cap));
+            strategy_params.insert("window_ms".to_string(), config::ParameterValue::Float(params.window_ms as f64));
+            strategy_params.insert("min_quote_lifetime_ms".to_string(), config::ParameterValue::Float(params.min_quote_lifetime_ms as f64));
+            
+            // Initialize the strategy with parameters
+            if let Err(e) = strategy.initialize(strategy_params.clone()).await {
+                eprintln!("❌ Failed to initialize strategy: {}", e);
+                std::process::exit(1);
+            }
+            
+            // Initialize strategy manager and register the strategy
+            let mut strategy_manager = StrategyManager::new();
+            
+            // Convert config::ParameterValue to strategy::ParameterValue
+            let mut converted_params = HashMap::new();
+            for (key, value) in &strategy_params {
+                let strategy_value = match value {
+                    config::ParameterValue::Float(f) => strategy::config::ParameterValue::Float(*f),
+                    config::ParameterValue::Integer(i) => strategy::config::ParameterValue::Int(*i),
+                    config::ParameterValue::String(s) => strategy::config::ParameterValue::String(s.clone()),
+                    config::ParameterValue::Boolean(b) => strategy::config::ParameterValue::Bool(*b),
+                };
+                converted_params.insert(key.clone(), strategy_value);
+            }
+            
+            let strategy_config = StrategyConfig {
+                id: "avellaneda-stoikov".to_string(),
+                name: "Avellaneda-Stoikov Market Maker".to_string(),
+                enabled: true,
+                symbol: symbol.clone(),
+                exchange: exchange.clone(),
+                strategy_type: "AvellanedaStoikovMarketMaker".to_string(),
+                parameters: converted_params,
+                risk_limits: StrategyRiskLimits {
+                    max_position_size: Some(10.0),
+                    max_daily_loss: Some(1000.0),
+                    max_open_orders: Some(10),
+                    max_drawdown_percent: Some(params.volatility_cap),
+                    stop_loss_percent: None,
+                    take_profit_percent: None,
+                },
+            };
+            
+            if let Err(e) = strategy_manager.register_strategy(strategy_config, strategy) {
+                eprintln!("❌ Failed to register strategy: {}", e);
+                std::process::exit(1);
+            }
+            
+            println!("✅ Avellaneda-Stoikov strategy registered and initialized");
             
             // Initialize backtest components
-            let strategy_manager = StrategyManager::new();
             let config = OrderBookConfig::default();
-            let fee_config = config::ExchangeFeeConfig::kraken_default();
-            let mut orderbook = OrderBook::new("BTCUSD".to_string(), "kraken".to_string(), config);
+            
+            // Configure exchange-specific fees
+            let fee_config = match exchange.as_str() {
+                "kraken" => config::ExchangeFeeConfig::kraken_default(),
+                _ => {
+                    println!("⚠️  Unknown exchange '{}', using Kraken defaults", exchange);
+                    config::ExchangeFeeConfig::kraken_default()
+                }
+            };
+            
+            let mut orderbook = OrderBook::new("BTCUSD".to_string(), exchange.clone(), config);
             orderbook.set_fee_config(fee_config);
-            let portfolio = PortfolioState::default();  // Use default initialization
+            
+            // Initialize portfolio with configurable starting capital
+            let mut portfolio = PortfolioState::default();
+            portfolio.balance = BigDecimal::from_f64(initial_capital).unwrap_or_else(|| {
+                eprintln!("❌ Invalid initial capital: {}", initial_capital);
+                std::process::exit(1);
+            });
+            
+            println!("💼 Portfolio initialized with ${:.2} starting capital", initial_capital);
             let risk_manager = RiskManager::new();
             let simulation = SimulationLoop::new();
             
@@ -294,26 +371,53 @@ async fn main() {
                 simulation,
             );
             
-            // Run the backtest
-            let result = engine.run(data).await;
+            // Create custom configuration with CLI parameters
+            let mut backtest_config = config::BacktestConfig::default();
+            backtest_config.trading.initial_capital = initial_capital;
+            backtest_config.trading.commission_rate = commission_rate;
             
-            println!("✅ Backtest completed!");
-            println!("📊 Total P&L: ${:.2}", result.total_pnl.to_string());
-            println!("� Number of trades: {}", result.num_trades);
-            if let Some(sharpe) = result.sharpe_ratio {
-                println!("🎯 Sharpe Ratio: {:.4}", sharpe);
+            // Run the backtest with custom configuration
+            let result = engine.run_with_config(data, &backtest_config).await;
+
+            // Use enhanced CLI visualizer for comprehensive results display
+            let vis_config = VisualizationConfig::default();
+            let visualizer = CliVisualizer::new(vis_config);
+            visualizer.display_enhanced_results(&result);
+            
+            // Export detailed HTML visualization for real backtest results
+            println!("\n🌐 Exporting detailed HTML visualization...");
+            let html_path = std::path::Path::new("backtest_results.html");
+            match backtest::HtmlExporter::export_equity_curve_html(&result, "Avellaneda-Stoikov Strategy", &format!("{}/{}", symbol, exchange), html_path) {
+                Ok(()) => {
+                    println!("✅ HTML export successful!");
+                    println!("📊 Open {} in your web browser for detailed interactive analysis", html_path.display());
+                    println!("💡 Features include:");
+                    println!("   • 📈 Interactive portfolio tracking with hover details");
+                    println!("   • 📉 Real-time drawdown visualization");  
+                    println!("   • 📊 Daily returns distribution with color coding");
+                    println!("   • 🎯 Individual trade analysis scatter plot");
+                    println!("   • 📋 Comprehensive performance metrics table");
+                    println!("   • 🖱️  Zoom, pan, and export capabilities");
+                    
+                    // Try to automatically open the file if possible
+                    #[cfg(target_os = "windows")]
+                    {
+                        let _ = std::process::Command::new("cmd")
+                            .args(["/C", "start", "backtest_results.html"])
+                            .spawn();
+                    }
+                }
+                Err(e) => {
+                    println!("❌ HTML export failed: {}", e);
+                }
             }
-            if let Some(pf) = result.profit_factor {
-                println!("💰 Profit Factor: {:.2}", pf);
-            }
-            println!("📉 Max Drawdown: ${:.2}", result.max_drawdown.to_string());
         }
-        Commands::Optimize { data_path } => {
+        Commands::Optimize { symbol, exchange } => {
             println!("🧬 Starting Genetic Parameter Optimization...");
             
-            // Load market data
-            println!("📊 Loading market data from: {}", data_path);
-            let data = match load_market_data(&data_path).await {
+            // Load market data from database automatically
+            println!("📊 Loading market data from database for {} on {}", symbol, exchange);
+            let data = match load_market_data(&symbol, &exchange).await {
                 Ok(data) => data,
                 Err(e) => {
                     eprintln!("❌ Failed to load market data: {}", e);
@@ -321,13 +425,8 @@ async fn main() {
                 }
             };
             
-            // Set up genetic algorithm configuration
-            let config = GeneticConfig {
-                population_size: 20,  // Smaller for faster testing
-                generations: 50,     // Fewer generations for now
-                crossover_rate: 0.7,
-                mutation_rate: 0.1,
-            };
+            // Load genetic algorithm configuration
+            let genetic_config = GeneticConfig::default(); // Use defaults for now, will load from file later
             
             // Create fitness function that runs backtests
             let fitness_data = std::sync::Arc::new(data);
@@ -368,7 +467,7 @@ async fn main() {
             
             // Create optimizer and run
             let optimizer = GeneticOptimizer {
-                config,
+                config: genetic_config,
                 fitness_fn,
             };
             
@@ -391,9 +490,9 @@ async fn main() {
             println!("   Volatility Cap: {:.6}", best_params.volatility_cap);
         }
         Commands::Report { 
-            data_path, 
-            strategy_name, 
             symbol, 
+            exchange,
+            strategy_name, 
             timeframe, 
             output_dir, 
             formats,
@@ -416,7 +515,7 @@ async fn main() {
             
             // Run a sample backtest to get results (in real usage, this would come from stored results)
             println!("🚀 Running sample backtest to generate report data...");
-            let data = match load_market_data(&data_path).await {
+            let data = match load_market_data(&symbol, &exchange).await {
                 Ok(data) => data,
                 Err(e) => {
                     eprintln!("❌ Failed to load market data: {}", e);
@@ -428,7 +527,7 @@ async fn main() {
             let strategy_manager = StrategyManager::new();
             let config = OrderBookConfig::default();
             let fee_config = config::ExchangeFeeConfig::kraken_default();
-            let mut orderbook = OrderBook::new(symbol.clone(), "kraken".to_string(), config);
+            let mut orderbook = OrderBook::new(symbol.clone(), exchange.clone(), config);
             orderbook.set_fee_config(fee_config);
             let portfolio = PortfolioState::default();
             let risk_manager = RiskManager::new();
@@ -490,6 +589,9 @@ async fn main() {
                 }
             }
         }
+        Commands::Demo { } => {
+            program::demo::demo_enhanced_cli();
+        }
     }
 }
 
@@ -508,124 +610,118 @@ fn chromosome_to_params(chromosome: &AvellanedaStoikovChromosome) -> AvellanedaS
 }
 
 
-/// Load market data from file or database
-async fn load_market_data(path: &str) -> Result<Vec<MarketData>, Box<dyn std::error::Error>> {
+/// Load market data from database only
+async fn load_market_data(symbol: &str, exchange: &str) -> Result<Vec<MarketData>, Box<dyn std::error::Error>> {
     #[cfg(feature = "postgres")]
     {
         use dotenv::dotenv;
         use std::env;
+        use std::sync::Arc;
         use databaseschema::CustomAsyncPgConnectionManager;
         use deadpool::managed::Pool;
-        use std::path::Path;
 
-    // Check if path is a file or database query
-    if Path::new(path).exists() {
-        // TODO: Implement file-based data loading (CSV, JSON, Parquet)
-        return Err("File-based data loading not yet implemented".into());
-    }
+        // Database loading with proper error handling
+        dotenv().ok();
+        let db_url = env::var("DATABASE_URL")
+            .map_err(|_| "DATABASE_URL must be set in .env or environment")?;
 
-    // Database loading with proper error handling
-    dotenv().ok();
-    let db_url = env::var("DATABASE_URL")
-        .map_err(|_| "DATABASE_URL must be set in .env or environment")?;
+        let manager = CustomAsyncPgConnectionManager::new(db_url);
+        let pool = Pool::builder(manager)
+            .max_size(16)
+            .build()
+            .map_err(|e| format!("Failed to create database pool: {}", e))?;
+        let pool = Arc::new(pool);
 
-    let manager = CustomAsyncPgConnectionManager::new(db_url);
-    let pool = Pool::builder(manager)
-        .max_size(16)
-        .build()
-        .map_err(|e| format!("Failed to create database pool: {}", e))?;
-    let pool = Arc::new(pool);
-
-    // For now, use default parameters - in production this should come from config
-    let params = dataloader::QueryParams {
-        symbol: "BTCUSD".to_string(),
-        exchange: "BINANCE".to_string(), 
-        start_time: Some(chrono::Utc::now() - chrono::Duration::days(30)),
-        end_time: Some(chrono::Utc::now()),
-        limit: Some(10000), // Reasonable default limit
-    };
-
-    let loader = dataloader::DataLoader::new(pool);
-    
-    // Load multiple data types for comprehensive backtesting
-    let mut market_data = Vec::new();
-    
-    // Load historical snapshots
-    match loader.load_historical_snapshots(&params).await {
-        Ok(snapshots) => {
-            market_data.extend(snapshots.into_iter().map(MarketData::Snapshot));
-        }
-        Err(e) => eprintln!("Warning: Failed to load snapshots: {}", e),
-    }
-
-    // Load historical orders
-    match loader.load_historical_orders(&params).await {
-        Ok(orders) => {
-            market_data.extend(orders.into_iter().map(MarketData::Order));
-        }
-        Err(e) => eprintln!("Warning: Failed to load orders: {}", e),
-    }
-
-    if market_data.is_empty() {
-        return Err("No market data loaded from database".into());
-    }
-
-    // Sort by timestamp for proper chronological order
-    market_data.sort_by(|a, b| {
-        let timestamp_a = match a {
-            MarketData::Order(o) => o.get_timestamp(),
-            MarketData::Snapshot(s) => &s.get_timestamp(),
-            MarketData::Candle(c) => &c.timestamp,
-            MarketData::Trade(t) => &t.timestamp,
+        // Load ALL data from earliest available timestamp
+        let params = dataloader::QueryParams {
+            symbol: symbol.to_string(),
+            exchange: exchange.to_string(),
+            start_time: None, // Load from the very beginning
+            end_time: None,   // Load until the latest data
+            limit: None,      // No limit - get all data
         };
-        let timestamp_b = match b {
-            MarketData::Order(o) => o.get_timestamp(),
-            MarketData::Snapshot(s) => &s.get_timestamp(),
-            MarketData::Candle(c) => &c.timestamp,
-            MarketData::Trade(t) => &t.timestamp,
-        };
-        timestamp_a.cmp(timestamp_b)
-    });
 
-    println!("📊 Loaded {} market data points", market_data.len());
-    Ok(market_data)
+        let loader = dataloader::DataLoader::new(pool);
+        
+        // Load multiple data types for comprehensive backtesting
+        let mut market_data = Vec::new();
+        
+        // Load historical snapshots (order book data)
+        match loader.load_historical_snapshots(&params).await {
+            Ok(snapshots) => {
+                println!("📷 Loaded {} historical snapshots", snapshots.len());
+                market_data.extend(snapshots.into_iter().map(MarketData::Snapshot));
+            }
+            Err(e) => println!("⚠️  No snapshots found: {}", e),
+        }
+
+        // Load historical orders
+        match loader.load_historical_orders(&params).await {
+            Ok(orders) => {
+                println!("📋 Loaded {} historical orders", orders.len());
+                market_data.extend(orders.into_iter().map(MarketData::Order));
+            }
+            Err(e) => println!("⚠️  No orders found: {}", e),
+        }
+
+        // Load trade data from trades table
+        match loader.load_trade_data(&params).await {
+            Ok(trades) => {
+                println!("💱 Loaded {} trade records", trades.len());
+                market_data.extend(trades.into_iter().map(MarketData::Trade));
+            }
+            Err(e) => println!("⚠️  No trades found: {}", e),
+        }
+
+        // Load candle data if available
+        match loader.load_candles(&params, 1).await {
+            Ok(candles) => {
+                println!("🕯️  Loaded {} candles", candles.len());
+                market_data.extend(candles.into_iter().map(MarketData::Candle));
+            }
+            Err(e) => println!("⚠️  No candles found: {}", e),
+        }
+
+        if market_data.is_empty() {
+            println!("❌ No market data found in database for {} on {}", symbol, exchange);
+            println!("📊 Database tables checked:");
+            println!("   • historical_snapshots");
+            println!("   • historical_orders"); 
+            println!("   • trades");
+            println!("   • candles");
+            println!("💡 Please ensure market data is loaded into the database for backtesting");
+            return Err(format!("No market data available for {} on {} in database", symbol, exchange).into());
+        }
+
+        // Sort by timestamp for proper chronological order
+        market_data.sort_by(|a, b| {
+            let timestamp_a = match a {
+                MarketData::Order(o) => o.get_timestamp(),
+                MarketData::Snapshot(s) => &s.get_timestamp(),
+                MarketData::Candle(c) => &c.timestamp,
+                MarketData::Trade(t) => &t.timestamp,
+            };
+            let timestamp_b = match b {
+                MarketData::Order(o) => o.get_timestamp(),
+                MarketData::Snapshot(s) => &s.get_timestamp(),
+                MarketData::Candle(c) => &c.timestamp,
+                MarketData::Trade(t) => &t.timestamp,
+            };
+            timestamp_a.cmp(timestamp_b)
+        });
+
+        println!("📊 Loaded {} market data points", market_data.len());
+        Ok(market_data)
     }
 
     #[cfg(not(feature = "postgres"))]
     {
-        // Mock implementation for non-postgres builds
-        println!("📊 Mock data loading (postgres feature disabled)");
-        
-        // Create some mock candle data for testing
-        use bigdecimal::BigDecimal;
-        
-        let now = chrono::Utc::now();
-        let mock_candles = vec![
-            MarketData::Candle(dataloader::Candle {
-                symbol: "BTCUSD".to_string(),
-                exchange: "MOCK".to_string(),
-                timestamp: now - chrono::Duration::minutes(5),
-                open: BigDecimal::from(50000),
-                high: BigDecimal::from(50100),
-                low: BigDecimal::from(49900),
-                close: BigDecimal::from(50050),
-                volume: BigDecimal::from(100),
-                trade_count: 50,
-            }),
-            MarketData::Candle(dataloader::Candle {
-                symbol: "BTCUSD".to_string(),
-                exchange: "MOCK".to_string(),
-                timestamp: now,
-                open: BigDecimal::from(50050),
-                high: BigDecimal::from(50200),
-                low: BigDecimal::from(50000),
-                close: BigDecimal::from(50150),
-                volume: BigDecimal::from(150),
-                trade_count: 75,
-            }),
-        ];
-        
-        println!("📊 Generated {} mock candles", mock_candles.len());
-        Ok(mock_candles)
+        // Database feature is disabled - cannot load data
+        println!("❌ PostgreSQL feature is disabled");
+        println!("🔧 To enable database loading:");
+        println!("   • Build with --features postgres");
+        println!("   • Ensure DATABASE_URL is set");
+        println!("   • Verify database contains market data");
+        return Err("Database feature disabled. Cannot load market data without PostgreSQL support.".into());
     }
 }

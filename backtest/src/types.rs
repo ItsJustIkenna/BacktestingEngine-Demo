@@ -39,4 +39,6 @@ pub struct BacktestResult {
     pub gross_profit: Option<f64>,
     pub gross_loss: Option<f64>,
     pub net_profit: Option<f64>,
+    pub equity_curve: Vec<f64>,
+    pub initial_capital: f64,
 }

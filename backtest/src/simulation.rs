@@ -38,6 +38,9 @@ impl SimulationLoop {
     let mut equity_curve: Vec<f64> = Vec::new();
     let mut trade_durations: Vec<f64> = Vec::new();
 
+    // Start equity curve with initial capital
+    equity_curve.push(config.trading.initial_capital);
+
     for data in market_data {
             // 1. Update orderbook with new market data if needed
             match &data {
@@ -46,6 +49,11 @@ impl SimulationLoop {
                     // Convert snapshot to OrderBookEvent::Snapshot and apply
                     // (Assume conversion function exists)
                     // orderbook.apply_event(OrderBookEvent::Snapshot { ... })
+                }
+                #[cfg(feature = "postgres")]
+                MarketData::Order(_order) => {
+                    // Process historical order data
+                    // Can be used to reconstruct order book or analyze order flow
                 }
                 MarketData::Trade(_trade) => {
                     // Convert trade to OrderBookEvent::Trade and apply
@@ -135,7 +143,16 @@ impl SimulationLoop {
         result.max_drawdown = risk::max_drawdown(&equity_curve)
             .map(|v| BigDecimal::from_f64(v).unwrap_or_default())
             .unwrap_or_default();
-        // result.total_pnl: set as needed from portfolio or trade_returns
+            
+        // Calculate total P&L: ending portfolio value - initial capital
+        let final_portfolio_value = portfolio.balance.clone() + 
+            portfolio.positions.iter().map(|pos| pos.unrealized_pnl.clone()).sum::<BigDecimal>();
+        let initial_capital_bd = BigDecimal::from_f64(config.trading.initial_capital).unwrap_or_default();
+        result.total_pnl = final_portfolio_value - initial_capital_bd;
+
+        // Include equity curve data for visualization
+        result.equity_curve = equity_curve;
+        result.initial_capital = config.trading.initial_capital;
 
         result
     }

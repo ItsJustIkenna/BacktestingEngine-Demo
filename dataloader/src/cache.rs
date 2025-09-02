@@ -136,6 +136,36 @@ impl DataCache {
         let mut candles = self.candles.write().await;
         candles.retain(|_, entry| !entry.is_expired());
     }
+
+    /// Get cached historical orders
+    #[cfg(feature = "postgres")]
+    pub async fn get_orders(&self, _key: &str) -> Option<Vec<databaseschema::models::historical_order::HistoricalOrder>> {
+        // For now, return None since we don't have order caching implemented
+        // This can be extended later with a proper orders cache
+        None
+    }
+
+    /// Cache historical orders
+    #[cfg(feature = "postgres")]
+    pub async fn put_orders(&self, _key: String, _orders: Vec<databaseschema::models::historical_order::HistoricalOrder>) {
+        // For now, do nothing since we don't have order caching implemented
+        // This can be extended later with a proper orders cache
+    }
+
+    /// Get cached historical snapshots
+    #[cfg(feature = "postgres")]
+    pub async fn get_snapshots(&self, _key: &str) -> Option<Vec<databaseschema::models::historical_snapshot::HistoricalSnapshot>> {
+        // For now, return None since we don't have snapshot caching implemented
+        // This can be extended later with a proper snapshots cache
+        None
+    }
+
+    /// Cache historical snapshots
+    #[cfg(feature = "postgres")]
+    pub async fn put_snapshots(&self, _key: String, _snapshots: Vec<databaseschema::models::historical_snapshot::HistoricalSnapshot>) {
+        // For now, do nothing since we don't have snapshot caching implemented
+        // This can be extended later with a proper snapshots cache
+    }
 }
 
 /// Cache statistics

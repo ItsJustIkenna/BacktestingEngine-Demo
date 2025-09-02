@@ -4,6 +4,9 @@
 //! Provides common functionality and logging infrastructure.
 
 pub mod logging_facade;
+pub mod cli_visualizer;
+pub mod demo;
+pub mod config;
 
 // Re-export logging components for easy access
 pub use logging_facade::{

@@ -1,9 +1,9 @@
 
 [workspace]
-resolver = "3"
+resolver = "2"
 members = [
     "program",
-    "config",
+    "config", 
     "dataloader",
     "orderbook",
     "strategy",
@@ -13,6 +13,5 @@ members = [
     "walkforward",
     "portfoliomanager",
     "riskmanager",
-    "signal",
-    "development"
+    "signal"
 ]

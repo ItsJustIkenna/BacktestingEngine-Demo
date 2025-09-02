@@ -3,9 +3,11 @@ pub mod simulation;
 pub mod types;
 pub mod monte_carlo;
 pub mod logging_facade;
+pub mod html_export;
 
 // Re-export main types
 pub use types::{BacktestResult, BacktestEvent};
+pub use html_export::HtmlExporter;
 
 // Main simulation orchestrator
 // Coordinates data loading, strategy execution, order matching, portfolio/risk updates, and reporting.
@@ -85,14 +87,18 @@ impl BacktestEngine {
 
 	/// Run the backtest simulation
 	pub async fn run(&mut self, market_data: Vec<MarketData>) -> types::BacktestResult {
-		let default_config = config::BacktestConfig::default();
+		self.run_with_config(market_data, &config::BacktestConfig::default()).await
+	}
+
+	/// Run the backtest simulation with custom configuration
+	pub async fn run_with_config(&mut self, market_data: Vec<MarketData>, config: &config::BacktestConfig) -> types::BacktestResult {
 		self.simulation.run(
 			&mut self.strategy_manager,
 			&mut self.orderbook,
 			&mut self.portfolio,
 			&mut self.risk_manager,
 			market_data,
-			&default_config,
+			config,
 		).await
 	}
 

@@ -23,11 +23,18 @@ dotenv = "0.15"
 # Date/time
 chrono = { version = "0.4", features = ["serde"] }
 
+# Configuration serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+
 # BigDecimal for precision
 bigdecimal = "0.4"
 
+# Progress bar and random for Monte Carlo
+indicatif = "0.17"
+rand = "0.8"
+
 # Internal dependencies
-development = { path = "../development" }
 walkforward = { path = "../walkforward" }
 backtest = { path = "../backtest" }
 strategy = { path = "../strategy" }
