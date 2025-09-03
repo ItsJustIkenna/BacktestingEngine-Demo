@@ -4,6 +4,7 @@
 
 use chrono::{DateTime, Utc};
 use bigdecimal::BigDecimal;
+use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone)]
 pub enum BacktestEvent {
@@ -24,7 +25,7 @@ pub enum BacktestEvent {
     // Add more event types as needed
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BacktestResult {
     pub total_pnl: BigDecimal,
     pub num_trades: usize,

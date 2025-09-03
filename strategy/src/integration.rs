@@ -95,7 +95,7 @@ impl BacktestIntegration {
             }).collect();
 
         // Export strategy if it meets criteria
-        let export_path = exporter.export_strategy(
+        let export_path = exporter.export_if_qualified(
             &strategy_config.name,
             &strategy_config.symbol,
             &strategy_config.exchange,
@@ -146,7 +146,7 @@ impl BacktestIntegration {
 
     /// Get list of exported strategies
     pub async fn get_exported_strategies(&self) -> Result<Vec<String>> {
-        self.exporter.list_exported_strategies().await
+        self.exporter.list_exported().await
     }
 
     /// Get simple export statistics

@@ -1,0 +1,60 @@
+# Production Mode Configuration
+# Full analysis with Monte Carlo + Walk-Forward - optimized for accuracy
+
+database:
+  host: "{{ .Values.database.host }}"
+  port: {{ .Values.database.port }}
+  database: "{{ .Values.database.name }}"
+  username: "{{ .Values.database.username }}"
+  password: "{{ .Values.database.password }}"
+  max_connections: 20       # Higher connections for production
+  connection_timeout: 60    # Longer timeout for production
+
+trading:
+  initial_capital: 1000000.0  # Real production capital
+  commission_rate: 0.0008     # Actual broker rates
+  slippage_rate: 0.0003       # Realistic slippage
+  risk_free_rate: 0.045       # Current risk-free rate
+
+data:
+  start_date: "2020-01-01"
+  end_date: "2024-12-31"      # Full 5-year backtest
+  symbols:
+    - "BTCUSDT"
+    - "ETHUSDT" 
+    - "ADAUSDT"
+  timeframe: "15m"            # Higher resolution
+
+output:
+  reports_dir: "/app/reports/production"
+  export_formats:
+    - "html"
+    - "json"
+    - "pdf"                 # Full reporting suite
+  save_equity_curve: true
+  save_trade_log: true
+  save_detailed_metrics: true
+
+analysis:
+  mode: "production"
+  auto_monte_carlo: true      # Always enabled in production
+  monte_carlo_runs: 10000     # High accuracy Monte Carlo
+  auto_walk_forward: true     # Always enabled in production
+  wf_training_days: 730       # 2 years training window
+  wf_test_days: 90           # 3 months test window
+  wf_step_days: 30           # Monthly rebalancing
+  min_duration_for_auto: 30   # Low threshold (1 month)
+  validation_sharpe_threshold: 0.8   # Lower bar for production validation
+  validation_pf_threshold: 1.1
+  validation_min_trades: 20
+  timeout_seconds: 3600      # 1 hour timeout for production
+  confidence_levels:         # Production statistical analysis
+    - 0.90
+    - 0.95
+    - 0.99
+  risk_metrics:
+    - "var"
+    - "cvar" 
+    - "max_drawdown"
+    - "sharpe"
+    - "sortino"

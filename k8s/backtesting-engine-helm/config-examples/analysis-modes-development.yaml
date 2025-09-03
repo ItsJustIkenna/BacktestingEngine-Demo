@@ -1,0 +1,45 @@
+# Development Mode Configuration
+# Fast iteration for strategy development - optimized for speed
+
+database:
+  host: "{{ .Values.database.host }}"
+  port: {{ .Values.database.port }}
+  database: "{{ .Values.database.name }}"
+  username: "{{ .Values.database.username }}"
+  password: "{{ .Values.database.password }}"
+  max_connections: 5
+  connection_timeout: 15
+
+trading:
+  initial_capital: 50000.0  # Smaller capital for dev testing
+  commission_rate: 0.001
+  slippage_rate: 0.001      # Higher slippage for conservative testing
+  risk_free_rate: 0.02
+
+data:
+  start_date: "2024-01-01"
+  end_date: "2024-03-31"    # 3 months for fast development iteration
+  symbols:
+    - "BTCUSDT"
+  timeframe: "1h"
+
+output:
+  reports_dir: "/app/reports/dev"
+  export_formats:
+    - "json"                # Only JSON for dev (faster)
+  save_equity_curve: false  # Skip heavy outputs in dev
+  save_trade_log: true
+
+analysis:
+  mode: "development"       # Fast mode - basic backtest only
+  auto_monte_carlo: false   # Disabled for speed
+  monte_carlo_runs: 100     # Low count if enabled
+  auto_walk_forward: false  # Disabled for speed
+  wf_training_days: 90      # Short window if enabled
+  wf_test_days: 30
+  wf_step_days: 15
+  min_duration_for_auto: 180  # Higher threshold (6 months)
+  validation_sharpe_threshold: 2.0   # Higher bar for auto-escalation
+  validation_pf_threshold: 2.0
+  validation_min_trades: 100
+  timeout_seconds: 30       # 30 second timeout for development

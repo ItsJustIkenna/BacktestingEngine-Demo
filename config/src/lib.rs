@@ -34,6 +34,7 @@ pub struct BacktestConfig {
     pub trading: TradingConfig,
     pub data: DataConfig,
     pub output: OutputConfig,
+    pub analysis: AnalysisConfig,
 }
 
 /// Database connection configuration
@@ -97,9 +98,38 @@ pub struct OutputConfig {
 /// Monte Carlo simulation configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonteCarloConfig {
+    /// Number of Monte Carlo simulation runs
     pub num_simulations: usize,
+    /// Confidence level for percentile calculations
     pub confidence_level: f64,
-    // Add more config options as needed
+    /// Random seed for reproducibility (optional)
+    pub random_seed: Option<u64>,
+    /// Bootstrap sample size as fraction of original data
+    pub bootstrap_fraction: f64,
+    /// Whether to bootstrap trade returns or equity curve
+    pub bootstrap_method: BootstrapMethod,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BootstrapMethod {
+    /// Bootstrap individual trade returns
+    #[serde(rename = "trades")]
+    TradeReturns,
+    /// Bootstrap blocks of equity curve data
+    #[serde(rename = "blocks")]
+    BlockBootstrap,
+}
+
+impl Default for MonteCarloConfig {
+    fn default() -> Self {
+        Self {
+            num_simulations: 500,
+            confidence_level: 0.95,
+            random_seed: None,
+            bootstrap_fraction: 1.0,
+            bootstrap_method: BootstrapMethod::TradeReturns,
+        }
+    }
 }
 
 /// Report generation configuration
@@ -259,6 +289,7 @@ impl Default for BacktestConfig {
             trading: TradingConfig::default(),
             data: DataConfig::default(),
             output: OutputConfig::default(),
+            analysis: AnalysisConfig::default(),
         }
     }
 }
@@ -568,6 +599,121 @@ impl BacktestConfig {
         Ok(())
     }
 }
+
+/// Analysis configuration for Monte Carlo and Walk-Forward
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalysisConfig {
+    /// Analysis mode: "development", "validation", "production"
+    pub mode: AnalysisMode,
+    /// Enable automatic Monte Carlo simulation
+    pub auto_monte_carlo: bool,
+    /// Number of Monte Carlo runs (default: 500)
+    pub monte_carlo_runs: usize,
+    /// Enable automatic walk-forward analysis  
+    pub auto_walk_forward: bool,
+    /// Walk-forward training window size in days
+    pub wf_training_days: i64,
+    /// Walk-forward test window size in days
+    pub wf_test_days: i64,
+    /// Walk-forward step size in days
+    pub wf_step_days: i64,
+    /// Minimum backtest duration to trigger auto-analysis (days)
+    pub min_duration_for_auto: i64,
+    /// Minimum Sharpe ratio to trigger validation mode
+    pub validation_sharpe_threshold: f64,
+    /// Minimum profit factor to trigger validation mode
+    pub validation_pf_threshold: f64,
+    /// Minimum number of trades to trigger validation mode
+    pub validation_min_trades: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Copy)]
+pub enum AnalysisMode {
+    /// Fast development mode - basic backtest only
+    #[serde(rename = "development")]
+    Development,
+    /// Validation mode - basic + Monte Carlo
+    #[serde(rename = "validation")]
+    Validation, 
+    /// Production mode - full analysis (basic + MC + walk-forward)
+    #[serde(rename = "production")]
+    Production,
+}
+
+impl Default for AnalysisConfig {
+    fn default() -> Self {
+        Self {
+            mode: AnalysisMode::Development,
+            auto_monte_carlo: false,
+            monte_carlo_runs: 500,
+            auto_walk_forward: false,
+            wf_training_days: 252,  // 1 year
+            wf_test_days: 63,       // 3 months
+            wf_step_days: 21,       // 1 month
+            min_duration_for_auto: 90, // Only auto-analyze backtests > 3 months
+            validation_sharpe_threshold: 1.2,
+            validation_pf_threshold: 1.4,
+            validation_min_trades: 50,
+        }
+    }
+}
+
+impl AnalysisConfig {
+    pub fn development() -> Self {
+        Self {
+            mode: AnalysisMode::Development,
+            auto_monte_carlo: false,
+            auto_walk_forward: false,
+            ..Default::default()
+        }
+    }
+    
+    pub fn validation() -> Self {
+        Self {
+            mode: AnalysisMode::Validation,
+            auto_monte_carlo: true,
+            auto_walk_forward: false,
+            monte_carlo_runs: 250, // Faster for validation
+            ..Default::default()
+        }
+    }
+    
+    pub fn production() -> Self {
+        Self {
+            mode: AnalysisMode::Production,
+            auto_monte_carlo: true,
+            auto_walk_forward: true,
+            monte_carlo_runs: 1000, // More thorough for production
+            ..Default::default()
+        }
+    }
+
+    /// Check if auto-escalation to validation mode should trigger
+    pub fn should_escalate_to_validation(&self, 
+        duration_days: i64, 
+        sharpe_ratio: f64, 
+        profit_factor: f64, 
+        num_trades: u64
+    ) -> bool {
+        matches!(self.mode, AnalysisMode::Development) &&
+        duration_days >= self.min_duration_for_auto &&
+        sharpe_ratio >= self.validation_sharpe_threshold &&
+        profit_factor >= self.validation_pf_threshold &&
+        num_trades >= self.validation_min_trades
+    }
+
+    /// Check if auto-escalation to production mode should trigger
+    pub fn should_escalate_to_production(&self, 
+        mc_confidence_95th: f64,
+        export_requested: bool
+    ) -> bool {
+        matches!(self.mode, AnalysisMode::Validation) &&
+        mc_confidence_95th > 1.0 && // Positive expected returns at 95th percentile
+        export_requested
+    }
+}
+
+
 
 #[cfg(test)]
 mod tests {

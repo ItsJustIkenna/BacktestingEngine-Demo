@@ -1,0 +1,53 @@
+# Validation Mode Configuration  
+# Balanced analysis with Monte Carlo - optimized for validation testing
+
+database:
+  host: "{{ .Values.database.host }}"
+  port: {{ .Values.database.port }}
+  database: "{{ .Values.database.name }}"
+  username: "{{ .Values.database.username }}"
+  password: "{{ .Values.database.password }}"
+  max_connections: 10
+  connection_timeout: 30
+
+trading:
+  initial_capital: 250000.0   # Medium capital for validation
+  commission_rate: 0.001
+  slippage_rate: 0.0005
+  risk_free_rate: 0.02
+
+data:
+  start_date: "2022-01-01"
+  end_date: "2024-06-30"      # 2.5 years for validation
+  symbols:
+    - "BTCUSDT"
+    - "ETHUSDT"
+  timeframe: "30m"            # Medium resolution
+
+output:
+  reports_dir: "/app/reports/validation"
+  export_formats:
+    - "html"
+    - "json"
+  save_equity_curve: true
+  save_trade_log: true
+
+analysis:
+  mode: "validation"
+  auto_monte_carlo: true      # Enabled for statistical validation
+  monte_carlo_runs: 2500      # Medium accuracy Monte Carlo
+  auto_walk_forward: false    # Not needed for validation
+  wf_training_days: 365
+  wf_test_days: 90
+  wf_step_days: 30
+  min_duration_for_auto: 90   # Medium threshold (3 months)
+  validation_sharpe_threshold: 1.2
+  validation_pf_threshold: 1.4
+  validation_min_trades: 50
+  timeout_seconds: 600       # 10 minute timeout for validation
+  confidence_levels:
+    - 0.95
+  risk_metrics:
+    - "var"
+    - "max_drawdown"
+    - "sharpe"

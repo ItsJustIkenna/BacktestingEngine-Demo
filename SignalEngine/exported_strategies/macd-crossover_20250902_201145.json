@@ -1,0 +1,69 @@
+{
+  "config": {
+    "id": "macd crossover-btcusdt-001",
+    "name": "MACD Crossover",
+    "strategy_type": "MACD Crossover",
+    "symbol": "BTCUSDT",
+    "exchange": "binance",
+    "enabled": true,
+    "parameters": {
+      "signal_ma": {
+        "Float": 9.0
+      },
+      "position_size": {
+        "Float": 0.15
+      },
+      "slow_ma": {
+        "Float": 26.0
+      },
+      "fast_ma": {
+        "Float": 12.0
+      }
+    }
+  },
+  "performance": {
+    "total_pnl": "12500",
+    "sharpe_ratio": 2.4,
+    "profit_factor": 1.9,
+    "win_rate": 0.725,
+    "max_drawdown": "-850",
+    "num_trades": 187,
+    "avg_trade_return": 0.0067,
+    "volatility": 0.19,
+    "avg_trade_duration_hours": 1.8,
+    "backtest_start": "2025-07-04T20:11:45.907007300Z",
+    "backtest_end": "2025-09-02T20:11:45.907084300Z"
+  },
+  "optimized_parameters": {
+    "signal_ma": {
+      "Float": 9.0
+    },
+    "position_size": {
+      "Float": 0.15
+    },
+    "slow_ma": {
+      "Float": 26.0
+    },
+    "fast_ma": {
+      "Float": 12.0
+    }
+  },
+  "live_trading_config": {
+    "max_position_pct": 0.05,
+    "stop_loss_pct": 0.02,
+    "take_profit_pct": null,
+    "daily_loss_limit": "1000.00",
+    "cooldown_minutes": 30,
+    "risk_scaling": 1.0,
+    "paper_trading": true,
+    "paper_trading_days": 7
+  },
+  "export_metadata": {
+    "export_time": "2025-09-02T20:11:45.907789300Z",
+    "strategy_version": "1.0.0",
+    "engine_version": "0.1.0",
+    "authorized_by": "backtesting-engine",
+    "approval_level": "Development",
+    "notes": "Auto-exported strategy with Sharpe: 2.40, PF: 1.90, Win Rate: 72.5%"
+  }
+}

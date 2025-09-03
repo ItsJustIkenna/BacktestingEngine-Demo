@@ -52,17 +52,8 @@ pub async fn run_walkforward_analysis(
         });
     }
 
-    // 5. Aggregate results (example: average test Sharpe, parameter stability, etc.)
-    let average_test_sharpe = if !window_results.is_empty() {
-        window_results.iter().map(|r| r.test_metrics.sharpe_ratio).sum::<f64>() / window_results.len() as f64
-    } else { 0.0 };
-    let parameter_stability = 0.0; // Placeholder: implement your own logic
-
-    WalkForwardSummary {
-        window_results,
-        average_test_sharpe,
-        parameter_stability,
-    }
+    // 5. Aggregate results using the new constructor
+    WalkForwardSummary::new(window_results)
 }
 
 // --- Helper stubs to be implemented ---

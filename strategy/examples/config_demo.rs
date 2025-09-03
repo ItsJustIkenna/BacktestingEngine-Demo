@@ -16,6 +16,8 @@ async fn main() -> Result<()> {
         min_sharpe_ratio: 1.8,
         min_profit_factor: 1.5,
         min_win_rate: 65.0,
+        max_drawdown_pct: 15.0,
+        min_trades: 50,
         export_path: "./custom_exports".to_string(),
     };
 

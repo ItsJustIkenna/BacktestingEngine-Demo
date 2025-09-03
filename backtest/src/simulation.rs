@@ -10,7 +10,6 @@ use riskmanager::RiskManager;
 use dataloader::MarketData;
 use crate::types::{BacktestEvent, BacktestResult};
 use crate::logging_facade::BACKTEST_LOGGER;
-use crate::log_error;
 use metrics::{performance, risk, trade_stats};
 use bigdecimal::{BigDecimal, ToPrimitive, FromPrimitive};
 
