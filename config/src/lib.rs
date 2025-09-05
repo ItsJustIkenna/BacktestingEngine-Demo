@@ -58,6 +58,63 @@ pub struct TradingConfig {
     pub max_position_size: Option<f64>, // as percentage of portfolio
     pub risk_free_rate: f64,       // for Sharpe ratio calculation
     pub exchange_fees: Option<ExchangeFeeConfig>, // Maker/taker fee configuration
+    pub routing_mode: Option<RoutingMode>, // Multi-exchange routing configuration
+}
+
+/// Routing mode for multi-exchange strategies
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RoutingMode {
+    /// Single exchange trading (default)
+    SingleExchange {
+        exchange: String,
+    },
+    /// Smart order routing across multiple exchanges
+    SmartRouting {
+        exchanges: Vec<String>,
+        algorithm: RoutingAlgorithm,
+        max_venues_per_order: usize,
+        cross_exchange_latency_ms: f64,
+    },
+    /// Arbitrage-specific routing
+    Arbitrage {
+        exchanges: Vec<String>,
+        min_profit_bps: f64,
+        max_holding_time_seconds: u64,
+        risk_limits: ArbitrageRiskLimits,
+    },
+}
+
+/// Smart routing algorithm types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RoutingAlgorithm {
+    /// Time-Weighted Average Price
+    TWAP,
+    /// Volume-Weighted Average Price  
+    VWAP,
+    /// Implementation Shortfall
+    ImplementationShortfall,
+    /// Best execution across venues
+    BestExecution,
+}
+
+/// Arbitrage-specific risk limits
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArbitrageRiskLimits {
+    pub max_open_positions: u32,
+    pub max_daily_loss: f64,
+    pub max_exchange_exposure: f64,
+    pub min_liquidity_ratio: f64,
+}
+
+impl Default for ArbitrageRiskLimits {
+    fn default() -> Self {
+        Self {
+            max_open_positions: 5,
+            max_daily_loss: 1000.0,
+            max_exchange_exposure: 10000.0,
+            min_liquidity_ratio: 5.0,
+        }
+    }
 }
 
 /// Exchange-specific fee configuration
@@ -317,6 +374,7 @@ impl Default for TradingConfig {
             max_position_size: Some(0.1), // 10%
             risk_free_rate: 0.02,      // 2%
             exchange_fees: Some(ExchangeFeeConfig::kraken_default()),
+            routing_mode: None,        // Single exchange by default
         }
     }
 }

@@ -6,7 +6,7 @@
 use crate::result::WalkForwardSummary;
 use crate::logging_facade::WALKFORWARD_LOGGER;
 use crate::{log_info, log_warn};
-use strategy::export::BacktestResults;
+use strategy::simple_export::BacktestResults;
 use strategy::strategies::avellaneda_stoikov::AvellanedaStoikovStrategy;
 use anyhow::Result;
 use bigdecimal::BigDecimal;
@@ -231,7 +231,7 @@ impl AutoExporter {
             sharpe_ratio: avg_sharpe_ratio,
             max_drawdown: BigDecimal::try_from(max_drawdown).unwrap_or_else(|_| BigDecimal::from(0)),
             profit_factor: avg_profit_factor,
-            num_trades: total_trades,
+            num_trades: total_trades as u64,
             win_rate: avg_win_rate,
             avg_trade_return: wf_summary.window_results.iter()
                 .map(|w| w.test_metrics.average_trade_return)
