@@ -1,6 +1,6 @@
 //! Integration tests for the config module
 
-use config::{BacktestConfig, ConfigError, DatabaseConfig, TradingConfig, DataConfig, OutputConfig, ReportFormat};
+use config::{BacktestConfig, DatabaseConfig, TradingConfig, DataConfig, OutputConfig, ReportFormat, AnalysisConfig};
 use std::fs;
 use tempfile::TempDir;
 
@@ -166,6 +166,7 @@ mod tests {
             trading: TradingConfig::default(),
             data: data_config,
             output: OutputConfig::default(),
+            analysis: AnalysisConfig::default(),
         };
         
         assert_eq!(config.data.default_timeframe, "1h");

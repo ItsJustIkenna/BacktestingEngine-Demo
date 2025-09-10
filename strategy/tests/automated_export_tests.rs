@@ -1,13 +1,8 @@
 //! Integration tests for the automated export system
 
 use strategy::{
-    EnhancedStrategyExporter, 
-    EnhancedExportConfig,
-    translation::TranslationConfig,
-    DeploymentConfig,
+    simple_export::{BacktestResults, ExportConfig, StrategyMetrics}, 
     strategies::avellaneda_stoikov::AvellanedaStoikovStrategy,
-    BacktestResults,
-    StrategyMetrics,
     Strategy,
 };
 use std::sync::Arc;
@@ -61,49 +56,43 @@ fn create_successful_backtest_results() -> BacktestResults {
 }
 
 #[tokio::test]
-async fn test_enhanced_export_configuration() {
-    let config = EnhancedExportConfig::default();
+async fn test_export_configuration() {
+    let config = ExportConfig::default();
     
     // Verify default configuration values
-    assert_eq!(config.translation.target_latency_ns, 1000);
-    assert!(config.translation.ultra_fast_mode);
-    assert_eq!(config.translation.buffer_size, 100);
+    assert_eq!(config.min_sharpe_ratio, 1.5);
+    assert_eq!(config.min_profit_factor, 1.3);
+    assert_eq!(config.min_win_rate, 0.6);
+    assert_eq!(config.max_drawdown_pct, 0.15);
+    assert_eq!(config.min_trades, 100);
     
-    assert!(config.deployment.auto_deploy);
-    assert!(config.deployment.paper_trading_first);
-    assert_eq!(config.deployment.paper_trading_hours, 24);
+    // Test conservative configuration
+    let conservative = ExportConfig::conservative();
+    assert_eq!(conservative.min_sharpe_ratio, 2.0);
+    assert_eq!(conservative.min_profit_factor, 1.8);
+    assert_eq!(conservative.min_win_rate, 0.7);
     
-    assert!(config.quality_assurance.automated_testing);
-    assert_eq!(config.quality_assurance.min_test_coverage, 80.0);
+    // Test aggressive configuration
+    let aggressive = ExportConfig::aggressive();
+    assert_eq!(aggressive.min_sharpe_ratio, 1.0);
+    assert_eq!(aggressive.min_profit_factor, 1.1);
+    assert_eq!(aggressive.min_win_rate, 0.55);
 }
 
 #[tokio::test]
 async fn test_strategy_evaluation() {
-    // Create temporary directory for testing
-    let temp_dir = std::env::temp_dir().join("test_signal_engine");
-    std::fs::create_dir_all(&temp_dir).ok();
-    
-    let signal_engine_path = temp_dir.to_string_lossy().to_string();
-    
-    // Create enhanced exporter
-    let exporter = EnhancedStrategyExporter::new(signal_engine_path);
-    assert!(exporter.is_ok());
-    
-    let mut exporter = exporter.unwrap();
-    
     // Create strategy and test data
     let strategy = Arc::new(AvellanedaStoikovStrategy::default());
     let backtest_results = create_successful_backtest_results();
     let mut parameters = HashMap::new();
     parameters.insert("risk_aversion".to_string(), ParameterValue::Float(0.015));
     
-    println!("Testing automated export system...");
+    println!("Testing export system...");
     
     // This would normally run the full export, but for testing we'll just verify
     // that the components can be created and configured
-    println!("✅ Strategy instance created");
+    println!("✅ Strategy instance created: {}", strategy.name());
     println!("✅ Backtest results created (meets criteria)");
-    println!("✅ Enhanced exporter initialized");
     
     // Verify the strategy meets basic criteria
     assert!(backtest_results.sharpe_ratio > 1.5);
@@ -111,105 +100,93 @@ async fn test_strategy_evaluation() {
     assert!(backtest_results.win_rate > 0.55);
     assert!(backtest_results.max_drawdown.to_f64().unwrap_or(1.0) < 0.15);
     
-    println!("✅ All export criteria verified");
+    // Test that parameters are properly set
+    assert!(!parameters.is_empty());
     
-    // Clean up
-    std::fs::remove_dir_all(temp_dir).ok();
+    println!("✅ All export criteria verified");
 }
 
 #[tokio::test]
-async fn test_translation_config_customization() {
-    let custom_config = EnhancedExportConfig {
-        translation: TranslationConfig {
-            target_latency_ns: 500,
-            ultra_fast_mode: true,
-            buffer_size: 200,
-            enable_profiling: true,
-            remove_async_hot_paths: true,
-            calculation_cache_size: 1500,
-        },
-        deployment: DeploymentConfig {
-            auto_deploy: false,
-            paper_trading_first: true,
-            paper_trading_hours: 48,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
+async fn test_export_config_customization() {
+    let conservative_config = ExportConfig::conservative();
     
-    // Verify custom configuration
-    assert_eq!(custom_config.translation.target_latency_ns, 500);
-    assert_eq!(custom_config.translation.buffer_size, 200);
-    assert!(!custom_config.deployment.auto_deploy);
-    assert_eq!(custom_config.deployment.paper_trading_hours, 48);
+    // Verify conservative configuration
+    assert_eq!(conservative_config.min_sharpe_ratio, 2.0);
+    assert_eq!(conservative_config.min_profit_factor, 1.8);
+    assert_eq!(conservative_config.min_win_rate, 0.7);
+    assert_eq!(conservative_config.max_drawdown_pct, 0.1);
+    assert_eq!(conservative_config.min_trades, 100);
     
-    println!("✅ Custom configuration validated");
+    let aggressive_config = ExportConfig::aggressive();
+    
+    // Verify aggressive configuration
+    assert_eq!(aggressive_config.min_sharpe_ratio, 1.0);
+    assert_eq!(aggressive_config.min_profit_factor, 1.1);
+    assert_eq!(aggressive_config.min_win_rate, 0.55);
+    assert_eq!(aggressive_config.max_drawdown_pct, 0.25);
+    assert_eq!(aggressive_config.min_trades, 50);
+    
+    println!("✅ Export configuration variants validated");
 }
 
 #[test]
 fn test_performance_metrics_calculation() {
-    use strategy::translation::TranslationMetrics;
+    // Test basic performance metric calculations
+    let backtest_results = create_successful_backtest_results();
     
-    let metrics = TranslationMetrics {
-        original_avg_latency_ns: 50_000_000,  // 50ms
-        translated_avg_latency_ns: 60_000,    // 60μs  
-        performance_improvement_ratio: 833.3, // 833x improvement
-        signals_per_second: 16_666,           // Based on 60μs latency
-        memory_usage_bytes: 1024,
-        cache_hit_rate: 0.95,
-        translation_time_ms: 150,
-    };
+    // Verify performance metrics
+    assert!(backtest_results.sharpe_ratio > 1.5);
+    assert!(backtest_results.profit_factor > 1.2);
+    assert!(backtest_results.win_rate > 0.55);
+    assert!(backtest_results.max_drawdown.to_f64().unwrap_or(1.0) < 0.15);
     
-    // Verify performance improvement calculation
-    let expected_improvement = 50_000_000.0 / 60_000.0;
-    assert!((metrics.performance_improvement_ratio - expected_improvement).abs() < 10.0);
-    
-    // Verify signals per second calculation  
-    let expected_sps = 1_000_000_000 / 60_000; // 1 billion ns / 60k ns = 16666
-    assert_eq!(metrics.signals_per_second, expected_sps); // 16666
+    // Test strategy metrics
+    let metrics = &backtest_results.strategy_metrics;
+    assert_eq!(metrics.total_signals, 2894);
+    assert_eq!(metrics.buy_signals, 1936);
+    assert_eq!(metrics.sell_signals, 958);
+    assert_eq!(metrics.avg_signal_strength, 0.75);
     
     println!("✅ Performance metrics calculation validated");
-    println!("   Improvement: {:.1}x", metrics.performance_improvement_ratio);
-    println!("   Throughput: {} signals/sec", metrics.signals_per_second);
+    println!("   Sharpe Ratio: {:.2}", backtest_results.sharpe_ratio);
+    println!("   Profit Factor: {:.2}", backtest_results.profit_factor);
+    println!("   Win Rate: {:.1}%", backtest_results.win_rate * 100.0);
 }
 
 #[tokio::test] 
-async fn test_deployment_environment_parsing() {
-    use strategy::enhanced_export::DeploymentEnvironment;
+async fn test_export_criteria_validation() {
+    // Test different export criteria configurations
+    let conservative = ExportConfig::conservative();
+    let aggressive = ExportConfig::aggressive();
+    let research = ExportConfig::research();
     
-    // Test environment parsing logic (would be extracted from CLI)
-    let dev_env = DeploymentEnvironment::Development;
-    let staging_env = DeploymentEnvironment::Staging; 
-    let prod_env = DeploymentEnvironment::Production;
-    let paper_env = DeploymentEnvironment::PaperTrading;
+    // Test conservative criteria
+    assert!(conservative.min_sharpe_ratio >= 2.0);
+    assert!(conservative.min_profit_factor >= 1.8);
+    println!("✅ Conservative export criteria");
     
-    // Verify enum variants exist and can be created
-    match dev_env {
-        DeploymentEnvironment::Development => println!("✅ Development environment"),
-        _ => panic!("Unexpected environment variant"),
-    }
+    // Test aggressive criteria  
+    assert!(aggressive.min_sharpe_ratio >= 1.0);
+    assert!(aggressive.min_profit_factor >= 1.1);
+    println!("✅ Aggressive export criteria");
     
-    match staging_env {
-        DeploymentEnvironment::Staging => println!("✅ Staging environment"),  
-        _ => panic!("Unexpected environment variant"),
-    }
+    // Test research criteria
+    assert!(research.min_sharpe_ratio >= 0.5);
+    assert!(research.min_profit_factor >= 1.0);
+    println!("✅ Research export criteria");
     
-    match prod_env {
-        DeploymentEnvironment::Production => println!("✅ Production environment"),
-        _ => panic!("Unexpected environment variant"),
-    }
-    
-    match paper_env {
-        DeploymentEnvironment::PaperTrading => println!("✅ Paper trading environment"),
-        _ => panic!("Unexpected environment variant"),
-    }
+    // Verify that conservative is stricter than aggressive
+    assert!(conservative.min_sharpe_ratio > aggressive.min_sharpe_ratio);
+    assert!(conservative.min_profit_factor > aggressive.min_profit_factor);
+    assert!(conservative.min_win_rate > aggressive.min_win_rate);
+    println!("✅ Criteria hierarchy validated");
 }
 
 /// Integration test demonstrating the complete workflow
 #[tokio::test]
 async fn test_complete_workflow_simulation() {
-    println!("🧪 Testing Complete Automated Export Workflow");
-    println!("==============================================");
+    println!("🧪 Testing Complete Export Workflow");
+    println!("===================================");
     
     // Step 1: Create strategy
     let strategy = Arc::new(AvellanedaStoikovStrategy::default());
@@ -228,44 +205,29 @@ async fn test_complete_workflow_simulation() {
     assert!(backtest_results.win_rate >= 0.55);
     println!("✅ Step 3: Export criteria verified");
     
-    // Step 4: Create enhanced configuration
-    let config = EnhancedExportConfig {
-        translation: TranslationConfig {
-            target_latency_ns: 1000,
-            ultra_fast_mode: true,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    println!("✅ Step 4: Enhanced configuration created");
+    // Step 4: Create export configuration
+    let config = ExportConfig::default();
+    println!("✅ Step 4: Export configuration created");
+    println!("   Min Sharpe: {:.2}", config.min_sharpe_ratio);
+    println!("   Min Profit Factor: {:.2}", config.min_profit_factor);
+    println!("   Min Win Rate: {:.1}%", config.min_win_rate * 100.0);
     
-    // Step 5: Simulate translation metrics
-    let estimated_improvement = 50_000_000.0 / 1000.0; // 50ms -> 1μs
-    println!("✅ Step 5: Translation metrics calculated");
-    println!("   Estimated improvement: {:.0}x faster", estimated_improvement);
-    println!("   Target latency: {}ns", config.translation.target_latency_ns);
+    // Step 5: Verify strategy meets export criteria
+    let meets_criteria = backtest_results.sharpe_ratio >= config.min_sharpe_ratio &&
+                        backtest_results.profit_factor >= config.min_profit_factor &&
+                        backtest_results.win_rate >= config.min_win_rate &&
+                        backtest_results.max_drawdown.to_f64().unwrap_or(1.0) <= config.max_drawdown_pct;
     
-    // Step 6: Simulate quality assurance
-    let qa_score = 0.885; // 88.5%
-    assert!(qa_score >= 0.8);
-    println!("✅ Step 6: Quality assurance passed ({:.1}%)", qa_score * 100.0);
+    assert!(meets_criteria);
+    println!("✅ Step 5: Strategy qualifies for export");
     
-    // Step 7: Simulate deployment
-    println!("✅ Step 7: Multi-environment deployment simulated");
-    println!("   Development: Ready");
-    println!("   Staging: Ready");
-    println!("   Production: Pending approval");
-    
-    // Step 8: Monitoring setup
-    println!("✅ Step 8: Monitoring configured");
-    println!("   Metrics: Latency, Throughput, Error Rate");
-    println!("   Alerts: 3 configured");
+    // Step 6: Simulate export readiness
+    println!("✅ Step 6: Export system ready");
+    println!("   Export path: {}", config.export_path);
+    println!("   Strategy: {}", strategy.name());
     
     println!();
     println!("🎉 Complete workflow simulation successful!");
-    println!("   Total simulated improvements:");
-    println!("   - {:.0}x latency reduction", estimated_improvement);
-    println!("   - {:.0}x throughput increase", estimated_improvement * 2.0);
-    println!("   - 60% memory reduction");
-    println!("   - 100% automation coverage");
+    println!("   Strategy passed all export criteria");
+    println!("   Ready for SignalEngine deployment");
 }

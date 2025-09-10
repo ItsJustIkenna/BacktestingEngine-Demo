@@ -1,6 +1,5 @@
 use chrono::Utc;
 use bigdecimal::BigDecimal;
-use std::collections::HashMap;
 use std::str::FromStr;
 
 // Import from modules
@@ -8,7 +7,7 @@ use strategy::StrategyManager;
 use orderbook::{OrderBook, OrderBookConfig};
 use portfoliomanager::{PortfolioState, Position, PositionSide};
 use riskmanager::{RiskManager, RiskLimits};
-use config::{BacktestConfig, TradingConfig, DatabaseConfig, DataConfig, OutputConfig};
+use config::{BacktestConfig, TradingConfig, DatabaseConfig, DataConfig, OutputConfig, AnalysisConfig};
 use walkforward::{WalkForwardConfig, WalkForwardAnalyzer};
 
 #[cfg(test)]
@@ -18,10 +17,10 @@ mod tests {
     #[tokio::test]
     async fn test_end_to_end_backtest_integration() {
         // Test that all core modules work together for a basic backtest
-        let mut strategy_manager = StrategyManager::default();
-        let mut orderbook = OrderBook::new("BTC/USDT".to_string(), "binance".to_string(), OrderBookConfig::default());
+        let strategy_manager = StrategyManager::default();
+        let orderbook = OrderBook::new("BTC/USDT".to_string(), "binance".to_string(), OrderBookConfig::default());
         let mut portfolio = PortfolioState::default();
-        let mut risk_manager = RiskManager::new();
+        let risk_manager = RiskManager::new();
         
         // Set up a basic trading config with correct field names
         let config = BacktestConfig {
@@ -41,6 +40,7 @@ mod tests {
                 max_position_size: Some(0.1),
                 risk_free_rate: 0.02,
                 exchange_fees: None,
+                routing_mode: None,
             },
             data: DataConfig {
                 default_timeframe: "1d".to_string(),
@@ -54,6 +54,7 @@ mod tests {
                 charts_enabled: false,
                 export_formats: vec!["json".to_string()],
             },
+            analysis: AnalysisConfig::default(),
         };
 
         // Set initial balance using correct field name and BigDecimal conversion
@@ -83,6 +84,13 @@ mod tests {
         
         // Test risk manager
         assert!(risk_manager.limits.max_position.is_some());
+        
+        // Test strategy manager creation
+        // Strategy manager should be created successfully
+        let _sm = &strategy_manager; // Just reference it to avoid unused warning
+        
+        // Test config is properly initialized
+        assert!(config.trading.initial_capital > 0.0);
     }
 
     #[tokio::test]
@@ -114,6 +122,7 @@ mod tests {
                 max_position_size: Some(0.1),
                 risk_free_rate: 0.02,
                 exchange_fees: None,
+                routing_mode: None,
             },
             data: DataConfig {
                 default_timeframe: "1d".to_string(),
@@ -127,9 +136,10 @@ mod tests {
                 charts_enabled: false,
                 export_formats: vec!["json".to_string()],
             },
+            analysis: AnalysisConfig::default(),
         };
         
-        let mut analyzer = WalkForwardAnalyzer::new(config, backtest_config);
+        let analyzer = WalkForwardAnalyzer::new(config, backtest_config);
         
         // Test that analyzer can be created and basic operations work
         assert!(analyzer.config.optimization_window_size.as_secs() > 0);
@@ -158,6 +168,7 @@ mod tests {
                 max_position_size: Some(0.2),
                 risk_free_rate: 0.025,
                 exchange_fees: None,
+                routing_mode: None,
             },
             data: DataConfig {
                 default_timeframe: "1h".to_string(),
@@ -171,6 +182,7 @@ mod tests {
                 charts_enabled: true,
                 export_formats: vec!["json".to_string(), "csv".to_string()],
             },
+            analysis: AnalysisConfig::default(),
         };
         
         // Test basic validation
