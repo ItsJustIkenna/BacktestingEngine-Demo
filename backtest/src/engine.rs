@@ -100,7 +100,21 @@ impl BacktestEngine {
         
         println!("🔍 Starting Backtest Analysis - Mode: {:?}", current_mode);
         
-        // Run core backtest simulation
+        // MANDATORY: Run genetic optimization first to find optimal parameters
+        println!("🧬 Running genetic optimization (mandatory for HFT strategies)...");
+        let optimized_params = self.run_genetic_optimization(
+            strategy_manager,
+            orderbook,
+            portfolio,
+            risk_manager,
+            market_data
+        ).await?;
+        
+        // Apply optimized parameters to strategy
+        strategy_manager.update_parameters(optimized_params).await?;
+        println!("✅ Genetic optimization complete - parameters updated");
+        
+        // Run core backtest simulation with optimized parameters
         let core_result = self.run_core_simulation(
             strategy_manager, 
             orderbook, 
@@ -222,6 +236,130 @@ impl BacktestEngine {
         ).await;
         
         Ok(result)
+    }
+    
+    /// Run genetic optimization to find optimal strategy parameters (MANDATORY)
+    async fn run_genetic_optimization(
+        &self,
+        strategy_manager: &mut StrategyManager,
+        _orderbook: &mut OrderBook,
+        _portfolio: &mut PortfolioState,
+        _risk_manager: &mut RiskManager,
+        market_data: &[MarketData],
+    ) -> Result<std::collections::HashMap<String, config::ParameterValue>> {
+        use genetic::{GeneticOptimizer, chromosome::AvellanedaStoikovChromosome};
+        use config::GeneticConfig;
+        use std::sync::Arc;
+        use std::pin::Pin;
+        use std::future::Future;
+        
+        // Configure genetic algorithm based on analysis mode
+        let (population_size, generations) = match self.analysis_config.mode {
+            config::AnalysisMode::Development => (5, 3),      // Minimal for testing (15 backtests)
+            config::AnalysisMode::Validation => (20, 10),     // Moderate
+            config::AnalysisMode::Production => (50, 25),     // Comprehensive
+        };
+        
+        let config = GeneticConfig {
+            population_size,
+            generations,
+            crossover_rate: 0.7,
+            mutation_rate: 0.2,
+        };
+        
+        // Create fitness function that runs backtest with parameters
+        let market_data_clone = market_data.to_vec();
+        let backtest_config = self.config.clone();
+        
+        let fitness_fn = Arc::new(move |chromo: &AvellanedaStoikovChromosome| {
+            let market_data = market_data_clone.clone();
+            let config = backtest_config.clone();
+            
+            Box::pin(async move {
+                // Create temporary components for fitness evaluation
+                let mut temp_strategy_manager = strategy::StrategyManager::new();
+                let mut temp_orderbook = orderbook::OrderBook::new(&config);
+                let mut temp_portfolio = portfoliomanager::PortfolioState::new(config.trading.initial_capital);
+                let mut temp_risk_manager = riskmanager::RiskManager::default();
+                
+                // Create strategy with chromosome parameters
+                let mut strategy = strategy::strategies::avellaneda_stoikov::AvellanedaStoikovStrategy::new(
+                    strategy::strategies::avellaneda_stoikov::AvellanedaStoikovParams {
+                        risk_aversion: chromo.risk_aversion,
+                        order_size: chromo.order_size,
+                        window_ms: chromo.window_ms,
+                        min_quote_lifetime_ms: chromo.min_quote_lifetime_ms,
+                        fee_rate: chromo.fee_rate,
+                        latency_buffer: chromo.latency_buffer,
+                        inventory_target: chromo.inventory_target,
+                        volatility_cap: chromo.volatility_cap,
+                        time_horizon_minutes: chromo.time_horizon_minutes,
+                        market_depth_k: chromo.market_depth_k,
+                    }
+                );
+                
+                // Register strategy
+                temp_strategy_manager.register_strategy(Box::new(strategy)).await.ok();
+                
+                // Run backtest
+                let mut sim_loop = crate::simulation::SimulationLoop::new();
+                let result = sim_loop.run(
+                    &mut temp_strategy_manager,
+                    &mut temp_orderbook,
+                    &mut temp_portfolio,
+                    &mut temp_risk_manager,
+                    market_data,
+                    &config,
+                ).await;
+                
+                // Fitness score: weighted combination of Sharpe and Profit Factor
+                let sharpe = result.sharpe_ratio.unwrap_or(0.0);
+                let pf = result.profit_factor.unwrap_or(1.0);
+                let win_rate = result.win_rate.unwrap_or(0.0);
+                
+                // Penalize if below minimum thresholds
+                let mut fitness = sharpe * 0.5 + (pf - 1.0) * 0.3 + win_rate * 0.2;
+                
+                // Heavy penalty for poor risk metrics
+                if let Some(dd) = result.max_drawdown {
+                    if dd.abs() > 0.20 { // More than 20% drawdown
+                        fitness *= 0.5;
+                    }
+                }
+                
+                fitness.max(0.0) // Ensure non-negative
+            }) as Pin<Box<dyn Future<Output = f64> + Send + 'static>>
+        });
+        
+        println!("   Population: {}, Generations: {}", population_size, generations);
+        
+        let optimizer = GeneticOptimizer {
+            config,
+            fitness_fn,
+        };
+        
+        let (best_chromo, best_fitness) = optimizer.run().await;
+        
+        println!("   Best fitness score: {:.4}", best_fitness);
+        println!("   Optimized parameters:");
+        println!("     risk_aversion: {:.4}", best_chromo.risk_aversion);
+        println!("     order_size: {:.4}", best_chromo.order_size);
+        println!("     volatility_cap: {:.4}", best_chromo.volatility_cap);
+        
+        // Convert chromosome to parameter map
+        let mut params = std::collections::HashMap::new();
+        params.insert("risk_aversion".to_string(), config::ParameterValue::Float(best_chromo.risk_aversion));
+        params.insert("order_size".to_string(), config::ParameterValue::Float(best_chromo.order_size));
+        params.insert("window_ms".to_string(), config::ParameterValue::Float(best_chromo.window_ms as f64));
+        params.insert("min_quote_lifetime_ms".to_string(), config::ParameterValue::Float(best_chromo.min_quote_lifetime_ms as f64));
+        params.insert("fee_rate".to_string(), config::ParameterValue::Float(best_chromo.fee_rate));
+        params.insert("latency_buffer".to_string(), config::ParameterValue::Float(best_chromo.latency_buffer));
+        params.insert("inventory_target".to_string(), config::ParameterValue::Float(best_chromo.inventory_target));
+        params.insert("volatility_cap".to_string(), config::ParameterValue::Float(best_chromo.volatility_cap));
+        params.insert("time_horizon_minutes".to_string(), config::ParameterValue::Float(best_chromo.time_horizon_minutes));
+        params.insert("market_depth_k".to_string(), config::ParameterValue::Float(best_chromo.market_depth_k));
+        
+        Ok(params)
     }
     
     /// Run Monte Carlo simulation analysis
