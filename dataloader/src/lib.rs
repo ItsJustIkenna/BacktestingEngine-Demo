@@ -2,7 +2,6 @@ pub mod cache;
 pub mod aggregation;
 pub mod query;
 
-use anyhow::Result;
 use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -610,24 +609,9 @@ impl DataLoader {
     }
 }
 
-/// Helper function to align timestamp to interval
-fn align_to_interval(timestamp: DateTime<Utc>, interval_minutes: i32) -> DateTime<Utc> {
-    let total_minutes = timestamp.timestamp() / 60;
-    let aligned_minutes = (total_minutes / interval_minutes as i64) * interval_minutes as i64;
-    DateTime::from_timestamp(aligned_minutes * 60, 0).unwrap_or(timestamp)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Timelike;
-
-    #[test]
-    fn test_align_to_interval() {
-        let timestamp = DateTime::parse_from_rfc3339("2024-01-01T10:37:45Z").unwrap().with_timezone(&Utc);
-        let aligned = align_to_interval(timestamp, 5);
-        assert_eq!(aligned.minute(), 35); // Should align to 10:35
-    }
 
     #[test]
     fn test_query_params_creation() {

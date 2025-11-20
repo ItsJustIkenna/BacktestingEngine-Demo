@@ -123,14 +123,12 @@ macro_rules! log_trace {
 /// Utility struct for BacktestingEngine logging
 pub struct BacktestEngineLogger {
     logger: Arc<UltraLogger>,
-    service_name: String,
 }
 
 impl BacktestEngineLogger {
     pub fn new(service_name: &str) -> Self {
         Self {
             logger: Arc::new(UltraLogger::new(service_name.to_string())),
-            service_name: service_name.to_string(),
         }
     }
 

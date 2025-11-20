@@ -1,7 +1,7 @@
 //! Integration tests for the portfoliomanager module
 
 use portfoliomanager::{PortfolioState, Position, PositionSide};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use bigdecimal::BigDecimal;
 
 #[test]

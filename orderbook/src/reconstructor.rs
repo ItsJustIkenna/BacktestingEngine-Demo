@@ -4,7 +4,7 @@
 //! converting raw order and snapshot data into live order book events.
 
 use crate::order_book::OrderBook;
-use crate::types::{BookSide, OrderBookEvent};
+use crate::types::OrderBookEvent;
 use crate::OrderBookConfig;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -22,6 +22,7 @@ use std::sync::Arc;
 /// Order book reconstructor that maintains order books from historical data
 pub struct OrderBookReconstructor {
     /// Data loader for accessing historical data
+    #[allow(dead_code)]
     dataloader: Arc<DataLoader>,
     /// Currently active order books by symbol-exchange pair
     books: HashMap<String, OrderBook>,

@@ -16,7 +16,7 @@ pub use types::{BacktestResult, BacktestEvent};
 pub use html_export::HtmlExporter;
 
 // Utility functions for report generation
-use metrics::{ReportGenerator, ReportConfig, ReportFormat};
+use metrics::{ReportConfig, ReportFormat};
 use config::OutputConfig;
 use anyhow::Result;
 use std::path::PathBuf;

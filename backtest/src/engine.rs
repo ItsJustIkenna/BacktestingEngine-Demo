@@ -1,19 +1,17 @@
 //! Clean and simplified backtesting engine
 //! Combines basic and enhanced functionality in a unified interface
 
-use std::collections::HashMap;
 use std::time::Instant;
 use anyhow::Result;
 use serde::{Serialize, Deserialize};
 
-use crate::{BacktestResult, monte_carlo};
+use crate::{BacktestResult, monte_carlo, simulation::SimulationLoop};
 use config::{BacktestConfig, AnalysisMode, AnalysisConfig};
 use strategy::{StrategyManager, simple_export::ExportConfig};
 use orderbook::OrderBook;
 use portfoliomanager::PortfolioState;
 use riskmanager::RiskManager;
 use dataloader::MarketData;
-use metrics::PerformanceMetrics;
 
 /// Main backtesting engine with intelligent analysis capabilities
 pub struct BacktestEngine {
@@ -206,59 +204,34 @@ impl BacktestEngine {
     /// Run the core backtest simulation
     async fn run_core_simulation(
         &self,
-        _strategy_manager: &mut StrategyManager,
-        _orderbook: &mut OrderBook,
-        _portfolio: &mut PortfolioState,
-        _risk_manager: &mut RiskManager,
-        _market_data: &[MarketData],
+        strategy_manager: &mut StrategyManager,
+        orderbook: &mut OrderBook,
+        portfolio: &mut PortfolioState,
+        risk_manager: &mut RiskManager,
+        market_data: &[MarketData],
     ) -> Result<BacktestResult> {
-        // TODO: Replace with actual simulation using SimulationLoop
-        // For now, return mock results
-        Ok(BacktestResult {
-            total_pnl: 1000_i32.into(),
-            num_trades: 100,
-            max_drawdown: 100_i32.into(),
-            sharpe_ratio: Some(1.5),
-            profit_factor: Some(1.8),
-            win_rate: Some(0.6),
-            avg_trade_return: Some(10.0),
-            median_trade_return: Some(8.0),
-            avg_trade_duration: Some(24.0),
-            volatility: Some(0.15),
-            gross_profit: Some(1800.0),
-            gross_loss: Some(800.0),
-            net_profit: Some(1000.0),
-            equity_curve: vec![1000.0, 1100.0, 1200.0, 1300.0],
-            initial_capital: 10000.0,
-        })
+        // Run actual simulation using SimulationLoop
+        let mut sim_loop = SimulationLoop::new();
+        let result = sim_loop.run(
+            strategy_manager,
+            orderbook,
+            portfolio,
+            risk_manager,
+            market_data.to_vec(),
+            &self.config,
+        ).await;
+        
+        Ok(result)
     }
     
     /// Run Monte Carlo simulation analysis
     async fn run_monte_carlo_analysis(&self, base_result: &BacktestResult) -> Result<monte_carlo::MonteCarloResult> {
         let num_runs = self.analysis_config.monte_carlo_runs;
         
-        // Create performance metrics from base result
-        let placeholder_metrics = PerformanceMetrics {
-            net_profit: base_result.net_profit.unwrap_or(0.0),
-            gross_profit: base_result.gross_profit.unwrap_or(0.0),
-            gross_loss: base_result.gross_loss.unwrap_or(0.0),
-            sharpe_ratio: base_result.sharpe_ratio.unwrap_or(0.0),
-            max_drawdown: base_result.max_drawdown.to_string().parse().unwrap_or(0.0),
-            win_rate: base_result.win_rate.unwrap_or(0.0),
-            profit_factor: base_result.profit_factor.unwrap_or(0.0),
-            average_trade_return: base_result.avg_trade_return.unwrap_or(0.0),
-            median_trade_return: base_result.median_trade_return.unwrap_or(0.0),
-            number_of_trades: base_result.num_trades,
-            volatility: base_result.volatility.unwrap_or(0.0),
-            average_trade_duration: base_result.avg_trade_duration.unwrap_or(0.0),
-        };
+        // Run actual Monte Carlo simulation
+        let mc_result = monte_carlo::run_monte_carlo_simulation(base_result, num_runs)?;
         
-        Ok(monte_carlo::MonteCarloResult {
-            num_runs,
-            mean_metrics: placeholder_metrics.clone(),
-            stddev_metrics: placeholder_metrics,
-            percentile_metrics: HashMap::new(),
-        })
+        Ok(mc_result)
     }
     
     /// Run walk-forward analysis

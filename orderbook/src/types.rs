@@ -194,6 +194,26 @@ impl Default for SlippageConfig {
     }
 }
 
+/// Market impact configuration for permanent price impact
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketImpactConfig {
+    pub enabled: bool,
+    pub impact_coefficient: f64,     // Base impact per unit volume (0.01 = 1% per BTC)
+    pub decay_half_life_ms: u64,     // Half-life for impact decay (60000 = 1 minute)
+    pub max_impact_bps: f64,         // Maximum cumulative impact (100 = 1%)
+}
+
+impl Default for MarketImpactConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            impact_coefficient: 0.01,   // 1% impact per BTC executed
+            decay_half_life_ms: 60_000, // 1 minute decay half-life
+            max_impact_bps: 100.0,      // Max 1% cumulative impact
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

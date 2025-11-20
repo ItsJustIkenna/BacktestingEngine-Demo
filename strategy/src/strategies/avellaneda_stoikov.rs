@@ -27,6 +27,8 @@ pub struct AvellanedaStoikovParams {
     pub latency_buffer: f64,        // Price buffer for latency/slippage
     pub inventory_target: f64,      // Target inventory (0 = flat)
     pub volatility_cap: f64,        // Max allowed volatility (pause quoting above this)
+    pub time_horizon_minutes: f64,  // t: time horizon for optimization (in minutes)
+    pub market_depth_k: f64,        // k: market depth parameter (higher = tighter spread)
 }
 
 impl Default for AvellanedaStoikovParams {
@@ -40,7 +42,43 @@ impl Default for AvellanedaStoikovParams {
             latency_buffer: 0.5,
             inventory_target: 0.0,
             volatility_cap: 0.10, // 10% annualized
+            time_horizon_minutes: 1.0, // 1 minute default
+            market_depth_k: 1.5, // Default market depth parameter
         }
+    }
+}
+
+impl AvellanedaStoikovParams {
+    /// Validate parameter bounds
+    pub fn validate(&self) -> Result<(), String> {
+        if self.risk_aversion <= 0.0 || self.risk_aversion > 1.0 {
+            return Err(format!("risk_aversion must be in (0, 1], got {}", self.risk_aversion));
+        }
+        if self.order_size <= 0.0 {
+            return Err(format!("order_size must be positive, got {}", self.order_size));
+        }
+        if self.window_ms < 1_000 {
+            return Err(format!("window_ms must be >= 1000ms, got {}", self.window_ms));
+        }
+        if self.min_quote_lifetime_ms == 0 {
+            return Err(format!("min_quote_lifetime_ms must be positive, got {}", self.min_quote_lifetime_ms));
+        }
+        if self.fee_rate < 0.0 || self.fee_rate > 0.1 {
+            return Err(format!("fee_rate must be in [0, 0.1], got {}", self.fee_rate));
+        }
+        if self.latency_buffer < 0.0 {
+            return Err(format!("latency_buffer must be non-negative, got {}", self.latency_buffer));
+        }
+        if self.volatility_cap <= 0.0 || self.volatility_cap > 10.0 {
+            return Err(format!("volatility_cap must be in (0, 10], got {}", self.volatility_cap));
+        }
+        if self.time_horizon_minutes <= 0.0 || self.time_horizon_minutes > 60.0 {
+            return Err(format!("time_horizon_minutes must be in (0, 60], got {}", self.time_horizon_minutes));
+        }
+        if self.market_depth_k <= 0.0 || self.market_depth_k > 10.0 {
+            return Err(format!("market_depth_k must be in (0, 10], got {}", self.market_depth_k));
+        }
+        Ok(())
     }
 }
 
@@ -54,19 +92,36 @@ pub struct AvellanedaStoikovStrategy {
     price_history: Vec<(DateTime<Utc>, BigDecimal)>,
     inventory: f64,
     paused: bool,
+    // EWMA state for volatility estimation
+    ewma_mean: Option<f64>,
+    ewma_variance: Option<f64>,
 }
 
-impl Default for AvellanedaStoikovStrategy {
-    fn default() -> Self {
+impl AvellanedaStoikovStrategy {
+    /// Create a new Avellaneda-Stoikov strategy with given parameters
+    pub fn new(params: AvellanedaStoikovParams) -> Self {
+        // Validate parameters
+        if let Err(e) = params.validate() {
+            panic!("Invalid Avellaneda-Stoikov parameters: {}", e);
+        }
+        
         Self {
-            params: AvellanedaStoikovParams::default(),
+            params,
             last_bid: None,
             last_ask: None,
             last_quote_time: None,
             price_history: Vec::new(),
             inventory: 0.0,
             paused: false,
+            ewma_mean: None,
+            ewma_variance: None,
         }
+    }
+}
+
+impl Default for AvellanedaStoikovStrategy {
+    fn default() -> Self {
+        Self::new(AvellanedaStoikovParams::default())
     }
 }
 
@@ -141,26 +196,49 @@ impl Strategy for AvellanedaStoikovStrategy {
         let window_start = now - Duration::milliseconds(self.params.window_ms as i64);
         self.price_history.retain(|(ts, _)| *ts >= window_start);
 
-        // 2. Estimate volatility (annualized, in price units)
-        let returns: Vec<f64> = self.price_history.windows(2)
-            .filter_map(|w| {
-                let p0 = w[0].1.to_f64();
-                let p1 = w[1].1.to_f64();
-                match (p0, p1) {
-                    (Some(p0), Some(p1)) if p0 > 0.0 => Some((p1 / p0).ln()),
-                    _ => None
-                }
-            })
-            .collect();
-        let stdev = if returns.len() > 1 {
-            let mean = returns.iter().sum::<f64>() / returns.len() as f64;
-            let var = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (returns.len() as f64 - 1.0);
-            var.sqrt()
-        } else { 0.0 };
-        // Annualize volatility (assuming 31,536,000,000 ms/year)
-        let ms_per_year = 31_536_000_000.0;
-        let dt = self.params.window_ms as f64 / self.price_history.len().max(1) as f64;
-        let ann_vol = stdev * (ms_per_year / dt).sqrt();
+        // 2. Estimate volatility using EWMA (Exponentially Weighted Moving Average)
+        // More responsive to recent changes than simple rolling standard deviation
+        let lambda = 0.94; // RiskMetrics standard decay factor
+        
+        let mid_price = mid.to_f64().unwrap_or(0.0);
+        
+        // Calculate return from last price
+        let log_return = if self.price_history.len() >= 2 {
+            let prev_price = self.price_history[self.price_history.len() - 2].1.to_f64().unwrap_or(mid_price);
+            if prev_price > 0.0 {
+                (mid_price / prev_price).ln()
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+        
+        // Update EWMA mean and variance
+        match (self.ewma_mean, self.ewma_variance) {
+            (Some(prev_mean), Some(prev_var)) => {
+                // EWMA update formulas
+                let new_mean = lambda * prev_mean + (1.0 - lambda) * log_return;
+                let squared_deviation = (log_return - prev_mean).powi(2);
+                let new_var = lambda * prev_var + (1.0 - lambda) * squared_deviation;
+                
+                self.ewma_mean = Some(new_mean);
+                self.ewma_variance = Some(new_var);
+            }
+            _ => {
+                // Initialize EWMA with first return
+                self.ewma_mean = Some(log_return);
+                self.ewma_variance = Some(0.0);
+            }
+        }
+        
+        // Calculate annualized volatility from EWMA variance
+        let ewma_stdev = self.ewma_variance.unwrap_or(0.0).sqrt();
+        
+        // Annualize volatility (252 trading days, assuming ~6.5 hour trading sessions for crypto)
+        // For millisecond data: sqrt(252 * 24 * 60 * 60 * 1000) for continuous markets
+        let annualization_factor = (252.0 * 24.0 * 60.0 * 60.0 * 1000.0 / self.params.window_ms as f64).sqrt();
+        let ann_vol = ewma_stdev * annualization_factor;
 
         // 3. Pause quoting if volatility is too high
         if ann_vol > self.params.volatility_cap {
@@ -175,16 +253,22 @@ impl Strategy for AvellanedaStoikovStrategy {
         let sigma = ann_vol;
         let q = self.inventory;
         let q_star = self.params.inventory_target;
-    let s = mid.to_f64().unwrap_or(0.0);
-    let t = 1.0 / 365.0 / 24.0 / 60.0; // 1 minute horizon (in years)
-        let k = 1.5; // market depth parameter (can be made configurable)
+        let s = mid.to_f64().unwrap_or(0.0);
+        
+        // Use configurable time horizon (converted to years)
+        let t = self.params.time_horizon_minutes / 365.0 / 24.0 / 60.0;
+        
+        // Use configurable market depth parameter
+        let k = self.params.market_depth_k;
+        
         let fee = self.params.fee_rate;
         let latency = self.params.latency_buffer;
 
         // Reservation price (skew)
-    let r = s - (q - q_star) * gamma * sigma * sigma * t;
-    // Optimal spread
-    let spread = gamma * sigma * sigma * t + (2.0 / gamma) * (1.0 + fee + latency) / k;
+        let r = s - (q - q_star) * gamma * sigma * sigma * t;
+        
+        // Optimal spread
+        let spread = gamma * sigma * sigma * t + (2.0 / gamma) * (1.0 + fee + latency) / k;
         let bid = r - spread / 2.0;
         let ask = r + spread / 2.0;
 

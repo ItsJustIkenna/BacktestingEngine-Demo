@@ -1,42 +1,83 @@
 //! Fitness function for Avellaneda-Stoikov strategy chromosome
 
 use crate::chromosome::AvellanedaStoikovChromosome;
+use strategy::strategies::avellaneda_stoikov::{AvellanedaStoikovStrategy, AvellanedaStoikovParams};
+use backtest::simulation::SimulationLoop;
+use orderbook::OrderBook;
+use portfoliomanager::PortfolioState;
+use riskmanager::RiskManager;
+use strategy::StrategyManager;
 
-/// Fitness function: simplified placeholder that scores based on parameter values
-/// In a real implementation, this would run a full backtest simulation
+/// Fitness function: runs actual backtest with given chromosome parameters
+/// Returns Sharpe ratio as fitness score (higher is better)
 pub async fn avellaneda_stoikov_fitness(
     chromo: &AvellanedaStoikovChromosome,
-    _market_data: Vec<dataloader::MarketData>,
-    _config: &config::BacktestConfig,
+    market_data: Vec<dataloader::MarketData>,
+    config: &config::BacktestConfig,
 ) -> f64 {
-    // Simplified fitness calculation based on parameter ranges
-    // This is a placeholder - real implementation would run backtest simulation
-    
-    // Score risk aversion (prefer moderate values)
-    let risk_score = if chromo.risk_aversion >= 0.01 && chromo.risk_aversion <= 0.05 {
-        10.0
-    } else {
-        5.0 - (chromo.risk_aversion - 0.03).abs() * 100.0
+    // Convert chromosome to strategy parameters
+    let params = AvellanedaStoikovParams {
+        risk_aversion: chromo.risk_aversion,
+        order_size: chromo.order_size,
+        window_ms: chromo.window_ms,
+        min_quote_lifetime_ms: chromo.min_quote_lifetime_ms,
+        fee_rate: chromo.fee_rate,
+        latency_buffer: chromo.latency_buffer,
+        inventory_target: chromo.inventory_target,
+        volatility_cap: chromo.volatility_cap,
+        time_horizon_minutes: chromo.time_horizon_minutes,
+        market_depth_k: chromo.market_depth_k,
     };
     
-    // Score order size (prefer moderate sizes)
-    let size_score = if chromo.order_size >= 0.1 && chromo.order_size <= 0.5 {
-        10.0
-    } else {
-        5.0 - (chromo.order_size - 0.3).abs() * 20.0
+    // Initialize strategy with chromosome parameters
+    let strategy = AvellanedaStoikovStrategy::new(params);
+    let mut strategy_manager = StrategyManager::new();
+    
+    // Create a simple strategy config
+    let strategy_config = strategy::StrategyConfig {
+        id: "avellaneda_stoikov".to_string(),
+        name: "Avellaneda-Stoikov Market Making".to_string(),
+        strategy_type: "AvellanedaStoikov".to_string(),
+        symbol: "BTC/USD".to_string(),
+        exchange: "backtest".to_string(),
+        parameters: std::collections::HashMap::new(),
+        risk_limits: strategy::config::RiskLimits::default(),
+        enabled: true,
     };
     
-    // Score inventory target (prefer balanced)
-    let inventory_score = 5.0 - chromo.inventory_target.abs() * 10.0;
+    if let Err(e) = strategy_manager.register_strategy(strategy_config, strategy) {
+        eprintln!("Failed to register strategy: {}", e);
+        return 0.0; // Return worst fitness on error
+    }
     
-    // Score volatility cap (prefer reasonable caps)
-    let vol_score = if chromo.volatility_cap >= 0.5 && chromo.volatility_cap <= 2.0 {
-        10.0
-    } else {
-        5.0 - (chromo.volatility_cap - 1.0).abs() * 5.0
-    };
+    // Initialize backtest components
+    let orderbook_config = orderbook::OrderBookConfig::default();
+    let mut orderbook = OrderBook::new("BTC/USD".to_string(), "backtest".to_string(), orderbook_config);
     
-    // Combined score
-    let fitness = risk_score + size_score + inventory_score + vol_score;
-    fitness.max(0.0) // Ensure non-negative
+    // Initialize portfolio with default (will be set to initial_capital in simulation)
+    let mut portfolio = PortfolioState::default();
+    portfolio.balance = bigdecimal::BigDecimal::from(config.trading.initial_capital as i64);
+    
+    let mut risk_manager = RiskManager::new();
+    
+    // Run simulation
+    let mut sim_loop = SimulationLoop::new();
+    let result = sim_loop.run(
+        &mut strategy_manager,
+        &mut orderbook,
+        &mut portfolio,
+        &mut risk_manager,
+        market_data,
+        config,
+    ).await;
+    
+    // Return Sharpe ratio as fitness (or 0.0 if None)
+    // Penalize strategies with too few trades
+    if result.num_trades < 10 {
+        return result.sharpe_ratio.unwrap_or(0.0) * 0.1; // Heavy penalty
+    }
+    
+    // Return Sharpe ratio, but ensure minimum of 0.0
+    result.sharpe_ratio.unwrap_or(0.0).max(0.0)
 }
+

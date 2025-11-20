@@ -32,12 +32,19 @@ impl Chromosome for BenchChromosome {
         Self { values: new_values }
     }
 
-    fn mutate(&mut self, rng: &mut impl Rng) {
+    fn mutate(&mut self, rng: &mut impl Rng, mutation_rate: f64) {
         for value in &mut self.values {
-            if rng.gen_bool(0.1) {
+            if rng.gen_bool(mutation_rate) {
                 *value += rng.gen_range(-1.0..1.0);
             }
         }
+    }
+
+    fn distance(&self, other: &Self) -> f64 {
+        self.values.iter().zip(&other.values)
+            .map(|(a, b)| (a - b).powi(2))
+            .sum::<f64>()
+            .sqrt()
     }
 }
 
@@ -83,7 +90,7 @@ fn bench_chromosome_operations(c: &mut Criterion) {
     c.bench_function("chromosome_mutation", |b| {
         b.iter(|| {
             let mut chromosome = BenchChromosome::random(&mut rand::thread_rng());
-            chromosome.mutate(&mut rand::thread_rng());
+            chromosome.mutate(&mut rand::thread_rng(), 0.1);
             black_box(chromosome)
         })
     });

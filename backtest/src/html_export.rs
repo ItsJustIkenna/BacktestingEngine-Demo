@@ -1,5 +1,5 @@
 use crate::types::BacktestResult;
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -80,7 +80,6 @@ impl HtmlExporter {
         
         // Generate time-based equity curve points
         let start_date = Utc::now() - chrono::Duration::days(180); // 6 months ago
-        let num_points = result.equity_curve.len().max(100);
         
         for (i, &portfolio_value) in result.equity_curve.iter().enumerate() {
             let timestamp = start_date + chrono::Duration::days(i as i64);

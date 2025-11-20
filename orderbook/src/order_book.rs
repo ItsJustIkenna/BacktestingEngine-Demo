@@ -102,7 +102,7 @@ impl OrderBook {
                     let fill = self.create_fill(&order_with_price, &fill_quantity, LiquidityType::Maker, timestamp);
                     
                     // Track volume for fee tier calculation
-                    let volume_usd = (&fill.price * &fill.quantity).to_f64().unwrap_or(0.0);
+                    let _volume_usd = (&fill.price * &fill.quantity).to_f64().unwrap_or(0.0);
                     fills.push(fill);
                 }
                 
@@ -115,7 +115,7 @@ impl OrderBook {
                     let fill = self.create_fill(&order_with_price, &fill_quantity, LiquidityType::Maker, timestamp);
                     
                     // Track volume for fee tier calculation
-                    let volume_usd = (&fill.price * &fill.quantity).to_f64().unwrap_or(0.0);
+                    let _volume_usd = (&fill.price * &fill.quantity).to_f64().unwrap_or(0.0);
                     fills.push(fill);
                 }
                 
@@ -473,6 +473,7 @@ impl OrderBook {
     }
 
     /// Create a fill from market order execution result
+    #[allow(dead_code)]
     fn create_fill_from_execution(
         &self, 
         order_id: String, 

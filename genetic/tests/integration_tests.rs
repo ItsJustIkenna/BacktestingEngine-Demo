@@ -36,12 +36,19 @@ mod tests {
             Self { values: new_values }
         }
 
-        fn mutate(&mut self, rng: &mut impl Rng) {
+        fn mutate(&mut self, rng: &mut impl Rng, mutation_rate: f64) {
             for value in &mut self.values {
-                if rng.gen_bool(0.1) { // 10% mutation rate per gene
+                if rng.gen_bool(mutation_rate) {
                     *value += rng.gen_range(-1.0..1.0);
                 }
             }
+        }
+
+        fn distance(&self, other: &Self) -> f64 {
+            self.values.iter().zip(&other.values)
+                .map(|(a, b)| (a - b).powi(2))
+                .sum::<f64>()
+                .sqrt()
         }
     }
 
@@ -128,7 +135,7 @@ mod tests {
         
         // Test mutation
         let mut chromo_mut = chromo1.clone();
-        chromo_mut.mutate(&mut rng);
+        chromo_mut.mutate(&mut rng, 0.1);
         // Values should stay in bounds after mutation
         assert!(chromo_mut.risk_aversion >= 0.001 && chromo_mut.risk_aversion <= 0.1);
         assert!(chromo_mut.order_size >= 0.001 && chromo_mut.order_size <= 1.0);
@@ -274,7 +281,7 @@ mod tests {
         
         // Test mutation
         let mut mutant = chromo1.clone();
-        mutant.mutate(&mut rng);
+        mutant.mutate(&mut rng, 0.1);
         assert_eq!(mutant.values.len(), 5);
     }
 

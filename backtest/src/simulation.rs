@@ -25,7 +25,7 @@ impl SimulationLoop {
         strategy_manager: &mut StrategyManager,
         orderbook: &mut OrderBook,
         portfolio: &mut PortfolioState,
-        risk_manager: &mut RiskManager,
+        _risk_manager: &mut RiskManager,
         market_data: Vec<MarketData>,
         config: &config::BacktestConfig,
     ) -> BacktestResult {

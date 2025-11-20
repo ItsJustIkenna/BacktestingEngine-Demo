@@ -1,5 +1,5 @@
 use walkforward::{WalkForwardConfig, WalkForwardAnalyzer, TradingMetrics};
-use chrono::{DateTime, Utc, TimeZone};
+use chrono::{Utc, TimeZone};
 
 #[tokio::test]
 async fn test_walk_forward_config_creation() {

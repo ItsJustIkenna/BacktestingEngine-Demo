@@ -2,16 +2,25 @@
 [workspace]
 resolver = "2"
 members = [
-    "program",
-    "config", 
-    "dataloader",
-    "orderbook",
-    "strategy",
-    "metrics",
-    "backtest",
-    "genetic",
-    "walkforward",
-    "portfoliomanager",
-    "riskmanager",
-    "signal"
+    # Core Engine Components
+    "backtest",          # Main backtesting engine with simulation
+    "metrics",           # Performance metrics calculation
+    
+    # Strategy & Optimization
+    "strategy",          # Trading strategy implementations
+    "genetic",           # Genetic algorithm optimization
+    "walkforward",       # Walk-forward analysis & validation
+    
+    # Trading Infrastructure
+    "orderbook",         # Order book management & matching engine
+    "portfoliomanager",  # Portfolio state & position tracking
+    "riskmanager",       # Risk limits & controls
+    "signal",            # Signal generation & management
+    
+    # Data & Configuration
+    "dataloader",        # Market data loading from database
+    "config",            # Configuration management
+    
+    # Applications
+    "program",           # CLI application (TODO: rename to 'cli')
 ]

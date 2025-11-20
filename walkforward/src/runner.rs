@@ -102,7 +102,7 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
         fitness_fn,
     };
     let (best_chromo, _score) = optimizer.run().await;
-    // Convert chromosome to params - using all 8 parameters now
+    // Convert chromosome to params - using all 10 parameters now
     AvellanedaStoikovParams {
         risk_aversion: best_chromo.risk_aversion,
         order_size: best_chromo.order_size,
@@ -112,6 +112,8 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
         latency_buffer: best_chromo.latency_buffer,
         inventory_target: best_chromo.inventory_target,
         volatility_cap: best_chromo.volatility_cap,
+        time_horizon_minutes: best_chromo.time_horizon_minutes,
+        market_depth_k: best_chromo.market_depth_k,
     }
 }
 
@@ -201,6 +203,8 @@ fn extract_best_parameters_from_walkforward(_wf_summary: &WalkForwardSummary) ->
         latency_buffer: 0.5,
         inventory_target: 0.0,
         volatility_cap: 0.10,
+        time_horizon_minutes: 1.0,
+        market_depth_k: 1.5,
     }
 }
 

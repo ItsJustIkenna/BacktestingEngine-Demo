@@ -115,6 +115,7 @@ impl SimpleMovingAverage {
 /// Exponential Moving Average (EMA) indicator
 #[derive(Debug)]
 pub struct ExponentialMovingAverage {
+    #[allow(dead_code)]
     period: usize,
     multiplier: f64,
     current_value: Option<f64>,

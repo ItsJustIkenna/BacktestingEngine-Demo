@@ -47,6 +47,7 @@ impl Default for RSIMeanReversionParams {
 
 /// RSI calculation helper
 #[derive(Debug)]
+#[allow(dead_code)]
 struct RSICalculator {
     period: usize,
     gains: VecDeque<f64>,
@@ -66,6 +67,7 @@ impl RSICalculator {
         }
     }
 
+    #[allow(dead_code)]
     fn update(&mut self, price_change: f64) -> Option<f64> {
         let gain = if price_change > 0.0 { price_change } else { 0.0 };
         let loss = if price_change < 0.0 { -price_change } else { 0.0 };
@@ -103,6 +105,7 @@ impl RSICalculator {
 
 /// RSI Mean Reversion Strategy
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct RSIMeanReversionStrategy {
     params: RSIMeanReversionParams,
     rsi_calculator: RSICalculator,
