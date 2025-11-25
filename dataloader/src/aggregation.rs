@@ -84,8 +84,8 @@ impl DataAggregator {
 
         let mut moving_averages = Vec::new();
         
-        for i in window_size - 1..prices.len() {
-            let start_idx = if i >= window_size - 1 { i - window_size + 1 } else { 0 };
+        for i in window_size.saturating_sub(1)..prices.len() {
+            let start_idx = i.saturating_sub(window_size.saturating_sub(1));
             let window_sum: BigDecimal = prices[start_idx..=i]
                 .iter()
                 .sum();

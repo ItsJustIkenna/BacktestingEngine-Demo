@@ -853,8 +853,8 @@ mod tests {
         assert!(book.asks.is_empty());
     }
 
-    #[test]
-    fn test_add_orders() {
+    #[tokio::test]
+    async fn test_add_orders() {
         let config = OrderBookConfig::default();
         let mut book = OrderBook::new("BTCUSD".to_string(), "TEST".to_string(), config);
         
@@ -882,8 +882,8 @@ mod tests {
         assert_eq!(book.best_ask(), Some(&BigDecimal::from(105)));
     }
     
-    #[test]
-    fn test_realistic_slippage_modeling() {
+    #[tokio::test]
+    async fn test_realistic_slippage_modeling() {
         let mut order_book = OrderBook::new(
             "BTC-USD".to_string(),
             "test_exchange".to_string(),

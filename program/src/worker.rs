@@ -223,8 +223,20 @@ impl Worker {
         
         log_info!(MAIN_LOGGER, "🚀 Starting backtest execution for job {}", job.id);
         
-        // Run backtest
+        // Run backtest with progress updates
         let start_time = std::time::Instant::now();
+        
+        // Simulate progress during execution (temporary solution until engine supports callbacks)
+        let job_id = job.id.clone();
+        let queue = self.job_queue.clone();
+        let progress_handle = tokio::spawn(async move {
+            // Update progress from 30% to 85% over the backtest duration
+            for progress in (35..=85).step_by(5) {
+                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                let _ = queue.update_progress(&job_id, progress as f64).await;
+            }
+        });
+        
         let result = engine
             .run_backtest(
                 &mut strategy_manager,
@@ -234,6 +246,10 @@ impl Worker {
                 &data,
             )
             .await?;
+        
+        // Cancel progress updates once backtest is done
+        progress_handle.abort();
+        
         let execution_time = start_time.elapsed();
         
         log_info!(MAIN_LOGGER, "⏱️ Backtest execution completed for job {} in {:.2}s", 

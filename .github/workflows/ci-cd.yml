@@ -39,7 +39,7 @@ jobs:
     runs-on: [self-hosted, windows, x64]
     timeout-minutes: 60
     outputs:
-      tests-passed: ${{ steps.test-result.outputs.passed }}
+      tests-passed: ${{ steps.test-result.outputs.passed || steps.skip-test-result.outputs.passed }}
       skip-tests: ${{ steps.check-skip.outputs.skip }}
     steps:
       - name: Checkout BacktestingEngine
@@ -173,6 +173,47 @@ jobs:
             Write-Host ""
           } else {
             Write-Host "✓ No known vulnerabilities detected"
+          }
+
+      - name: Install Node.js for UI Tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: BacktestingEngine/gui/package-lock.json
+
+      - name: Install UI Dependencies
+        shell: powershell
+        run: |
+          Write-Host "Installing UI dependencies..."
+          cd BacktestingEngine/gui
+          npm ci
+          Write-Host "✅ UI dependencies installed!"
+
+      - name: Run UI Tests
+        shell: powershell
+        run: |
+          Write-Host "Running UI tests..."
+          cd BacktestingEngine/gui
+          npm test
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "✅ UI tests passed!"
+          } else {
+            Write-Host "❌ UI tests failed!"
+            exit 1
+          }
+
+      - name: Build UI
+        shell: powershell
+        run: |
+          Write-Host "Building UI..."
+          cd BacktestingEngine/gui
+          npm run build
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "✅ UI build successful!"
+          } else {
+            Write-Host "❌ UI build failed!"
+            exit 1
           }
 
   # ===== BUILD & PUSH =====
