@@ -1,452 +1,247 @@
-# Default values for backtesting-engine.
-# This is a YAML-formatted file.
-# Declare variables to be passed into your templates.
+# =============================================================================
+# BacktestingEngine Helm Chart Values
+# High-Performance Trading Strategy Backtesting Platform
+# =============================================================================
 
-# Global configurations
+# Global configuration
 global:
   imageRegistry: ""
   imagePullSecrets: []
   storageClass: ""
 
-# Deployment configuration
-replicaCount: 1
+# =============================================================================
+# Application Configuration
+# =============================================================================
 
-# Application image configuration  
+# Application metadata
+appName: backtesting-engine
+fullnameOverride: ""
+nameOverride: ""
+
+# Image configuration
 image:
-  registry: docker.io
   repository: backtesting-engine
   tag: "latest"
   pullPolicy: IfNotPresent
+  pullSecrets: []
 
-imagePullSecrets: []
-nameOverride: ""
-fullnameOverride: ""
+# Deployment configuration  
+replicaCount: 1
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
 
-# ServiceAccount configuration
+# API Server configuration (separate from workers)
+api:
+  replicaCount: 1
+  enabled: true
+
+# =============================================================================
+# Resource Management
+# =============================================================================
+
+# Resource requests and limits
+resources:
+  limits:
+    cpu: "1000m"
+    memory: "2Gi"
+  requests:
+    cpu: "500m"
+    memory: "1Gi"
+
+# Node selection
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# =============================================================================
+# External Database Configuration
+# =============================================================================
+
+# Secrets (injected at deployment time from Azure Key Vault or CI/CD)
+secrets:
+  # Database credentials
+  database:
+    enabled: true
+    # Credentials injected via --set-string parameters at deployment time
+    # Example: --set-string secrets.database.username=$POSTGRES_USER
+    #          --set-string secrets.database.password=$POSTGRES_PASSWORD
+    #          --set-string secrets.database.url=$DATABASE_URL
+    username: ""  # Injected at deployment
+    password: ""  # Injected at deployment
+    url: ""       # Full connection string, injected at deployment
+  
+  # Elasticsearch credentials (optional for logging)
+  elasticsearch:
+    enabled: false
+    endpoint: ""
+    username: ""
+    password: ""
+
+externalDatabase:
+  enabled: true
+  host: "postgresql"  # Override via --set or environment values
+  port: 5432
+  database: "backtesting"
+  username: "backtesting"
+  existingSecret: ""  # Use Helm-generated secret
+  # password: ""  # SECURE: Set via secrets.database.password
+
+# Disable built-in databases (use external)
+postgresql:
+  enabled: false
+
+# =============================================================================
+# Networking & Service Configuration
+# =============================================================================
+
+# Service configuration
+service:
+  enabled: true
+  type: ClusterIP
+  ports:
+    - name: ui
+      port: 80
+      targetPort: 80
+      protocol: TCP
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
+  annotations: {}
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+  hosts:
+    - host: backtesting-engine.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# =============================================================================
+# Application Configuration
+# =============================================================================
+
+config:
+  environment: production
+  logging:
+    level: info
+    format: json
+  performance:
+    worker_threads: 4
+  database:
+    host: "host.docker.internal"  # Override at deployment
+    port: 5432
+    database: "backtesting"
+
+# Environment variables
+env: []
+  # - name: RUST_LOG
+  #   value: "info"
+
+# =============================================================================
+# Security Configuration
+# =============================================================================
+
 serviceAccount:
   create: true
-  automount: true
   annotations: {}
   name: ""
-  imagePullSecrets: []
-
-# RBAC configuration
-rbac:
-  create: true
-  extraRules: []
-  clusterRole:
-    create: false
-    extraRules: []
-
-# Pod configuration
-podAnnotations: {}
-podLabels: {}
 
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 1001
   runAsGroup: 1001
   fsGroup: 1001
-  seccompProfile:
-    type: RuntimeDefault
 
 securityContext:
   allowPrivilegeEscalation: false
-  readOnlyRootFilesystem: true
-  runAsNonRoot: true
-  runAsUser: 1001
-  runAsGroup: 1001
   capabilities:
     drop:
       - ALL
+  readOnlyRootFilesystem: false
 
-# Service configuration
-service:
-  type: ClusterIP
-  # UI port (nginx serving React app)
-  uiPort: 80
-  uiTargetPort: 80
-  # API port (backend service)
-  port: 8080
-  targetPort: 8080
-  # Metrics port
-  metricsPort: 9090
-  nodePort: ""
-  loadBalancerIP: ""
-  loadBalancerSourceRanges: []
-  externalName: ""
-  annotations: {}
-  sessionAffinity: ""
-  sessionAffinityConfig: {}
-  extraPorts: []
-  headless:
-    enabled: false
-    publishNotReadyAddresses: false
+# =============================================================================
+# Storage Configuration
+# =============================================================================
 
-# Ingress configuration
-ingress:
+persistence:
   enabled: false
-  className: ""
-  annotations: {}
-  hosts:
-    - host: backtesting-engine.local
-      paths:
-        - path: /
-          pathType: Prefix
-  tls: []
-  extraIngresses: {}
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
 
-# Resource configuration
-resources:
-  limits:
-    cpu: 1000m
-    memory: 2Gi
-  requests:
-    cpu: 500m
-    memory: 1Gi
+# =============================================================================
+# Monitoring Configuration
+# =============================================================================
 
-# Autoscaling configuration
+metrics:
+  enabled: true
+  port: 9090
+
+# =============================================================================
+# Autoscaling Configuration
+# =============================================================================
+
 autoscaling:
   enabled: false
   minReplicas: 1
-  maxReplicas: 100
+  maxReplicas: 5
   targetCPUUtilizationPercentage: 80
-  targetMemoryUtilizationPercentage: 85
-  customMetrics: []
-  behavior: {}
+  targetMemoryUtilizationPercentage: 80
 
-# Probes configuration
-probes:
-  liveness:
-    initialDelaySeconds: 30
-    periodSeconds: 10
-    timeoutSeconds: 5
-    failureThreshold: 3
-    successThreshold: 1
-  
-  readiness:
-    initialDelaySeconds: 5
-    periodSeconds: 5
-    timeoutSeconds: 3
-    failureThreshold: 3
-    successThreshold: 1
+# =============================================================================
+# Pod Disruption Budget
+# =============================================================================
 
-  startup:
-    initialDelaySeconds: 10
-    periodSeconds: 10
-    timeoutSeconds: 5
-    failureThreshold: 30
-    successThreshold: 1
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
 
-# Node selector, affinity, and tolerations
-nodeSelector: {}
-tolerations: []
-affinity: {}
+# =============================================================================
+# Health Checks
+# =============================================================================
 
-# Persistence configuration
-persistence:
+livenessProbe:
   enabled: true
-  accessModes:
-    - ReadWriteOnce
-  size: 10Gi
-  storageClass: ""
-  annotations: {}
-  selector: {}
-  dataSource: {}
-  dataSourceRef: {}
-  volumeMode: Filesystem
-  
-  logs:
-    enabled: false
-    accessModes:
-      - ReadWriteOnce
-    size: 5Gi
-    storageClass: ""
-    annotations: {}
-    volumeMode: Filesystem
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 60
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 3
 
-# Application configuration (all pulled from ConfigMap)
-config:
-  # Load all environment variables from ConfigMap
-  envFromConfigMap: true
-  
-  # Database configuration
-  database:
-    host: postgresql
-    port: 5432
-    database: backtesting
-    username: postgres
-    password: changeme
-    max_connections: 20
-    connection_timeout: 30
-
-  # Trading configuration
-  trading:
-    commission_rate: 0.001
-    slippage_bps: 1
-    initial_capital: 100000
-    max_position_size: 0.1
-    risk_free_rate: 0.02
-
-  # Data configuration
-  data:
-    default_timeframe: "1d"
-    data_sources:
-      - "yahoo"
-      - "alpha_vantage"
-    cache_enabled: true
-    cache_duration_hours: 24
-
-  # Output configuration
-  output:
-    results_dir: "/app/results"
-    reports_dir: "/app/reports"
-    charts_enabled: true
-    export_formats:
-      - "json"
-      - "csv"
-      - "parquet"
-
-  # Genetic algorithm configuration
-  genetic:
-    population_size: 100
-    generations: 50
-    mutation_rate: 0.1
-    crossover_rate: 0.7
-    elite_size: 10
-
-  # Walk-forward configuration
-  walkforward:
-    optimization_window_days: 252
-    test_window_days: 63
-    step_size_days: 21
-    min_trades_per_period: 10
-
-  # Risk management configuration
-  risk:
-    max_drawdown: 0.2
-    max_position_size: 0.1
-    stop_loss: 0.05
-    var_confidence: 0.95
-
-  # Logging configuration
-  logging:
-    level: "info"
-    format: "json"
-    file_enabled: true
-    file_path: "/app/logs/backtesting.log"
-
-  # Redis configuration (when enabled)
-  redis:
-    password: ""
-
-  # Secrets configuration
-  secrets:
-    jwt_secret: ""
-    encryption_key: ""
-    api_keys: {}
-
-# Environment variables
-env: "info"
-
-# Job configuration for one-time backtests
-job:
-  enabled: false
-  name: "backtest"
-  annotations: {}
-  podAnnotations: {}
-  ttlSecondsAfterFinished: 86400
-  activeDeadlineSeconds: 3600
-  backoffLimit: 3
-  completions: 1
-  parallelism: 1
-  restartPolicy: Never
-  command: []
-  args: []
-  env: []
-  resources: {}
-  volumeMounts: []
-  volumes: []
-
-# CronJob configuration for scheduled backtests
-cronjob:
-  enabled: false
-  schedule: "0 2 * * *"
-  timezone: ""
-  startingDeadlineSeconds: 200
-  concurrencyPolicy: Forbid
-  suspend: false
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 1
-  annotations: {}
-  podAnnotations: {}
-  command: []
-  args: []
-  env: []
-  resources: {}
-  volumeMounts: []
-  volumes: []
-  job:
-    ttlSecondsAfterFinished: 86400
-    activeDeadlineSeconds: 3600
-    backoffLimit: 3
-    restartPolicy: OnFailure
-
-# Monitoring and observability
-monitoring:
-  enabled: false
-  serviceMonitor:
-    enabled: false
-    namespace: ""
-    labels: {}
-    annotations: {}
-    interval: 30s
-    scrapeTimeout: 10s
-    path: /metrics
-    scheme: http
-    portName: metrics
-    selector: {}
-    metricRelabelings: []
-    relabelings: []
-    targetLabels: []
-    podTargetLabels: []
-
-# Additional volumes and volume mounts
-extraVolumes: []
-extraVolumeMounts: []
-
-# Priority class and termination
-priorityClassName: ""
-terminationGracePeriodSeconds: 30
-
-# PostgreSQL dependency configuration
-postgresql:
+readinessProbe:
   enabled: true
-  auth:
-    postgresPassword: changeme
-    username: postgres
-    password: changeme
-    database: backtesting
-  primary:
-    service:
-      ports:
-        postgresql: 5432
-  architecture: standalone
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
 
-# Redis dependency configuration  
-redis:
-  enabled: false
-  auth:
-    enabled: false
-    password: ""
-  master:
-    service:
-      ports:
-        redis: 6379
+# =============================================================================
+# Additional Configuration
+# =============================================================================
 
-# Strategy Export configuration
-strategyExport:
-  configMap:
-    enabled: true
-  performance:
-    minSharpeRatio: 1.5
-    minProfitFactor: 1.3
-    minWinRate: 0.55
-    maxDrawdown: 0.15
-    minTrades: 100
-    minNetProfit: 10000.0
-    maxAvgTradeDuration: 24.0
-    minVolatilityAdjustedReturn: 0.8
-    minCalmarRatio: 1.2
-    requirePositiveSkew: true
-  deployment:
-    signalEnginePath: "/app/signal-engine"
-    environments:
-      development:
-        path: "/app/signal-engine/strategies/development"
-        enabled: true
-        maxStrategies: 10
-        approvalRequired: false
-      staging:
-        path: "/app/signal-engine/strategies/staging"
-        enabled: true
-        maxStrategies: 5
-        approvalRequired: true
-      production:
-        path: "/app/signal-engine/strategies/production"
-        enabled: true
-        maxStrategies: 3
-        approvalRequired: true
-    autoDeployment:
-      enabled: true
-      cronSchedule: "0 2 * * *"
-      maxConcurrentDeployments: 3
-      timeoutSeconds: 600
-      targetEnvironment: "development"
-      batchSize: 1
-      delayBetweenDeployments: 300
-  filesystem:
-    exportBasePath: "/app/exports"
-    strategySourcePath: "/app/backtesting-engine/strategy/src/strategies"
-    backupEnabled: true
-    backupRetentionDays: 30
-  approval:
-    development:
-      requiredApprovers: 0
-      allowedRoles:
-        - "developer"
-        - "trader"
-        - "admin"
-      autoApproveThreshold: 75.0
-      timeoutHours: 1
-    staging:
-      requiredApprovers: 1
-      allowedRoles:
-        - "senior_trader"
-        - "risk_manager"
-        - "admin"
-      autoApproveThreshold: 85.0
-      timeoutHours: 24
-    production:
-      requiredApprovers: 2
-      allowedRoles:
-        - "risk_manager"
-        - "head_of_trading"
-        - "admin"
-      autoApproveThreshold: 95.0
-      timeoutHours: 72
-    notifications:
-      enabled: true
-      emailRecipients:
-        - "trading-team@company.com"
-        - "risk-management@company.com"
-    audit:
-      enabled: true
-      retentionDays: 90
-      includePerformanceData: true
-      includeParameters: true
-  risk:
-    globalLimits:
-      maxTotalExposure: 1000000.0
-      maxStrategiesPerSymbol: 3
-      maxStrategiesPerExchange: 10
-      emergencyStopEnabled: true
-    strategyLimits:
-      maxPositionSize: 100000.0
-      maxOrderSize: 10000.0
-      maxDailyLoss: 5000.0
-      maxLeverage: 3.0
-      positionConcentrationLimit: 0.2
-    environmentLimits:
-      development:
-        capitalAllocationLimit: 50000.0
-        maxConcurrentStrategies: 5
-        testingMode: true
-      staging:
-        capitalAllocationLimit: 200000.0
-        maxConcurrentStrategies: 3
-        testingMode: false
-      production:
-        capitalAllocationLimit: 1000000.0
-        maxConcurrentStrategies: 3
-        testingMode: false
+# Pod annotations
+podAnnotations: {}
+
+# Pod labels
+podLabels: {}
+
+# Deployment annotations
+annotations: {}

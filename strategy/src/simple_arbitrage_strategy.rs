@@ -165,7 +165,7 @@ impl Strategy for SimpleArbitrageStrategy {
         params.insert("min_profit_bps".to_string(), ParameterValue::Float(self.min_profit_bps));
         params.insert("position_size".to_string(), ParameterValue::Float(self.position_size));
         params.insert("enabled".to_string(), ParameterValue::Bool(self.enabled));
-        params.insert("total_opportunities".to_string(), ParameterValue::Integer(self.total_opportunities as i64));
+        params.insert("total_opportunities".to_string(), ParameterValue::Int(self.total_opportunities as i64));
         params
     }
     

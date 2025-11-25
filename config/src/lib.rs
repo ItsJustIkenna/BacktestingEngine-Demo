@@ -28,7 +28,7 @@ pub enum ConfigError {
 }
 
 /// Main backtesting configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BacktestConfig {
     pub database: DatabaseConfig,
     pub trading: TradingConfig,
@@ -121,9 +121,95 @@ impl Default for ArbitrageRiskLimits {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExchangeFeeConfig {
     pub exchange: String,          // "kraken", "coinbase", "binance", etc.
-    pub maker_fee: f64,           // e.g., -0.0025 (negative = rebate)
-    pub taker_fee: f64,           // e.g., 0.0040
+    pub maker_fee: f64,           // e.g., 0.0002 (0.02% for Kraken at high volume)
+    pub taker_fee: f64,           // e.g., 0.0012 (0.12% for Kraken at high volume)
     pub volume_tiers: Vec<VolumeTier>,
+}
+
+impl Default for ExchangeFeeConfig {
+    /// Default to Kraken fees at $5M-$10M 30-day volume (realistic for co-located market making)
+    fn default() -> Self {
+        Self {
+            exchange: "kraken".to_string(),
+            maker_fee: 0.0002,  // 0.02% (2 bps)
+            taker_fee: 0.0012,  // 0.12% (12 bps)
+            volume_tiers: Self::kraken_fee_tiers(),
+        }
+    }
+}
+
+impl ExchangeFeeConfig {
+    /// Kraken's complete fee tier structure (as of 2025)
+    pub fn kraken_fee_tiers() -> Vec<VolumeTier> {
+        vec![
+            VolumeTier { min_volume_30d: 0.0,          maker_fee: 0.0025, taker_fee: 0.0040 },
+            VolumeTier { min_volume_30d: 10_000.0,     maker_fee: 0.0020, taker_fee: 0.0035 },
+            VolumeTier { min_volume_30d: 50_000.0,     maker_fee: 0.0014, taker_fee: 0.0024 },
+            VolumeTier { min_volume_30d: 100_000.0,    maker_fee: 0.0012, taker_fee: 0.0022 },
+            VolumeTier { min_volume_30d: 250_000.0,    maker_fee: 0.0010, taker_fee: 0.0020 },
+            VolumeTier { min_volume_30d: 500_000.0,    maker_fee: 0.0008, taker_fee: 0.0018 },
+            VolumeTier { min_volume_30d: 1_000_000.0,  maker_fee: 0.0006, taker_fee: 0.0016 },
+            VolumeTier { min_volume_30d: 2_500_000.0,  maker_fee: 0.0004, taker_fee: 0.0014 },
+            VolumeTier { min_volume_30d: 5_000_000.0,  maker_fee: 0.0002, taker_fee: 0.0012 },
+            VolumeTier { min_volume_30d: 10_000_000.0, maker_fee: 0.0000, taker_fee: 0.0010 },
+            VolumeTier { min_volume_30d: 100_000_000.0, maker_fee: 0.0000, taker_fee: 0.0008 },
+        ]
+    }
+    
+    /// Create Kraken exchange configuration
+    pub fn kraken() -> Self {
+        Self {
+            exchange: "kraken".to_string(),
+            maker_fee: 0.0002,  // 0.02% at $5M-$10M volume
+            taker_fee: 0.0012,  // 0.12% at $5M-$10M volume
+            volume_tiers: Self::kraken_fee_tiers(),
+        }
+    }
+    
+    /// Create Binance exchange configuration
+    pub fn binance() -> Self {
+        Self {
+            exchange: "binance".to_string(),
+            maker_fee: 0.0010,  // 0.10%
+            taker_fee: 0.0010,  // 0.10%
+            volume_tiers: vec![
+                VolumeTier { min_volume_30d: 0.0,         maker_fee: 0.0010, taker_fee: 0.0010 },
+                VolumeTier { min_volume_30d: 1_000_000.0, maker_fee: 0.0009, taker_fee: 0.0010 },
+            ],
+        }
+    }
+    
+    /// Create Coinbase exchange configuration
+    pub fn coinbase() -> Self {
+        Self {
+            exchange: "coinbase".to_string(),
+            maker_fee: 0.0040,  // 0.40%
+            taker_fee: 0.0060,  // 0.60%
+            volume_tiers: vec![
+                VolumeTier { min_volume_30d: 0.0,          maker_fee: 0.0040, taker_fee: 0.0060 },
+                VolumeTier { min_volume_30d: 10_000.0,     maker_fee: 0.0025, taker_fee: 0.0040 },
+                VolumeTier { min_volume_30d: 100_000.0,    maker_fee: 0.0015, taker_fee: 0.0025 },
+            ],
+        }
+    }
+    
+    /// Create configuration for a specific exchange by name
+    pub fn for_exchange(exchange: &str) -> Self {
+        match exchange.to_lowercase().as_str() {
+            "kraken" => Self::kraken(),
+            "binance" => Self::binance(),
+            "coinbase" => Self::coinbase(),
+            _ => {
+                // Default to generic fees
+                Self {
+                    exchange: exchange.to_string(),
+                    maker_fee: 0.0010,
+                    taker_fee: 0.0015,
+                    volume_tiers: vec![],
+                }
+            }
+        }
+    }
 }
 
 /// Volume-based fee tier
@@ -141,6 +227,120 @@ pub struct DataConfig {
     pub data_sources: Vec<String>, // e.g., ["yahoo", "alpha_vantage"]
     pub cache_enabled: bool,
     pub cache_duration_hours: u32,
+    pub gap_detection: GapDetectionConfig,
+    pub market_impact: MarketImpactConfig,
+}
+
+/// Gap detection and handling configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GapDetectionConfig {
+    /// Enable gap detection
+    pub enabled: bool,
+    /// Expected data frequency in seconds (e.g., 60 for 1-minute data)
+    pub expected_frequency_seconds: i64,
+    /// Gap threshold multiplier (gap = frequency * threshold)
+    pub gap_threshold_multiplier: f64,
+    /// Gap filling strategy
+    pub fill_strategy: GapFillStrategy,
+    /// Warn if gap exceeds this duration (seconds)
+    pub warning_threshold_seconds: i64,
+    /// Fail backtest if gap exceeds this duration (seconds)
+    pub critical_threshold_seconds: Option<i64>,
+    /// Order stream detection (for market making strategies)
+    pub order_detection: Option<OrderDetectionConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum GapFillStrategy {
+    /// Do nothing - process data as-is
+    None,
+    /// Forward fill - use last known values
+    ForwardFill,
+    /// Linear interpolation between points
+    LinearInterpolation,
+    /// Mark gap periods and exclude from analysis
+    ExcludeGaps,
+}
+
+/// Market impact modeling configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarketImpactConfig {
+    /// Enable market impact modeling
+    pub enabled: bool,
+    /// Impact model type
+    pub model: MarketImpactModel,
+    /// Minimum order size ratio to trigger impact (order_size / avg_volume)
+    pub min_impact_ratio: f64,
+    /// Linear impact coefficient (basis points per 1% of volume)
+    pub linear_coefficient: f64,
+    /// Square root impact coefficient
+    pub sqrt_coefficient: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum MarketImpactModel {
+    /// No market impact
+    None,
+    /// Linear model: impact = coefficient * (order_size / volume)
+    Linear,
+    /// Square root model: impact = coefficient * sqrt(order_size / volume)
+    SquareRoot,
+    /// Almgren-Chriss model (more sophisticated)
+    AlmgrenChriss,
+}
+
+/// Order stream detection configuration (for market making strategies)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderDetectionConfig {
+    /// Enable order stream analysis
+    pub enabled: bool,
+    /// Expected quote update interval in milliseconds (your strategy's quote refresh rate)
+    /// For co-located Kraken: 10-100ms, typical HFT market making: 50-200ms
+    pub expected_quote_interval_ms: u64,
+    /// Require bid-ask pairs (both sides present)
+    pub require_paired_quotes: bool,
+    /// Tolerance window for pairing (milliseconds)
+    pub pairing_window_ms: u64,
+    /// Maximum gap before warning (in number of missing quote cycles)
+    pub warning_missing_cycles: u64,
+}
+
+impl Default for OrderDetectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            expected_quote_interval_ms: 50, // 50ms for co-located market making
+            require_paired_quotes: true,
+            pairing_window_ms: 20, // 20ms tolerance for bid-ask pairing
+            warning_missing_cycles: 10, // Warn after 500ms of missing quotes (10 * 50ms)
+        }
+    }
+}
+
+impl Default for GapDetectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            expected_frequency_seconds: 60, // 1-minute data
+            gap_threshold_multiplier: 2.0,  // gaps > 2x frequency
+            fill_strategy: GapFillStrategy::ForwardFill,
+            warning_threshold_seconds: 300, // 5 minutes
+            critical_threshold_seconds: Some(3600), // 1 hour
+            order_detection: None, // Disabled by default, enable for market making
+        }
+    }
+}
+
+impl Default for MarketImpactConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            model: MarketImpactModel::SquareRoot,
+            min_impact_ratio: 0.01, // 1% of volume
+            linear_coefficient: 10.0, // 10 bps per 1% of volume
+            sqrt_coefficient: 5.0,
+        }
+    }
 }
 
 /// Output and reporting configuration
@@ -198,9 +398,9 @@ pub struct ReportConfig {
     pub include_charts: bool,
     pub template_dir: Option<PathBuf>,
     pub custom_css: Option<String>,
-    /// Whether to persist report metadata to database
+    /// Whether to persist report metadata to database (enabled by default for historical tracking)
     pub persist_to_database: bool,
-    /// Database connection for persistence (if enabled)
+    /// Database connection for persistence (if enabled, reads from DATABASE_URL env var)
     pub database_url: Option<String>,
     /// User or system generating the report
     pub generated_by: Option<String>,
@@ -282,17 +482,18 @@ pub struct StrategyConfig {
 /// Parameter value that can hold different types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ParameterValue {
-    Integer(i64),
+    Int(i64),       // Renamed from Integer for consistency
     Float(f64),
     String(String),
-    Boolean(bool),
+    Bool(bool),     // Renamed from Boolean for consistency
+    Array(Vec<ParameterValue>), // Added for array support
 }
 
 impl ParameterValue {
     /// Get as integer
     pub fn as_int(&self) -> Option<i64> {
         match self {
-            ParameterValue::Integer(v) => Some(*v),
+            ParameterValue::Int(v) => Some(*v),
             ParameterValue::Float(v) => Some(*v as i64),
             _ => None,
         }
@@ -302,7 +503,23 @@ impl ParameterValue {
     pub fn as_float(&self) -> Option<f64> {
         match self {
             ParameterValue::Float(v) => Some(*v),
-            ParameterValue::Integer(v) => Some(*v as f64),
+            ParameterValue::Int(v) => Some(*v as f64),
+            _ => None,
+        }
+    }
+    
+    /// Get as bool
+    pub fn as_bool(&self) -> Option<bool> {
+        match self {
+            ParameterValue::Bool(v) => Some(*v),
+            _ => None,
+        }
+    }
+    
+    /// Get as array
+    pub fn as_array(&self) -> Option<&Vec<ParameterValue>> {
+        match self {
+            ParameterValue::Array(v) => Some(v),
             _ => None,
         }
     }
@@ -311,14 +528,6 @@ impl ParameterValue {
     pub fn as_string(&self) -> Option<&str> {
         match self {
             ParameterValue::String(v) => Some(v),
-            _ => None,
-        }
-    }
-
-    /// Get as boolean
-    pub fn as_bool(&self) -> Option<bool> {
-        match self {
-            ParameterValue::Boolean(v) => Some(*v),
             _ => None,
         }
     }
@@ -339,18 +548,6 @@ pub struct RiskLimits {
     pub stop_loss_pct: Option<f64>,
 }
 
-impl Default for BacktestConfig {
-    fn default() -> Self {
-        Self {
-            database: DatabaseConfig::default(),
-            trading: TradingConfig::default(),
-            data: DataConfig::default(),
-            output: OutputConfig::default(),
-            analysis: AnalysisConfig::default(),
-        }
-    }
-}
-
 impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
@@ -368,41 +565,25 @@ impl Default for DatabaseConfig {
 impl Default for TradingConfig {
     fn default() -> Self {
         Self {
-            commission_rate: 0.001,    // 0.1%
-            slippage_bps: 5.0,         // 5 basis points
-            initial_capital: 100000.0, // $100,000
+            commission_rate: 0.0002,    // 0.02% (fallback, use exchange_fees instead)
+            slippage_bps: 2.0,          // 2 basis points for co-located
+            initial_capital: 100000.0,  // $100,000
             max_position_size: Some(0.1), // 10%
-            risk_free_rate: 0.02,      // 2%
-            exchange_fees: Some(ExchangeFeeConfig::kraken_default()),
-            routing_mode: None,        // Single exchange by default
+            risk_free_rate: 0.02,       // 2%
+            exchange_fees: Some(ExchangeFeeConfig::default()), // Kraken at $5M volume
+            routing_mode: None,         // Single exchange by default
         }
     }
 }
 
 impl ExchangeFeeConfig {
-    /// Kraken exchange fee configuration (Pro tier)
+    /// Kraken exchange fee configuration at $5M-$10M volume tier (realistic for co-located market making)
     pub fn kraken_default() -> Self {
         Self {
             exchange: "kraken".to_string(),
-            maker_fee: -0.0025,    // -0.25% (rebate)
-            taker_fee: 0.0040,     // 0.40%
-            volume_tiers: vec![
-                VolumeTier {
-                    min_volume_30d: 0.0,
-                    maker_fee: -0.0025,
-                    taker_fee: 0.0040,
-                },
-                VolumeTier {
-                    min_volume_30d: 50_000.0,
-                    maker_fee: -0.0025,
-                    taker_fee: 0.0035,
-                },
-                VolumeTier {
-                    min_volume_30d: 100_000.0,
-                    maker_fee: -0.0025,
-                    taker_fee: 0.0030,
-                },
-            ],
+            maker_fee: 0.0002,     // 0.02% (2 bps) at high volume
+            taker_fee: 0.0012,     // 0.12% (12 bps) at high volume
+            volume_tiers: Self::kraken_fee_tiers(),
         }
     }
 
@@ -458,6 +639,8 @@ impl Default for DataConfig {
             data_sources: vec!["yahoo".to_string()],
             cache_enabled: true,
             cache_duration_hours: 24,
+            gap_detection: GapDetectionConfig::default(),
+            market_impact: MarketImpactConfig::default(),
         }
     }
 }
@@ -700,15 +883,19 @@ pub enum AnalysisMode {
 
 impl Default for AnalysisConfig {
     fn default() -> Self {
+        // Default to Production mode with full analysis pipeline:
+        // 1. Genetic optimization (mandatory before backtesting)
+        // 2. Walk-forward analysis (out-of-sample validation)
+        // 3. Monte Carlo simulation (parameter robustness)
         Self {
-            mode: AnalysisMode::Development,
-            auto_monte_carlo: false,
+            mode: AnalysisMode::Production,
+            auto_monte_carlo: true,
             monte_carlo_runs: 500,
-            auto_walk_forward: false,
-            wf_training_days: 252,  // 1 year
-            wf_test_days: 63,       // 3 months
-            wf_step_days: 21,       // 1 month
-            min_duration_for_auto: 90, // Only auto-analyze backtests > 3 months
+            auto_walk_forward: true,
+            wf_training_days: 252,  // 1 year training
+            wf_test_days: 63,       // 3 months testing
+            wf_step_days: 21,       // 1 month rolling steps
+            min_duration_for_auto: 90, // Minimum 90 days for full analysis
             validation_sharpe_threshold: 1.2,
             validation_pf_threshold: 1.4,
             validation_min_trades: 50,

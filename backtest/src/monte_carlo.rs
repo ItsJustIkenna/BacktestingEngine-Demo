@@ -238,6 +238,10 @@ pub fn run_monte_carlo_simulation(
             number_of_trades: base_result.num_trades,
             volatility: base_result.volatility.unwrap_or(0.0),
             average_trade_duration: base_result.avg_trade_duration.unwrap_or(0.0),
+            total_commission: 0.0,
+            total_slippage: 0.0,
+            total_market_impact: 0.0,
+            transaction_costs_percentage: 0.0,
         });
     }
     
@@ -273,6 +277,10 @@ pub fn run_monte_carlo_simulation(
             number_of_trades: base_result.num_trades,
             volatility: base_result.volatility.unwrap_or(0.0),
             average_trade_duration: base_result.avg_trade_duration.unwrap_or(0.0),
+            total_commission: base_result.transaction_costs.as_ref().map(|tc| tc.total_commission).unwrap_or(0.0),
+            total_slippage: base_result.transaction_costs.as_ref().map(|tc| tc.total_slippage).unwrap_or(0.0),
+            total_market_impact: base_result.transaction_costs.as_ref().map(|tc| tc.total_market_impact).unwrap_or(0.0),
+            transaction_costs_percentage: base_result.transaction_costs.as_ref().map(|tc| tc.costs_as_percentage_of_pnl).unwrap_or(0.0),
         },
         stddev_metrics: PerformanceMetrics {
             net_profit: std_net_profit,
@@ -287,6 +295,10 @@ pub fn run_monte_carlo_simulation(
             number_of_trades: 0,
             volatility: 0.0,
             average_trade_duration: 0.0,
+            total_commission: 0.0,
+            total_slippage: 0.0,
+            total_market_impact: 0.0,
+            transaction_costs_percentage: 0.0,
         },
         percentile_metrics: percentiles,
         var_95,

@@ -1,0 +1,131 @@
+# =============================================================================
+# BacktestingEngine QA Environment Values
+# QA testing with Azure Key Vault integration
+# =============================================================================
+
+# Environment marker
+environment: qa
+
+# Replica count for QA (higher availability than dev)
+replicaCount: 2
+
+# Image configuration - use QA-specific tag
+image:
+  repository: backtesting-engine
+  pullPolicy: IfNotPresent
+  tag: "qa"
+
+# Resource allocation for QA (moderate)
+resources:
+  limits:
+    cpu: "1500m"
+    memory: "3Gi"
+  requests:
+    cpu: "750m"
+    memory: "1.5Gi"
+
+# =============================================================================
+# Secrets Configuration - Azure Key Vault Integration
+# =============================================================================
+# Secrets are injected from Azure Key Vault using External Secrets Operator
+# Database URL format: postgresql://username:password@host:port/database
+
+secrets:
+  database:
+    enabled: true
+    # These values are injected from Azure Key Vault at runtime
+    # Key Vault secret names: backtesting-qa-db-username, backtesting-qa-db-password, backtesting-qa-db-url
+    username: ""  # Injected from Azure Key Vault
+    password: ""  # Injected from Azure Key Vault
+    url: ""       # Injected from Azure Key Vault (full postgresql:// connection string)
+  
+  elasticsearch:
+    enabled: false
+    endpoint: ""
+    username: ""
+    password: ""
+
+# External database configuration (values from Key Vault secrets)
+externalDatabase:
+  enabled: true
+  host: ""  # Extracted from secrets.database.url
+  port: 5432
+  database: "backtesting_qa"
+  username: ""  # From secrets.database.username
+  existingSecret: ""
+
+# =============================================================================
+# Service Configuration
+# =============================================================================
+
+service:
+  enabled: true
+  type: ClusterIP
+  ports:
+    - name: ui
+      port: 80
+      targetPort: 80
+      protocol: TCP
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
+
+# =============================================================================
+# Health Checks
+# =============================================================================
+
+livenessProbe:
+  enabled: true
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 60
+  periodSeconds: 30
+  timeoutSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# =============================================================================
+# Application Configuration
+# =============================================================================
+
+config:
+  environment: qa
+  logging:
+    level: info
+  
+  # Database configuration (populated from secrets)
+  database:
+    host: ""  # Populated from Azure Key Vault secret
+    port: 5432
+    database: "backtesting_qa"
+    maxConnections: 20
+    connectionTimeout: 30
+
+# =============================================================================
+# Monitoring & Metrics
+# =============================================================================
+
+metrics:
+  enabled: true
+  port: 9090
+  path: /metrics
+
+# Pod disruption budget for QA
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

@@ -4,7 +4,7 @@
 //! converting raw order and snapshot data into live order book events.
 
 use crate::order_book::OrderBook;
-use crate::types::OrderBookEvent;
+use crate::types::{OrderBookEvent, BookSide};
 use crate::OrderBookConfig;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -77,7 +77,8 @@ impl OrderBookReconstructor {
             limit: None,
         };
 
-        let orders = self.dataloader.load_historical_orders(&params).await?;
+        let orders = self.dataloader.load_historical_orders(&params).await
+            .map_err(|e| anyhow::anyhow!("Failed to load historical orders: {}", e))?;
         log_info!(ORDERBOOK_LOGGER, 
             "Loaded {} historical orders for {}:{} between {:?} and {:?}",
             orders.len(),
@@ -119,7 +120,8 @@ impl OrderBookReconstructor {
             limit: None,
         };
 
-        let snapshots = self.dataloader.load_historical_snapshots(&params).await?;
+        let snapshots = self.dataloader.load_historical_snapshots(&params).await
+            .map_err(|e| anyhow::anyhow!("Failed to load historical snapshots: {}", e))?;
         log_info!(ORDERBOOK_LOGGER, 
             "Loaded {} historical snapshots for {}:{} between {:?} and {:?}",
             snapshots.len(),

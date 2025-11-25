@@ -56,7 +56,7 @@ mod tests {
 
     #[test]
     fn test_signal_strength_variants() {
-        let strengths = vec![
+        let strengths = [
             SignalStrength::Weak,
             SignalStrength::Medium,
             SignalStrength::Strong,

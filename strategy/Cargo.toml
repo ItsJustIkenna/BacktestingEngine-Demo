@@ -7,14 +7,6 @@ edition = "2021"
 default = []
 postgres = ["databaseschema", "dataloader/postgres", "portfoliomanager/postgres", "riskmanager/postgres"]
 
-[[bin]]
-name = "demo"
-path = "examples/demo.rs"
-
-[[bin]]
-name = "config_demo"
-path = "examples/config_demo.rs"
-
 [dependencies]
 signal = { path = "../signal" }
 config = { path = "../config" }

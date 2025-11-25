@@ -158,6 +158,8 @@ mod tests {
             data_sources: vec!["database".to_string(), "binance".to_string()],
             cache_enabled: false,
             cache_duration_hours: 12,
+            gap_detection: config::GapDetectionConfig::default(),
+            market_impact: config::MarketImpactConfig::default(),
         };
         
         // This would be validated in the parent BacktestConfig validation

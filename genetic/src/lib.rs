@@ -8,7 +8,8 @@ use config::GeneticConfig;
 use rand::prelude::*;
 
 pub mod chromosome;
-pub mod fitness;
+// Fitness functions moved to backtest crate to avoid circular dependency
+// pub mod fitness;
 
 /// Represents a set of strategy parameters (chromosome)
 pub trait Chromosome: Clone + Send + Sync {

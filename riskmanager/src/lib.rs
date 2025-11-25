@@ -39,11 +39,17 @@ pub struct RiskManager {
     pub limits: RiskLimits,
 }
 
-impl RiskManager {
-    pub fn new() -> Self {
+impl Default for RiskManager {
+    fn default() -> Self {
         Self {
             limits: RiskLimits::default(),
         }
+    }
+}
+
+impl RiskManager {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn with_limits(limits: RiskLimits) -> Self {

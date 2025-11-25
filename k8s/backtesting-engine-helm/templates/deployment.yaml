@@ -45,22 +45,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "backtesting-engine.fullname" . }}-secret
                   key: database-password
-        {{- if .Values.redis.enabled }}
-        - name: wait-for-redis
-          image: "redis:7-alpine"
-          command:
-            - sh
-            - -c
-            - |
-              until redis-cli -h {{ include "backtesting-engine.redis.servicename" . }} -p {{ include "backtesting-engine.redis.port" . }} ping; do
-                echo "Waiting for Redis to be ready..."
-                sleep 2
-              done
-        {{- end }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["worker"]  # Run in worker-only mode (no UI, no API server)
           ports:
             - name: ui
               containerPort: {{ .Values.service.uiTargetPort }}
@@ -77,31 +66,49 @@ spec:
                 secretKeyRef:
                   name: {{ include "backtesting-engine.fullname" . }}-secret
                   key: database-password
+            # Use shared DATABASE_URL from secrets (same as DataEngine)
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: {{ include "backtesting-engine.fullname" . }}-secret
+                  {{- if .Values.secrets.database.url }}
+                  key: DATABASE_URL
+                  {{- else }}
                   key: database-url
-            {{- if .Values.redis.enabled }}
-            - name: REDIS_PASSWORD
+                  {{- end }}
+            
+            # Elasticsearch logging configuration (shared with DataEngine)
+            {{- if and .Values.secrets.elasticsearch .Values.secrets.elasticsearch.enabled }}
+            - name: USE_ELASTICSEARCH_LOGGING
+              value: "true"
+            - name: ELASTIC_CLOUD_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "backtesting-engine" . }}-secret
+                  key: ELASTIC_CLOUD_ENDPOINT
+            - name: ELASTIC_CLOUD_USERNAME
               valueFrom:
                 secretKeyRef:
                   name: {{ include "backtesting-engine.fullname" . }}-secret
-                  key: redis-password
-            - name: REDIS_URL
+                  key: ELASTIC_CLOUD_USERNAME
+            - name: ELASTIC_CLOUD_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ include "backtesting-engine.fullname" . }}-secret
-                  key: redis-url
+                  key: ELASTIC_CLOUD_PASSWORD
+            {{- else }}
+            - name: USE_ELASTICSEARCH_LOGGING
+              value: "false"
             {{- end }}
-            {{- if .Values.config.secrets.jwt_secret }}
+            
+            {{- if and .Values.config.secrets .Values.config.secrets.jwt_secret }}
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: {{ include "backtesting-engine.fullname" . }}-secret
                   key: jwt-secret
             {{- end }}
-            {{- if .Values.config.secrets.encryption_key }}
+            {{- if and .Values.config.secrets .Values.config.secrets.encryption_key }}
             - name: ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
@@ -114,7 +121,6 @@ spec:
             - configMapRef:
                 name: {{ include "backtesting-engine.fullname" . }}-config
           {{- else }}
-          env:
             # Individual environment variables from ConfigMap
             - name: DATABASE_HOST
               valueFrom:
@@ -172,30 +178,26 @@ spec:
             {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- if .Values.livenessProbe.enabled }}
           livenessProbe:
             httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
-            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
-            timeoutSeconds: {{ .Values.probes.liveness.timeoutSeconds }}
-            failureThreshold: {{ .Values.probes.liveness.failureThreshold }}
+              path: {{ .Values.livenessProbe.httpGet.path }}
+              port: {{ .Values.livenessProbe.httpGet.port }}
+            initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.readinessProbe.enabled }}
           readinessProbe:
             httpGet:
-              path: /ready
-              port: http
-            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
-            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
-            timeoutSeconds: {{ .Values.probes.readiness.timeoutSeconds }}
-            failureThreshold: {{ .Values.probes.readiness.failureThreshold }}
-          startupProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: {{ .Values.probes.startup.initialDelaySeconds }}
-            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
-            timeoutSeconds: {{ .Values.probes.startup.timeoutSeconds }}
-            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+              path: {{ .Values.readinessProbe.httpGet.path }}
+              port: {{ .Values.readinessProbe.httpGet.port }}
+            initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:

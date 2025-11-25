@@ -1,3 +1,8 @@
+# ⚠️ WARNING: This docker-compose.yml is for LOCAL DEVELOPMENT ONLY
+# For all deployed environments (dev/staging/prod), use Helm charts:
+#   helm install backtesting-engine ./k8s/backtesting-engine-helm -f values-{env}.yaml
+# See DEPLOYMENT.md for details
+
 version: '3.8'
 
 services:
@@ -10,16 +15,9 @@ services:
       - "${API_PORT:-8080}:8080"  # API Backend
     environment:
       - RUST_LOG=${RUST_LOG:-info}
-      - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
-      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
-      - POSTGRES_USERNAME=${POSTGRES_USERNAME:-backtesting}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB:-backtesting_db}
-      - REDIS_HOST=${REDIS_HOST:-redis}
-      - REDIS_PORT=${REDIS_PORT:-6379}
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - API_SECRET_KEY=${API_SECRET_KEY}
-      - JWT_SECRET=${JWT_SECRET}
+      - DATABASE_URL=postgresql://${POSTGRES_USERNAME:-backtesting}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-backtesting_db}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis123}@redis:6379
+      - NUM_WORKERS=${NUM_WORKERS:-4}
     depends_on:
       postgres:
         condition: service_healthy

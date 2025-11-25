@@ -19,16 +19,22 @@ use std::collections::HashMap;
 /// Parameters for the Avellaneda-Stoikov strategy
 #[derive(Debug, Clone)]
 pub struct AvellanedaStoikovParams {
-    pub risk_aversion: f64,         // γ: risk aversion parameter
+    pub risk_aversion: f64,         // γ: BASE risk aversion parameter (will be adjusted dynamically)
     pub order_size: f64,            // Fixed order size (in base asset)
     pub window_ms: u64,             // Rolling window for volatility estimation (milliseconds)
     pub min_quote_lifetime_ms: u64, // Minimum quote lifetime (milliseconds)
     pub fee_rate: f64,              // Exchange taker/maker fee (fraction)
     pub latency_buffer: f64,        // Price buffer for latency/slippage
-    pub inventory_target: f64,      // Target inventory (0 = flat)
+    pub inventory_target: f64,      // BASE target inventory (will be adjusted dynamically)
     pub volatility_cap: f64,        // Max allowed volatility (pause quoting above this)
     pub time_horizon_minutes: f64,  // t: time horizon for optimization (in minutes)
     pub market_depth_k: f64,        // k: market depth parameter (higher = tighter spread)
+    
+    // Phase 2: Dynamic adjustment parameters (optimized by genetic algorithm)
+    pub volatility_adjustment_factor: f64, // How much to scale γ with volatility (0.5 = 50% increase per 1.0 vol ratio)
+    pub inventory_penalty_factor: f64,     // How much to increase γ with inventory (0.3 = 30% per unit deviation)
+    pub trend_sensitivity: f64,            // How much to lean inventory target with trend (-0.5 to 0.5)
+    pub flow_sensitivity: f64,             // How much to fade order flow imbalance (-0.2 to 0.2)
 }
 
 impl Default for AvellanedaStoikovParams {
@@ -44,6 +50,12 @@ impl Default for AvellanedaStoikovParams {
             volatility_cap: 0.10, // 10% annualized
             time_horizon_minutes: 1.0, // 1 minute default
             market_depth_k: 1.5, // Default market depth parameter
+            
+            // Phase 2: Dynamic adjustment defaults
+            volatility_adjustment_factor: 0.5,  // Moderate volatility scaling
+            inventory_penalty_factor: 0.3,      // Moderate inventory penalty
+            trend_sensitivity: 0.2,             // Slight trend following
+            flow_sensitivity: -0.1,             // Fade order flow (contrarian)
         }
     }
 }
@@ -51,8 +63,8 @@ impl Default for AvellanedaStoikovParams {
 impl AvellanedaStoikovParams {
     /// Validate parameter bounds
     pub fn validate(&self) -> Result<(), String> {
-        if self.risk_aversion <= 0.0 || self.risk_aversion > 1.0 {
-            return Err(format!("risk_aversion must be in (0, 1], got {}", self.risk_aversion));
+        if self.risk_aversion <= 0.0 || self.risk_aversion > 10.0 {
+            return Err(format!("risk_aversion must be in (0, 10], got {}", self.risk_aversion));
         }
         if self.order_size <= 0.0 {
             return Err(format!("order_size must be positive, got {}", self.order_size));
@@ -95,6 +107,13 @@ pub struct AvellanedaStoikovStrategy {
     // EWMA state for volatility estimation
     ewma_mean: Option<f64>,
     ewma_variance: Option<f64>,
+    
+    // Phase 2: Market state tracking for dynamic adjustments
+    baseline_volatility: Option<f64>,       // Historical average volatility for comparison
+    recent_fills: Vec<(DateTime<Utc>, f64)>, // Recent fill prices for trend estimation
+    buy_volume: f64,                         // Recent buy volume
+    sell_volume: f64,                        // Recent sell volume
+    max_inventory: f64,                      // Maximum allowed inventory for penalty calculation
 }
 
 impl AvellanedaStoikovStrategy {
@@ -115,6 +134,142 @@ impl AvellanedaStoikovStrategy {
             paused: false,
             ewma_mean: None,
             ewma_variance: None,
+            
+            // Phase 2: Initialize market state tracking
+            baseline_volatility: None,
+            recent_fills: Vec::new(),
+            buy_volume: 0.0,
+            sell_volume: 0.0,
+            max_inventory: 10.0, // Default max inventory (will be calibrated)
+        }
+    }
+    
+    /// Phase 2: Calculate dynamic risk aversion (gamma) based on market conditions
+    fn calculate_dynamic_gamma(&mut self, current_volatility: f64) -> f64 {
+        let base_gamma = self.params.risk_aversion;
+        
+        // 1. Volatility adjustment: scale gamma with volatility ratio
+        let vol_factor = if let Some(baseline) = self.baseline_volatility {
+            if baseline > 0.0 {
+                (current_volatility / baseline).min(3.0) // Cap at 3x baseline
+            } else {
+                1.0
+            }
+        } else {
+            // Initialize baseline on first call
+            self.baseline_volatility = Some(current_volatility);
+            1.0
+        };
+        
+        // 2. Inventory penalty: increase gamma when inventory deviates from target
+        let inventory_deviation = (self.inventory - self.params.inventory_target).abs();
+        let inventory_penalty = if self.max_inventory > 0.0 {
+            (inventory_deviation / self.max_inventory).min(1.0).powi(2)
+        } else {
+            0.0
+        };
+        
+        // 3. Combine adjustments
+        let dynamic_gamma = base_gamma * (
+            1.0 
+            + vol_factor * self.params.volatility_adjustment_factor
+            + inventory_penalty * self.params.inventory_penalty_factor
+        );
+        
+        // Clamp to reasonable bounds
+        dynamic_gamma.max(0.001).min(1.0)
+    }
+    
+    /// Phase 2: Calculate dynamic inventory target based on market signals
+    fn calculate_dynamic_target(&mut self) -> f64 {
+        let base_target = self.params.inventory_target;
+        
+        // 1. Trend component: estimate from recent price action
+        let trend = self.estimate_trend();
+        let trend_bias = trend * self.params.trend_sensitivity;
+        
+        // 2. Order flow imbalance: fade the flow (contrarian)
+        let total_volume = self.buy_volume + self.sell_volume;
+        let flow_imbalance = if total_volume > 0.0 {
+            (self.buy_volume - self.sell_volume) / total_volume
+        } else {
+            0.0
+        };
+        let flow_bias = flow_imbalance * self.params.flow_sensitivity;
+        
+        // 3. Combine adjustments
+        let dynamic_target = base_target + trend_bias + flow_bias;
+        
+        // Clamp to reasonable inventory limits
+        dynamic_target.clamp(-1.0, 1.0)
+    }
+    
+    /// Estimate trend from recent price action (simple linear regression on log prices)
+    fn estimate_trend(&self) -> f64 {
+        if self.recent_fills.len() < 5 {
+            return 0.0; // Not enough data
+        }
+        
+        // Use last 20 fills or all available
+        let window = self.recent_fills.len().min(20);
+        let recent = &self.recent_fills[self.recent_fills.len() - window..];
+        
+        // Simple slope calculation
+        let n = recent.len() as f64;
+        let x_mean = (n - 1.0) / 2.0;
+        let y_mean = recent.iter().map(|(_, p)| p.ln()).sum::<f64>() / n;
+        
+        let numerator: f64 = recent.iter().enumerate()
+            .map(|(i, (_, p))| {
+                let x = i as f64;
+                let y = p.ln();
+                (x - x_mean) * (y - y_mean)
+            })
+            .sum();
+            
+        let denominator: f64 = recent.iter().enumerate()
+            .map(|(i, _)| {
+                let x = i as f64;
+                (x - x_mean).powi(2)
+            })
+            .sum();
+        
+        if denominator > 0.0 {
+            let slope = numerator / denominator;
+            // Normalize to approximately [-1, 1] range
+            slope.tanh()
+        } else {
+            0.0
+        }
+    }
+    
+    /// Update volume tracking (called from update_state)
+    fn update_volume_tracking(&mut self, market_data: &dataloader::MarketData) {
+        // Decay old volume over time (exponential decay)
+        let decay_factor = 0.99;
+        self.buy_volume *= decay_factor;
+        self.sell_volume *= decay_factor;
+        
+        // Add new volume based on market data type
+        match market_data {
+            dataloader::MarketData::Trade(trade) => {
+                let volume = trade.quantity.to_f64().unwrap_or(0.0);
+                if trade.side == "buy" {
+                    self.buy_volume += volume;
+                } else {
+                    self.sell_volume += volume;
+                }
+                
+                // Track fill price for trend estimation
+                let price = trade.price.to_f64().unwrap_or(0.0);
+                self.recent_fills.push((trade.timestamp, price));
+                
+                // Keep only recent fills (last 100)
+                if self.recent_fills.len() > 100 {
+                    self.recent_fills.remove(0);
+                }
+            },
+            _ => {},
         }
     }
 }
@@ -249,10 +404,12 @@ impl Strategy for AvellanedaStoikovStrategy {
         }
 
         // 4. Calculate optimal spread and skew (Avellaneda-Stoikov formulas)
-        let gamma = self.params.risk_aversion;
+        // Phase 2: Use dynamic parameters instead of static
+        let gamma = self.calculate_dynamic_gamma(ann_vol);
+        let q_star = self.calculate_dynamic_target();
+        
         let sigma = ann_vol;
         let q = self.inventory;
-        let q_star = self.params.inventory_target;
         let s = mid.to_f64().unwrap_or(0.0);
         
         // Use configurable time horizon (converted to years)
@@ -307,10 +464,13 @@ impl Strategy for AvellanedaStoikovStrategy {
     }
 
     async fn update_state(&mut self, market_data: &dataloader::MarketData, context: &StrategyContext) -> StrategyResult<()> {
-    let _ = market_data; // silence unused variable warning
-    // Update inventory from portfolio state
-    self.inventory = context.portfolio_state.net_position;
-    Ok(())
+        // Update inventory from portfolio state
+        self.inventory = context.portfolio_state.net_position;
+        
+        // Phase 2: Update volume tracking for dynamic adjustments
+        self.update_volume_tracking(market_data);
+        
+        Ok(())
     }
 
     fn get_parameters(&self) -> HashMap<String, ParameterValue> {

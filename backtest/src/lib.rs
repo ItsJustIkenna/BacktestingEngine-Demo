@@ -50,9 +50,9 @@ pub fn create_report_config(output_config: &OutputConfig) -> Result<ReportConfig
         include_charts: output_config.charts_enabled,
         template_dir: None,
         custom_css: None,
-        persist_to_database: false,
-        database_url: None,
-        generated_by: None,
+        persist_to_database: true,  // Enable by default
+        database_url: std::env::var("DATABASE_URL").ok(),  // Read from environment
+        generated_by: std::env::var("USER").ok().or_else(|| std::env::var("USERNAME").ok()),
         generation_source: "backtest_engine".to_string(),
     })
 }

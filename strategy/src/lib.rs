@@ -152,6 +152,14 @@ impl StrategyManager {
     pub fn risk_manager_mut(&mut self) -> &mut RiskManager {
         &mut self.risk_manager
     }
+
+    /// Update parameters for all registered strategies
+    pub async fn update_all_parameters(&mut self, parameters: HashMap<String, ParameterValue>) -> Result<()> {
+        for strategy in self.strategies.values_mut() {
+            strategy.update_parameters(parameters.clone()).await?;
+        }
+        Ok(())
+    }
 }
 
 impl Default for StrategyManager {

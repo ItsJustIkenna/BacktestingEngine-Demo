@@ -43,13 +43,15 @@ mod tests {
                 routing_mode: None,
             },
             data: DataConfig {
-                default_timeframe: "1d".to_string(),
+                default_timeframe: "1h".to_string(),
                 data_sources: vec!["mock".to_string()],
-                cache_enabled: false,
-                cache_duration_hours: 24,
+                cache_enabled: true,
+                cache_duration_hours: 12,
+                gap_detection: config::GapDetectionConfig::default(),
+                market_impact: config::MarketImpactConfig::default(),
             },
             output: OutputConfig {
-                results_dir: "./results".to_string(),
+                results_dir: "./test_results".to_string(),
                 reports_dir: "./reports".to_string(),
                 charts_enabled: false,
                 export_formats: vec!["json".to_string()],
@@ -129,6 +131,8 @@ mod tests {
                 data_sources: vec!["mock".to_string()],
                 cache_enabled: false,
                 cache_duration_hours: 24,
+                gap_detection: config::GapDetectionConfig::default(),
+                market_impact: config::MarketImpactConfig::default(),
             },
             output: OutputConfig {
                 results_dir: "./results".to_string(),
@@ -175,6 +179,8 @@ mod tests {
                 data_sources: vec!["mock".to_string()],
                 cache_enabled: true,
                 cache_duration_hours: 12,
+                gap_detection: config::GapDetectionConfig::default(),
+                market_impact: config::MarketImpactConfig::default(),
             },
             output: OutputConfig {
                 results_dir: "./test_results".to_string(),

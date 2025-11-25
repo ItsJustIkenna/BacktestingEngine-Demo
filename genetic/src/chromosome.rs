@@ -15,6 +15,12 @@ pub struct AvellanedaStoikovChromosome {
     pub volatility_cap: f64,
     pub time_horizon_minutes: f64,
     pub market_depth_k: f64,
+    
+    // Phase 2: Dynamic adjustment parameters
+    pub volatility_adjustment_factor: f64,
+    pub inventory_penalty_factor: f64,
+    pub trend_sensitivity: f64,
+    pub flow_sensitivity: f64,
 }
 
 impl Chromosome for AvellanedaStoikovChromosome {
@@ -30,6 +36,12 @@ impl Chromosome for AvellanedaStoikovChromosome {
             volatility_cap: rng.gen_range(0.1..3.0),
             time_horizon_minutes: rng.gen_range(0.5..5.0), // 30s to 5 min
             market_depth_k: rng.gen_range(0.5..5.0), // 0.5 to 5.0
+            
+            // Phase 2: Dynamic adjustment parameters
+            volatility_adjustment_factor: rng.gen_range(0.0..1.0), // 0-100% adjustment
+            inventory_penalty_factor: rng.gen_range(0.0..0.8),     // 0-80% penalty
+            trend_sensitivity: rng.gen_range(-0.5..0.5),           // Contrarian to trend-following
+            flow_sensitivity: rng.gen_range(-0.3..0.3),            // Fade or follow flow
         }
     }
 
@@ -45,6 +57,12 @@ impl Chromosome for AvellanedaStoikovChromosome {
             volatility_cap: if rng.gen_bool(0.5) { self.volatility_cap } else { other.volatility_cap },
             time_horizon_minutes: if rng.gen_bool(0.5) { self.time_horizon_minutes } else { other.time_horizon_minutes },
             market_depth_k: if rng.gen_bool(0.5) { self.market_depth_k } else { other.market_depth_k },
+            
+            // Phase 2: Crossover dynamic parameters
+            volatility_adjustment_factor: if rng.gen_bool(0.5) { self.volatility_adjustment_factor } else { other.volatility_adjustment_factor },
+            inventory_penalty_factor: if rng.gen_bool(0.5) { self.inventory_penalty_factor } else { other.inventory_penalty_factor },
+            trend_sensitivity: if rng.gen_bool(0.5) { self.trend_sensitivity } else { other.trend_sensitivity },
+            flow_sensitivity: if rng.gen_bool(0.5) { self.flow_sensitivity } else { other.flow_sensitivity },
         }
     }
 
@@ -90,6 +108,24 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.market_depth_k += rng.gen_range(-0.5..0.5);
             self.market_depth_k = self.market_depth_k.clamp(0.5, 5.0);
         }
+        
+        // Phase 2: Mutate dynamic adjustment parameters
+        if rng.gen_bool(mutation_rate) {
+            self.volatility_adjustment_factor += rng.gen_range(-0.1..0.1);
+            self.volatility_adjustment_factor = self.volatility_adjustment_factor.clamp(0.0, 1.0);
+        }
+        if rng.gen_bool(mutation_rate) {
+            self.inventory_penalty_factor += rng.gen_range(-0.1..0.1);
+            self.inventory_penalty_factor = self.inventory_penalty_factor.clamp(0.0, 0.8);
+        }
+        if rng.gen_bool(mutation_rate) {
+            self.trend_sensitivity += rng.gen_range(-0.1..0.1);
+            self.trend_sensitivity = self.trend_sensitivity.clamp(-0.5, 0.5);
+        }
+        if rng.gen_bool(mutation_rate) {
+            self.flow_sensitivity += rng.gen_range(-0.05..0.05);
+            self.flow_sensitivity = self.flow_sensitivity.clamp(-0.3, 0.3);
+        }
     }
     
     fn distance(&self, other: &Self) -> f64 {
@@ -107,9 +143,16 @@ impl Chromosome for AvellanedaStoikovChromosome {
         let d_horizon = (self.time_horizon_minutes - other.time_horizon_minutes).abs() / 5.0; // Range: 0.5-5.0
         let d_depth = (self.market_depth_k - other.market_depth_k).abs() / 5.0; // Range: 0.5-5.0
         
-        // Euclidean distance in 10D normalized space
+        // Phase 2: Add dynamic parameter distances
+        let d_vol_adj = (self.volatility_adjustment_factor - other.volatility_adjustment_factor).abs() / 1.0; // Range: 0-1
+        let d_inv_penalty = (self.inventory_penalty_factor - other.inventory_penalty_factor).abs() / 0.8; // Range: 0-0.8
+        let d_trend = (self.trend_sensitivity - other.trend_sensitivity).abs() / 1.0; // Range: -0.5 to 0.5
+        let d_flow = (self.flow_sensitivity - other.flow_sensitivity).abs() / 0.6; // Range: -0.3 to 0.3
+        
+        // Euclidean distance in 14D normalized space
         (d_risk.powi(2) + d_size.powi(2) + d_window.powi(2) + d_lifetime.powi(2) + 
          d_fee.powi(2) + d_latency.powi(2) + d_inventory.powi(2) + d_vol_cap.powi(2) +
-         d_horizon.powi(2) + d_depth.powi(2)).sqrt()
+         d_horizon.powi(2) + d_depth.powi(2) + d_vol_adj.powi(2) + d_inv_penalty.powi(2) +
+         d_trend.powi(2) + d_flow.powi(2)).sqrt()
     }
 }

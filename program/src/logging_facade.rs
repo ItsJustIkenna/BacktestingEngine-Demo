@@ -1,64 +1,136 @@
-use ultra_logger::UltraLogger;
+use ultra_logger::{UltraLogger, LoggerConfig, TransportConfig, ConnectionConfig};
 use std::sync::Arc;
+use std::collections::HashMap;
+
+/// Create Elasticsearch configuration for BacktestingEngine
+fn create_elasticsearch_config(_component: &str) -> LoggerConfig {
+    // Check if we should use Elasticsearch (environment variable or default)
+    let use_elasticsearch = std::env::var("USE_ELASTICSEARCH_LOGGING")
+        .map(|v| v.to_lowercase() == "true")
+        .unwrap_or(true); // Default to true for production
+
+    if use_elasticsearch {
+        // Get credentials from environment variables set by Kubernetes
+        let endpoint = std::env::var("ELASTICSEARCH_ENDPOINT")
+            .or_else(|_| std::env::var("ELASTIC_CLOUD_ENDPOINT"))
+            .unwrap_or_else(|_| "https://my-observability-deployment-76d771.es.us-east-2.aws.elastic-cloud.com".to_string());
+        let username = std::env::var("ELASTICSEARCH_USERNAME")
+            .or_else(|_| std::env::var("ELASTIC_CLOUD_USERNAME"))
+            .unwrap_or_else(|_| "elastic".to_string());
+        let password = std::env::var("ELASTICSEARCH_PASSWORD")
+            .or_else(|_| std::env::var("ELASTIC_CLOUD_PASSWORD"))
+            .unwrap_or_else(|_| "mN9CNxqYU9J0nw4aywXVxTAw".to_string());
+
+        let mut options = HashMap::new();
+        options.insert("index".to_string(), "backtestingengine-logs".to_string());
+
+        LoggerConfig {
+            level: std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
+            transport: TransportConfig {
+                transport_type: "elasticsearch".to_string(),
+                connection: ConnectionConfig {
+                    host: endpoint,
+                    port: 443,
+                    username: Some(username),
+                    password: Some(password),
+                    options,
+                },
+            },
+        }
+    } else {
+        // Fallback to stdout for development
+        LoggerConfig::default()
+    }
+}
 
 /// Backtest Engine specific logger instance
 pub static BACKTEST_LOGGER: once_cell::sync::Lazy<Arc<UltraLogger>> = 
     once_cell::sync::Lazy::new(|| {
-        Arc::new(UltraLogger::new("backtest_engine".to_string()))
+        Arc::new(UltraLogger::with_config(
+            "BacktestingEngine-backtest_engine".to_string(),
+            create_elasticsearch_config("backtest_engine")
+        ))
     });
 
 /// Strategy execution logger
 pub static STRATEGY_LOGGER: once_cell::sync::Lazy<Arc<UltraLogger>> = 
     once_cell::sync::Lazy::new(|| {
-        Arc::new(UltraLogger::new("strategy".to_string()))
+        Arc::new(UltraLogger::with_config(
+            "BacktestingEngine-strategy".to_string(),
+            create_elasticsearch_config("strategy")
+        ))
     });
 
 /// Portfolio management logger
 pub static PORTFOLIO_LOGGER: once_cell::sync::Lazy<Arc<UltraLogger>> = 
     once_cell::sync::Lazy::new(|| {
-        Arc::new(UltraLogger::new("portfolio".to_string()))
+        Arc::new(UltraLogger::with_config(
+            "BacktestingEngine-portfolio".to_string(),
+            create_elasticsearch_config("portfolio")
+        ))
     });
 
 /// Risk management logger
 pub static RISK_LOGGER: once_cell::sync::Lazy<Arc<UltraLogger>> = 
     once_cell::sync::Lazy::new(|| {
-        Arc::new(UltraLogger::new("risk".to_string()))
+        Arc::new(UltraLogger::with_config(
+            "BacktestingEngine-risk".to_string(),
+            create_elasticsearch_config("risk")
+        ))
     });
 
 /// Order book operations logger
 pub static ORDERBOOK_LOGGER: once_cell::sync::Lazy<Arc<UltraLogger>> = 
     once_cell::sync::Lazy::new(|| {
-        Arc::new(UltraLogger::new("orderbook".to_string()))
+        Arc::new(UltraLogger::with_config(
+            "BacktestingEngine-orderbook".to_string(),
+            create_elasticsearch_config("orderbook")
+        ))
     });
 
 /// Data loading logger
 pub static DATALOADER_LOGGER: once_cell::sync::Lazy<Arc<UltraLogger>> = 
     once_cell::sync::Lazy::new(|| {
-        Arc::new(UltraLogger::new("dataloader".to_string()))
+        Arc::new(UltraLogger::with_config(
+            "BacktestingEngine-dataloader".to_string(),
+            create_elasticsearch_config("dataloader")
+        ))
     });
 
 /// Walk-forward analysis logger
 pub static WALKFORWARD_LOGGER: once_cell::sync::Lazy<Arc<UltraLogger>> = 
     once_cell::sync::Lazy::new(|| {
-        Arc::new(UltraLogger::new("walkforward".to_string()))
+        Arc::new(UltraLogger::with_config(
+            "BacktestingEngine-walkforward".to_string(),
+            create_elasticsearch_config("walkforward")
+        ))
     });
 
 /// Genetic optimization logger
 pub static GENETIC_LOGGER: once_cell::sync::Lazy<Arc<UltraLogger>> = 
     once_cell::sync::Lazy::new(|| {
-        Arc::new(UltraLogger::new("genetic".to_string()))
+        Arc::new(UltraLogger::with_config(
+            "BacktestingEngine-genetic".to_string(),
+            create_elasticsearch_config("genetic")
+        ))
     });
 
 /// Metrics and reporting logger
 pub static METRICS_LOGGER: once_cell::sync::Lazy<Arc<UltraLogger>> = 
     once_cell::sync::Lazy::new(|| {
-        Arc::new(UltraLogger::new("metrics".to_string()))
+        Arc::new(UltraLogger::with_config(
+            "BacktestingEngine-metrics".to_string(),
+            create_elasticsearch_config("metrics")
+        ))
     });
 
 /// Main program logger
 pub static MAIN_LOGGER: once_cell::sync::Lazy<Arc<UltraLogger>> = 
     once_cell::sync::Lazy::new(|| {
-        Arc::new(UltraLogger::new("main".to_string()))
+        Arc::new(UltraLogger::with_config(
+            "BacktestingEngine-main".to_string(),
+            create_elasticsearch_config("main")
+        ))
     });
 
 /// Performance-optimized logging macros for BacktestingEngine

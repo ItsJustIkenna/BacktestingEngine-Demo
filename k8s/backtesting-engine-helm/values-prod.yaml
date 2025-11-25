@@ -1,261 +1,62 @@
-# Production values for backtesting-engine
+# =============================================================================
+# BacktestingEngine Production Environment Values
+# Production deployment with Azure Key Vault integration
+# =============================================================================
+
+# Environment marker
+environment: production
+
+# High replica count for production availability
 replicaCount: 5
 
+# Image configuration - use production-specific tag
 image:
-  repository: prodtradingbotregistry.azurecr.io/backtesting-engine
+  repository: backtesting-engine
   pullPolicy: IfNotPresent
-  tag: ""
+  tag: "prod"
 
-# High resource limits for production
+# High resource allocation for production
 resources:
   limits:
-    cpu: 2000m
-    memory: 4Gi
+    cpu: "2000m"
+    memory: "4Gi"
   requests:
-    cpu: 500m
-    memory: 1Gi
+    cpu: "1000m"
+    memory: "2Gi"
 
-# Enable autoscaling for production
-autoscaling:
-  enabled: true
-  minReplicas: 5
-  maxReplicas: 20
-  targetCPUUtilizationPercentage: 60
-  targetMemoryUtilizationPercentage: 70
-  behavior:
-    scaleDown:
-      stabilizationWindowSeconds: 300
-      policies:
-      - type: Percent
-        value: 10
-        periodSeconds: 60
-    scaleUp:
-      stabilizationWindowSeconds: 60
-      policies:
-      - type: Percent
-        value: 50
-        periodSeconds: 60
+# =============================================================================
+# Secrets Configuration - Azure Key Vault Integration
+# =============================================================================
+# Secrets are injected from Azure Key Vault using External Secrets Operator
+# Database URL format: postgresql://username:password@host:port/database
 
-# Production configuration
-config:
-  environment: production
-  logging:
-    level: warn
-    enable_file_logging: true
-  performance:
-    worker_threads: 8
-  tls:
+secrets:
+  database:
     enabled: true
+    # These values are injected from Azure Key Vault at runtime
+    # Key Vault secret names: backtesting-prod-db-username, backtesting-prod-db-password, backtesting-prod-db-url
+    username: ""  # Injected from Azure Key Vault
+    password: ""  # Injected from Azure Key Vault
+    url: ""       # Injected from Azure Key Vault (full postgresql:// connection string)
   
-# Enable persistence for production
-persistence:
-  enabled: true
-  size: 100Gi
-  storageClass: premium-ssd
-  logs:
-    enabled: true
-    size: 50Gi
+  elasticsearch:
+    enabled: false
+    endpoint: ""
+    username: ""
+    password: ""
 
-# Production service configuration
-service:
+# External database configuration (values from Key Vault secrets)
+externalDatabase:
+  enabled: true
+  host: ""  # Extracted from secrets.database.url
+  port: 5432
+  database: "backtesting_prod"
+  username: ""  # From secrets.database.username
+  existingSecret: ""
   type: ClusterIP
-  port: 8080
-  annotations:
-    service.beta.kubernetes.io/azure-load-balancer-internal: "true"
 
-# Production ingress
-ingress:
-  enabled: true
-  className: nginx
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-  hosts:
-    - host: backtesting-engine.tradingplatform.com
-      paths:
-        - path: /
-          pathType: Prefix
-  tls:
-    - secretName: backtesting-engine-prod-tls
-      hosts:
-        - backtesting-engine.tradingplatform.com
+# Disable built-in PostgreSQL
+postgresql:
+  enabled: false
 
-# Metrics enabled with monitoring
-metrics:
-  enabled: true
-  port: 9090
 
-# ServiceMonitor for Prometheus
-serviceMonitor:
-  enabled: true
-  interval: 30s
-  path: /metrics
-  
-# Pod Disruption Budget for high availability
-podDisruptionBudget:
-  enabled: true
-  minAvailable: 3
-
-# Network policy for security
-networkPolicy:
-  enabled: true
-  ingress:
-    enabled: true
-    rules:
-      - from:
-          - namespaceSelector:
-              matchLabels:
-                name: trading-platform
-          - namespaceSelector:
-              matchLabels:
-                name: monitoring
-        ports:
-          - protocol: TCP
-            port: 8080
-          - protocol: TCP
-            port: 9090
-  egress:
-    enabled: true
-    rules:
-      - to:
-          - namespaceSelector:
-              matchLabels:
-                name: trading-platform
-        ports:
-          - protocol: TCP
-            port: 5432  # PostgreSQL
-          - protocol: TCP
-            port: 6379  # Redis
-
-# Production environment variables
-env:
-  RUST_LOG: warn
-  ENVIRONMENT: production
-
-# Anti-affinity for production
-affinity:
-  podAntiAffinity:
-    preferredDuringSchedulingIgnoredDuringExecution:
-    - weight: 100
-      podAffinityTerm:
-        labelSelector:
-          matchExpressions:
-          - key: app.kubernetes.io/name
-            operator: In
-            values:
-            - backtesting-engine
-        topologyKey: kubernetes.io/hostname
-
-# Production node selector
-nodeSelector:
-  kubernetes.io/os: linux
-  node.kubernetes.io/instance-type: Standard_D8s_v3
-
-# Strategy Export configuration (production settings)
-strategyExport:
-  configMap:
-    enabled: true
-  performance:
-    minSharpeRatio: 1.5        # Standard production threshold
-    minProfitFactor: 1.3       # Standard production threshold
-    minWinRate: 0.55           # Standard production threshold
-    maxDrawdown: 0.15          # Strict production limit
-    minTrades: 100             # Standard production minimum
-    minNetProfit: 10000.0      # Standard production minimum
-    maxAvgTradeDuration: 24.0  # Standard production limit
-    minVolatilityAdjustedReturn: 0.8  # Standard production threshold
-    minCalmarRatio: 1.2        # Standard production threshold
-    requirePositiveSkew: true  # Required for production
-  deployment:
-    signalEnginePath: "/app/signal-engine"
-    environments:
-      development:
-        path: "/app/signal-engine/strategies/development"
-        enabled: false           # Disabled in production
-        maxStrategies: 0
-        approvalRequired: false
-      staging:
-        path: "/app/signal-engine/strategies/staging"
-        enabled: true            # Enabled for pre-production validation
-        maxStrategies: 3         # Limited staging strategies
-        approvalRequired: true   # Strict approval required
-      production:
-        path: "/app/signal-engine/strategies/production"
-        enabled: true            # Production deployment enabled
-        maxStrategies: 3         # Limited production strategies
-        approvalRequired: true   # Strict approval required
-    autoDeployment:
-      enabled: true
-      cronSchedule: "0 2 * * 0"     # Weekly on Sunday at 2 AM
-      maxConcurrentDeployments: 1   # Conservative concurrent for prod
-      timeoutSeconds: 900           # Longer timeout for production
-      targetEnvironment: "production"
-      batchSize: 1                  # Conservative batch size for prod
-      delayBetweenDeployments: 600  # Longer delay for prod safety
-  filesystem:
-    exportBasePath: "/app/exports"
-    strategySourcePath: "/app/backtesting-engine/strategy/src/strategies"
-    backupEnabled: true             # Required backups for production
-    backupRetentionDays: 90         # Long retention for production
-  approval:
-    development:
-      requiredApprovers: 999        # Disabled in production
-      allowedRoles: []
-      autoApproveThreshold: 100.0
-      timeoutHours: 1
-    staging:
-      requiredApprovers: 2          # Two approvals for staging in prod
-      allowedRoles:
-        - "senior_trader"
-        - "risk_manager"
-        - "head_of_trading"
-        - "admin"
-      autoApproveThreshold: 90.0    # High threshold for staging
-      timeoutHours: 48              # Longer timeout for staging
-    production:
-      requiredApprovers: 3          # Three approvals for production
-      allowedRoles:
-        - "risk_manager"
-        - "head_of_trading"
-        - "cto"                 # Additional high-level role
-        - "admin"
-      autoApproveThreshold: 98.0    # Very high threshold for production
-      timeoutHours: 168             # One week timeout for production
-    notifications:
-      enabled: true                 # Required notifications for prod
-      emailRecipients:
-        - "trading-team@company.com"
-        - "risk-management@company.com"
-        - "cto@company.com"
-        - "head-of-trading@company.com"
-    audit:
-      enabled: true                 # Required audit for production
-      retentionDays: 365            # Long retention for production
-      includePerformanceData: true
-      includeParameters: true
-  risk:
-    globalLimits:
-      maxTotalExposure: 2000000.0   # High limits for production
-      maxStrategiesPerSymbol: 2     # Conservative limits for production
-      maxStrategiesPerExchange: 5
-      emergencyStopEnabled: true    # Required for production
-    strategyLimits:
-      maxPositionSize: 200000.0     # High position sizes for production
-      maxOrderSize: 20000.0         # High order sizes for production
-      maxDailyLoss: 10000.0         # High daily loss limits for production
-      maxLeverage: 2.0              # Conservative leverage for production
-      positionConcentrationLimit: 0.15  # Conservative concentration for production
-    environmentLimits:
-      development:
-        capitalAllocationLimit: 0.0    # Disabled in production
-        maxConcurrentStrategies: 0
-        testingMode: true
-      staging:
-        capitalAllocationLimit: 500000.0  # High staging allocation
-        maxConcurrentStrategies: 2        # Conservative staging concurrent
-        testingMode: false
-      production:
-        capitalAllocationLimit: 2000000.0  # Full production allocation
-        maxConcurrentStrategies: 3         # Conservative production concurrent
-        testingMode: false

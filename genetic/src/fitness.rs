@@ -15,7 +15,7 @@ pub async fn avellaneda_stoikov_fitness(
     market_data: Vec<dataloader::MarketData>,
     config: &config::BacktestConfig,
 ) -> f64 {
-    // Convert chromosome to strategy parameters
+    // Convert chromosome to strategy parameters (Phase 2: all 14 parameters)
     let params = AvellanedaStoikovParams {
         risk_aversion: chromo.risk_aversion,
         order_size: chromo.order_size,
@@ -27,6 +27,12 @@ pub async fn avellaneda_stoikov_fitness(
         volatility_cap: chromo.volatility_cap,
         time_horizon_minutes: chromo.time_horizon_minutes,
         market_depth_k: chromo.market_depth_k,
+        
+        // Phase 2: Dynamic adjustment parameters
+        volatility_adjustment_factor: chromo.volatility_adjustment_factor,
+        inventory_penalty_factor: chromo.inventory_penalty_factor,
+        trend_sensitivity: chromo.trend_sensitivity,
+        flow_sensitivity: chromo.flow_sensitivity,
     };
     
     // Initialize strategy with chromosome parameters

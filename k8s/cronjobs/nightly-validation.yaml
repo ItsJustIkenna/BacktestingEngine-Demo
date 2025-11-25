@@ -1,0 +1,47 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nightly-validation-backtest
+  namespace: backtesting-engine
+spec:
+  # Run at 6 AM UTC every day
+  schedule: "0 6 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: backtest-submitter
+            image: curlimages/curl:latest
+            env:
+            - name: API_URL
+              value: "http://backtesting-engine-service:8080"
+            command:
+            - /bin/sh
+            - -c
+            - |
+              # Submit validation backtest for BTC-USD
+              curl -X POST "${API_URL}/api/backtest" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "symbol": "BTC-USD",
+                  "exchange": "Binance",
+                  "risk_aversion": 0.5,
+                  "inventory_target": 0.5,
+                  "order_size": 0.01,
+                  "initial_capital": 100000,
+                  "commission_rate": 0.001
+                }'
+              
+              # Check for errors
+              if [ $? -ne 0 ]; then
+                echo "Failed to submit backtest"
+                exit 1
+              fi
+              
+              echo "Validation backtest submitted successfully"

@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "backtesting-engine.fullname" . }}-api
+  labels:
+    {{- include "backtesting-engine.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  namespace: {{ .Release.Namespace | quote }}
+spec:
+  replicas: {{ .Values.api.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "backtesting-engine.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "backtesting-engine.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "backtesting-engine.serviceAccountName" . }}
+      initContainers:
+        - name: wait-for-postgresql
+          image: "postgres:15-alpine"
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h {{ include "backtesting-engine.postgresql.servicename" . }} -p {{ include "backtesting-engine.postgresql.port" . }} -U {{ include "backtesting-engine.postgresql.username" . }}; do
+                echo "Waiting for PostgreSQL to be ready..."
+                sleep 2
+              done
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  key: database-password
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["api"]  # Run in API-only mode (nginx + API server, no workers)
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  key: database-password
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  key: DATABASE_URL
+            - name: RUST_LOG
+              value: "info"
+          envFrom:
+            - configMapRef:
+                name: {{ include "backtesting-engine.fullname" . }}-config
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+            requests:
+              cpu: "250m"
+              memory: "256Mi"

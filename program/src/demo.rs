@@ -31,6 +31,9 @@ pub fn demo_enhanced_cli() {
             111200.0, 108900.0, 112500.0, 114200.0, 115420.5
         ],
         initial_capital: 100000.0,
+        data_quality: None,
+        transaction_costs: None,
+        market_impact: None,
     };
     
     // Create and use the enhanced visualizer with configuration

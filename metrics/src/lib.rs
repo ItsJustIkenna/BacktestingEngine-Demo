@@ -40,7 +40,11 @@ pub struct PerformanceMetrics {
     pub volatility: f64,
     pub win_rate: f64,
     pub average_trade_duration: f64,
-    // Add more fields as needed
+    // Transaction cost metrics
+    pub total_commission: f64,
+    pub total_slippage: f64,
+    pub total_market_impact: f64,
+    pub transaction_costs_percentage: f64,
 }
 
 impl PerformanceMetrics {
@@ -67,6 +71,10 @@ impl PerformanceMetrics {
             volatility: volatility(trade_returns).unwrap_or(0.0),
             win_rate: win_rate(trade_returns).unwrap_or(0.0),
             average_trade_duration: average_trade_duration(trade_durations).unwrap_or(0.0),
+            total_commission: 0.0,
+            total_slippage: 0.0,
+            total_market_impact: 0.0,
+            transaction_costs_percentage: 0.0,
         }
     }
 }

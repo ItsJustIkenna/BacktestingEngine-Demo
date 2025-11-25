@@ -73,11 +73,6 @@ data:
   DATABASE_NAME: {{ include "backtesting-engine.postgresql.database" . }}
   DATABASE_USER: {{ include "backtesting-engine.postgresql.username" . }}
   
-  {{- if .Values.redis.enabled }}
-  REDIS_HOST: {{ include "backtesting-engine.redis.servicename" . }}
-  REDIS_PORT: {{ include "backtesting-engine.redis.port" . | quote }}
-  {{- end }}
-  
   # Application settings
   APP_PORT: {{ .Values.service.targetPort | quote }}
   RESULTS_DIR: {{ .Values.config.output.results_dir | quote }}

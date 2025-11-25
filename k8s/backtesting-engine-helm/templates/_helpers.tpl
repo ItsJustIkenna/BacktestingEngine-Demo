@@ -81,7 +81,11 @@ Create the image name
 Create a default fully qualified postgresql name.
 */}}
 {{- define "backtesting-engine.postgresql.fullname" -}}
-{{- include "common.names.dependency.fullname" (dict "chartName" "postgresql" "chartValues" .Values.postgresql "context" $) -}}
+{{- if .Values.postgresql.enabled }}
+{{- printf "%s-postgresql" (include "backtesting-engine.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- .Values.config.database.host }}
+{{- end }}
 {{- end }}
 
 {{/*
@@ -132,7 +136,11 @@ Create the postgresql username
 Create a default fully qualified redis name.
 */}}
 {{- define "backtesting-engine.redis.fullname" -}}
-{{- include "common.names.dependency.fullname" (dict "chartName" "redis" "chartValues" .Values.redis "context" $) -}}
+{{- if .Values.redis.enabled }}
+{{- printf "%s-redis" (include "backtesting-engine.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- "redis" }}
+{{- end }}
 {{- end }}
 
 {{/*

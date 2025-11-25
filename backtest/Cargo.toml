@@ -5,7 +5,7 @@ edition = "2021"
 
 [features]
 default = []
-postgres = ["dataloader/postgres", "strategy/postgres"]
+postgres = ["dataloader/postgres", "strategy/postgres", "databaseschema"]
 
 [dependencies]
 # External dependencies
@@ -27,6 +27,9 @@ riskmanager = { path = "../riskmanager" }
 strategy = { path = "../strategy" }
 signal = { path = "../signal" }
 metrics = { path = "../metrics" }
+genetic = { path = "../genetic" }
+walkforward = { path = "../walkforward" }
+databaseschema = { path = "../../databaseschema", optional = true }
 
 # Logging
 ultra-logger = { path = "../../LoggingEngine/ultra-logger" }

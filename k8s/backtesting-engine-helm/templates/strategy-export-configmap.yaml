@@ -1,5 +1,5 @@
 {{/* Strategy Export ConfigMap Template */}}
-{{- if .Values.strategyExport.configMap.enabled }}
+{{- if and .Values.strategyExport .Values.strategyExport.configMap .Values.strategyExport.configMap.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: data-quality-check
+  namespace: backtesting-engine
+spec:
+  # Run every 30 minutes
+  schedule: "*/30 * * * *"
+  concurrencyPolicy: Replace
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 300  # 5 minute timeout
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+          - name: data-quality-checker
+            image: curlimages/curl:latest
+            env:
+            - name: API_URL
+              value: "http://backtesting-engine-service:8080"
+            command:
+            - /bin/sh
+            - -c
+            - |
+              # Submit a quick validation backtest with minimal data
+              echo "Checking data quality with test backtest..."
+              
+              response=$(curl -s -w "\n%{http_code}" -X POST "${API_URL}/api/backtest" \
+                -H "Content-Type: application/json" \
+                -d '{
+                  "symbol": "ETH-USD",
+                  "exchange": "Binance",
+                  "risk_aversion": 0.5,
+                  "inventory_target": 0.5,
+                  "order_size": 0.005,
+                  "initial_capital": 50000,
+                  "commission_rate": 0.001
+                }')
+              
+              http_code=$(echo "$response" | tail -n1)
+              body=$(echo "$response" | head -n-1)
+              
+              if [ "$http_code" -eq 200 ] || [ "$http_code" -eq 201 ]; then
+                echo "Data quality check passed"
+                echo "Response: $body"
+                exit 0
+              else
+                echo "Data quality check failed with HTTP $http_code"
+                echo "Response: $body"
+                exit 1
+              fi

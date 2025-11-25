@@ -63,12 +63,10 @@ fn extract_data(data: &[MarketData], start: NaiveDate, end: NaiveDate) -> Vec<Ma
     data.iter().cloned().filter(|d| in_range(d, start, end)).collect()
 }
 
+#[cfg(feature = "postgres")]
 fn in_range(d: &MarketData, start: NaiveDate, end: NaiveDate) -> bool {
-    // Extract timestamp from MarketData and compare
     let ts = match d {
-        #[cfg(feature = "postgres")]
         MarketData::Order(o) => o.get_timestamp().naive_utc().date(),
-        #[cfg(feature = "postgres")]
         MarketData::Snapshot(s) => s.get_timestamp().naive_utc().date(),
         MarketData::Candle(c) => c.timestamp.naive_utc().date(),
         MarketData::Trade(t) => t.timestamp.naive_utc().date(),
@@ -76,7 +74,14 @@ fn in_range(d: &MarketData, start: NaiveDate, end: NaiveDate) -> bool {
     ts >= start && ts < end
 }
 
-
+#[cfg(not(feature = "postgres"))]
+fn in_range(d: &MarketData, start: NaiveDate, end: NaiveDate) -> bool {
+    let ts = match d {
+        MarketData::Candle(c) => c.timestamp.naive_utc().date(),
+        MarketData::Trade(t) => t.timestamp.naive_utc().date(),
+    };
+    ts >= start && ts < end
+}
 use genetic::chromosome::AvellanedaStoikovChromosome;
 use genetic::GeneticOptimizer;
 use config::GeneticConfig;
@@ -102,7 +107,7 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
         fitness_fn,
     };
     let (best_chromo, _score) = optimizer.run().await;
-    // Convert chromosome to params - using all 10 parameters now
+    // Convert chromosome to params - using all 14 parameters (Phase 2)
     AvellanedaStoikovParams {
         risk_aversion: best_chromo.risk_aversion,
         order_size: best_chromo.order_size,
@@ -114,6 +119,12 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
         volatility_cap: best_chromo.volatility_cap,
         time_horizon_minutes: best_chromo.time_horizon_minutes,
         market_depth_k: best_chromo.market_depth_k,
+        
+        // Phase 2: Dynamic adjustment parameters
+        volatility_adjustment_factor: best_chromo.volatility_adjustment_factor,
+        inventory_penalty_factor: best_chromo.inventory_penalty_factor,
+        trend_sensitivity: best_chromo.trend_sensitivity,
+        flow_sensitivity: best_chromo.flow_sensitivity,
     }
 }
 
@@ -146,6 +157,10 @@ async fn run_backtest_with_params(_test_data: &[MarketData], params: &Avellaneda
         volatility: 0.15,
         win_rate: 0.6,
         average_trade_duration: 300.0,
+        total_commission: 50.0,
+        total_slippage: 30.0,
+        total_market_impact: 20.0,
+        transaction_costs_percentage: 1.0,
     }
 }
 
@@ -205,6 +220,12 @@ fn extract_best_parameters_from_walkforward(_wf_summary: &WalkForwardSummary) ->
         volatility_cap: 0.10,
         time_horizon_minutes: 1.0,
         market_depth_k: 1.5,
+        
+        // Phase 2: Using default dynamic adjustment parameters
+        volatility_adjustment_factor: 0.5,
+        inventory_penalty_factor: 0.3,
+        trend_sensitivity: 0.2,
+        flow_sensitivity: -0.1,
     }
 }
 

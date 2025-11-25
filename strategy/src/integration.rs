@@ -89,9 +89,10 @@ impl BacktestIntegration {
         let parameters: HashMap<String, f64> = optimized_parameters.iter()
             .filter_map(|(k, v)| match v {
                 ParameterValue::Float(f) => Some((k.clone(), *f)),
-                ParameterValue::Integer(i) => Some((k.clone(), *i as f64)),
-                ParameterValue::Boolean(b) => Some((k.clone(), if *b { 1.0 } else { 0.0 })),
+                ParameterValue::Int(i) => Some((k.clone(), *i as f64)),
+                ParameterValue::Bool(b) => Some((k.clone(), if *b { 1.0 } else { 0.0 })),
                 ParameterValue::String(_) => None, // Skip strings for simplicity
+                ParameterValue::Array(_) => None, // Skip arrays
             }).collect();
 
         // Export strategy if it meets criteria
@@ -127,9 +128,10 @@ impl BacktestIntegration {
         let parameters: HashMap<String, f64> = optimized_parameters.iter()
             .filter_map(|(k, v)| match v {
                 ParameterValue::Float(f) => Some((k.clone(), *f)),
-                ParameterValue::Integer(i) => Some((k.clone(), *i as f64)),
-                ParameterValue::Boolean(b) => Some((k.clone(), if *b { 1.0 } else { 0.0 })),
+                ParameterValue::Int(i) => Some((k.clone(), *i as f64)),
+                ParameterValue::Bool(b) => Some((k.clone(), if *b { 1.0 } else { 0.0 })),
                 ParameterValue::String(_) => None,
+                ParameterValue::Array(_) => None, // Skip arrays
             }).collect();
 
         let export_path = exporter.force_export(

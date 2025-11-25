@@ -6,9 +6,9 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use diesel::prelude::*;
+use diesel::{Insertable, Queryable, Selectable};
 use std::collections::HashMap;
-use rust_decimal::Decimal;
+use bigdecimal::BigDecimal;
 use serde_json::Value;
 
 // Import database schema
@@ -27,11 +27,11 @@ pub struct BacktestReportRecord {
     pub timeframe: String,
     pub start_date: NaiveDate,
     pub end_date: NaiveDate,
-    pub initial_capital: Decimal,
+    pub initial_capital: BigDecimal,
     pub generated_at: DateTime<Utc>,
     pub generated_by: Option<String>,
     pub generation_source: String,
-    pub backtest_duration_seconds: Option<Decimal>,
+    pub backtest_duration_seconds: Option<BigDecimal>,
     pub data_points: Option<i32>,
     pub include_trades: bool,
     pub include_charts: bool,
@@ -53,12 +53,6 @@ pub struct BacktestReportRecord {
     pub accessed_at: Option<DateTime<Utc>>,
     pub access_count: i32,
 }
-    pub notes: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub accessed_at: Option<DateTime<Utc>>,
-    pub access_count: i32,
-}
 
 /// New report record for insertion
 #[derive(Insertable, Debug, Clone, Serialize, Deserialize)]
@@ -72,11 +66,11 @@ pub struct NewBacktestReportRecord {
     pub timeframe: String,
     pub start_date: NaiveDate,
     pub end_date: NaiveDate,
-    pub initial_capital: Decimal,
+    pub initial_capital: BigDecimal,
     pub generated_at: DateTime<Utc>,
     pub generated_by: Option<String>,
     pub generation_source: String,
-    pub backtest_duration_seconds: Option<Decimal>,
+    pub backtest_duration_seconds: Option<BigDecimal>,
     pub data_points: Option<i32>,
     pub include_trades: bool,
     pub include_charts: bool,
@@ -93,6 +87,8 @@ pub struct NewBacktestReportRecord {
     pub error_message: Option<String>,
     pub tags: Option<Vec<String>>,
     pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// Database model for report access log
@@ -142,11 +138,11 @@ pub struct BacktestReportSummary {
     pub status: String,
     pub access_count: i32,
     pub accessed_at: Option<DateTime<Utc>>,
-    pub net_profit: Option<rust_decimal::Decimal>,
-    pub sharpe_ratio: Option<rust_decimal::Decimal>,
-    pub max_drawdown: Option<rust_decimal::Decimal>,
+    pub net_profit: Option<BigDecimal>,
+    pub sharpe_ratio: Option<BigDecimal>,
+    pub max_drawdown: Option<BigDecimal>,
     pub total_trades: Option<i32>,
-    pub backtest_total_return: rust_decimal::Decimal,
+    pub backtest_total_return: BigDecimal,
     pub backtest_created_at: DateTime<Utc>,
 }
 
@@ -169,14 +165,24 @@ impl NewBacktestReportRecord {
             "profit_factor": report.performance.profit_factor,
             "max_drawdown": report.performance.max_drawdown,
             "win_rate": report.performance.win_rate,
-            "total_trades": report.performance.number_of_trades
+            "total_trades": report.performance.number_of_trades,
+            // Enhanced metrics - transaction costs
+            "total_commission": report.performance.total_commission,
+            "total_slippage": report.performance.total_slippage,
+            "total_market_impact": report.performance.total_market_impact,
+            "transaction_costs_pct": report.performance.transaction_costs_percentage,
         });
         
         let risk_summary = serde_json::json!({
             "volatility": report.performance.volatility,
             "value_at_risk_95": report.analysis.risk_metrics.value_at_risk_95,
             "sortino_ratio": report.analysis.risk_metrics.sortino_ratio,
-            "calmar_ratio": report.analysis.risk_metrics.calmar_ratio
+            "calmar_ratio": report.analysis.risk_metrics.calmar_ratio,
+            // Enhanced metrics - data quality
+            "data_quality_score": report.analysis.data_quality.overall_score,
+            "data_completeness": report.analysis.data_quality.data_completeness_score,
+            "gaps_detected": report.analysis.data_quality.gaps_detected,
+            "max_gap_minutes": report.analysis.data_quality.max_gap_seconds / 60,
         });
         
         let trade_summary = serde_json::json!({
@@ -184,7 +190,11 @@ impl NewBacktestReportRecord {
             "profitable_trades": report.analysis.trade_distribution.profitable_trades,
             "losing_trades": report.analysis.trade_distribution.losing_trades,
             "best_trade": report.analysis.trade_distribution.best_trade,
-            "worst_trade": report.analysis.trade_distribution.worst_trade
+            "worst_trade": report.analysis.trade_distribution.worst_trade,
+            // Enhanced metrics - market impact
+            "trades_with_impact": report.analysis.market_impact.trades_with_impact,
+            "avg_impact_bps": report.analysis.market_impact.avg_impact_bps,
+            "liquidity_warnings": report.analysis.market_impact.liquidity_warnings,
         });
 
         Self {
@@ -196,13 +206,12 @@ impl NewBacktestReportRecord {
             timeframe: report.metadata.timeframe.clone(),
             start_date: report.metadata.start_date,
             end_date: report.metadata.end_date,
-            initial_capital: Decimal::from_f64_retain(report.metadata.initial_capital)
-                .unwrap_or_default(),
+            initial_capital: BigDecimal::from(report.metadata.initial_capital as i64),
             generated_at: report.metadata.generated_at,
             generated_by,
             generation_source,
             backtest_duration_seconds: report.metadata.backtest_duration_seconds
-                .map(|d| Decimal::from_f64_retain(d).unwrap_or_default()),
+                .map(|d| BigDecimal::from(d as i64)),
             data_points: Some(report.metadata.data_points as i32),
             include_trades: report.trades.is_some(),
             include_charts: true, // Assume charts are included by default
@@ -219,20 +228,41 @@ impl NewBacktestReportRecord {
             error_message: None,
             tags: None,
             notes: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
         }
     }
 }
 
 /// Repository for database operations on reports
 pub struct BacktestReportRepository {
-    // Connection pool would be passed here in real implementation
+    pool: std::sync::Arc<diesel_async::pooled_connection::deadpool::Pool<diesel_async::AsyncPgConnection>>,
 }
 
 impl BacktestReportRepository {
+    /// Create a new repository with connection pool
+    pub fn new(pool: std::sync::Arc<diesel_async::pooled_connection::deadpool::Pool<diesel_async::AsyncPgConnection>>) -> Self {
+        Self { pool }
+    }
+
     /// Save a new report record to the database
-    pub async fn save_report(&self, report: NewBacktestReportRecord) -> Result<BacktestReportRecord, diesel::result::Error> {
-        // Implementation would use diesel to insert the record
-        todo!("Implement database save operation")
+    pub async fn save_report(&self, report: NewBacktestReportRecord) -> Result<(), diesel::result::Error> {
+        use databaseschema::schema::backtest_reports;
+        use diesel_async::RunQueryDsl;
+        
+        let mut conn = self.pool.get().await
+            .map_err(|e| diesel::result::Error::DatabaseError(
+                diesel::result::DatabaseErrorKind::UnableToSendCommand,
+                Box::new(e.to_string())
+            ))?;
+        
+        // Insert the record
+        diesel::insert_into(backtest_reports::table)
+            .values(&report)
+            .execute(&mut conn)
+            .await?;
+        
+        Ok(())
     }
     
     /// Find a report by report_id

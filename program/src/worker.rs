@@ -1,7 +1,7 @@
 //! Worker system for processing backtest jobs
 //! 
-//! Workers poll the job queue and execute backtests using the existing
-//! CLI logic, then store results back to Redis.
+//! Workers poll the job queue (PostgreSQL) and execute backtests using the existing
+//! CLI logic, then store results back to the database.
 
 use std::sync::Arc;
 use std::collections::HashMap;

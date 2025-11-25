@@ -2,6 +2,8 @@ pub mod cache;
 pub mod aggregation;
 pub mod query;
 
+#[cfg(feature = "postgres")]
+use anyhow::Result;
 use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -9,7 +11,6 @@ use std::sync::Arc;
 
 #[cfg(feature = "postgres")]
 use databaseschema::{
-    CustomAsyncPgConnectionManager,
     models::{
         historical_order::{HistoricalOrder, NewHistoricalOrder},
         historical_snapshot::{HistoricalSnapshot, NewHistoricalSnapshot},
@@ -20,12 +21,12 @@ use databaseschema::{
     },
 };
 #[cfg(feature = "postgres")]
-use deadpool::managed::Pool;
+use diesel_async::{AsyncPgConnection, pooled_connection::deadpool};
 
 /// Core data loader for market data processing
 pub struct DataLoader {
     #[cfg(feature = "postgres")]
-    pool: Arc<Pool<CustomAsyncPgConnectionManager>>,
+    pool: Arc<deadpool::Pool<AsyncPgConnection>>,
     cache: Arc<cache::DataCache>,
 }
 
@@ -54,9 +55,7 @@ impl DataLoader {
 /// Market data types supported by the loader
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MarketData {
-    #[cfg(feature = "postgres")]
     Order(HistoricalOrder),
-    #[cfg(feature = "postgres")]
     Snapshot(HistoricalSnapshot),
     Candle(Candle),
     Trade(TradeData),
@@ -120,7 +119,7 @@ pub struct MonteCarloParams {
 #[cfg(feature = "postgres")]
 impl DataLoader {
     /// Create a new DataLoader instance
-    pub fn new(pool: Arc<Pool<CustomAsyncPgConnectionManager>>) -> Self {
+    pub fn new(pool: Arc<deadpool::Pool<AsyncPgConnection>>) -> Self {
         Self {
             pool,
             cache: Arc::new(cache::DataCache::new()),
@@ -236,7 +235,7 @@ impl DataLoader {
                     low: candle.low_price,
                     close: candle.close_price,
                     volume: candle.volume,
-                    trade_count: candle.trade_count,
+                    trade_count: candle.trade_count as i64,
                 }).collect::<Vec<Candle>>()
             },
             5 => {
@@ -258,7 +257,7 @@ impl DataLoader {
                     low: candle.low_price,
                     close: candle.close_price,
                     volume: candle.volume,
-                    trade_count: candle.trade_count,
+                    trade_count: candle.trade_count as i64,
                 }).collect::<Vec<Candle>>()
             },
             15 => {
@@ -280,7 +279,7 @@ impl DataLoader {
                     low: candle.low_price,
                     close: candle.close_price,
                     volume: candle.volume,
-                    trade_count: candle.trade_count,
+                    trade_count: candle.trade_count as i64,
                 }).collect::<Vec<Candle>>()
             },
             60 => {
@@ -302,7 +301,7 @@ impl DataLoader {
                     low: candle.low_price,
                     close: candle.close_price,
                     volume: candle.volume,
-                    trade_count: candle.trade_count,
+                    trade_count: candle.trade_count as i64,
                 }).collect::<Vec<Candle>>()
             },
             1440 => { // 24 * 60 minutes = 1 day
@@ -324,7 +323,7 @@ impl DataLoader {
                     low: candle.low_price,
                     close: candle.close_price,
                     volume: candle.volume,
-                    trade_count: candle.trade_count,
+                    trade_count: candle.trade_count as i64,
                 }).collect::<Vec<Candle>>()
             },
             _ => {
@@ -350,11 +349,18 @@ impl DataLoader {
     }
 
     /// Load pre-computed candles from continuous aggregates (replaced by load_candles)
-    async fn load_precomputed_candles(&self, params: &QueryParams, interval_minutes: i32) -> Result<Vec<Candle>> {
+    async fn _load_precomputed_candles(&self, params: &QueryParams, interval_minutes: i32) -> Result<Vec<Candle>> {
         // This method is now replaced by the continuous aggregate approach in load_candles
         self.load_candles(params, interval_minutes).await
     }
 
+    /// Align timestamp to interval boundary
+    fn align_to_interval(timestamp: DateTime<Utc>, interval_minutes: i32) -> DateTime<Utc> {
+        let minutes = timestamp.timestamp() / 60;
+        let aligned_minutes = (minutes / interval_minutes as i64) * interval_minutes as i64;
+        DateTime::from_timestamp(aligned_minutes * 60, 0).unwrap_or(timestamp)
+    }
+    
     /// Generate OHLCV candles from trade data (fallback method)
     pub async fn generate_candles(&self, params: &QueryParams, interval_minutes: i32) -> Result<Vec<Candle>> {
         let trades = self.load_trade_data(params).await?;
@@ -367,7 +373,7 @@ impl DataLoader {
         let mut current_candle: Option<Candle> = None;
 
         for trade in trades {
-            let candle_start = align_to_interval(trade.timestamp, interval_minutes);
+            let candle_start = Self::align_to_interval(trade.timestamp, interval_minutes);
             
             match &mut current_candle {
                 Some(candle) if candle.timestamp == candle_start => {
@@ -506,7 +512,7 @@ impl DataLoader {
     async fn retry_database_operation<T, F, Fut>(&self, operation: F) -> Result<T>
     where
         F: Fn() -> Fut,
-        Fut: std::future::Future<Output = Result<T, diesel::result::Error>>,
+        Fut: std::future::Future<Output = std::result::Result<T, diesel::result::Error>>,
     {
         use tokio::time::{sleep, Duration};
         
@@ -520,7 +526,7 @@ impl DataLoader {
                 Err(e) => {
                     attempts += 1;
                     if attempts >= MAX_ATTEMPTS {
-                        return Err(anyhow::anyhow!("Database operation failed after {} attempts: {}", MAX_ATTEMPTS, e));
+                        return Err(anyhow::anyhow!("Database operation failed after {} attempts: {}", MAX_ATTEMPTS, e).into());
                     }
 
                     // Exponential backoff with jitter

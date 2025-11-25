@@ -8,6 +8,11 @@ pub mod cli_visualizer;
 pub mod demo;
 pub mod config;
 
+// Service modules
+pub mod job_queue;
+pub mod api;
+pub mod worker;
+
 // Re-export logging components for easy access
 pub use logging_facade::{
     BACKTEST_LOGGER, STRATEGY_LOGGER, PORTFOLIO_LOGGER, RISK_LOGGER,
