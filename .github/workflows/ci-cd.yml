@@ -1,31 +1,188 @@
-name: BacktestingEngine Build & Push
+name: BacktestingEngine CI/CD
 
 on:
   push:
     branches: [main]
-    paths:
-      - 'BacktestingEngine/**'
-      - '.github/workflows/build-push.yml'
   pull_request:
     branches: [main]
-    paths:
-      - 'BacktestingEngine/**'
   workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip tests'
+        type: boolean
+        default: false
 
+# Prevent concurrent deployments
+concurrency:
+  group: backtesting-engine-${{ github.ref }}
+  cancel-in-progress: false
+
+# Grant minimal required permissions
 permissions:
   contents: read
   packages: write
+  security-events: write  # For security scan results
 
 env:
+  # Core configuration
   IMAGE_NAME: ghcr.io/nwagbara-group-llc/backtesting-engine
+  
+  # Performance optimization
+  PARALLEL_JOBS: 3
   DOCKER_BUILDKIT: 1
+  BUILDX_NO_DEFAULT_ATTESTATIONS: 1
 
 jobs:
-  build-push:
-    name: Build & Push to GHCR
+  # ===== VALIDATION & TESTING =====
+  validate:
+    name: Validate & Test
     runs-on: [self-hosted, windows, x64]
+    timeout-minutes: 60
+    outputs:
+      tests-passed: ${{ steps.test-result.outputs.passed }}
+      skip-tests: ${{ steps.check-skip.outputs.skip }}
+    steps:
+      - name: Checkout BacktestingEngine
+        uses: actions/checkout@v4
+        with:
+          path: BacktestingEngine
+
+      - name: Checkout databaseschema
+        uses: actions/checkout@v4
+        with:
+          repository: Nwagbara-Group-LLC/databaseschema
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          path: databaseschema
+
+      - name: Checkout LoggingEngine
+        uses: actions/checkout@v4
+        with:
+          repository: Nwagbara-Group-LLC/LoggingEngine
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          path: LoggingEngine
+
+      - name: Verify Rust
+        shell: powershell
+        run: |
+          Write-Host "Checking Rust installation..."
+          rustc --version
+          cargo --version
+
+      - name: Check for Skip Tests Flag
+        id: check-skip
+        shell: powershell
+        run: |
+          $commitMsg = git log -1 --pretty=%B
+          if ($commitMsg -match '\[skip-tests\]') {
+            Write-Host "⏭️  [skip-tests] flag detected in commit message - skipping tests"
+            echo "skip=true" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "Running full validation with tests"
+            echo "skip=false" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Cache Cargo Registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache Target Directory
+        uses: actions/cache@v4
+        with:
+          path: BacktestingEngine/target
+          key: ${{ runner.os }}-target-backtesting-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-target-backtesting-
+
+      - name: Fast Check (Syntax & Type Check)
+        shell: powershell
+        run: |
+          Write-Host "Running fast cargo check (no codegen)..."
+          cd BacktestingEngine
+          cargo check --workspace --jobs 10
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "❌ Cargo check failed - syntax or type errors detected"
+            exit 1
+          }
+          Write-Host "✅ Fast check passed!"
+
+      - name: Build Workspace
+        shell: powershell
+        run: |
+          Write-Host "Building BacktestingEngine workspace with parallel compilation..."
+          cd BacktestingEngine
+          cargo build --workspace --jobs 10
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "❌ Build failed!"
+            exit 1
+          }
+          Write-Host "✅ Build passed!"
+
+      - name: Run Tests
+        if: steps.check-skip.outputs.skip != 'true'
+        id: test-result
+        shell: powershell
+        run: |
+          Write-Host "Running tests with parallel execution..."
+          cd BacktestingEngine
+          cargo test --workspace --jobs 10
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "✅ Tests passed!"
+            echo "passed=true" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "❌ Tests failed!"
+            echo "passed=false" >> $env:GITHUB_OUTPUT
+            exit 1
+          }
+
+      - name: Skip Tests
+        if: steps.check-skip.outputs.skip == 'true'
+        id: skip-test-result
+        shell: powershell
+        run: |
+          Write-Host "⏭️  Tests skipped due to [skip-tests] flag"
+          echo "passed=true" >> $env:GITHUB_OUTPUT
+
+      - name: Security Audit Dependencies
+        shell: powershell
+        continue-on-error: true
+        run: |
+          Write-Host "Auditing Rust dependencies for vulnerabilities..."
+          cd BacktestingEngine
+          
+          # Install cargo-audit if not present
+          if (-not (cargo install --list | Select-String "cargo-audit")) {
+            Write-Host "Installing cargo-audit..."
+            cargo install cargo-audit
+          }
+          
+          # Run audit - informational only, don't fail build
+          cargo audit
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host ""
+            Write-Host "⚠️  WARNING: Security advisories detected in dependencies"
+            Write-Host "Review the audit output above and update dependencies when new versions are available"
+            Write-Host ""
+          } else {
+            Write-Host "✓ No known vulnerabilities detected"
+          }
+
+  # ===== BUILD & PUSH =====
+  build:
+    name: Build & Push
+    runs-on: [self-hosted, windows, x64]
+    needs: validate
+    if: needs.validate.outputs.tests-passed == 'true' || github.event.inputs.skip_tests == 'true'
     timeout-minutes: 45
-    
+    outputs:
+      image-exists: ${{ steps.image-check.outputs.exists }}
     steps:
       - name: Checkout BacktestingEngine
         uses: actions/checkout@v4

@@ -723,7 +723,8 @@ impl PostgresQueue {
                     count_query = count_query.filter(backtest_jobs::created_at.le(end_dt.with_timezone(&chrono::Utc)));
                 }
             }
-            let total = count_query.count().get_result::<i64>(&mut conn)? as usize;
+            let total: i64 = count_query.count().get_result(&mut conn)?;
+            let total = total as usize;
             
             // Build data query with same filters
             let mut data_query = backtest_jobs::table.into_boxed();
@@ -824,6 +825,20 @@ mod tests {
             commission_rate: 0.001,
             start_date: None,
             end_date: None,
+            optimization_method: "manual".to_string(),
+            population_size: 50,
+            generations: 20,
+            window_ms: 5000,
+            min_quote_lifetime_ms: 100,
+            fee_rate: 0.001,
+            latency_buffer: 10,
+            volatility_cap: 0.05,
+            time_horizon_minutes: 60,
+            market_depth_k: 1.5,
+            volatility_adjustment_factor: 0.5,
+            inventory_penalty_factor: 0.3,
+            trend_sensitivity: 0.2,
+            flow_sensitivity: -0.1,
         };
         
         let job_id = queue.submit_job(params).await.unwrap();
