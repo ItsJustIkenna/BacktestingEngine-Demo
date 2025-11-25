@@ -72,6 +72,7 @@ jobs:
         id: check-skip
         shell: powershell
         run: |
+          cd BacktestingEngine
           $commitMsg = git log -1 --pretty=%B
           if ($commitMsg -match '\[skip-tests\]') {
             Write-Host "⏭️  [skip-tests] flag detected in commit message - skipping tests"
