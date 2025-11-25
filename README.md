@@ -66,22 +66,20 @@ The BacktestingEngine is a sophisticated, production-ready backtesting framework
 
 ```bash
 # Development cluster
-helm upgrade --install backtesting-engine ./k8s/backtesting-engine-helm \
-  -f ./k8s/backtesting-engine-helm/values-dev.yaml \
+helm upgrade --install backtesting-engine ./deployment/k8s/backtesting-engine-helm \
+  -f ./deployment/k8s/backtesting-engine-helm/values-dev.yaml \
   --namespace backtesting-dev --create-namespace
 
 # Staging
-helm upgrade --install backtesting-engine ./k8s/backtesting-engine-helm \
-  -f ./k8s/backtesting-engine-helm/values-staging.yaml \
+helm upgrade --install backtesting-engine ./deployment/k8s/backtesting-engine-helm \
+  -f ./deployment/k8s/backtesting-engine-helm/values-staging.yaml \
   --namespace backtesting-staging --create-namespace
 
 # Production
-helm upgrade --install backtesting-engine ./k8s/backtesting-engine-helm \
-  -f ./k8s/backtesting-engine-helm/values-prod.yaml \
+helm upgrade --install backtesting-engine ./deployment/k8s/backtesting-engine-helm \
+  -f ./deployment/k8s/backtesting-engine-helm/values-prod.yaml \
   --namespace backtesting-prod --create-namespace
 ```
-
-📖 **See [DEPLOYMENT.md](DEPLOYMENT.md) for complete deployment guide**
 
 ### For Local Development
 
@@ -89,8 +87,8 @@ helm upgrade --install backtesting-engine ./k8s/backtesting-engine-helm \
 
 ```bash
 # Install with local dev values
-helm install backtesting-engine ./k8s/backtesting-engine-helm \
-  -f ./k8s/backtesting-engine-helm/values-dev-local.yaml \
+helm install backtesting-engine ./deployment/k8s/backtesting-engine-helm \
+  -f ./deployment/k8s/backtesting-engine-helm/values-dev-local.yaml \
   --namespace backtesting-dev --create-namespace
 
 # Access UI
@@ -209,11 +207,10 @@ BacktestingEngine/
 │       ├── worker.rs      # Worker pool management
 │       └── main.rs        # CLI + server orchestration
 │
-└── ☁️ DEPLOYMENT
-    ├── k8s/               # Kubernetes Helm charts
-    ├── gui/               # React UI components
-    ├── Dockerfile         # Multi-stage build
-    └── docker-compose.yml
+└── ☁️ DEPLOYMENT & DOCS
+    ├── deployment/        # Kubernetes Helm charts, Dockerfile
+    ├── docs/              # Examples, Postman collection, guides
+    └── gui/               # React UI components
 ```
 
 ### Service Architecture
@@ -592,7 +589,7 @@ export ELASTIC_CLOUD_USERNAME="elastic"
 export ELASTIC_CLOUD_PASSWORD="your-password"
 
 # Deploy with Helm
-helm upgrade --install backtesting-engine ./k8s/backtesting-engine-helm \
+helm upgrade --install backtesting-engine ./deployment/k8s/backtesting-engine-helm \
   --namespace backtesting-engine \
   --create-namespace \
   --set nodeSelector."kubernetes\.io/hostname"="self-hosted-runner" \
@@ -607,6 +604,45 @@ helm upgrade --install backtesting-engine ./k8s/backtesting-engine-helm \
   --set autoscaling.enabled=true \
   --set autoscaling.minReplicas=2 \
   --set autoscaling.maxReplicas=10
+```
+
+**Architecture:**
+- Runs on same node as DataEngine using `nodeSelector`
+- Shares PostgreSQL database via same `DATABASE_URL` secret
+- Uses same Elasticsearch logging with shared Azure credentials
+- Optional Redis for job queue (can use PostgreSQL-only mode)
+
+**Resource Allocation:**
+```yaml
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+```
+
+**Configuration Options:**
+
+```bash
+# PostgreSQL-only mode (default)
+--set redis.enabled=false
+
+# Enable Redis job queue
+--set redis.enabled=true \
+--set redis.auth.password="your-redis-password"
+
+# Enable persistent storage
+--set persistence.enabled=true \
+--set persistence.size=20Gi \
+--set persistence.storageClass="local-path"
+
+# Production deployment with ingress
+--set ingress.enabled=true \
+--set ingress.className=nginx \
+--set ingress.hosts[0].host=backtesting.yourdomain.com \
+--set ingress.tls[0].secretName=backtesting-tls
 ```
 
 ### Verify Deployment
@@ -795,6 +831,77 @@ kubectl exec deployment/backtesting-engine -- \
 # Navigate to Discover → Index: backtestingengine-logs*
 # Query: component:"BacktestingEngine-*"
 ```
+
+---
+
+## 📊 Testing
+
+### Test Coverage
+
+**API Tests (46 tests):**
+- ✅ 23 integration tests for REST endpoints
+- ✅ 23 edge case tests (validation, security, concurrency)
+
+**UI Tests (49 tests):**
+- ✅ 23 component tests (BacktestForm, JobList)
+- ✅ 26 edge case tests (error handling, UX, data handling)
+
+**Core Logic:**
+- ✅ 100+ unit and integration tests across all modules
+
+### Running Tests
+
+```bash
+# Rust tests
+cargo test --workspace
+
+# UI tests
+cd gui && npm test
+
+# With coverage
+cd gui && npm run test:coverage
+```
+
+### API Test Categories
+
+#### Health & Metadata
+- Health check endpoint
+- Get symbols endpoint
+- Get exchanges endpoint
+
+#### Backtest Submission
+- Valid/invalid data validation
+- Strategy submission (arbitrage, momentum, mean_reversion)
+- Grid search optimization
+- JSON/content-type validation
+
+#### Job Management
+- Job status, details, results
+- Delete backtest
+- Queue statistics
+
+#### Edge Cases Covered
+- **Input Validation**: Zero/negative/extreme capital, invalid dates, SQL injection
+- **String Validation**: Empty symbols, XSS attempts, path traversal
+- **Numeric Validation**: Negative commission, extreme values
+- **HTTP Protocol**: Invalid JSON, missing headers, unsupported methods
+- **Concurrency**: 10 simultaneous requests
+
+### UI Test Categories
+
+#### BacktestForm Component
+- Form rendering and field updates
+- Submission with valid/invalid data
+- Error handling (server errors, network timeouts)
+- Loading states and double submission prevention
+- Optimization mode toggle (genetic/manual)
+
+#### JobList Component
+- Job list rendering with pagination
+- Status and symbol filtering
+- Job deletion with confirmation
+- Auto-refresh for running jobs
+- Error states and empty list handling
 
 ---
 

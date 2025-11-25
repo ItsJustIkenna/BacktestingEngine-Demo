@@ -91,3 +91,14 @@ Dockerfile.bak
 # Kubernetes
 *.yaml.bak
 *.yml.bak
+temp-secret.yaml
+current-values.yaml
+**/temp-*.yaml
+**/current-*.yaml
+
+# Docker compose (removed - use Helm)
+docker-compose*.yml
+docker-compose*.yaml
+supervisord.conf
+docker-entrypoint.sh
+nginx.conf

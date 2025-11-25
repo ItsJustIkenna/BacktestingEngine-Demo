@@ -295,7 +295,7 @@ jobs:
             --platform linux/amd64 `
             --tag ${{ env.IMAGE_NAME }}:latest `
             --tag ${{ env.IMAGE_NAME }}:${{ github.sha }} `
-            --file BacktestingEngine/Dockerfile `
+            --file BacktestingEngine/deployment/Dockerfile `
             --build-arg BUILDKIT_INLINE_CACHE=1 `
             --progress=plain `
             .

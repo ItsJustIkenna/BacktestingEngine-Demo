@@ -565,7 +565,7 @@ impl Default for DatabaseConfig {
 impl Default for TradingConfig {
     fn default() -> Self {
         Self {
-            commission_rate: 0.0002,    // 0.02% (fallback, use exchange_fees instead)
+            commission_rate: 0.001,     // 0.1% (fallback, use exchange_fees instead)
             slippage_bps: 2.0,          // 2 basis points for co-located
             initial_capital: 100000.0,  // $100,000
             max_position_size: Some(0.1), // 10%
