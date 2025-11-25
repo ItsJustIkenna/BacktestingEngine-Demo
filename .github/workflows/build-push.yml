@@ -1,0 +1,200 @@
+name: BacktestingEngine Build & Push
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'BacktestingEngine/**'
+      - '.github/workflows/build-push.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'BacktestingEngine/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/nwagbara-group-llc/backtesting-engine
+  DOCKER_BUILDKIT: 1
+
+jobs:
+  build-push:
+    name: Build & Push to GHCR
+    runs-on: [self-hosted, windows, x64]
+    timeout-minutes: 45
+    
+    steps:
+      - name: Checkout BacktestingEngine
+        uses: actions/checkout@v4
+        with:
+          path: BacktestingEngine
+          fetch-depth: 0
+
+      - name: Checkout databaseschema
+        uses: actions/checkout@v4
+        with:
+          repository: Nwagbara-Group-LLC/databaseschema
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          path: databaseschema
+          fetch-depth: 0
+
+      - name: Checkout LoggingEngine
+        uses: actions/checkout@v4
+        with:
+          repository: Nwagbara-Group-LLC/LoggingEngine
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          path: LoggingEngine
+          fetch-depth: 0
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Check Image Cache
+        id: image-check
+        shell: powershell
+        run: |
+          Write-Host "Checking if image exists for commit SHA..."
+          
+          $imageTag = "${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          
+          $ErrorActionPreference = 'SilentlyContinue'
+          docker pull $imageTag 2>&1 | Out-Null
+          $pullResult = $LASTEXITCODE
+          
+          if ($pullResult -eq 0) {
+            echo "exists=true" >> $env:GITHUB_OUTPUT
+            Write-Host "[OK] Image cache hit: $imageTag"
+          } else {
+            echo "exists=false" >> $env:GITHUB_OUTPUT
+            Write-Host "[INFO] Image cache miss, will build: $imageTag"
+          }
+          
+          exit 0
+
+      - name: Build & Push Image
+        if: steps.image-check.outputs.exists != 'true'
+        shell: powershell
+        run: |
+          Write-Host "Building BacktestingEngine Docker image..."
+          $startTime = Get-Date
+          
+          # Verify dependencies
+          $requiredDeps = @("databaseschema", "LoggingEngine")
+          foreach ($dep in $requiredDeps) {
+            if (Test-Path $dep) {
+              Write-Host "[OK] Dependency found: $dep"
+            } else {
+              Write-Host "[ERROR] Missing dependency: $dep"
+              exit 1
+            }
+          }
+          
+          # Create .dockerignore
+          Write-Host "[SETUP] Creating .dockerignore..."
+          $dockerignoreContent = @"
+          **/.git/
+          **/.gitignore
+          **/.github/
+          **/target/
+          **/.vscode/
+          **/.idea/
+          **/*.swp
+          **/.DS_Store
+          **/.env
+          **/.env.*
+          **/*.md
+          **/LICENSE
+          **/Dockerfile
+          **/.dockerignore
+          **/docker-compose.yml
+          **/compose.yaml
+          BacktestingEngine/k8s/
+          **/.cargo/
+          **/Makefile
+          "@
+          
+          Set-Content -Path ".dockerignore" -Value $dockerignoreContent
+          Write-Host "[OK] .dockerignore created"
+          
+          # Build image
+          Write-Host "[BUILD] Starting Docker build..."
+          $buildStartTime = Get-Date
+          
+          try {
+            docker build `
+              --platform linux/amd64 `
+              --tag ${{ env.IMAGE_NAME }}:latest `
+              --tag ${{ env.IMAGE_NAME }}:${{ github.sha }} `
+              --file BacktestingEngine/Dockerfile `
+              --build-arg BUILDKIT_INLINE_CACHE=1 `
+              --progress=plain `
+              .
+              
+            if ($LASTEXITCODE -ne 0) {
+              throw "Docker build failed with exit code $LASTEXITCODE"
+            }
+            
+            $buildDuration = (Get-Date) - $buildStartTime
+            $durationMinutes = [math]::Round($buildDuration.TotalMinutes, 1)
+            Write-Host "[OK] Docker build completed in $durationMinutes minutes"
+            
+          } catch {
+            Write-Host "[FAIL] Docker build failed!"
+            throw $_
+          }
+          
+          # Push images
+          Write-Host "[PUSH] Pushing images to GHCR..."
+          docker push ${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          
+          $duration = (Get-Date) - $startTime
+          $durationMinutes = [math]::Round($duration.TotalMinutes, 1)
+          Write-Host "[OK] Build & push completed in $durationMinutes minutes"
+
+      - name: Tag Existing Image
+        if: steps.image-check.outputs.exists == 'true'
+        shell: powershell
+        run: |
+          docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.IMAGE_NAME }}:latest
+          Write-Host "[OK] Tagged existing image as latest"
+
+      - name: Validate Image
+        shell: powershell
+        run: |
+          Write-Host "Validating pushed image..."
+          
+          # Pull and inspect
+          docker pull ${{ env.IMAGE_NAME }}:latest
+          
+          $imageSize = docker inspect ${{ env.IMAGE_NAME }}:latest --format='{{.Size}}' | ForEach-Object { [math]::Round($_ / 1MB, 1) }
+          Write-Host "[INFO] Image size: $imageSize MB"
+          
+          # Verify critical files exist in image
+          Write-Host "[CHECK] Verifying image contents..."
+          docker run --rm ${{ env.IMAGE_NAME }}:latest ls -la /app/program
+          
+          Write-Host "[OK] Image validation complete"
+
+      - name: Output Summary
+        shell: powershell
+        run: |
+          Write-Host "`n=========================================="
+          Write-Host "Build Summary"
+          Write-Host "=========================================="
+          Write-Host "Image: ${{ env.IMAGE_NAME }}"
+          Write-Host "Tags:"
+          Write-Host "  - latest"
+          Write-Host "  - ${{ github.sha }}"
+          Write-Host "`nPull commands:"
+          Write-Host "  docker pull ${{ env.IMAGE_NAME }}:latest"
+          Write-Host "  docker pull ${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          Write-Host "=========================================="
