@@ -59,17 +59,22 @@ RUN cp /app/BacktestingEngine/nginx.conf /tmp/nginx.conf && \
 
 ################################################################################
 # Stage 3: Create final runtime image with UI and backend
-FROM nginx:1.27.3 AS runtime
+# Using Chainguard's nginx image - minimal attack surface, continuously patched
+FROM cgr.dev/chainguard/nginx:latest AS runtime
 ARG APP_NAME=program
 
+# Switch to root to install additional packages
+USER root
+
 # Install runtime dependencies including supervisord for multi-process
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+RUN apk update && apk upgrade --no-cache && apk add --no-cache \
     supervisor \
     ca-certificates \
     postgresql-client \
     redis \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    bash && \
+    rm -rf /var/cache/apk/*
 
 # Copy React UI build
 COPY --from=ui-build /app/gui/build /usr/share/nginx/html
@@ -80,7 +85,7 @@ COPY --from=backend-build /bin/server /bin/server
 # Copy nginx configuration
 COPY --from=backend-build /tmp/nginx.conf /etc/nginx/conf.d/default.conf
 
-# Copy supervisord configuration  
+# Copy supervisord configuration
 COPY --from=backend-build /tmp/supervisord.conf /etc/supervisord.conf
 
 # Fix nginx PID path for non-root execution

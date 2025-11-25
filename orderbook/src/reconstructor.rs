@@ -4,7 +4,7 @@
 //! converting raw order and snapshot data into live order book events.
 
 use crate::order_book::OrderBook;
-use crate::types::{OrderBookEvent, BookSide};
+use crate::types::OrderBookEvent;
 use crate::OrderBookConfig;
 use anyhow::Result;
 use chrono::{DateTime, Utc};

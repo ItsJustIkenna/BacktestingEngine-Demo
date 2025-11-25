@@ -12,28 +12,22 @@ on:
         type: boolean
         default: false
 
-# Prevent concurrent deployments
 concurrency:
   group: backtesting-engine-${{ github.ref }}
   cancel-in-progress: false
 
-# Grant minimal required permissions
 permissions:
   contents: read
   packages: write
-  security-events: write  # For security scan results
+  security-events: write
 
 env:
-  # Core configuration
   IMAGE_NAME: ghcr.io/nwagbara-group-llc/backtesting-engine
-  
-  # Performance optimization
   PARALLEL_JOBS: 3
   DOCKER_BUILDKIT: 1
   BUILDX_NO_DEFAULT_ATTESTATIONS: 1
 
 jobs:
-  # ===== VALIDATION & TESTING =====
   validate:
     name: Validate & Test
     runs-on: [self-hosted, windows, x64]
@@ -102,14 +96,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-target-backtesting-
 
-      - name: Fast Check (Syntax & Type Check)
+      - name: Fast Check
         shell: powershell
         run: |
-          Write-Host "Running fast cargo check (no codegen)..."
+          Write-Host "Running fast cargo check..."
           cd BacktestingEngine
           cargo check --workspace --jobs 10
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "❌ Cargo check failed - syntax or type errors detected"
+            Write-Host "❌ Cargo check failed"
             exit 1
           }
           Write-Host "✅ Fast check passed!"
@@ -117,7 +111,7 @@ jobs:
       - name: Build Workspace
         shell: powershell
         run: |
-          Write-Host "Building BacktestingEngine workspace with parallel compilation..."
+          Write-Host "Building BacktestingEngine workspace..."
           cd BacktestingEngine
           cargo build --workspace --jobs 10
           if ($LASTEXITCODE -ne 0) {
@@ -131,7 +125,7 @@ jobs:
         id: test-result
         shell: powershell
         run: |
-          Write-Host "Running tests with parallel execution..."
+          Write-Host "Running tests..."
           cd BacktestingEngine
           cargo test --workspace --jobs 10
           if ($LASTEXITCODE -eq 0) {
@@ -148,34 +142,21 @@ jobs:
         id: skip-test-result
         shell: powershell
         run: |
-          Write-Host "⏭️  Tests skipped due to [skip-tests] flag"
+          Write-Host "⏭️  Tests skipped"
           echo "passed=true" >> $env:GITHUB_OUTPUT
 
-      - name: Security Audit Dependencies
+      - name: Security Audit
         shell: powershell
         continue-on-error: true
         run: |
-          Write-Host "Auditing Rust dependencies for vulnerabilities..."
+          Write-Host "Auditing dependencies..."
           cd BacktestingEngine
-          
-          # Install cargo-audit if not present
           if (-not (cargo install --list | Select-String "cargo-audit")) {
-            Write-Host "Installing cargo-audit..."
             cargo install cargo-audit
           }
-          
-          # Run audit - informational only, don't fail build
           cargo audit
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host ""
-            Write-Host "⚠️  WARNING: Security advisories detected in dependencies"
-            Write-Host "Review the audit output above and update dependencies when new versions are available"
-            Write-Host ""
-          } else {
-            Write-Host "✓ No known vulnerabilities detected"
-          }
 
-      - name: Install Node.js for UI Tests
+      - name: Install Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
@@ -185,7 +166,6 @@ jobs:
       - name: Install UI Dependencies
         shell: powershell
         run: |
-          Write-Host "Installing UI dependencies..."
           cd BacktestingEngine/gui
           npm ci
           Write-Host "✅ UI dependencies installed!"
@@ -193,7 +173,6 @@ jobs:
       - name: Run UI Tests
         shell: powershell
         run: |
-          Write-Host "Running UI tests..."
           cd BacktestingEngine/gui
           npm test
           if ($LASTEXITCODE -eq 0) {
@@ -206,7 +185,6 @@ jobs:
       - name: Build UI
         shell: powershell
         run: |
-          Write-Host "Building UI..."
           cd BacktestingEngine/gui
           npm run build
           if ($LASTEXITCODE -eq 0) {
@@ -216,7 +194,6 @@ jobs:
             exit 1
           }
 
-  # ===== BUILD & PUSH =====
   build:
     name: Build & Push
     runs-on: [self-hosted, windows, x64]
@@ -253,49 +230,42 @@ jobs:
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
-          password: ${{ secrets.GHCR_TOKEN }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check Image Cache
         id: image-check
         shell: powershell
         run: |
-          Write-Host "Checking if image exists for commit SHA..."
-          
+          Write-Host "Checking if image exists..."
           $imageTag = "${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          
           $ErrorActionPreference = 'SilentlyContinue'
           docker pull $imageTag 2>&1 | Out-Null
-          $pullResult = $LASTEXITCODE
-          
-          if ($pullResult -eq 0) {
+          if ($LASTEXITCODE -eq 0) {
             echo "exists=true" >> $env:GITHUB_OUTPUT
-            Write-Host "[OK] Image cache hit: $imageTag"
+            Write-Host "[OK] Image cache hit"
           } else {
             echo "exists=false" >> $env:GITHUB_OUTPUT
-            Write-Host "[INFO] Image cache miss, will build: $imageTag"
+            Write-Host "[INFO] Will build image"
           }
-          
           exit 0
 
       - name: Build & Push Image
         if: steps.image-check.outputs.exists != 'true'
         shell: powershell
         run: |
-          Write-Host "Building BacktestingEngine Docker image..."
+          Write-Host "Building Docker image..."
           $startTime = Get-Date
           
-          # Verify dependencies
           $requiredDeps = @("databaseschema", "LoggingEngine")
           foreach ($dep in $requiredDeps) {
             if (Test-Path $dep) {
               Write-Host "[OK] Dependency found: $dep"
             } else {
-              Write-Host "[ERROR] Missing dependency: $dep"
+              Write-Host "[ERROR] Missing: $dep"
               exit 1
             }
           }
           
-          # Create .dockerignore
           Write-Host "[SETUP] Creating .dockerignore..."
           $dockerignoreContent = @"
           **/.git/
@@ -318,45 +288,31 @@ jobs:
           **/.cargo/
           **/Makefile
           "@
-          
           Set-Content -Path ".dockerignore" -Value $dockerignoreContent
-          Write-Host "[OK] .dockerignore created"
           
-          # Build image
-          Write-Host "[BUILD] Starting Docker build..."
-          $buildStartTime = Get-Date
-          
-          try {
-            docker build `
-              --platform linux/amd64 `
-              --tag ${{ env.IMAGE_NAME }}:latest `
-              --tag ${{ env.IMAGE_NAME }}:${{ github.sha }} `
-              --file BacktestingEngine/Dockerfile `
-              --build-arg BUILDKIT_INLINE_CACHE=1 `
-              --progress=plain `
-              .
-              
-            if ($LASTEXITCODE -ne 0) {
-              throw "Docker build failed with exit code $LASTEXITCODE"
-            }
+          Write-Host "[BUILD] Starting build..."
+          docker build `
+            --platform linux/amd64 `
+            --tag ${{ env.IMAGE_NAME }}:latest `
+            --tag ${{ env.IMAGE_NAME }}:${{ github.sha }} `
+            --file BacktestingEngine/Dockerfile `
+            --build-arg BUILDKIT_INLINE_CACHE=1 `
+            --progress=plain `
+            .
             
-            $buildDuration = (Get-Date) - $buildStartTime
-            $durationMinutes = [math]::Round($buildDuration.TotalMinutes, 1)
-            Write-Host "[OK] Docker build completed in $durationMinutes minutes"
-            
-          } catch {
-            Write-Host "[FAIL] Docker build failed!"
-            throw $_
+          if ($LASTEXITCODE -ne 0) {
+            throw "Docker build failed"
           }
           
-          # Push images
-          Write-Host "[PUSH] Pushing images to GHCR..."
+          $buildDuration = (Get-Date) - $startTime
+          Write-Host "[OK] Build completed in $([math]::Round($buildDuration.TotalMinutes, 1)) minutes"
+          
+          Write-Host "[PUSH] Pushing images..."
           docker push ${{ env.IMAGE_NAME }}:latest
           docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
           
           $duration = (Get-Date) - $startTime
-          $durationMinutes = [math]::Round($duration.TotalMinutes, 1)
-          Write-Host "[OK] Build & push completed in $durationMinutes minutes"
+          Write-Host "[OK] Total time: $([math]::Round($duration.TotalMinutes, 1)) minutes"
 
       - name: Tag Existing Image
         if: steps.image-check.outputs.exists == 'true'
@@ -364,24 +320,17 @@ jobs:
         run: |
           docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.IMAGE_NAME }}:latest
           docker push ${{ env.IMAGE_NAME }}:latest
-          Write-Host "[OK] Tagged existing image as latest"
+          Write-Host "[OK] Tagged existing image"
 
       - name: Validate Image
         shell: powershell
         run: |
-          Write-Host "Validating pushed image..."
-          
-          # Pull and inspect
+          Write-Host "Validating image..."
           docker pull ${{ env.IMAGE_NAME }}:latest
-          
           $imageSize = docker inspect ${{ env.IMAGE_NAME }}:latest --format='{{.Size}}' | ForEach-Object { [math]::Round($_ / 1MB, 1) }
           Write-Host "[INFO] Image size: $imageSize MB"
-          
-          # Verify critical files exist in image
-          Write-Host "[CHECK] Verifying image contents..."
-          docker run --rm ${{ env.IMAGE_NAME }}:latest ls -la /app/program
-          
-          Write-Host "[OK] Image validation complete"
+          docker run --rm ${{ env.IMAGE_NAME }}:latest ls -la /bin/server
+          Write-Host "[OK] Validation complete"
 
       - name: Output Summary
         shell: powershell
@@ -390,10 +339,6 @@ jobs:
           Write-Host "Build Summary"
           Write-Host "=========================================="
           Write-Host "Image: ${{ env.IMAGE_NAME }}"
-          Write-Host "Tags:"
-          Write-Host "  - latest"
-          Write-Host "  - ${{ github.sha }}"
-          Write-Host "`nPull commands:"
-          Write-Host "  docker pull ${{ env.IMAGE_NAME }}:latest"
-          Write-Host "  docker pull ${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          Write-Host "Tags: latest, ${{ github.sha }}"
+          Write-Host "`nPull: docker pull ${{ env.IMAGE_NAME }}:latest"
           Write-Host "=========================================="
