@@ -403,8 +403,10 @@ fn get_exchange_commission_rate(exchange: &str) -> f64 {
 /// Get date range for a symbol/exchange pair from the database
 async fn get_date_range_for_symbol(
     _job_queue: &Arc<dyn JobQueue>,
-    _symbol: &str,
-    _exchange: &str,
+    #[cfg_attr(not(feature = "postgres"), allow(unused_variables))]
+    symbol: &str,
+    #[cfg_attr(not(feature = "postgres"), allow(unused_variables))]
+    exchange: &str,
 ) -> Result<(String, String), String> {
     #[cfg(feature = "postgres")]
     {
