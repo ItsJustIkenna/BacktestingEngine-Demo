@@ -180,18 +180,23 @@ mod tests {
     #[tokio::test]
     async fn test_async_fitness_evaluation() {
         let config = GeneticConfig {
-            population_size: 5,
-            generations: 3,
+            population_size: 10,
+            generations: 5,
             crossover_rate: 0.5,
             mutation_rate: 0.1,
         };
 
-        // Async fitness function that simulates delay
-        let slow_fitness_fn: AsyncFitnessFn<TestChromosome> = Arc::new(|chromo| {
+        // Counter to track how many fitness evaluations occurred
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let eval_count = Arc::new(AtomicUsize::new(0));
+
+        // Async fitness function that counts evaluations
+        let eval_count_clone = Arc::clone(&eval_count);
+        let slow_fitness_fn: AsyncFitnessFn<TestChromosome> = Arc::new(move |chromo| {
             let values = chromo.values.clone();
+            let counter = Arc::clone(&eval_count_clone);
             Box::pin(async move {
-                // Simulate some async work
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                counter.fetch_add(1, Ordering::SeqCst);
                 // Return fitness based on first value
                 values.get(0).copied().unwrap_or(0.0)
             })
@@ -202,12 +207,12 @@ mod tests {
             fitness_fn: slow_fitness_fn,
         };
 
-        let start_time = std::time::Instant::now();
         let (_best, _fitness) = optimizer.run().await;
-        let elapsed = start_time.elapsed();
 
-        // Should have taken some time due to async delays
-        assert!(elapsed.as_millis() > 50); // At least 50ms for async work
+        // Should have evaluated the fitness function multiple times
+        // (population_size * generations) evaluations minimum
+        let total_evals = eval_count.load(Ordering::SeqCst);
+        assert!(total_evals >= 50); // At least 10 * 5 evaluations
     }
 
     #[tokio::test]
