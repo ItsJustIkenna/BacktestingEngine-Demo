@@ -126,6 +126,10 @@ postgresql:
 service:
   enabled: true
   type: ClusterIP
+  port: 8080
+  targetPort: 8080
+  uiPort: 80
+  metricsPort: 9090
   ports:
     - name: ui
       port: 80
@@ -171,6 +175,7 @@ config:
     host: "host.docker.internal"  # Override at deployment
     port: 5432
     database: "backtesting"
+    username: "postgres"  # Override at deployment
     max_connections: 10
     connection_timeout: 30
   trading:
@@ -189,7 +194,10 @@ config:
   output:
     results_dir: "/tmp/backtest_results"
     reports_dir: "/tmp/backtest_reports"
-    export_format: "json"
+    charts_enabled: true
+    export_formats:
+      - "json"
+      - "csv"
   genetic:
     population_size: 100
     generations: 50
@@ -206,6 +214,9 @@ config:
     max_position_size: 0.25
     stop_loss: 0.05
     var_confidence: 0.95
+  secrets:
+    jwt_secret: ""
+    encryption_key: ""
 
 # Environment variables
 env: []
