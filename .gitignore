@@ -72,7 +72,6 @@ temp/
 
 # Lock files
 *.lock
-package-lock.json
 yarn.lock
 
 # Test artifacts
