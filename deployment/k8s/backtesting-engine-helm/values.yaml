@@ -169,6 +169,24 @@ config:
     host: "host.docker.internal"  # Override at deployment
     port: 5432
     database: "backtesting"
+    max_connections: 10
+    connection_timeout: 30
+  trading:
+    commission_rate: 0.001
+    slippage_bps: 5
+    initial_capital: 100000
+    max_position_size: 0.25
+    risk_free_rate: 0.04
+  data:
+    default_timeframe: "1h"
+    data_sources:
+      - "binance"
+      - "coinbase"
+    cache_enabled: true
+    cache_duration_hours: 24
+  output:
+    results_dir: "/tmp/backtest_results"
+    export_format: "json"
 
 # Environment variables
 env: []
