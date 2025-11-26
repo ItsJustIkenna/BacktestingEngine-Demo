@@ -243,6 +243,14 @@ persistence:
   storageClass: ""
   accessMode: ReadWriteOnce
   size: 10Gi
+  logs:
+    enabled: false
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 5Gi
+    annotations: {}
+    volumeMode: "Filesystem"
 
 # =============================================================================
 # Monitoring Configuration
