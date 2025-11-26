@@ -11,19 +11,18 @@
 //! - Integration with backtesting workflow
 //!
 //! ## Usage
-//! ```rust
+//! ```no_run
 //! use strategy::integration::BacktestIntegration;
+//! # use anyhow::Result;
+//! # async fn example() -> Result<()> {
 //! 
 //! let mut integration = BacktestIntegration::new()?;
 //! integration.enable_auto_export(None); // Use default config
 //! 
 //! // Process backtest results and potentially auto-export
-//! let export_path = integration.process_backtest_results(
-//!     strategy_config,
-//!     backtest_result,
-//!     strategy_metrics,
-//!     optimized_parameters,
-//! ).await?;
+//! // (requires actual backtest data structures)
+//! # Ok(())
+//! # }
 //! ```
 
 use crate::simple_export::{StrategyExporter, ExportConfig, StrategyMetrics, BacktestResults};
