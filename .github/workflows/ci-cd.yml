@@ -471,6 +471,15 @@ jobs:
           
           cd BacktestingEngine
           
+          # Create image pull secret for GHCR
+          Write-Host "[INFO] Creating image pull secret..."
+          kubectl create secret docker-registry ghcr-secret `
+            --docker-server=ghcr.io `
+            --docker-username=${{ github.actor }} `
+            --docker-password=${{ secrets.GITHUB_TOKEN }} `
+            --namespace=backtestingengine `
+            --dry-run=client -o yaml | kubectl apply -f -
+          
           # Build DATABASE_URL
           $databaseUrl = "postgresql://$($env:POSTGRES_USER):$($env:POSTGRES_PASSWORD)@$($env:POSTGRES_HOST):$($env:POSTGRES_PORT)/$($env:POSTGRES_DB)"
           

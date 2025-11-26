@@ -23,7 +23,8 @@ image:
   repository: backtesting-engine
   tag: "latest"
   pullPolicy: Always
-  pullSecrets: []
+  pullSecrets: 
+    - ghcr-secret
 
 # Deployment configuration  
 replicaCount: 1
