@@ -1,11 +1,12 @@
 /// Genetic Algorithm optimization for trading strategies
 /// 
 /// Provides async genetic algorithm optimization for finding optimal
-/// trading strategy parameters.
+/// trading strategy parameters with parallel fitness evaluation.
 
 use std::sync::Arc;
 use config::GeneticConfig;
 use rand::prelude::*;
+use rayon::prelude::*;
 
 pub mod chromosome;
 // Fitness functions moved to backtest crate to avoid circular dependency
@@ -50,11 +51,16 @@ impl<C: Chromosome> GeneticOptimizer<C> {
         let elite_size = (self.config.population_size as f64 * 0.05).ceil() as usize;
 
         for generation in 0..self.config.generations {
-            // 2. Evaluate fitness (async)
-            let mut fitnesses = Vec::with_capacity(population.len());
-            for c in &population {
-                fitnesses.push((self.fitness_fn)(c).await);
-            }
+            // 2. Evaluate fitness in parallel (OPTIMIZED)
+            // Create a tokio runtime handle for async operations within rayon threads
+            let fitnesses: Vec<f64> = population.par_iter()
+                .map(|chromo| {
+                    // Block on the async fitness function within each parallel thread
+                    tokio::runtime::Handle::current().block_on(async {
+                        (self.fitness_fn)(chromo).await
+                    })
+                })
+                .collect();
             
             // Track best fitness in this generation
             let mut generation_best_fitness = best_fitness;

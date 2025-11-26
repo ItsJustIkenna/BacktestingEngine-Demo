@@ -12,21 +12,21 @@ use crate::types::{BacktestEvent, BacktestResult, TransactionCostAnalysis, Marke
 use crate::logging_facade::BACKTEST_LOGGER;
 use metrics::{performance, risk, trade_stats};
 use bigdecimal::{BigDecimal, ToPrimitive, FromPrimitive};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 pub struct SimulationLoop {
     // Track transaction costs
     total_commission: f64,
     total_slippage: f64,
     total_market_impact: f64,
-    commission_by_exchange: HashMap<String, f64>,
+    commission_by_exchange: FxHashMap<String, f64>,
     // Track market impact
     trades_with_impact: usize,
     impact_costs_bps: Vec<f64>,
     liquidity_warnings: Vec<LiquidityWarning>,
     // Track 30-day rolling volume per exchange for fee tiers
-    trade_history_by_exchange: HashMap<String, Vec<(chrono::DateTime<chrono::Utc>, f64)>>, // exchange -> (timestamp, volume_usd)
-    current_30d_volume_by_exchange: HashMap<String, f64>,
+    trade_history_by_exchange: FxHashMap<String, Vec<(chrono::DateTime<chrono::Utc>, f64)>>, // exchange -> (timestamp, volume_usd)
+    current_30d_volume_by_exchange: FxHashMap<String, f64>,
 }
 
 impl SimulationLoop {
@@ -35,12 +35,12 @@ impl SimulationLoop {
             total_commission: 0.0,
             total_slippage: 0.0,
             total_market_impact: 0.0,
-            commission_by_exchange: HashMap::new(),
+            commission_by_exchange: FxHashMap::default(),
             trades_with_impact: 0,
-            impact_costs_bps: Vec::new(),
-            liquidity_warnings: Vec::new(),
-            trade_history_by_exchange: HashMap::new(),
-            current_30d_volume_by_exchange: HashMap::new(),
+            impact_costs_bps: Vec::with_capacity(1000),  // Pre-allocate for typical backtest
+            liquidity_warnings: Vec::with_capacity(100),
+            trade_history_by_exchange: FxHashMap::default(),
+            current_30d_volume_by_exchange: FxHashMap::default(),
         }
     }
     
@@ -150,13 +150,13 @@ impl SimulationLoop {
         market_data: Vec<MarketData>,
         config: &config::BacktestConfig,
     ) -> BacktestResult {
-    let mut events: Vec<BacktestEvent> = Vec::new();
+    let mut events: Vec<BacktestEvent> = Vec::with_capacity(market_data.len());
     let mut result = BacktestResult::default();
 
-    // Collectors for metrics
-    let mut trade_returns: Vec<f64> = Vec::new();
-    let mut equity_curve: Vec<f64> = Vec::new();
-    let mut trade_durations: Vec<f64> = Vec::new();
+    // Collectors for metrics (pre-allocated)
+    let mut trade_returns: Vec<f64> = Vec::with_capacity(100);
+    let mut equity_curve: Vec<f64> = Vec::with_capacity(market_data.len() + 1);
+    let mut trade_durations: Vec<f64> = Vec::with_capacity(100);
 
     // Start equity curve with initial capital
     equity_curve.push(config.trading.initial_capital);
@@ -346,7 +346,9 @@ impl SimulationLoop {
             } else {
                 0.0
             },
-            commission_by_exchange: self.commission_by_exchange.clone(),
+            commission_by_exchange: self.commission_by_exchange.iter()
+                .map(|(k, v)| (k.clone(), *v))
+                .collect(),
         });
         
         // Generate market impact analysis

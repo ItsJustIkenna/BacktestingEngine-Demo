@@ -159,7 +159,7 @@ impl BacktestEngine {
         core_result.data_quality = Some(data_quality_report.clone());
         
         // Auto-escalation logic based on performance
-        let mut escalation_triggers = Vec::new();
+        let mut escalation_triggers = Vec::with_capacity(2);  // Max 2 escalations
         let mut mode_escalated = false;
         
         if current_mode == AnalysisMode::Development {
@@ -566,8 +566,8 @@ impl BacktestEngine {
             });
         }
         
-        let mut in_sample_sharpes = Vec::new();
-        let mut out_of_sample_sharpes = Vec::new();
+        let mut in_sample_sharpes = Vec::with_capacity(windows.len());
+        let mut out_of_sample_sharpes = Vec::with_capacity(windows.len());
         
         for window in &windows {
             // Split market data into training and test sets
@@ -689,7 +689,7 @@ impl BacktestEngine {
     
     /// Generate performance-based recommendations
     fn generate_recommendations(&self, result: &BacktestResult, _mc_result: &Option<monte_carlo::MonteCarloResult>) -> Vec<String> {
-        let mut recommendations = Vec::new();
+        let mut recommendations = Vec::with_capacity(4);  // Typical number of recommendations
         
         if let Some(sharpe) = result.sharpe_ratio {
             if sharpe < 1.0 {
@@ -748,7 +748,7 @@ impl BacktestEngine {
     
     /// Detect gaps in market data
     fn detect_data_gaps(&self, market_data: &[MarketData]) -> Vec<crate::types::DataGap> {
-        let mut gaps = Vec::new();
+        let mut gaps = Vec::with_capacity(50);  // Pre-allocate for typical gap count
         let gap_config = &self.config.data.gap_detection;
         
         if !gap_config.enabled || market_data.len() < 2 {

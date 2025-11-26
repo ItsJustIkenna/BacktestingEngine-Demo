@@ -71,14 +71,17 @@ ui:
 # Resource requests and limits
 resources:
   limits:
-    cpu: "1000m"
-    memory: "2Gi"
+    cpu: "4000m"      # Increased for better performance
+    memory: "8Gi"     # Increased for genetic algorithm and Monte Carlo
   requests:
-    cpu: "500m"
-    memory: "1Gi"
+    cpu: "2000m"      # Higher baseline for faster processing
+    memory: "4Gi"     # More memory for parallel operations
 
 # Node selection
 nodeSelector: {}
+  # Uncomment to use CPU-optimized nodes:
+  # node.kubernetes.io/instance-type: "c5.4xlarge"
+  
 tolerations: []
 affinity: {}
 
@@ -178,8 +181,11 @@ config:
     port: 5432
     database: "backtesting"
     username: "postgres"  # Override at deployment
-    max_connections: 10
+    max_connections: 20        # Increased from 10 for better parallelization
     connection_timeout: 30
+    pool_size: 20              # New: connection pool size
+    max_lifetime: 1800         # New: max connection lifetime (30 min)
+    idle_timeout: 600          # New: idle connection timeout (10 min)
   trading:
     commission_rate: 0.001
     slippage_bps: 5
@@ -278,11 +284,30 @@ metrics:
 # =============================================================================
 
 autoscaling:
-  enabled: false
-  minReplicas: 1
-  maxReplicas: 5
-  targetCPUUtilizationPercentage: 80
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 80
+  # Scale up quickly for burst workloads, scale down slowly to maintain capacity
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 4
+        periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 120
+      selectPolicy: Min
 
 # =============================================================================
 # Pod Disruption Budget
