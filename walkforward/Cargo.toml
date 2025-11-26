@@ -22,6 +22,7 @@ uuid = { version = "1.0", features = ["v4"] }
 
 # Performance optimizations
 rayon = "1.8"
+futures = "0.3"  # For async execution in Rayon threads
 
 # Internal workspace dependencies
 # Removed circular dependency: backtest now depends on walkforward

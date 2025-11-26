@@ -8,8 +8,9 @@ use metrics::PerformanceMetrics;
 use dataloader::MarketData;
 use strategy::strategies::avellaneda_stoikov::AvellanedaStoikovParams;
 use anyhow::Result;
+use rayon::prelude::*;
 
-/// Main walk-forward analysis runner
+/// Main walk-forward analysis runner with parallel window processing
 pub async fn run_walkforward_analysis(
     data: &[MarketData],
     start: NaiveDate,
@@ -19,38 +20,43 @@ pub async fn run_walkforward_analysis(
     step_size: chrono::Duration,
 ) -> WalkForwardSummary {
     let windows = generate_windows(start, end, train_size, test_size, step_size);
-    let mut window_results = Vec::new();
+    
+    // Process windows in parallel using Rayon
+    let window_results: Vec<WalkForwardWindowResult> = windows.par_iter()
+        .map(|window| {
+            // Use futures executor for async operations in parallel threads
+            futures::executor::block_on(async {
+                // 1. Extract training and testing data for this window
+                let train_data = extract_data(data, window.train_start, window.train_end);
+                let test_data = extract_data(data, window.test_start, window.test_end);
 
-    for window in windows {
-        // 1. Extract training and testing data for this window
-        let train_data = extract_data(data, window.train_start, window.train_end);
-        let test_data = extract_data(data, window.test_start, window.test_end);
+                // 2. Optimize parameters on training set
+                let best_params = optimize_parameters(&train_data).await;
 
-        // 2. Optimize parameters on training set (call your optimizer here)
-        let best_params = optimize_parameters(&train_data).await;
+                // 3. Run backtest on test set with best parameters
+                let test_metrics = run_backtest_with_params(&test_data, &best_params).await;
 
-        // 3. Run backtest on test set with best parameters
-        let test_metrics = run_backtest_with_params(&test_data, &best_params).await;
-
-        // 4. Store results
-        window_results.push(WalkForwardWindowResult {
-            train_start: window.train_start,
-            train_end: window.train_end,
-            test_start: window.test_start,
-            test_end: window.test_end,
-            best_params: serde_json::json!({
-                "risk_aversion": best_params.risk_aversion,
-                "order_size": best_params.order_size,
-                "window_ms": best_params.window_ms,
-                "min_quote_lifetime_ms": best_params.min_quote_lifetime_ms,
-                "fee_rate": best_params.fee_rate,
-                "latency_buffer": best_params.latency_buffer,
-                "inventory_target": best_params.inventory_target,
-                "volatility_cap": best_params.volatility_cap,
-            }),
-            test_metrics,
-        });
-    }
+                // 4. Return result
+                WalkForwardWindowResult {
+                    train_start: window.train_start,
+                    train_end: window.train_end,
+                    test_start: window.test_start,
+                    test_end: window.test_end,
+                    best_params: serde_json::json!({
+                        "risk_aversion": best_params.risk_aversion,
+                        "order_size": best_params.order_size,
+                        "window_ms": best_params.window_ms,
+                        "min_quote_lifetime_ms": best_params.min_quote_lifetime_ms,
+                        "fee_rate": best_params.fee_rate,
+                        "latency_buffer": best_params.latency_buffer,
+                        "inventory_target": best_params.inventory_target,
+                        "volatility_cap": best_params.volatility_cap,
+                    }),
+                    test_metrics,
+                }
+            })
+        })
+        .collect();
 
     // 5. Aggregate results using the new constructor
     WalkForwardSummary::new(window_results)
@@ -166,8 +172,8 @@ async fn run_backtest_with_params(_test_data: &[MarketData], params: &Avellaneda
 
 /// Enhanced walk-forward analysis runner with automatic strategy export
 /// 
-/// This function performs the complete workflow:
-/// 1. Walk-forward analysis with genetic optimization
+/// This function performs the complete workflow with parallel window processing:
+/// 1. Walk-forward analysis with genetic optimization (parallel windows)
 /// 2. Performance evaluation across all windows
 /// 3. Automatic export to SignalEngine if profitability thresholds are met
 pub async fn run_walkforward_with_auto_export(
@@ -180,7 +186,7 @@ pub async fn run_walkforward_with_auto_export(
     strategy_name: &str,
     export_thresholds: Option<ExportThresholds>,
 ) -> Result<(WalkForwardSummary, bool)> {
-    // Step 1: Run standard walk-forward analysis
+    // Step 1: Run parallelized walk-forward analysis
     let wf_summary = run_walkforward_analysis(
         data, start, end, train_size, test_size, step_size
     ).await;

@@ -3269,6 +3269,7 @@ dependencies = [
  "chrono",
  "config",
  "dataloader",
+ "futures",
  "genetic",
  "metrics",
  "once_cell",
