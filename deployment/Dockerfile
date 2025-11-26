@@ -59,12 +59,9 @@ RUN cp /app/BacktestingEngine/nginx.conf /tmp/nginx.conf && \
 
 ################################################################################
 # Stage 3: Create final runtime image with UI and backend
-# Using Chainguard's nginx image - minimal attack surface, continuously patched
-FROM cgr.dev/chainguard/nginx:latest AS runtime
+# Using Alpine with nginx - minimal attack surface, well-maintained
+FROM nginx:alpine AS runtime
 ARG APP_NAME=program
-
-# Switch to root to install additional packages
-USER root
 
 # Install runtime dependencies including supervisord for multi-process
 RUN apk update && apk upgrade --no-cache && apk add --no-cache \
