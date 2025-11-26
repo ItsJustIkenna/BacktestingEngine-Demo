@@ -262,6 +262,12 @@ readinessProbe:
 # Additional Configuration
 # =============================================================================
 
+# Job configuration (for one-time backtest runs)
+job:
+  enabled: false  # Set to true to create a Job instead of Deployment
+  name: "backtest"
+  annotations: {}
+
 # Pod annotations
 podAnnotations: {}
 
