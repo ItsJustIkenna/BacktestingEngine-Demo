@@ -163,6 +163,8 @@ config:
   logging:
     level: info
     format: json
+    file_enabled: true
+    file_path: "/var/log/backtesting/app.log"
   performance:
     worker_threads: 4
   database:
@@ -186,7 +188,24 @@ config:
     cache_duration_hours: 24
   output:
     results_dir: "/tmp/backtest_results"
+    reports_dir: "/tmp/backtest_reports"
     export_format: "json"
+  genetic:
+    population_size: 100
+    generations: 50
+    mutation_rate: 0.1
+    crossover_rate: 0.7
+    elite_size: 10
+  walkforward:
+    optimization_window_days: 90
+    test_window_days: 30
+    step_size_days: 30
+    min_trades_per_period: 10
+  risk:
+    max_drawdown: 0.2
+    max_position_size: 0.25
+    stop_loss: 0.05
+    var_confidence: 0.95
 
 # Environment variables
 env: []
