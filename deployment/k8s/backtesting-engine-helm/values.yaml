@@ -313,6 +313,22 @@ job:
   name: "backtest"
   annotations: {}
 
+# CronJob configuration (for scheduled backtest runs)
+cronjob:
+  enabled: false
+  schedule: "0 0 * * *"  # Daily at midnight
+  timezone: "UTC"
+  annotations: {}
+  startingDeadlineSeconds: 300
+  concurrencyPolicy: "Forbid"
+  suspend: false
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  job:
+    ttlSecondsAfterFinished: 86400  # 24 hours
+    activeDeadlineSeconds: 3600  # 1 hour
+    backoffLimit: 3
+
 # Pod annotations
 podAnnotations: {}
 
