@@ -317,8 +317,10 @@ async fn test_queue_stats_endpoint() {
         .await
         .unwrap();
     
-    // Mock queue returns 500 for unimplemented stats
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.status(), StatusCode::OK);
+    
+    let body: serde_json::Value = response_json(response).await;
+    assert!(body["queue_length"].is_number());
 }
 
 #[tokio::test]
