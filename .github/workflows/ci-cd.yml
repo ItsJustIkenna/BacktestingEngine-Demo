@@ -388,6 +388,70 @@ jobs:
           kubectl get nodes
           Write-Host "✅ Kubernetes connection verified"
 
+      - name: Fetch Secrets from Azure Key Vault
+        shell: powershell
+        env:
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
+          AZURE_KEYVAULT_NAME: ${{ secrets.AZURE_KEYVAULT_NAME }}
+        run: |
+          Write-Host "Fetching secrets from Azure Key Vault..."
+          
+          # Parse Azure credentials
+          try {
+            $creds = $env:AZURE_CREDENTIALS | ConvertFrom-Json
+            Write-Host "[OK] Azure credentials parsed successfully"
+          } catch {
+            Write-Error "Failed to parse AZURE_CREDENTIALS: $($_.Exception.Message)"
+            exit 1
+          }
+          
+          # Authenticate with Azure CLI
+          try {
+            Write-Host "[INFO] Authenticating with Azure..."
+            az login --service-principal `
+              --username $creds.clientId `
+              --password $creds.clientSecret `
+              --tenant $creds.tenantId `
+              --output none
+            
+            if ($LASTEXITCODE -ne 0) {
+              throw "Azure CLI login failed"
+            }
+            Write-Host "[OK] Azure authentication successful"
+          } catch {
+            Write-Error "Azure authentication failed: $_"
+            exit 1
+          }
+          
+          # Fetch secrets
+          $secretNames = @(
+            "POSTGRES-HOST","POSTGRES-PORT","POSTGRES-USER","POSTGRES-PASSWORD","POSTGRES-DB",
+            "ELASTIC-CLOUD-ENDPOINT","ELASTIC-CLOUD-USERNAME","ELASTIC-CLOUD-PASSWORD"
+          )
+          
+          Write-Host "[INFO] Fetching $($secretNames.Count) secrets..."
+          
+          foreach ($secretName in $secretNames) {
+            try {
+              $envName = $secretName -replace "-", "_"
+              $value = az keyvault secret show --vault-name $env:AZURE_KEYVAULT_NAME --name $secretName --query value -o tsv 2>&1
+              
+              if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($value)) {
+                Write-Error "[FAIL] Failed to fetch secret $secretName"
+                exit 1
+              }
+              
+              $cleanValue = $value.Trim()
+              echo "${envName}=${cleanValue}" >> $env:GITHUB_ENV
+              Write-Host "[OK] Fetched $secretName"
+            } catch {
+              Write-Error "[FAIL] Error fetching $secretName : $_"
+              exit 1
+            }
+          }
+          
+          Write-Host "[OK] All secrets fetched successfully"
+
       - name: Deploy to Kubernetes
         shell: powershell
         run: |
@@ -395,30 +459,35 @@ jobs:
           
           cd BacktestingEngine
           
+          # Build DATABASE_URL
+          $databaseUrl = "postgresql://$($env:POSTGRES_USER):$($env:POSTGRES_PASSWORD)@$($env:POSTGRES_HOST):$($env:POSTGRES_PORT)/$($env:POSTGRES_DB)"
+          
+          # Build Helm command with secrets
+          $helmArgs = @(
+            "--namespace", "backtestingengine",
+            "--create-namespace",
+            "--set", "image.repository=${{ env.IMAGE_NAME }}",
+            "--set", "image.tag=latest",
+            "--set", "ui.image.repository=${{ env.IMAGE_NAME }}-ui",
+            "--set", "ui.image.tag=latest",
+            "--set-string", "secrets.database.url=$databaseUrl",
+            "--set-string", "secrets.elasticsearch.enabled=true",
+            "--set-string", "secrets.elasticsearch.endpoint=$($env:ELASTIC_CLOUD_ENDPOINT)",
+            "--set-string", "secrets.elasticsearch.username=$($env:ELASTIC_CLOUD_USERNAME)",
+            "--set-string", "secrets.elasticsearch.password=$($env:ELASTIC_CLOUD_PASSWORD)",
+            "--wait",
+            "--timeout", "10m"
+          )
+          
           # Check if release exists
           $releaseExists = helm list -n backtestingengine -q | Select-String "backtesting-engine"
           
           if ($releaseExists) {
             Write-Host "Upgrading existing release..."
-            helm upgrade backtesting-engine ./deployment/k8s/backtesting-engine-helm `
-              --namespace backtestingengine `
-              --set image.repository=${{ env.IMAGE_NAME }} `
-              --set image.tag=latest `
-              --set ui.image.repository=${{ env.IMAGE_NAME }}-ui `
-              --set ui.image.tag=latest `
-              --wait `
-              --timeout 10m
+            helm upgrade backtesting-engine ./deployment/k8s/backtesting-engine-helm @helmArgs
           } else {
             Write-Host "Installing new release..."
-            helm install backtesting-engine ./deployment/k8s/backtesting-engine-helm `
-              --namespace backtestingengine `
-              --create-namespace `
-              --set image.repository=${{ env.IMAGE_NAME }} `
-              --set image.tag=latest `
-              --set ui.image.repository=${{ env.IMAGE_NAME }}-ui `
-              --set ui.image.tag=latest `
-              --wait `
-              --timeout 10m
+            helm install backtesting-engine ./deployment/k8s/backtesting-engine-helm @helmArgs
           }
           
           if ($LASTEXITCODE -ne 0) {
