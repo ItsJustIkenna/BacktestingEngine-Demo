@@ -367,3 +367,95 @@ jobs:
           Write-Host "`nPull API: docker pull ${{ env.IMAGE_NAME }}:latest"
           Write-Host "Pull UI:  docker pull ${{ env.IMAGE_NAME }}-ui:latest"
           Write-Host "=========================================="
+
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: [self-hosted, windows, x64]
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    timeout-minutes: 15
+    steps:
+      - name: Checkout BacktestingEngine
+        uses: actions/checkout@v4
+        with:
+          path: BacktestingEngine
+
+      - name: Check Kubernetes Connection
+        shell: powershell
+        run: |
+          Write-Host "Verifying Kubernetes connection..."
+          kubectl cluster-info
+          kubectl get nodes
+          Write-Host "✅ Kubernetes connection verified"
+
+      - name: Deploy to Kubernetes
+        shell: powershell
+        run: |
+          Write-Host "Deploying BacktestingEngine to Kubernetes..."
+          
+          cd BacktestingEngine
+          
+          # Check if release exists
+          $releaseExists = helm list -n backtestingengine -q | Select-String "backtesting-engine"
+          
+          if ($releaseExists) {
+            Write-Host "Upgrading existing release..."
+            helm upgrade backtesting-engine ./deployment/k8s/backtesting-engine-helm `
+              --namespace backtestingengine `
+              --set image.repository=${{ env.IMAGE_NAME }} `
+              --set image.tag=latest `
+              --set ui.image.repository=${{ env.IMAGE_NAME }}-ui `
+              --set ui.image.tag=latest `
+              --wait `
+              --timeout 10m
+          } else {
+            Write-Host "Installing new release..."
+            helm install backtesting-engine ./deployment/k8s/backtesting-engine-helm `
+              --namespace backtestingengine `
+              --create-namespace `
+              --set image.repository=${{ env.IMAGE_NAME }} `
+              --set image.tag=latest `
+              --set ui.image.repository=${{ env.IMAGE_NAME }}-ui `
+              --set ui.image.tag=latest `
+              --wait `
+              --timeout 10m
+          }
+          
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "❌ Deployment failed!"
+            exit 1
+          }
+          
+          Write-Host "✅ Deployment successful!"
+
+      - name: Verify Deployment
+        shell: powershell
+        run: |
+          Write-Host "Verifying deployment..."
+          
+          Write-Host "`n📦 Pods:"
+          kubectl get pods -n backtestingengine -o wide
+          
+          Write-Host "`n🔌 Services:"
+          kubectl get services -n backtestingengine
+          
+          Write-Host "`n📊 Deployments:"
+          kubectl get deployments -n backtestingengine
+          
+          Write-Host "`n✅ Deployment verification complete!"
+
+      - name: Deployment Summary
+        shell: powershell
+        run: |
+          Write-Host "`n=========================================="
+          Write-Host "Deployment Summary"
+          Write-Host "=========================================="
+          Write-Host "Namespace: backtestingengine"
+          Write-Host "Release: backtesting-engine"
+          Write-Host "Images:"
+          Write-Host "  - API: ${{ env.IMAGE_NAME }}:latest"
+          Write-Host "  - UI:  ${{ env.IMAGE_NAME }}-ui:latest"
+          Write-Host "`nAccess UI:"
+          Write-Host "  kubectl port-forward -n backtestingengine svc/backtesting-engine-ui 8000:80"
+          Write-Host "  http://localhost:8000"
+          Write-Host "=========================================="
