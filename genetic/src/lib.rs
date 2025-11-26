@@ -52,13 +52,11 @@ impl<C: Chromosome> GeneticOptimizer<C> {
 
         for generation in 0..self.config.generations {
             // 2. Evaluate fitness in parallel (OPTIMIZED)
-            // Create a tokio runtime handle for async operations within rayon threads
+            // Use futures::executor to handle async within Rayon threads
             let fitnesses: Vec<f64> = population.par_iter()
                 .map(|chromo| {
-                    // Block on the async fitness function within each parallel thread
-                    tokio::runtime::Handle::current().block_on(async {
-                        (self.fitness_fn)(chromo).await
-                    })
+                    // Use futures executor for async in sync context
+                    futures::executor::block_on((self.fitness_fn)(chromo))
                 })
                 .collect();
             

@@ -1028,6 +1028,7 @@ dependencies = [
  "criterion",
  "databaseschema",
  "dataloader",
+ "futures",
  "once_cell",
  "orderbook",
  "portfoliomanager",
