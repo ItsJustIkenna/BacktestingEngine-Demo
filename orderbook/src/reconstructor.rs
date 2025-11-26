@@ -5,6 +5,8 @@
 
 use crate::order_book::OrderBook;
 use crate::types::OrderBookEvent;
+#[cfg(feature = "postgres")]
+use crate::types::BookSide;
 use crate::OrderBookConfig;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
