@@ -37,6 +37,31 @@ strategy:
 api:
   replicaCount: 1
   enabled: true
+  service:
+    type: ClusterIP
+    port: 8080
+
+# UI configuration
+ui:
+  replicaCount: 2
+  enabled: true
+  image:
+    repository: backtesting-engine-ui
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    limits:
+      cpu: "200m"
+      memory: "256Mi"
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
 
 # =============================================================================
 # Resource Management

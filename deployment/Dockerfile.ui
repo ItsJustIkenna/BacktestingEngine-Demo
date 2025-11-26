@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1
+# UI-ONLY BUILD: Lean nginx container serving the React UI
+# Build: docker build -f deployment/Dockerfile.ui -t backtesting-engine-ui:latest .
+
+ARG NODE_VERSION=18
+
+################################################################################
+# Stage 1: Build the React UI
+FROM node:${NODE_VERSION}-alpine AS ui-build
+
+WORKDIR /app/gui
+COPY BacktestingEngine/gui/package*.json ./
+RUN npm ci --only=production
+
+COPY BacktestingEngine/gui/ ./
+RUN npm run build
+
+################################################################################
+# Stage 2: Serve with nginx
+FROM nginx:alpine
+
+# Copy built UI
+COPY --from=ui-build /app/gui/build /usr/share/nginx/html
+
+# Remove default nginx config (will be provided by k8s ConfigMap)
+RUN rm /etc/nginx/conf.d/default.conf
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD wget --quiet --tries=1 --spider http://localhost/ || exit 1
+
+# Metadata
+LABEL maintainer="Nwagbara-Group-LLC"
+LABEL description="BacktestingEngine UI - React Frontend"
+LABEL version="2.0.0"
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]
