@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 
 interface BacktestResult {
   job_id: string;
@@ -56,49 +56,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
   const [countdown, setCountdown] = useState<number | null>(null);
   const [displayProgress, setDisplayProgress] = useState<number>(0);
 
-  useEffect(() => {
-    fetchData();
-  }, [jobId]);
-
-  // Countdown timer that decrements every second
-  useEffect(() => {
-    if (estimatedTimeRemaining !== null && estimatedTimeRemaining > 0) {
-      setCountdown(estimatedTimeRemaining);
-      
-      const interval = setInterval(() => {
-        setCountdown((prev) => {
-          if (prev === null || prev <= 1000) {
-            return 0;
-          }
-          return prev - 1000;
-        });
-      }, 1000);
-
-      return () => clearInterval(interval);
-    }
-  }, [estimatedTimeRemaining]);
-
-  // Smooth progress interpolation between API updates
-  useEffect(() => {
-    if (jobStatus && jobStatus.status === 'running' && jobStatus.started_at) {
-      setDisplayProgress(jobStatus.progress);
-      
-      // Gradually increment progress between updates
-      const interval = setInterval(() => {
-        setDisplayProgress((prev) => {
-          // Small increment per second based on estimated completion rate
-          const increment = jobStatus.progress < 99 ? 0.1 : 0;
-          return Math.min(prev + increment, jobStatus.progress + 0.5);
-        });
-      }, 1000);
-
-      return () => clearInterval(interval);
-    } else if (jobStatus) {
-      setDisplayProgress(jobStatus.progress);
-    }
-  }, [jobStatus]);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
 
@@ -152,7 +110,49 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
       setError(err instanceof Error ? err.message : 'An error occurred');
       setLoading(false);
     }
-  };
+  }, [jobId, jobDetails]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // Countdown timer that decrements every second
+  useEffect(() => {
+    if (estimatedTimeRemaining !== null && estimatedTimeRemaining > 0) {
+      setCountdown(estimatedTimeRemaining);
+      
+      const interval = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev === null || prev <= 1000) {
+            return 0;
+          }
+          return prev - 1000;
+        });
+      }, 1000);
+
+      return () => clearInterval(interval);
+    }
+  }, [estimatedTimeRemaining]);
+
+  // Smooth progress interpolation between API updates
+  useEffect(() => {
+    if (jobStatus && jobStatus.status === 'running' && jobStatus.started_at) {
+      setDisplayProgress(jobStatus.progress);
+      
+      // Gradually increment progress between updates
+      const interval = setInterval(() => {
+        setDisplayProgress((prev) => {
+          // Small increment per second based on estimated completion rate
+          const increment = jobStatus.progress < 99 ? 0.1 : 0;
+          return Math.min(prev + increment, jobStatus.progress + 0.5);
+        });
+      }, 1000);
+
+      return () => clearInterval(interval);
+    } else if (jobStatus) {
+      setDisplayProgress(jobStatus.progress);
+    }
+  }, [jobStatus]);
 
   const downloadReport = (format: 'json' | 'csv') => {
     if (!result) return;

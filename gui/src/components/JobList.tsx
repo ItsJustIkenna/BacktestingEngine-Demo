@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 
 interface BacktestJob {
   job_id: string;
@@ -72,7 +72,7 @@ export const JobList: React.FC<JobListProps> = ({
     fetchMetadata();
   }, []);
 
-  const fetchJobs = async () => {
+  const fetchJobs = useCallback(async () => {
     setLoading(true);
     setError(null);
 
@@ -99,12 +99,12 @@ export const JobList: React.FC<JobListProps> = ({
     } finally {
       setLoading(false);
     }
-  };
+  }, [statusFilter, symbolFilter, exchangeFilter, limit, offset]);
 
   // Initial fetch
   useEffect(() => {
     fetchJobs();
-  }, [statusFilter, symbolFilter, exchangeFilter, offset]);
+  }, [fetchJobs]);
 
   // Auto-refresh for running jobs
   useEffect(() => {
@@ -114,7 +114,7 @@ export const JobList: React.FC<JobListProps> = ({
       const interval = setInterval(fetchJobs, refreshInterval);
       return () => clearInterval(interval);
     }
-  }, [jobs, refreshInterval]);
+  }, [jobs, refreshInterval, fetchJobs]);
 
   const getStatusBadge = (status: string) => {
     const colors: { [key: string]: string } = {
