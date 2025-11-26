@@ -398,26 +398,38 @@ jobs:
           
           # Parse Azure credentials
           try {
-            $creds = $env:AZURE_CREDENTIALS | ConvertFrom-Json
+            if ([string]::IsNullOrWhiteSpace($env:AZURE_CREDENTIALS)) {
+              throw "AZURE_CREDENTIALS secret is empty or not set"
+            }
+            
+            $creds = $env:AZURE_CREDENTIALS | ConvertFrom-Json -ErrorAction Stop
+            
+            # Validate required fields
+            if (-not $creds.clientId -or -not $creds.clientSecret -or -not $creds.tenantId) {
+              throw "Invalid Azure credentials format"
+            }
+            
             Write-Host "[OK] Azure credentials parsed successfully"
           } catch {
-            Write-Error "Failed to parse AZURE_CREDENTIALS: $($_.Exception.Message)"
+            Write-Error "Failed to parse Azure credentials: $($_.Exception.Message)"
+            Write-Error "Please configure AZURE_CREDENTIALS secret in repository settings"
             exit 1
           }
           
           # Authenticate with Azure CLI
           try {
             Write-Host "[INFO] Authenticating with Azure..."
-            az login --service-principal `
+            $loginResult = az login --service-principal `
               --username $creds.clientId `
               --password $creds.clientSecret `
               --tenant $creds.tenantId `
-              --output none
+              --output json 2>&1
             
             if ($LASTEXITCODE -ne 0) {
-              throw "Azure CLI login failed"
+              throw "Azure CLI login failed with exit code $LASTEXITCODE"
             }
-            Write-Host "[OK] Azure authentication successful"
+            
+            Write-Host "[OK] Successfully authenticated with Azure"
           } catch {
             Write-Error "Azure authentication failed: $_"
             exit 1
@@ -462,7 +474,7 @@ jobs:
           # Build DATABASE_URL
           $databaseUrl = "postgresql://$($env:POSTGRES_USER):$($env:POSTGRES_PASSWORD)@$($env:POSTGRES_HOST):$($env:POSTGRES_PORT)/$($env:POSTGRES_DB)"
           
-          # Build Helm command with secrets
+          # Build Helm arguments
           $helmArgs = @(
             "--namespace", "backtestingengine",
             "--create-namespace",
@@ -478,6 +490,8 @@ jobs:
             "--wait",
             "--timeout", "10m"
           )
+          
+          Write-Host "[INFO] Database and Elasticsearch configured"
           
           # Check if release exists
           $releaseExists = helm list -n backtestingengine -q | Select-String "backtesting-engine"
