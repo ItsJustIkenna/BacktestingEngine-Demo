@@ -22,7 +22,7 @@ nameOverride: ""
 image:
   repository: backtesting-engine
   tag: "latest"
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
   pullSecrets: []
 
 # Deployment configuration  
