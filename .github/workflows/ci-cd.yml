@@ -330,13 +330,40 @@ jobs:
           docker run --rm ${{ env.IMAGE_NAME }}:latest ls -la /bin/server
           Write-Host "[OK] Validation complete"
 
+      - name: Build & Push UI Image
+        shell: powershell
+        run: |
+          Write-Host "Building UI Docker image..."
+          $uiImageName = "${{ env.IMAGE_NAME }}-ui"
+          
+          docker build `
+            --platform linux/amd64 `
+            --tag ${uiImageName}:latest `
+            --tag ${uiImageName}:${{ github.sha }} `
+            --file BacktestingEngine/deployment/Dockerfile.ui `
+            --progress=plain `
+            .
+            
+          if ($LASTEXITCODE -ne 0) {
+            throw "UI Docker build failed"
+          }
+          
+          Write-Host "[PUSH] Pushing UI images..."
+          docker push ${uiImageName}:latest
+          docker push ${uiImageName}:${{ github.sha }}
+          
+          $imageSize = docker inspect ${uiImageName}:latest --format='{{.Size}}' | ForEach-Object { [math]::Round($_ / 1MB, 1) }
+          Write-Host "[OK] UI image size: $imageSize MB"
+
       - name: Output Summary
         shell: powershell
         run: |
           Write-Host "`n=========================================="
           Write-Host "Build Summary"
           Write-Host "=========================================="
-          Write-Host "Image: ${{ env.IMAGE_NAME }}"
+          Write-Host "API Image: ${{ env.IMAGE_NAME }}"
+          Write-Host "UI Image: ${{ env.IMAGE_NAME }}-ui"
           Write-Host "Tags: latest, ${{ github.sha }}"
-          Write-Host "`nPull: docker pull ${{ env.IMAGE_NAME }}:latest"
+          Write-Host "`nPull API: docker pull ${{ env.IMAGE_NAME }}:latest"
+          Write-Host "Pull UI:  docker pull ${{ env.IMAGE_NAME }}-ui:latest"
           Write-Host "=========================================="

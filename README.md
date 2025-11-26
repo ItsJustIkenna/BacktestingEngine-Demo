@@ -15,17 +15,19 @@
 - [Overview](#-overview)
 - [Key Features](#-key-features)
 - [Quick Start](#-quick-start)
+- [Kubernetes Deployment](#-kubernetes-deployment)
 - [Architecture](#-architecture)
 - [Operation Modes](#-operation-modes)
 - [Analysis Modes](#-analysis-modes)
 - [REST API](#-rest-api)
+- [API Testing with Postman](#-api-testing-with-postman)
 - [Multi-Backend Job Queue](#-multi-backend-job-queue)
 - [Logging & Monitoring](#-logging--monitoring)
-- [Deployment](#-deployment)
 - [Configuration](#-configuration)
 - [Usage Examples](#-usage-examples)
 - [Performance](#-performance)
 - [Troubleshooting](#-troubleshooting)
+- [Testing](#-testing)
 
 ---
 
@@ -68,17 +70,17 @@ The BacktestingEngine is a sophisticated, production-ready backtesting framework
 # Development cluster
 helm upgrade --install backtesting-engine ./deployment/k8s/backtesting-engine-helm \
   -f ./deployment/k8s/backtesting-engine-helm/values-dev.yaml \
-  --namespace backtesting-dev --create-namespace
+  --namespace backtestingengine-dev --create-namespace
 
 # Staging
 helm upgrade --install backtesting-engine ./deployment/k8s/backtesting-engine-helm \
   -f ./deployment/k8s/backtesting-engine-helm/values-staging.yaml \
-  --namespace backtesting-staging --create-namespace
+  --namespace backtestingengine-staging --create-namespace
 
 # Production
 helm upgrade --install backtesting-engine ./deployment/k8s/backtesting-engine-helm \
   -f ./deployment/k8s/backtesting-engine-helm/values-prod.yaml \
-  --namespace backtesting-prod --create-namespace
+  --namespace backtestingengine --create-namespace
 ```
 
 ### For Local Development
@@ -89,10 +91,10 @@ helm upgrade --install backtesting-engine ./deployment/k8s/backtesting-engine-he
 # Install with local dev values
 helm install backtesting-engine ./deployment/k8s/backtesting-engine-helm \
   -f ./deployment/k8s/backtesting-engine-helm/values-dev-local.yaml \
-  --namespace backtesting-dev --create-namespace
+  --namespace backtestingengine-dev --create-namespace
 
 # Access UI
-kubectl port-forward -n backtesting-dev svc/backtesting-engine 8080:8080
+kubectl port-forward -n backtestingengine-dev svc/backtesting-engine 8080:8080
 # Open http://localhost:8080
 ```
 
@@ -121,59 +123,193 @@ cd ../program
 cargo run --features postgres -- serve --bind 0.0.0.0:8080
 ```
 
+---
+
+## 🚀 Kubernetes Deployment
+
 ### Prerequisites
 
-```bash
-# Install Rust (1.82+)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+1. **Kubernetes cluster** (v1.19+)
+2. **kubectl** configured to access your cluster
+3. **Helm 3** installed
+4. **Container images** built and pushed by CI/CD:
+   - `ghcr.io/nwagbara-group-llc/backtesting-engine:latest` (API)
+   - `ghcr.io/nwagbara-group-llc/backtesting-engine-ui:latest` (UI)
 
-# PostgreSQL (required for service mode)
-export DATABASE_URL="postgresql://user:pass@localhost/trading"
-
-# Optional: Redis (alternative job queue backend)
-export REDIS_URL="redis://localhost:6379"
-```
-
-### Installation
+### Quick Deploy
 
 ```bash
-# Clone and build
-git clone <repository-url>
-cd BacktestingEngine
-cargo build --release --features postgres
+# 1. Create namespace
+kubectl create namespace backtestingengine
 
-# Run database migrations (service mode only)
-cd databaseschema
-diesel migration run
+# 2. Deploy with Helm
+cd deployment/k8s/backtesting-engine-helm
+
+helm install backtesting-engine . \
+  --namespace backtestingengine \
+  --set image.repository=ghcr.io/nwagbara-group-llc/backtesting-engine \
+  --set image.tag=latest \
+  --set ui.image.repository=ghcr.io/nwagbara-group-llc/backtesting-engine-ui \
+  --set ui.image.tag=latest \
+  --set ingress.enabled=true \
+  --set ingress.hosts[0].host=backtesting.yourdomain.com \
+  --set ingress.hosts[0].paths[0].path=/ \
+  --set ingress.hosts[0].paths[0].pathType=Prefix \
+  --set secrets.database.url="postgresql://user:pass@postgres-host:5432/backtesting"
+
+# 3. Verify deployment
+kubectl get pods -n backtestingengine
+kubectl get services -n backtestingengine
+kubectl get ingress -n backtestingengine
 ```
 
-### CLI Mode - Quick Backtest
+### Access the UI
+
+#### Via Ingress (Production)
+Configure your DNS to point to the ingress controller's external IP:
+```bash
+kubectl get ingress -n backtestingengine
+# Add A record: backtesting.yourdomain.com -> EXTERNAL-IP
+# Then access: https://backtesting.yourdomain.com
+```
+
+#### Via Port Forward (Development)
+```bash
+# Forward UI service to localhost
+kubectl port-forward -n backtestingengine service/backtesting-engine-ui 8000:80
+
+# Access UI at: http://localhost:8000
+```
+
+#### Via LoadBalancer (Cloud)
+```bash
+# Change UI service to LoadBalancer
+helm upgrade backtesting-engine . \
+  --namespace backtestingengine \
+  --reuse-values \
+  --set ui.service.type=LoadBalancer
+
+# Get external IP
+kubectl get service backtesting-engine-ui -n backtestingengine
+# Access: http://EXTERNAL-IP
+```
+
+### Kubernetes Configuration
+
+#### Scaling
 
 ```bash
-cargo run --features postgres --bin program -- backtest \
-  --symbol BTC/USD \
-  --exchange Kraken \
-  --risk-aversion 0.01 \
-  --inventory-target 0.0 \
-  --order-size 0.1 \
-  --initial-capital 100000.0 \
-  --commission-rate 0.001
+# Scale API pods
+helm upgrade backtesting-engine . \
+  --namespace backtestingengine \
+  --reuse-values \
+  --set api.replicaCount=3
+
+# Scale UI pods
+helm upgrade backtesting-engine . \
+  --namespace backtestingengine \
+  --reuse-values \
+  --set ui.replicaCount=5
 ```
 
-### Service Mode - Start API Server
+#### Resource Limits
+
+Edit `values.yaml` or override:
+```bash
+helm upgrade backtesting-engine . \
+  --namespace backtestingengine \
+  --reuse-values \
+  --set resources.limits.cpu=2000m \
+  --set resources.limits.memory=4Gi \
+  --set ui.resources.limits.cpu=500m \
+  --set ui.resources.limits.memory=512Mi
+```
+
+#### Database Configuration
 
 ```bash
-# Start with PostgreSQL backend (default)
-cargo run --features postgres --bin program -- serve \
-  --bind 0.0.0.0:8080 \
-  --workers 4
-
-# Or with Redis backend
-cargo run --features postgres --bin program -- serve \
-  --bind 0.0.0.0:8080 \
-  --backend redis://localhost:6379 \
-  --workers 4
+helm upgrade backtesting-engine . \
+  --namespace backtestingengine \
+  --reuse-values \
+  --set externalDatabase.host=postgres.database.internal \
+  --set externalDatabase.port=5432 \
+  --set externalDatabase.database=backtesting \
+  --set secrets.database.url="postgresql://user:password@host:5432/db"
 ```
+
+### Monitoring
+
+```bash
+# Check pod logs
+kubectl logs -n backtestingengine -l app.kubernetes.io/component=api -f
+kubectl logs -n backtestingengine -l app.kubernetes.io/component=ui -f
+
+# Check pod status
+kubectl describe pod -n backtestingengine <pod-name>
+
+# Check service endpoints
+kubectl get endpoints -n backtestingengine
+```
+
+### Troubleshooting Kubernetes
+
+#### UI not accessible
+```bash
+# Check UI pods are running
+kubectl get pods -n backtestingengine -l app.kubernetes.io/component=ui
+
+# Check UI service
+kubectl describe service backtesting-engine-ui -n backtestingengine
+
+# Test UI directly
+kubectl port-forward -n backtestingengine service/backtesting-engine-ui 8000:80
+curl http://localhost:8000
+```
+
+#### API connection issues
+```bash
+# Check API pods
+kubectl get pods -n backtestingengine -l app.kubernetes.io/component=api
+
+# Check API logs
+kubectl logs -n backtestingengine -l app.kubernetes.io/component=api --tail=100
+
+# Test API health
+kubectl port-forward -n backtestingengine service/backtesting-engine-api 8080:8080
+curl http://localhost:8080/health
+```
+
+#### Database connection issues
+```bash
+# Check database secret
+kubectl get secret backtesting-engine-secret -n backtestingengine -o yaml
+
+# Test database connectivity from API pod
+kubectl exec -it -n backtestingengine <api-pod-name> -- bash
+curl http://postgres-host:5432
+```
+
+### Uninstall
+
+```bash
+helm uninstall backtesting-engine --namespace backtestingengine
+kubectl delete namespace backtestingengine
+```
+
+### Production Checklist
+
+- [ ] Configure TLS/SSL certificates for ingress
+- [ ] Set up proper DNS records
+- [ ] Configure database backups
+- [ ] Enable monitoring (Prometheus/Grafana)
+- [ ] Set up log aggregation (ELK stack)
+- [ ] Configure autoscaling (HPA)
+- [ ] Set resource limits and requests
+- [ ] Enable network policies
+- [ ] Configure RBAC properly
+- [ ] Set up secret management (Vault/Sealed Secrets)
+- [ ] Configure persistent storage for database
+- [ ] Set up disaster recovery procedures
 
 ---
 
@@ -358,6 +494,22 @@ The engine automatically escalates when:
 
 ## 🌐 REST API
 
+### Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/api/symbols` | GET | Available symbols |
+| `/api/exchanges` | GET | Available exchanges |
+| `/api/backtest` | POST | Submit backtest job |
+| `/api/backtest/:id` | GET | Job details |
+| `/api/backtest/:id/status` | GET | Job status |
+| `/api/backtest/:id/results` | GET | Job results |
+| `/api/backtest/:id` | DELETE | Delete job |
+| `/api/backtests` | GET | List jobs |
+| `/api/queue/statistics` | GET | Queue statistics |
+| `/api/backtest/:id/progress` | WebSocket | Real-time progress updates |
+
 ### Submit Backtest Job
 
 ```http
@@ -424,12 +576,166 @@ GET /api/backtest/{job_id}/results
 }
 ```
 
-### Additional Endpoints
+---
 
-- `GET /api/backtests` - Historical backtests with filtering
-- `GET /health` - Health check
-- `GET /api/stats` - Queue statistics
-- `WS /api/backtest/{job_id}/progress` - WebSocket progress updates
+## 🧪 API Testing with Postman
+
+Complete Postman collection available for testing all API endpoints. Import the collection and environment to get started quickly.
+
+### Quick Start
+
+**1. Import Collection & Environment**
+
+Import these files into Postman:
+- `docs/postman/BacktestingEngine-API.postman_collection.json`
+- `docs/postman/Local.postman_environment.json`
+- `docs/postman/Production.postman_environment.json`
+
+**2. Select Environment**
+- Click the environment dropdown (top right)
+- Select **BacktestingEngine - Local** for local testing
+- Select **BacktestingEngine - Production** for production API
+
+**3. Start the API Server**
+```powershell
+cd BacktestingEngine
+cargo run --bin program -- serve --bind 127.0.0.1:8080
+```
+
+**4. Run Your First Request**
+1. Open **Health & Status** → **Health Check**
+2. Click **Send**
+3. You should see: `{"status": "ok", "message": "BacktestingEngine API is running"}`
+
+### Collection Structure
+
+- **📁 Health & Status** - Health Check, Queue Statistics
+- **📁 Metadata** - Get Available Symbols, Get Available Exchanges
+- **📁 Backtest Jobs** - Submit Backtest (Genetic/Manual/Grid Search), Get Job Status, Get Job Details, Get Job Results, Delete Backtest
+- **📁 Backtest History** - Get All Backtests, Paginated queries, Filter by status/symbol/exchange
+
+### Typical Workflow
+
+**1. Check API Health**
+```bash
+GET /health
+```
+
+**2. Get Available Symbols and Exchanges**
+```bash
+GET /api/symbols
+GET /api/exchanges
+```
+
+**3. Submit a Backtest**
+```bash
+POST /api/backtest
+Content-Type: application/json
+
+{
+  "symbol": "BTC/USDT",
+  "exchange": "binance",
+  "strategy": "arbitrage",
+  "initial_capital": 100000.0,
+  "optimization_method": "genetic",
+  "population_size": 50,
+  "generations": 20
+}
+```
+
+Response (job_id automatically saved to environment):
+```json
+{
+  "job_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "queued",
+  "message": "Backtest submitted successfully"
+}
+```
+
+**4. Monitor Job Status**
+```bash
+GET /api/backtest/{{job_id}}/status
+```
+
+**5. Get Results (when completed)**
+```bash
+GET /api/backtest/{{job_id}}/results
+```
+
+### WebSocket Real-Time Updates
+
+For real-time progress updates:
+```
+ws://localhost:8080/api/backtest/{job_id}/progress
+```
+
+Use a WebSocket client like [WebSocket King](https://chrome.google.com/webstore/detail/websocket-king) for testing.
+
+### Environment Variables
+
+The Postman collection uses:
+- `job_id` - Automatically set when submitting a backtest
+- `base_url` - API base URL (configured per environment: Local=http://localhost:8080, Production=your-domain)
+
+Add custom variables in environment settings for repeated values like `default_capital` or `default_symbol`.
+
+### Testing Different Scenarios
+
+**Test Error Handling:**
+```json
+{
+  "symbol": "BTC/USDT"
+  // Missing required fields - expect 400 Bad Request
+}
+```
+
+**Test Pagination:**
+```bash
+GET /api/backtests?page=1&page_size=10
+GET /api/backtests?page=2&page_size=10
+```
+
+**Test Filtering:**
+```bash
+GET /api/backtests?status=completed&symbol=BTC/USDT
+```
+
+### Example cURL Commands
+
+```bash
+# Health check
+curl http://localhost:8080/health
+
+# Submit backtest
+curl -X POST http://localhost:8080/api/backtest \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "BTC/USDT",
+    "exchange": "binance",
+    "strategy": "arbitrage",
+    "initial_capital": 100000,
+    "optimization_method": "genetic"
+  }'
+
+# Get status
+curl http://localhost:8080/api/backtest/{job_id}/status
+```
+
+### Troubleshooting Postman
+
+**Connection Refused:**
+```
+Error: connect ECONNREFUSED 127.0.0.1:8080
+```
+Ensure API server is running: `cargo run --bin program -- serve`
+
+**404 Not Found:**
+Check endpoint URL and selected environment.
+
+**Job ID Not Found:**
+1. Submit a new backtest first
+2. Verify `{{job_id}}` variable is set in environment
+3. Check job exists: `GET /api/backtests`
 
 ---
 
