@@ -129,6 +129,7 @@ service:
   port: 8080
   targetPort: 8080
   uiPort: 80
+  uiTargetPort: 80
   metricsPort: 9090
   ports:
     - name: ui
