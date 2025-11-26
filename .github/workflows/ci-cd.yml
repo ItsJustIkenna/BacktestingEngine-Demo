@@ -494,16 +494,9 @@ jobs:
           
           Write-Host "[INFO] Database and Elasticsearch configured"
           
-          # Check if release exists
-          $releaseExists = helm list -n backtestingengine -q | Select-String "backtesting-engine"
-          
-          if ($releaseExists) {
-            Write-Host "Upgrading existing release..."
-            helm upgrade backtesting-engine ./deployment/k8s/backtesting-engine-helm @helmArgs
-          } else {
-            Write-Host "Installing new release..."
-            helm install backtesting-engine ./deployment/k8s/backtesting-engine-helm @helmArgs
-          }
+          # Use helm upgrade --install to handle both new and existing releases
+          Write-Host "Deploying with Helm (upgrade or install)..."
+          helm upgrade --install backtesting-engine ./deployment/k8s/backtesting-engine-helm @helmArgs
           
           if ($LASTEXITCODE -ne 0) {
             Write-Host "❌ Deployment failed!"
