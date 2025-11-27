@@ -71,9 +71,6 @@
 
 Configuration Summary:
 - Database: {{ include "backtesting-engine.postgresql.servicename" . }}:{{ include "backtesting-engine.postgresql.port" . }}/{{ include "backtesting-engine.postgresql.database" . }}
-{{- if .Values.redis.enabled }}
-- Redis: {{ include "backtesting-engine.redis.servicename" . }}:{{ include "backtesting-engine.redis.port" . }}
-{{- end }}
 - Initial Capital: ${{ .Values.config.trading.initial_capital }}
 - Commission Rate: {{ .Values.config.trading.commission_rate }}%
 - Max Drawdown: {{ .Values.config.risk.max_drawdown }}%
