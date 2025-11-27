@@ -491,6 +491,7 @@ jobs:
             "--set", "image.tag=latest",
             "--set", "image.pullPolicy=Always",
             "--set", "imagePullSecrets[0].name=ghcr-secret",
+            "--set", "global.imagePullSecrets[0].name=ghcr-secret",
             "--set", "ui.image.repository=${{ env.IMAGE_NAME }}-ui",
             "--set", "ui.image.tag=latest",
             "--set", "ui.image.pullPolicy=Always",
@@ -501,7 +502,7 @@ jobs:
             "--set-string", "secrets.elasticsearch.username=$($env:ELASTIC_CLOUD_USERNAME)",
             "--set-string", "secrets.elasticsearch.password=$($env:ELASTIC_CLOUD_PASSWORD)",
             "--wait",
-            "--timeout", "10m"
+            "--timeout", "15m"
           )
           
           Write-Host "[INFO] Database and Elasticsearch configured"
