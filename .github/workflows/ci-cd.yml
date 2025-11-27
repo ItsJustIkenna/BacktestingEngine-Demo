@@ -604,27 +604,27 @@ jobs:
           helm upgrade --install backtesting-engine ./deployment/k8s/backtesting-engine-helm @helmArgs --atomic --cleanup-on-fail
           
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "❌ Deployment failed!"
+            Write-Host "Deployment failed!"
             exit 1
           }
           
-          Write-Host "✅ Deployment successful!"
+          Write-Host "Deployment successful!"
 
       - name: Verify Deployment
         shell: powershell
         run: |
           Write-Host "Verifying deployment..."
           
-          Write-Host "`n📦 Pods:"
+          Write-Host "`nPods:"
           kubectl get pods -n backtestingengine -o wide
           
-          Write-Host "`n🔌 Services:"
+          Write-Host "`nServices:"
           kubectl get services -n backtestingengine
           
-          Write-Host "`n📊 Deployments:"
+          Write-Host "`nDeployments:"
           kubectl get deployments -n backtestingengine
           
-          Write-Host "`n✅ Deployment verification complete!"
+          Write-Host "`nDeployment verification complete!"
 
       - name: Deployment Summary
         shell: powershell
