@@ -483,18 +483,21 @@ jobs:
           # Build DATABASE_URL
           $databaseUrl = "postgresql://$($env:POSTGRES_USER):$($env:POSTGRES_PASSWORD)@$($env:POSTGRES_HOST):$($env:POSTGRES_PORT)/$($env:POSTGRES_DB)"
           
-          # Build Helm arguments
+          # Build Helm arguments with commit SHA as image tag for immutability
+          $imageTag = "${{ github.sha }}".Substring(0, 7)
+          Write-Host "[INFO] Deploying with image tag: $imageTag"
+          
           $helmArgs = @(
             "--namespace", "backtestingengine",
             "--create-namespace",
             "--set", "image.repository=${{ env.IMAGE_NAME }}",
-            "--set", "image.tag=latest",
-            "--set", "image.pullPolicy=Always",
+            "--set", "image.tag=$imageTag",
+            "--set", "image.pullPolicy=IfNotPresent",
             "--set", "imagePullSecrets[0].name=ghcr-secret",
             "--set", "global.imagePullSecrets[0].name=ghcr-secret",
             "--set", "ui.image.repository=${{ env.IMAGE_NAME }}-ui",
-            "--set", "ui.image.tag=latest",
-            "--set", "ui.image.pullPolicy=Always",
+            "--set", "ui.image.tag=$imageTag",
+            "--set", "ui.image.pullPolicy=IfNotPresent",
             "--set-string", "secrets.database.username=$($env:POSTGRES_USER)",
             "--set-string", "secrets.database.password=$($env:POSTGRES_PASSWORD)",
             "--set-string", "secrets.database.url=$databaseUrl",
