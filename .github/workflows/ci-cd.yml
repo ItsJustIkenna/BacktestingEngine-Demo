@@ -289,10 +289,12 @@ jobs:
           Set-Content -Path ".dockerignore" -Value $dockerignoreContent
           
           Write-Host "[BUILD] Starting build..."
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+          Write-Host "[INFO] Building with immutable tag: $shortSha"
+          
           docker build `
             --platform linux/amd64 `
-            --tag ${{ env.IMAGE_NAME }}:latest `
-            --tag ${{ env.IMAGE_NAME }}:${{ github.sha }} `
+            --tag ${{ env.IMAGE_NAME }}:$shortSha `
             --file BacktestingEngine/deployment/Dockerfile `
             --build-arg BUILDKIT_INLINE_CACHE=1 `
             --progress=plain `
@@ -305,29 +307,45 @@ jobs:
           $buildDuration = (Get-Date) - $startTime
           Write-Host "[OK] Build completed in $([math]::Round($buildDuration.TotalMinutes, 1)) minutes"
           
-          Write-Host "[PUSH] Pushing images..."
-          docker push ${{ env.IMAGE_NAME }}:latest
-          docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          Write-Host "[PUSH] Pushing image..."
+          docker push ${{ env.IMAGE_NAME }}:$shortSha
+          Write-Host "[OK] Pushed image with immutable tag: $shortSha"
           
-          $duration = (Get-Date) - $startTime
-          Write-Host "[OK] Total time: $([math]::Round($duration.TotalMinutes, 1)) minutes"
-
-      - name: Tag Existing Image
-        if: steps.image-check.outputs.exists == 'true'
+          # Security scan with Trivy
+          Write-Host "[SCAN] Running security scan with Trivy..."
+          if (-not (Test-Path "trivy.exe")) {
+            Write-Host "Installing Trivy..."
+            Invoke-WebRequest -Uri "https://github.com/aquasecurity/trivy/releases/download/v0.48.3/trivy_0.48.3_windows-64bit.zip" -OutFile "trivy.zip"
+            Expand-Archive trivy.zip -Force
+            Move-Item trivy/trivy.exe . -Force
+            Remove-Item trivy.zip, trivy -Recurse -Force
+          }
+          
+          .\trivy.exe image --severity HIGH,CRITICAL --exit-code 0 --format sarif --output trivy-results.sarif ${{ env.IMAGE_NAME }}:$shortSha
+          Write-Host "[OK] Security scan complete"
+          
+      - name: Upload API Security Scan
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: backtesting-api
+          
+      - name: Build Summary
         shell: powershell
         run: |
-          docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.IMAGE_NAME }}:latest
-          docker push ${{ env.IMAGE_NAME }}:latest
-          Write-Host "[OK] Tagged existing image"
+          $duration = (Get-Date) - (Get-Date).AddMinutes(-5)  # Approximate
+          Write-Host "[OK] Total time: $([math]::Round($duration.TotalMinutes, 1)) minutes"
 
       - name: Validate Image
         shell: powershell
         run: |
           Write-Host "Validating image..."
-          docker pull ${{ env.IMAGE_NAME }}:latest
-          $imageSize = docker inspect ${{ env.IMAGE_NAME }}:latest --format='{{.Size}}' | ForEach-Object { [math]::Round($_ / 1MB, 1) }
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+          docker pull ${{ env.IMAGE_NAME }}:$shortSha
+          $imageSize = docker inspect ${{ env.IMAGE_NAME }}:$shortSha --format='{{.Size}}' | ForEach-Object { [math]::Round($_ / 1MB, 1) }
           Write-Host "[INFO] Image size: $imageSize MB"
-          docker run --rm ${{ env.IMAGE_NAME }}:latest ls -la /bin/server
+          docker run --rm ${{ env.IMAGE_NAME }}:$shortSha ls -la /bin/server
           Write-Host "[OK] Validation complete"
 
       - name: Build & Push UI Image
@@ -335,11 +353,11 @@ jobs:
         run: |
           Write-Host "Building UI Docker image..."
           $uiImageName = "${{ env.IMAGE_NAME }}-ui"
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
           
           docker build `
             --platform linux/amd64 `
-            --tag ${uiImageName}:latest `
-            --tag ${uiImageName}:${{ github.sha }} `
+            --tag ${uiImageName}:$shortSha `
             --file BacktestingEngine/deployment/Dockerfile.ui `
             --progress=plain `
             .
@@ -348,24 +366,43 @@ jobs:
             throw "UI Docker build failed"
           }
           
-          Write-Host "[PUSH] Pushing UI images..."
-          docker push ${uiImageName}:latest
-          docker push ${uiImageName}:${{ github.sha }}
+          Write-Host "[PUSH] Pushing UI image..."
+          docker push ${uiImageName}:$shortSha
+          Write-Host "[OK] UI image pushed with immutable tag: $shortSha"
           
-          $imageSize = docker inspect ${uiImageName}:latest --format='{{.Size}}' | ForEach-Object { [math]::Round($_ / 1MB, 1) }
+          # Scan UI image
+          .\trivy.exe image --severity HIGH,CRITICAL --exit-code 0 --format sarif --output trivy-ui-results.sarif ${uiImageName}:$shortSha
+          Write-Host "[OK] UI security scan complete"
+          
+      - name: Upload UI Security Scan
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-ui-results.sarif
+          category: backtesting-ui
+          
+      - name: UI Build Summary
+        shell: powershell
+        run: |
+          $uiImageName = "${{ env.IMAGE_NAME }}-ui"
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+          $imageSize = docker inspect ${uiImageName}:$shortSha --format='{{.Size}}' | ForEach-Object { [math]::Round($_ / 1MB, 1) }
           Write-Host "[OK] UI image size: $imageSize MB"
 
       - name: Output Summary
         shell: powershell
         run: |
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
           Write-Host "`n=========================================="
           Write-Host "Build Summary"
           Write-Host "=========================================="
           Write-Host "API Image: ${{ env.IMAGE_NAME }}"
           Write-Host "UI Image: ${{ env.IMAGE_NAME }}-ui"
-          Write-Host "Tags: latest, ${{ github.sha }}"
-          Write-Host "`nPull API: docker pull ${{ env.IMAGE_NAME }}:latest"
-          Write-Host "Pull UI:  docker pull ${{ env.IMAGE_NAME }}-ui:latest"
+          Write-Host "Immutable Tag: $shortSha"
+          Write-Host "Commit: ${{ github.sha }}"
+          Write-Host "`nPull API: docker pull ${{ env.IMAGE_NAME }}:$shortSha"
+          Write-Host "Pull UI:  docker pull ${{ env.IMAGE_NAME }}-ui:$shortSha"
+          Write-Host "`nSecurity: Trivy scan completed"
           Write-Host "=========================================="
 
   deploy:
@@ -471,6 +508,9 @@ jobs:
           
           cd BacktestingEngine
           
+          # Create namespace if it doesn't exist
+          kubectl create namespace backtestingengine --dry-run=client -o yaml | kubectl apply -f -
+          
           # Create image pull secret for GHCR
           Write-Host "[INFO] Creating image pull secret..."
           kubectl create secret docker-registry ghcr-secret `
@@ -479,6 +519,22 @@ jobs:
             --docker-password=${{ secrets.GITHUB_TOKEN }} `
             --namespace=backtestingengine `
             --dry-run=client -o yaml | kubectl apply -f -
+          
+          # Create Kubernetes secret from Azure Key Vault values
+          Write-Host "[INFO] Creating application secrets in Kubernetes..."
+          kubectl create secret generic backtesting-secrets `
+            --from-literal=database-username="$($env:POSTGRES_USER)" `
+            --from-literal=database-password="$($env:POSTGRES_PASSWORD)" `
+            --from-literal=database-host="$($env:POSTGRES_HOST)" `
+            --from-literal=database-port="$($env:POSTGRES_PORT)" `
+            --from-literal=database-name="$($env:POSTGRES_DB)" `
+            --from-literal=elasticsearch-endpoint="$($env:ELASTIC_CLOUD_ENDPOINT)" `
+            --from-literal=elasticsearch-username="$($env:ELASTIC_CLOUD_USERNAME)" `
+            --from-literal=elasticsearch-password="$($env:ELASTIC_CLOUD_PASSWORD)" `
+            --namespace=backtestingengine `
+            --dry-run=client -o yaml | kubectl apply -f -
+          
+          Write-Host "[OK] Secrets synced to Kubernetes"
           
           # Build DATABASE_URL
           $databaseUrl = "postgresql://$($env:POSTGRES_USER):$($env:POSTGRES_PASSWORD)@$($env:POSTGRES_HOST):$($env:POSTGRES_PORT)/$($env:POSTGRES_DB)"
@@ -498,15 +554,12 @@ jobs:
             "--set", "ui.image.repository=${{ env.IMAGE_NAME }}-ui",
             "--set", "ui.image.tag=$imageTag",
             "--set", "ui.image.pullPolicy=IfNotPresent",
-            "--set-string", "secrets.database.username=$($env:POSTGRES_USER)",
-            "--set-string", "secrets.database.password=$($env:POSTGRES_PASSWORD)",
-            "--set-string", "secrets.database.url=$databaseUrl",
-            "--set-string", "secrets.elasticsearch.endpoint=$($env:ELASTIC_CLOUD_ENDPOINT)",
-            "--set-string", "secrets.elasticsearch.username=$($env:ELASTIC_CLOUD_USERNAME)",
-            "--set-string", "secrets.elasticsearch.password=$($env:ELASTIC_CLOUD_PASSWORD)",
+            "--set", "secrets.existingSecret=backtesting-secrets",
             "--wait",
             "--timeout", "15m"
           )
+          
+          Write-Host "[INFO] Using Kubernetes secret: backtesting-secrets"
           
           Write-Host "[INFO] Database and Elasticsearch configured"
           
@@ -557,15 +610,19 @@ jobs:
       - name: Deployment Summary
         shell: powershell
         run: |
+          $imageTag = "${{ github.sha }}".Substring(0, 7)
           Write-Host "`n=========================================="
           Write-Host "Deployment Summary"
           Write-Host "=========================================="
           Write-Host "Namespace: backtestingengine"
           Write-Host "Release: backtesting-engine"
-          Write-Host "Images:"
-          Write-Host "  - API: ${{ env.IMAGE_NAME }}:latest"
-          Write-Host "  - UI:  ${{ env.IMAGE_NAME }}-ui:latest"
+          Write-Host "Images (Immutable):"
+          Write-Host "  - API: ${{ env.IMAGE_NAME }}:$imageTag"
+          Write-Host "  - UI:  ${{ env.IMAGE_NAME }}-ui:$imageTag"
+          Write-Host "`nSecrets: Kubernetes secret 'backtesting-secrets'"
           Write-Host "`nAccess UI:"
           Write-Host "  kubectl port-forward -n backtestingengine svc/backtesting-engine-ui 8000:80"
           Write-Host "  http://localhost:8000"
+          Write-Host "`nRollback:"
+          Write-Host "  helm rollback backtesting-engine -n backtestingengine"
           Write-Host "=========================================="

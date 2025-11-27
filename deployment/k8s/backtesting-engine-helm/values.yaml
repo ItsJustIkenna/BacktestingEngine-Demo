@@ -91,7 +91,19 @@ affinity: {}
 
 # Secrets (injected at deployment time from Azure Key Vault or CI/CD)
 secrets:
-  # Database credentials
+  # Use an existing Kubernetes secret (recommended for production)
+  # If specified, the secret should contain these keys:
+  #   - database-username
+  #   - database-password
+  #   - database-host
+  #   - database-port
+  #   - database-name
+  #   - elasticsearch-endpoint (optional)
+  #   - elasticsearch-username (optional)
+  #   - elasticsearch-password (optional)
+  existingSecret: ""  # Set to "backtesting-secrets" to use existing K8s secret
+  
+  # Database credentials (legacy - only used if existingSecret is not set)
   database:
     enabled: true
     # Credentials injected via --set-string parameters at deployment time
@@ -115,7 +127,7 @@ externalDatabase:
   port: 5432
   database: "backtesting"
   username: "backtesting"
-  existingSecret: ""  # Use Helm-generated secret
+  existingSecret: ""  # Deprecated: Use secrets.existingSecret instead
   # password: ""  # SECURE: Set via secrets.database.password
 
 # Disable built-in databases (use external)

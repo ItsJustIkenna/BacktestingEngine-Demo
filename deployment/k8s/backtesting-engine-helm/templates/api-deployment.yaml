@@ -37,7 +37,7 @@ spec:
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
                   key: database-password
       containers:
         - name: api
@@ -53,12 +53,12 @@ spec:
             - name: DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
                   key: database-password
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
                   key: DATABASE_URL
             - name: RUST_LOG
               value: "info"
