@@ -43,7 +43,7 @@ spec:
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
                   key: database-password
       containers:
         - name: {{ .Chart.Name }}
@@ -55,18 +55,14 @@ spec:
             - name: DATABASE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
                   key: database-password
             # Use shared DATABASE_URL from secrets (same as DataEngine)
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "backtesting-engine.fullname" . }}-secret
-                  {{- if .Values.secrets.database.url }}
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
                   key: DATABASE_URL
-                  {{- else }}
-                  key: database-url
-                  {{- end }}
             
             # Elasticsearch logging configuration (shared with DataEngine)
             {{- if and .Values.secrets.elasticsearch .Values.secrets.elasticsearch.enabled }}
@@ -75,17 +71,17 @@ spec:
             - name: ELASTIC_CLOUD_ENDPOINT
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "backtesting-engine" . }}-secret
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
                   key: ELASTIC_CLOUD_ENDPOINT
             - name: ELASTIC_CLOUD_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
                   key: ELASTIC_CLOUD_USERNAME
             - name: ELASTIC_CLOUD_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
                   key: ELASTIC_CLOUD_PASSWORD
             {{- else }}
             - name: USE_ELASTICSEARCH_LOGGING
@@ -96,14 +92,14 @@ spec:
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
                   key: jwt-secret
             {{- end }}
             {{- if and .Values.config.secrets .Values.config.secrets.encryption_key }}
             - name: ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "backtesting-engine.fullname" . }}-secret
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
                   key: encryption-key
             {{- end }}
             # Load all config from ConfigMap as environment variables
