@@ -508,8 +508,10 @@ jobs:
           Write-Host "[INFO] Database and Elasticsearch configured"
           
           # Use helm upgrade --install to handle both new and existing releases
+          # --atomic: rollback automatically on failure
+          # --cleanup-on-fail: delete resources created during failed upgrade
           Write-Host "Deploying with Helm (upgrade or install)..."
-          helm upgrade --install backtesting-engine ./deployment/k8s/backtesting-engine-helm @helmArgs
+          helm upgrade --install backtesting-engine ./deployment/k8s/backtesting-engine-helm @helmArgs --atomic --cleanup-on-fail
           
           if ($LASTEXITCODE -ne 0) {
             Write-Host "❌ Deployment failed!"
