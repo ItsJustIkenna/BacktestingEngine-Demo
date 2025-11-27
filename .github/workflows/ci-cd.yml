@@ -509,11 +509,17 @@ jobs:
           
           # Check and clear any stuck Helm operations
           Write-Host "[INFO] Checking Helm release status..."
-          $helmStatus = helm status backtesting-engine -n backtestingengine -o json 2>$null | ConvertFrom-Json
-          if ($helmStatus -and $helmStatus.info.status -match "pending") {
-            Write-Host "[WARN] Found stuck release, rolling back..."
-            helm rollback backtesting-engine -n backtestingengine --wait
+          $ErrorActionPreference = 'SilentlyContinue'
+          $helmList = helm list -n backtestingengine --all -o json | ConvertFrom-Json
+          $ErrorActionPreference = 'Stop'
+          
+          if ($helmList -and $helmList.status -match "pending") {
+            Write-Host "[WARN] Found stuck release in status: $($helmList.status), rolling back..."
+            helm rollback backtesting-engine -n backtestingengine --wait --timeout 2m
             Start-Sleep -Seconds 5
+            Write-Host "[OK] Rollback completed"
+          } else {
+            Write-Host "[OK] No stuck releases found"
           }
           
           # Use helm upgrade --install to handle both new and existing releases
