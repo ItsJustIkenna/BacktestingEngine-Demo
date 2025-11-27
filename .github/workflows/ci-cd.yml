@@ -507,6 +507,15 @@ jobs:
           
           Write-Host "[INFO] Database and Elasticsearch configured"
           
+          # Check and clear any stuck Helm operations
+          Write-Host "[INFO] Checking Helm release status..."
+          $helmStatus = helm status backtesting-engine -n backtestingengine -o json 2>$null | ConvertFrom-Json
+          if ($helmStatus -and $helmStatus.info.status -match "pending") {
+            Write-Host "[WARN] Found stuck release, rolling back..."
+            helm rollback backtesting-engine -n backtestingengine --wait
+            Start-Sleep -Seconds 5
+          }
+          
           # Use helm upgrade --install to handle both new and existing releases
           # --atomic: rollback automatically on failure
           # --cleanup-on-fail: delete resources created during failed upgrade
