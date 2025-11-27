@@ -531,12 +531,17 @@ jobs:
           
           # Create Kubernetes secret from Azure Key Vault values
           Write-Host "[INFO] Creating application secrets in Kubernetes..."
+          
+          # Build DATABASE_URL first
+          $databaseUrl = "postgresql://$($env:POSTGRES_USER):$($env:POSTGRES_PASSWORD)@$($env:POSTGRES_HOST):$($env:POSTGRES_PORT)/$($env:POSTGRES_DB)"
+          
           kubectl create secret generic backtesting-secrets `
             --from-literal=database-username="$($env:POSTGRES_USER)" `
             --from-literal=database-password="$($env:POSTGRES_PASSWORD)" `
             --from-literal=database-host="$($env:POSTGRES_HOST)" `
             --from-literal=database-port="$($env:POSTGRES_PORT)" `
             --from-literal=database-name="$($env:POSTGRES_DB)" `
+            --from-literal=DATABASE_URL="$databaseUrl" `
             --from-literal=elasticsearch-endpoint="$($env:ELASTIC_CLOUD_ENDPOINT)" `
             --from-literal=elasticsearch-username="$($env:ELASTIC_CLOUD_USERNAME)" `
             --from-literal=elasticsearch-password="$($env:ELASTIC_CLOUD_PASSWORD)" `
@@ -544,9 +549,6 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
           
           Write-Host "[OK] Secrets synced to Kubernetes"
-          
-          # Build DATABASE_URL
-          $databaseUrl = "postgresql://$($env:POSTGRES_USER):$($env:POSTGRES_PASSWORD)@$($env:POSTGRES_HOST):$($env:POSTGRES_PORT)/$($env:POSTGRES_DB)"
           
           # Build Helm arguments with commit SHA as image tag for immutability
           $imageTag = "${{ github.sha }}".Substring(0, 7)
