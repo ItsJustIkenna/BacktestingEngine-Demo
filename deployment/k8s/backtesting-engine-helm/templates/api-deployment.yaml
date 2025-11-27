@@ -43,8 +43,7 @@ spec:
         - name: api
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["/docker-entrypoint.sh"]
-          args: ["api"]  # Run in API-only mode (nginx + API server, no workers)
+          # Use image's default CMD: /bin/server serve
           ports:
             - name: http
               containerPort: 8080
