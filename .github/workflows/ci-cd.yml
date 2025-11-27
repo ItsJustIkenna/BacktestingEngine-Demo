@@ -321,12 +321,14 @@ jobs:
             Remove-Item trivy.zip, trivy -Recurse -Force
           }
           
-          .\trivy.exe image --severity HIGH,CRITICAL --exit-code 0 --format sarif --output trivy-results.sarif ${{ env.IMAGE_NAME }}:$shortSha
+          .\\trivy.exe image --severity HIGH,CRITICAL --exit-code 0 --format sarif --output trivy-results.sarif ${{ env.IMAGE_NAME }}:$shortSha
+          .\\trivy.exe image --severity HIGH,CRITICAL --exit-code 0 --format table ${{ env.IMAGE_NAME }}:$shortSha
           Write-Host "[OK] Security scan complete"
           
       - name: Upload API Security Scan
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: false  # Disabled: Requires security-events permission not available on self-hosted runner
+        continue-on-error: true
         with:
           sarif_file: trivy-results.sarif
           category: backtesting-api
@@ -370,13 +372,20 @@ jobs:
           docker push ${uiImageName}:$shortSha
           Write-Host "[OK] UI image pushed with immutable tag: $shortSha"
           
-          # Scan UI image
-          .\trivy.exe image --severity HIGH,CRITICAL --exit-code 0 --format sarif --output trivy-ui-results.sarif ${uiImageName}:$shortSha
+      - name: Scan UI Image
+        shell: powershell
+        continue-on-error: true
+        run: |
+          $uiImageName = "${{ env.IMAGE_NAME }}-ui"
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+          Write-Host "[SCAN] Running UI security scan with Trivy..."
+          .\trivy.exe image --severity HIGH,CRITICAL --exit-code 0 --format table ${uiImageName}:$shortSha
           Write-Host "[OK] UI security scan complete"
           
       - name: Upload UI Security Scan
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: false  # Disabled: Requires security-events permission not available on self-hosted runner
+        continue-on-error: true
         with:
           sarif_file: trivy-ui-results.sarif
           category: backtesting-ui
