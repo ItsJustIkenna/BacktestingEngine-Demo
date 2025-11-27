@@ -550,6 +550,19 @@ jobs:
           
           Write-Host "[OK] Secrets synced to Kubernetes"
           
+          # Install Nginx Ingress Controller if not present
+          Write-Host "[INFO] Checking for Nginx Ingress Controller..."
+          $ingressNs = kubectl get namespace ingress-nginx --ignore-not-found
+          if ([string]::IsNullOrEmpty($ingressNs)) {
+            Write-Host "[INFO] Installing Nginx Ingress Controller..."
+            kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml
+            Write-Host "[INFO] Waiting for Ingress Controller to be ready..."
+            kubectl wait --namespace ingress-nginx --for=condition=ready pod --selector=app.kubernetes.io/component=controller --timeout=120s
+            Write-Host "[OK] Ingress Controller installed"
+          } else {
+            Write-Host "[OK] Ingress Controller already installed"
+          }
+          
           # Build Helm arguments with commit SHA as image tag for immutability
           $imageTag = "${{ github.sha }}".Substring(0, 7)
           Write-Host "[INFO] Deploying with image tag: $imageTag"
@@ -609,6 +622,11 @@ jobs:
           }
           
           Write-Host "Deployment successful!"
+          
+          # Setup Ingress for UI access
+          Write-Host "[INFO] Configuring Ingress for UI..."
+          kubectl apply -f ./deployment/k8s/backtesting-ui-ingress.yaml
+          Write-Host "[OK] Ingress configured"
 
       - name: Verify Deployment
         shell: powershell
@@ -623,6 +641,9 @@ jobs:
           
           Write-Host "`nDeployments:"
           kubectl get deployments -n backtestingengine
+          
+          Write-Host "`nIngress:"
+          kubectl get ingress -n backtestingengine
           
           Write-Host "`nDeployment verification complete!"
 
@@ -639,9 +660,10 @@ jobs:
           Write-Host "  - API: ${{ env.IMAGE_NAME }}:$imageTag"
           Write-Host "  - UI:  ${{ env.IMAGE_NAME }}-ui:$imageTag"
           Write-Host "`nSecrets: Kubernetes secret 'backtesting-secrets'"
-          Write-Host "`nAccess UI:"
-          Write-Host "  kubectl port-forward -n backtestingengine svc/backtesting-engine-ui 8000:80"
-          Write-Host "  http://localhost:8000"
+          Write-Host "`nIngress: Nginx Ingress Controller installed"
+          Write-Host "Access UI:"
+          Write-Host "  - http://backtesting.local (add '192.81.111.116 backtesting.local' to local hosts file)"
+          Write-Host "  - kubectl port-forward -n backtestingengine svc/backtesting-engine-ui 8000:80"
           Write-Host "`nRollback:"
           Write-Host "  helm rollback backtesting-engine -n backtestingengine"
           Write-Host "=========================================="
