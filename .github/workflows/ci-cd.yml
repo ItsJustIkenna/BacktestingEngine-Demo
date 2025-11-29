@@ -165,7 +165,7 @@ jobs:
         shell: powershell
         run: |
           cd BacktestingEngine/gui
-          npm ci
+          npm ci --legacy-peer-deps
           Write-Host "✅ UI dependencies installed!"
 
       - name: Run UI Tests
