@@ -1,0 +1,14 @@
+# Exclude large directories to reduce build context
+target/
+.git/
+.github/
+node_modules/
+gui/node_modules/
+
+# But explicitly include what we need
+!deployment/nginx.conf
+!gui/package.json
+!gui/package-lock.json
+!gui/src/
+!gui/public/
+!gui/tsconfig.json

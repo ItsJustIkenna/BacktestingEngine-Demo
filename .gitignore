@@ -84,7 +84,6 @@ build/
 out/
 
 # Docker
-.dockerignore
 Dockerfile.bak
 
 # Kubernetes
