@@ -2,13 +2,22 @@
 target/
 .git/
 .github/
-node_modules/
-gui/node_modules/
+docs/
+tests/
+backtest/
+config/
+dataloader/
+genetic/
+metrics/
+orderbook/
+portfoliomanager/
+program/
+riskmanager/
+signal/
+strategy/
+walkforward/
 
-# But explicitly include what we need
-!deployment/nginx.conf
-!gui/package.json
-!gui/package-lock.json
-!gui/src/
-!gui/public/
-!gui/tsconfig.json
+# Exclude node_modules but they'll be installed in container
+**/node_modules/
+
+# Keep what we need - gui folder and deployment folder are not excluded
