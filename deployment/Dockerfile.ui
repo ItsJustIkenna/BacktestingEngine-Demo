@@ -9,10 +9,10 @@ ARG NODE_VERSION=18
 FROM node:${NODE_VERSION}-alpine AS ui-build
 
 WORKDIR /app/gui
-COPY gui/package*.json ./
+COPY BacktestingEngine/gui/package*.json ./
 RUN npm ci --only=production
 
-COPY gui/ ./
+COPY BacktestingEngine/gui/ ./
 RUN npm run build
 
 ################################################################################
@@ -22,12 +22,12 @@ FROM nginx:alpine
 # Copy built UI
 COPY --from=ui-build /app/gui/build /usr/share/nginx/html
 
-# Copy custom nginx configuration
-COPY deployment/nginx.conf /etc/nginx/nginx.conf
+# Remove default nginx config (will be provided by k8s ConfigMap)
+RUN rm /etc/nginx/conf.d/default.conf
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --quiet --tries=1 --spider http://localhost/health || exit 1
+  CMD wget --quiet --tries=1 --spider http://localhost/ || exit 1
 
 # Metadata
 LABEL maintainer="Nwagbara-Group-LLC"

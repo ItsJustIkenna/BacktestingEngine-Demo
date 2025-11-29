@@ -357,23 +357,12 @@ jobs:
           $uiImageName = "${{ env.IMAGE_NAME }}-ui"
           $shortSha = "${{ github.sha }}".Substring(0, 7)
           
-          Write-Host "DEBUG: Current directory: $(Get-Location)"
-          Write-Host "DEBUG: Checking if BacktestingEngine exists..."
-          Test-Path BacktestingEngine
-          Write-Host "DEBUG: Listing BacktestingEngine..."
-          Get-ChildItem BacktestingEngine | Select-Object Name
-          Write-Host "DEBUG: Checking deployment directory..."
-          Test-Path BacktestingEngine/deployment
-          Get-ChildItem BacktestingEngine/deployment | Select-Object Name
-          Write-Host "DEBUG: Checking nginx.conf..."
-          Test-Path BacktestingEngine/deployment/nginx.conf
-          
           docker build `
             --platform linux/amd64 `
             --tag ${uiImageName}:$shortSha `
             --file BacktestingEngine/deployment/Dockerfile.ui `
             --progress=plain `
-            BacktestingEngine
+            .
             
           if ($LASTEXITCODE -ne 0) {
             throw "UI Docker build failed"

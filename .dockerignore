@@ -1,23 +1,10 @@
-# Exclude large directories to reduce build context
-target/
-.git/
-.github/
-docs/
-tests/
-backtest/
-config/
-dataloader/
-genetic/
-metrics/
-orderbook/
-portfoliomanager/
-program/
-riskmanager/
-signal/
-strategy/
-walkforward/
+# Exclude everything first
+*
 
-# Exclude node_modules but they'll be installed in container
-**/node_modules/
+# Then explicitly include what we need
+!gui/
+!deployment/
+!.dockerignore
 
-# Keep what we need - gui folder and deployment folder are not excluded
+# Exclude node_modules from gui
+gui/node_modules/
