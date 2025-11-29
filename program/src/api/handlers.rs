@@ -344,9 +344,9 @@ impl IntoResponse for AppError {
 /// POST /api/backtest/:id/cancel
 pub async fn cancel_backtest(
     State(_state): State<ApiState>,
-    Path(job_id): Path<String>,
+    Path(job_id_str): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    log_info!(MAIN_LOGGER, "Request to cancel job: {}", job_id);
+    log_info!(MAIN_LOGGER, "Request to cancel job: {}", job_id_str);
     
     #[cfg(feature = "postgres")]
     {
@@ -364,7 +364,7 @@ pub async fn cancel_backtest(
         // First check if job exists and its status
         use databaseschema::schema::backtest_jobs::dsl::*;
         let job: Option<(String, String)> = backtest_jobs
-            .filter(job_id.eq(&job_id))
+            .filter(job_id.eq(&job_id_str))
             .select((job_id, status))
             .first(&mut conn)
             .await
@@ -373,13 +373,13 @@ pub async fn cancel_backtest(
         
         match job {
             None => {
-                log_warn!(MAIN_LOGGER, "Job {} not found", job_id);
-                return Err(AppError::NotFound(format!("Job {} not found", job_id)));
+                log_warn!(MAIN_LOGGER, "Job {} not found", job_id_str);
+                return Err(AppError::NotFound(format!("Job {} not found", job_id_str)));
             }
             Some((_, job_status)) => {
                 // Only allow cancellation of running or queued jobs
                 if !is_cancellable_status(&job_status) {
-                    log_warn!(MAIN_LOGGER, "Job {} cannot be cancelled (status: {})", job_id, job_status);
+                    log_warn!(MAIN_LOGGER, "Job {} cannot be cancelled (status: {})", job_id_str, job_status);
                     return Err(AppError::BadRequest(format!(
                         "Job cannot be cancelled. Current status: {}. Only running or queued jobs can be cancelled.",
                         job_status
@@ -388,7 +388,7 @@ pub async fn cancel_backtest(
                 
                 // Cancel the job by marking as cancelled
                 diesel::update(backtest_jobs)
-                    .filter(job_id.eq(&job_id))
+                    .filter(job_id.eq(&job_id_str))
                     .set((
                         status.eq("cancelled"),
                         error_message.eq(Some("Cancelled by user")),
@@ -398,11 +398,11 @@ pub async fn cancel_backtest(
                     .await
                     .map_err(|e| AppError::Internal(format!("Failed to cancel job: {}", e)))?;
                 
-                log_info!(MAIN_LOGGER, "Job {} cancelled successfully", job_id);
+                log_info!(MAIN_LOGGER, "Job {} cancelled successfully", job_id_str);
                 
                 return Ok(Json(serde_json::json!({
                     "message": "Job cancelled successfully",
-                    "job_id": job_id,
+                    "job_id": job_id_str,
                     "status": "cancelled",
                 })));
             }
