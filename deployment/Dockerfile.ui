@@ -10,7 +10,7 @@ FROM node:${NODE_VERSION}-alpine AS ui-build
 
 WORKDIR /app/gui
 COPY BacktestingEngine/gui/package*.json ./
-RUN npm ci --only=production
+RUN npm ci --legacy-peer-deps
 
 COPY BacktestingEngine/gui/ ./
 RUN npm run build
