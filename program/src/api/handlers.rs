@@ -417,9 +417,9 @@ pub async fn cancel_backtest(
 /// DELETE /api/backtest/:id
 pub async fn delete_backtest(
     State(_state): State<ApiState>,
-    Path(job_id): Path<String>,
+    Path(job_id_str): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    log_info!(MAIN_LOGGER, "Request to delete job: {}", job_id);
+    log_info!(MAIN_LOGGER, "Request to delete job: {}", job_id_str);
     
     #[cfg(feature = "postgres")]
     {
@@ -439,7 +439,7 @@ pub async fn delete_backtest(
         use databaseschema::schema::backtest_results;
         
         let job: Option<(String, String, Option<uuid::Uuid>)> = backtest_jobs
-            .filter(job_id.eq(&job_id))
+            .filter(job_id.eq(&job_id_str))
             .select((job_id, status, result_id))
             .first(&mut conn)
             .await
@@ -448,13 +448,13 @@ pub async fn delete_backtest(
         
         match job {
             None => {
-                log_warn!(MAIN_LOGGER, "Job {} not found", job_id);
-                return Err(AppError::NotFound(format!("Job {} not found", job_id)));
+                log_warn!(MAIN_LOGGER, "Job {} not found", job_id_str);
+                return Err(AppError::NotFound(format!("Job {} not found", job_id_str)));
             }
             Some((_, job_status, job_result_id)) => {
                 // Only allow deletion of completed, failed, or cancelled jobs
                 if !is_deletable_status(&job_status) {
-                    log_warn!(MAIN_LOGGER, "Job {} cannot be deleted (status: {})", job_id, job_status);
+                    log_warn!(MAIN_LOGGER, "Job {} cannot be deleted (status: {})", job_id_str, job_status);
                     return Err(AppError::BadRequest(format!(
                         "Job cannot be deleted while {}. Please cancel the job first or wait for it to complete.",
                         job_status
@@ -468,20 +468,20 @@ pub async fn delete_backtest(
                         .await
                         .map_err(|e| AppError::Internal(format!("Failed to delete backtest results: {}", e)))?;
                     
-                    log_info!(MAIN_LOGGER, "Deleted backtest results for job {}", job_id);
+                    log_info!(MAIN_LOGGER, "Deleted backtest results for job {}", job_id_str);
                 }
                 
                 // Delete the job itself
-                diesel::delete(backtest_jobs.filter(job_id.eq(&job_id)))
+                diesel::delete(backtest_jobs.filter(job_id.eq(&job_id_str)))
                     .execute(&mut conn)
                     .await
                     .map_err(|e| AppError::Internal(format!("Failed to delete job: {}", e)))?;
                 
-                log_info!(MAIN_LOGGER, "Job {} deleted successfully", job_id);
+                log_info!(MAIN_LOGGER, "Job {} deleted successfully", job_id_str);
                 
                 return Ok(Json(serde_json::json!({
                     "message": "Job and all associated data deleted successfully",
-                    "job_id": job_id,
+                    "job_id": job_id_str,
                 })));
             }
         }
