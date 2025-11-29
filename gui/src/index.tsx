@@ -4,6 +4,7 @@ import './index.css';
 import BacktestForm from './components/BacktestForm';
 import JobList from './components/JobList';
 import ResultsVisualization from './components/ResultsVisualization';
+import ErrorBoundary from './components/ErrorBoundary';
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<'form' | 'list' | 'results'>('list');
@@ -83,6 +84,8 @@ const root = ReactDOM.createRoot(
 );
 root.render(
   <React.StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </React.StrictMode>
 );
