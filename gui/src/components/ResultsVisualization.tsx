@@ -639,7 +639,7 @@ const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
         
         {/* X-axis labels (show first, middle, last) */}
         {[0, Math.floor(data.length / 2), data.length - 1].map((index) => {
-          if (index >= data.length) return null;
+          if (index >= data.length || !data[index]) return null;
           const x = xScale(index);
           const timestamp = new Date(data[index].timestamp).toLocaleDateString();
           return (
