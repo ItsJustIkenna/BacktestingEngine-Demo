@@ -292,7 +292,14 @@ describe('JobList', () => {
 
     const allDeleteButtons = screen.getAllByRole('button', { name: /delete/i });
     expect(allDeleteButtons.length).toBeGreaterThan(1); // Should have both table Delete buttons and modal Delete button
-    expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument();
+    
+    // Check for cancel button in modal specifically (not Cancel action buttons)
+    const allButtons = screen.getAllByRole('button');
+    const modalCancelButton = allButtons.find(btn => 
+      btn.textContent === 'Cancel' && 
+      btn.style.backgroundColor === 'rgb(108, 117, 125)'
+    );
+    expect(modalCancelButton).toBeInTheDocument();
   });
 
   test('deletes job when confirmed', async () => {
@@ -361,8 +368,16 @@ describe('JobList', () => {
       expect(screen.getByText(/are you sure/i)).toBeInTheDocument();
     });
 
-    const cancelButton = screen.getByRole('button', { name: /cancel/i });
-    fireEvent.click(cancelButton);
+    // Get the cancel button from the modal specifically (not any Cancel action buttons)
+    const allButtons = screen.getAllByRole('button');
+    const cancelButton = allButtons.find(btn => 
+      btn.textContent === 'Cancel' && 
+      btn.style.backgroundColor === 'rgb(108, 117, 125)'
+    );
+    
+    if (cancelButton) {
+      fireEvent.click(cancelButton);
+    }
 
     await waitFor(() => {
       expect(screen.queryByText(/are you sure/i)).not.toBeInTheDocument();
@@ -381,4 +396,241 @@ describe('JobList', () => {
     expect(screen.getByText('COMPLETED')).toBeInTheDocument();
     expect(screen.getByText('100%')).toBeInTheDocument();
   });
+
+  // New tests for cancel vs delete functionality
+
+  test('shows Delete button for completed jobs', async () => {
+    const completedJob = {
+      ...mockJobs[0],
+      status: 'completed',
+      progress: 100,
+    };
+
+    (global.fetch as jest.Mock).mockImplementation((url: string) => {
+      if (url === '/api/symbols') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ data: [{ symbol: 'BTC-USD' }] }),
+        });
+      }
+      if (url === '/api/exchanges') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ data: [{ exchange: 'coinbase' }] }),
+        });
+      }
+      if (url.startsWith('/api/backtests')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ backtests: [completedJob], total: 1 }),
+        });
+      }
+      return Promise.resolve({ ok: false });
+    });
+
+    render(<JobList />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/job-1/)).toBeInTheDocument();
+    });
+
+    // Should have Delete button for completed job
+    const deleteButtons = screen.getAllByRole('button', { name: /delete/i });
+    expect(deleteButtons.length).toBeGreaterThan(0);
+  });
+
+  test('shows Cancel button for running jobs', async () => {
+    const runningJob = {
+      job_id: 'running-job',
+      symbol: 'BTC-USD',
+      exchange: 'binance',
+      status: 'running',
+      progress: 50,
+      created_at: '2024-01-01T00:00:00Z',
+    };
+
+    (global.fetch as jest.Mock).mockImplementation((url: string) => {
+      if (url === '/api/symbols') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ data: [{ symbol: 'BTC-USD' }] }),
+        });
+      }
+      if (url === '/api/exchanges') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ data: [{ exchange: 'binance' }] }),
+        });
+      }
+      if (url.startsWith('/api/backtests')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ backtests: [runningJob], total: 1 }),
+        });
+      }
+      return Promise.resolve({ ok: false });
+    });
+
+    render(<JobList />);
+
+    await waitFor(() => {
+      expect(screen.getByText('RUNNING')).toBeInTheDocument();
+    });
+
+    // Should have Cancel button (yellow) for running job
+    const allButtons = screen.getAllByRole('button');
+    const cancelButton = allButtons.find(btn => 
+      btn.textContent === 'Cancel' && 
+      btn.style.backgroundColor === 'rgb(255, 193, 7)'
+    );
+    
+    expect(cancelButton).toBeInTheDocument();
+  });
+
+  test('calls cancel endpoint for running jobs', async () => {
+    const runningJob = {
+      job_id: 'running-job',
+      symbol: 'BTC-USD',
+      exchange: 'binance',
+      status: 'running',
+      progress: 50,
+      created_at: '2024-01-01T00:00:00Z',
+    };
+
+    (global.fetch as jest.Mock).mockImplementation((url: string, options?: RequestInit) => {
+      if (url === '/api/symbols') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ data: [{ symbol: 'BTC-USD' }] }),
+        });
+      }
+      if (url === '/api/exchanges') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ data: [{ exchange: 'binance' }] }),
+        });
+      }
+      if (url.includes('/cancel') && options?.method === 'POST') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ message: 'Job cancelled successfully' }),
+        });
+      }
+      if (url.startsWith('/api/backtests')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ backtests: [runningJob], total: 1 }),
+        });
+      }
+      return Promise.resolve({ ok: false });
+    });
+
+    render(<JobList />);
+
+    await waitFor(() => {
+      expect(screen.getByText('RUNNING')).toBeInTheDocument();
+    });
+
+    // Find and click the Cancel action button
+    const allButtons = screen.getAllByRole('button');
+    const cancelActionButton = allButtons.find(btn => 
+      btn.textContent === 'Cancel' && 
+      btn.style.backgroundColor === 'rgb(255, 193, 7)'
+    );
+    
+    if (cancelActionButton) {
+      fireEvent.click(cancelActionButton);
+    }
+
+    // Confirm in the modal
+    await waitFor(() => {
+      expect(screen.getByText(/Are you sure you want to cancel this running backtest/i)).toBeInTheDocument();
+    });
+
+    const confirmButton = screen.getByRole('button', { name: /Yes, Cancel Job/i });
+    fireEvent.click(confirmButton);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/cancel'),
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+  });
+
+  test('shows appropriate button based on job status', async () => {
+    const jobs = [
+      {
+        job_id: 'completed-job',
+        symbol: 'BTC-USD',
+        exchange: 'binance',
+        status: 'completed',
+        progress: 100,
+        created_at: '2024-01-01T00:00:00Z',
+      },
+      {
+        job_id: 'running-job',
+        symbol: 'ETH-USD',
+        exchange: 'binance',
+        status: 'running',
+        progress: 50,
+        created_at: '2024-01-01T01:00:00Z',
+      },
+      {
+        job_id: 'failed-job',
+        symbol: 'SOL-USD',
+        exchange: 'binance',
+        status: 'failed',
+        progress: 25,
+        created_at: '2024-01-01T02:00:00Z',
+      },
+    ];
+
+    (global.fetch as jest.Mock).mockImplementation((url: string) => {
+      if (url === '/api/symbols') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ data: [{ symbol: 'BTC-USD' }] }),
+        });
+      }
+      if (url === '/api/exchanges') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ data: [{ exchange: 'binance' }] }),
+        });
+      }
+      if (url.startsWith('/api/backtests')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ backtests: jobs, total: jobs.length }),
+        });
+      }
+      return Promise.resolve({ ok: false });
+    });
+
+    render(<JobList />);
+
+    await waitFor(() => {
+      expect(screen.getByText('COMPLETED')).toBeInTheDocument();
+      expect(screen.getByText('RUNNING')).toBeInTheDocument();
+      expect(screen.getByText('FAILED')).toBeInTheDocument();
+    });
+
+    const allButtons = screen.getAllByRole('button');
+    
+    // Completed job should have Delete button (red)
+    const deleteButtons = allButtons.filter(btn => 
+      btn.textContent === 'Delete' && 
+      btn.style.backgroundColor === 'rgb(220, 53, 69)'
+    );
+    expect(deleteButtons.length).toBeGreaterThanOrEqual(2); // completed + failed
+
+    // Running job should have Cancel button (yellow)
+    const cancelButtons = allButtons.filter(btn => 
+      btn.textContent === 'Cancel' && 
+      btn.style.backgroundColor === 'rgb(255, 193, 7)'
+    );
+    expect(cancelButtons.length).toBeGreaterThanOrEqual(1);
+  });
 });
+

@@ -28,6 +28,8 @@ export const JobList: React.FC<JobListProps> = ({
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cancelConfirm, setCancelConfirm] = useState<string | null>(null); // job_id to cancel
+  const [cancelling, setCancelling] = useState<string | null>(null); // job_id being cancelled
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null); // job_id to delete
   const [deleting, setDeleting] = useState<string | null>(null); // job_id being deleted
   
@@ -154,9 +156,38 @@ export const JobList: React.FC<JobListProps> = ({
     setOffset((newPage - 1) * limit);
   };
 
+  const handleCancelClick = (e: React.MouseEvent, jobId: string) => {
+    e.stopPropagation(); // Prevent row click
+    setCancelConfirm(jobId);
+  };
+
   const handleDeleteClick = (e: React.MouseEvent, jobId: string) => {
     e.stopPropagation(); // Prevent row click
     setDeleteConfirm(jobId);
+  };
+
+  const handleCancelConfirm = async (jobId: string) => {
+    setCancelling(jobId);
+    setError(null);
+
+    try {
+      const response = await fetch(`/api/backtest/${jobId}/cancel`, {
+        method: 'POST',
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to cancel backtest');
+      }
+
+      // Refresh the list
+      await fetchJobs();
+      setCancelConfirm(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to cancel backtest');
+    } finally {
+      setCancelling(null);
+    }
   };
 
   const handleDeleteConfirm = async (jobId: string) => {
@@ -183,8 +214,20 @@ export const JobList: React.FC<JobListProps> = ({
     }
   };
 
+  const handleCancelCancel = () => {
+    setCancelConfirm(null);
+  };
+
   const handleDeleteCancel = () => {
     setDeleteConfirm(null);
+  };
+
+  const isJobCancellable = (status: string) => {
+    return ['running', 'queued', 'pending'].includes(status.toLowerCase());
+  };
+
+  const isJobDeletable = (status: string) => {
+    return ['completed', 'failed', 'cancelled'].includes(status.toLowerCase());
   };
 
   return (
@@ -357,22 +400,43 @@ export const JobList: React.FC<JobListProps> = ({
                   <td style={{ padding: '12px' }}>{formatNumber(job.win_rate)}%</td>
                   <td style={{ padding: '12px', fontSize: '12px' }}>{formatDate(job.created_at)}</td>
                   <td style={{ padding: '12px' }}>
-                    <button
-                      onClick={(e) => handleDeleteClick(e, job.job_id)}
-                      disabled={deleting === job.job_id}
-                      style={{
-                        padding: '4px 8px',
-                        backgroundColor: '#dc3545',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: deleting === job.job_id ? 'not-allowed' : 'pointer',
-                        fontSize: '12px',
-                        opacity: deleting === job.job_id ? 0.6 : 1,
-                      }}
-                    >
-                      {deleting === job.job_id ? 'Deleting...' : 'Delete'}
-                    </button>
+                    {isJobCancellable(job.status) ? (
+                      <button
+                        onClick={(e) => handleCancelClick(e, job.job_id)}
+                        disabled={cancelling === job.job_id}
+                        style={{
+                          padding: '4px 8px',
+                          backgroundColor: '#ffc107',
+                          color: '#212529',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: cancelling === job.job_id ? 'not-allowed' : 'pointer',
+                          fontSize: '12px',
+                          opacity: cancelling === job.job_id ? 0.6 : 1,
+                        }}
+                      >
+                        {cancelling === job.job_id ? 'Cancelling...' : 'Cancel'}
+                      </button>
+                    ) : isJobDeletable(job.status) ? (
+                      <button
+                        onClick={(e) => handleDeleteClick(e, job.job_id)}
+                        disabled={deleting === job.job_id}
+                        style={{
+                          padding: '4px 8px',
+                          backgroundColor: '#dc3545',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: deleting === job.job_id ? 'not-allowed' : 'pointer',
+                          fontSize: '12px',
+                          opacity: deleting === job.job_id ? 0.6 : 1,
+                        }}
+                      >
+                        {deleting === job.job_id ? 'Deleting...' : 'Delete'}
+                      </button>
+                    ) : (
+                      <span style={{ fontSize: '12px', color: '#6c757d' }}>-</span>
+                    )}
                   </td>
                 </tr>
               ))
@@ -380,6 +444,76 @@ export const JobList: React.FC<JobListProps> = ({
           </tbody>
         </table>
       </div>
+
+      {/* Cancel Confirmation Modal */}
+      {cancelConfirm && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0,0,0,0.5)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 1000,
+        }}>
+          <div style={{
+            backgroundColor: 'white',
+            padding: '30px',
+            borderRadius: '8px',
+            boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+            maxWidth: '500px',
+            width: '90%',
+          }}>
+            <h3 style={{ marginTop: 0, marginBottom: '20px' }}>Confirm Cancel</h3>
+            <p style={{ marginBottom: '20px' }}>
+              Are you sure you want to cancel this running backtest?
+            </p>
+            <p style={{ 
+              fontSize: '12px', 
+              color: '#666', 
+              fontFamily: 'monospace',
+              marginBottom: '20px',
+              wordBreak: 'break-all',
+            }}>
+              Job ID: {cancelConfirm}
+            </p>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button
+                onClick={handleCancelCancel}
+                disabled={cancelling === cancelConfirm}
+                style={{
+                  padding: '8px 16px',
+                  backgroundColor: '#6c757d',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: cancelling === cancelConfirm ? 'not-allowed' : 'pointer',
+                }}
+              >
+                No, Keep Running
+              </button>
+              <button
+                onClick={() => handleCancelConfirm(cancelConfirm)}
+                disabled={cancelling === cancelConfirm}
+                style={{
+                  padding: '8px 16px',
+                  backgroundColor: '#ffc107',
+                  color: '#212529',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: cancelling === cancelConfirm ? 'not-allowed' : 'pointer',
+                  opacity: cancelling === cancelConfirm ? 0.6 : 1,
+                }}
+              >
+                {cancelling === cancelConfirm ? 'Cancelling...' : 'Yes, Cancel Job'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Delete Confirmation Modal */}
       {deleteConfirm && (
@@ -405,7 +539,7 @@ export const JobList: React.FC<JobListProps> = ({
           }}>
             <h3 style={{ marginTop: 0, marginBottom: '20px' }}>Confirm Delete</h3>
             <p style={{ marginBottom: '20px' }}>
-              Are you sure you want to delete this backtest?
+              Are you sure you want to permanently delete this backtest and all its results?
             </p>
             <p style={{ 
               fontSize: '12px', 

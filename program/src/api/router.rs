@@ -23,9 +23,11 @@ pub fn build_router(job_queue: Arc<dyn JobQueue>) -> Router {
         
         // API routes
         .route("/api/backtest", post(handlers::submit_backtest))
+        .route("/api/backtest/cleanup", post(handlers::cleanup_old_backtests))
         .route("/api/backtest/:id", 
             get(handlers::get_job_details)
             .delete(handlers::delete_backtest))
+        .route("/api/backtest/:id/cancel", post(handlers::cancel_backtest))
         .route("/api/backtest/:id/status", get(handlers::get_job_status))
         .route("/api/backtest/:id/results", get(handlers::get_job_results))
         .route("/api/backtests", get(history::get_backtests))

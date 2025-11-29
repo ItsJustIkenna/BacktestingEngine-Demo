@@ -340,7 +340,80 @@ impl IntoResponse for AppError {
     }
 }
 
-/// Cancel/delete a backtest job
+/// Cancel a running backtest job
+/// POST /api/backtest/:id/cancel
+pub async fn cancel_backtest(
+    State(_state): State<ApiState>,
+    Path(job_id): Path<String>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    log_info!(MAIN_LOGGER, "Request to cancel job: {}", job_id);
+    
+    #[cfg(feature = "postgres")]
+    {
+        use diesel::prelude::*;
+        use diesel_async::{AsyncPgConnection, AsyncConnection};
+        use diesel_async::RunQueryDsl;
+        
+        let database_url = std::env::var("DATABASE_URL")
+            .map_err(|_| AppError::Internal("DATABASE_URL not set".to_string()))?;
+        
+        let mut conn = AsyncPgConnection::establish(&database_url)
+            .await
+            .map_err(|e| AppError::Internal(format!("Database connection failed: {}", e)))?;
+        
+        // First check if job exists and its status
+        use databaseschema::schema::backtest_jobs::dsl::*;
+        let job: Option<(String, String)> = backtest_jobs
+            .filter(job_id.eq(&job_id))
+            .select((job_id, status))
+            .first(&mut conn)
+            .await
+            .optional()
+            .map_err(|e| AppError::Internal(format!("Failed to query job: {}", e)))?;
+        
+        match job {
+            None => {
+                log_warn!(MAIN_LOGGER, "Job {} not found", job_id);
+                return Err(AppError::NotFound(format!("Job {} not found", job_id)));
+            }
+            Some((_, job_status)) => {
+                // Only allow cancellation of running or queued jobs
+                if !is_cancellable_status(&job_status) {
+                    log_warn!(MAIN_LOGGER, "Job {} cannot be cancelled (status: {})", job_id, job_status);
+                    return Err(AppError::BadRequest(format!(
+                        "Job cannot be cancelled. Current status: {}. Only running or queued jobs can be cancelled.",
+                        job_status
+                    )));
+                }
+                
+                // Cancel the job by marking as cancelled
+                diesel::update(backtest_jobs)
+                    .filter(job_id.eq(&job_id))
+                    .set((
+                        status.eq("cancelled"),
+                        error_message.eq(Some("Cancelled by user")),
+                        completed_at.eq(diesel::dsl::now),
+                    ))
+                    .execute(&mut conn)
+                    .await
+                    .map_err(|e| AppError::Internal(format!("Failed to cancel job: {}", e)))?;
+                
+                log_info!(MAIN_LOGGER, "Job {} cancelled successfully", job_id);
+                
+                return Ok(Json(serde_json::json!({
+                    "message": "Job cancelled successfully",
+                    "job_id": job_id,
+                    "status": "cancelled",
+                })));
+            }
+        }
+    }
+    
+    #[cfg(not(feature = "postgres"))]
+    Err(AppError::Internal("Cancel not supported for this backend".to_string()))
+}
+
+/// Delete a completed backtest job and its results
 /// DELETE /api/backtest/:id
 pub async fn delete_backtest(
     State(_state): State<ApiState>,
@@ -361,26 +434,157 @@ pub async fn delete_backtest(
             .await
             .map_err(|e| AppError::Internal(format!("Database connection failed: {}", e)))?;
         
-        diesel::update(databaseschema::schema::backtest_jobs::table)
-            .filter(databaseschema::schema::backtest_jobs::job_id.eq(&job_id))
-            .set((
-                databaseschema::schema::backtest_jobs::status.eq("failed"),
-                databaseschema::schema::backtest_jobs::error_message.eq(Some("Cancelled by user")),
-            ))
-            .execute(&mut conn)
+        // First check if job exists and its status
+        use databaseschema::schema::backtest_jobs::dsl::*;
+        use databaseschema::schema::backtest_results;
+        
+        let job: Option<(String, String, Option<uuid::Uuid>)> = backtest_jobs
+            .filter(job_id.eq(&job_id))
+            .select((job_id, status, result_id))
+            .first(&mut conn)
             .await
-            .map_err(|e| AppError::Internal(format!("Failed to cancel job: {}", e)))?;
+            .optional()
+            .map_err(|e| AppError::Internal(format!("Failed to query job: {}", e)))?;
         
-        log_info!(MAIN_LOGGER, "Job {} marked as cancelled", job_id);
-        
-        return Ok(Json(serde_json::json!({
-            "message": "Job cancelled successfully",
-            "job_id": job_id,
-        })));
+        match job {
+            None => {
+                log_warn!(MAIN_LOGGER, "Job {} not found", job_id);
+                return Err(AppError::NotFound(format!("Job {} not found", job_id)));
+            }
+            Some((_, job_status, job_result_id)) => {
+                // Only allow deletion of completed, failed, or cancelled jobs
+                if !is_deletable_status(&job_status) {
+                    log_warn!(MAIN_LOGGER, "Job {} cannot be deleted (status: {})", job_id, job_status);
+                    return Err(AppError::BadRequest(format!(
+                        "Job cannot be deleted while {}. Please cancel the job first or wait for it to complete.",
+                        job_status
+                    )));
+                }
+                
+                // Delete the results first (if they exist) - this cascades to related tables
+                if let Some(result_uuid) = job_result_id {
+                    diesel::delete(backtest_results::table.filter(backtest_results::id.eq(result_uuid)))
+                        .execute(&mut conn)
+                        .await
+                        .map_err(|e| AppError::Internal(format!("Failed to delete backtest results: {}", e)))?;
+                    
+                    log_info!(MAIN_LOGGER, "Deleted backtest results for job {}", job_id);
+                }
+                
+                // Delete the job itself
+                diesel::delete(backtest_jobs.filter(job_id.eq(&job_id)))
+                    .execute(&mut conn)
+                    .await
+                    .map_err(|e| AppError::Internal(format!("Failed to delete job: {}", e)))?;
+                
+                log_info!(MAIN_LOGGER, "Job {} deleted successfully", job_id);
+                
+                return Ok(Json(serde_json::json!({
+                    "message": "Job and all associated data deleted successfully",
+                    "job_id": job_id,
+                })));
+            }
+        }
     }
     
     #[cfg(not(feature = "postgres"))]
     Err(AppError::Internal("Delete not supported for this backend".to_string()))
+}
+
+/// Check if a job status allows cancellation
+fn is_cancellable_status(status: &str) -> bool {
+    matches!(status, "running" | "queued" | "pending")
+}
+
+/// Check if a job status allows deletion
+fn is_deletable_status(status: &str) -> bool {
+    matches!(status, "completed" | "failed" | "cancelled")
+}
+
+/// Cleanup old completed backtest jobs
+/// POST /api/backtest/cleanup
+/// Query parameters: days_old (default: 30)
+pub async fn cleanup_old_backtests(
+    State(_state): State<ApiState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    log_info!(MAIN_LOGGER, "Request to cleanup old backtests");
+    
+    #[cfg(feature = "postgres")]
+    {
+        use diesel::prelude::*;
+        use diesel_async::{AsyncPgConnection, AsyncConnection};
+        use diesel_async::RunQueryDsl;
+        use chrono::{Utc, Duration};
+        
+        // Default: cleanup jobs older than 30 days
+        let retention_days = 30;
+        let cutoff_date = Utc::now() - Duration::days(retention_days);
+        
+        let database_url = std::env::var("DATABASE_URL")
+            .map_err(|_| AppError::Internal("DATABASE_URL not set".to_string()))?;
+        
+        let mut conn = AsyncPgConnection::establish(&database_url)
+            .await
+            .map_err(|e| AppError::Internal(format!("Database connection failed: {}", e)))?;
+        
+        use databaseschema::schema::backtest_jobs::dsl::*;
+        use databaseschema::schema::backtest_results;
+        
+        // Find old completed/failed/cancelled jobs
+        let old_jobs: Vec<(uuid::Uuid, String, Option<uuid::Uuid>)> = backtest_jobs
+            .filter(completed_at.lt(cutoff_date.naive_utc()))
+            .filter(status.eq_any(vec!["completed", "failed", "cancelled"]))
+            .select((id, job_id, result_id))
+            .load(&mut conn)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to query old jobs: {}", e)))?;
+        
+        let job_count = old_jobs.len();
+        
+        if job_count == 0 {
+            log_info!(MAIN_LOGGER, "No old backtests to cleanup");
+            return Ok(Json(serde_json::json!({
+                "message": "No old backtests found to cleanup",
+                "deleted_count": 0,
+                "retention_days": retention_days,
+            })));
+        }
+        
+        // Delete results first (cascades to related tables)
+        let result_ids: Vec<uuid::Uuid> = old_jobs.iter()
+            .filter_map(|(_, _, rid)| *rid)
+            .collect();
+        
+        if !result_ids.is_empty() {
+            let result_count = diesel::delete(
+                backtest_results::table.filter(backtest_results::id.eq_any(&result_ids))
+            )
+            .execute(&mut conn)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to delete results: {}", e)))?;
+            
+            log_info!(MAIN_LOGGER, "Deleted {} backtest results", result_count);
+        }
+        
+        // Delete the jobs
+        let job_uuids: Vec<uuid::Uuid> = old_jobs.iter().map(|(jid, _, _)| *jid).collect();
+        let deleted_count = diesel::delete(backtest_jobs.filter(id.eq_any(&job_uuids)))
+            .execute(&mut conn)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to delete jobs: {}", e)))?;
+        
+        log_info!(MAIN_LOGGER, "Cleanup: deleted {} old backtests (older than {} days)", deleted_count, retention_days);
+        
+        return Ok(Json(serde_json::json!({
+            "message": format!("Successfully cleaned up old backtests"),
+            "deleted_count": deleted_count,
+            "retention_days": retention_days,
+            "cutoff_date": cutoff_date.to_rfc3339(),
+        })));
+    }
+    
+    #[cfg(not(feature = "postgres"))]
+    Err(AppError::Internal("Cleanup not supported for this backend".to_string()))
 }
 
 /// Get commission rate for a given exchange
