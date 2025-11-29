@@ -492,11 +492,13 @@ pub async fn delete_backtest(
 }
 
 /// Check if a job status allows cancellation
+#[cfg(feature = "postgres")]
 fn is_cancellable_status(status: &str) -> bool {
     matches!(status, "running" | "queued" | "pending")
 }
 
 /// Check if a job status allows deletion
+#[cfg(feature = "postgres")]
 fn is_deletable_status(status: &str) -> bool {
     matches!(status, "completed" | "failed" | "cancelled")
 }
