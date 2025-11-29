@@ -53,6 +53,7 @@ RUN apt-get update && apt-get install -y \
     libpq5 \
     libssl3 \
     curl \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy backend binary
