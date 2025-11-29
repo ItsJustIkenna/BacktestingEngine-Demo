@@ -50,13 +50,16 @@ impl<C: Chromosome> GeneticOptimizer<C> {
         // Elite size (top 5% of population)
         let elite_size = (self.config.population_size as f64 * 0.05).ceil() as usize;
 
+        // Capture Tokio runtime handle for use in parallel threads
+        let handle = tokio::runtime::Handle::current();
+
         for generation in 0..self.config.generations {
             // 2. Evaluate fitness in parallel (OPTIMIZED)
-            // Use futures::executor to handle async within Rayon threads
+            // Use Tokio runtime handle to execute async fitness functions in Rayon threads
             let fitnesses: Vec<f64> = population.par_iter()
                 .map(|chromo| {
-                    // Use futures executor for async in sync context
-                    futures::executor::block_on((self.fitness_fn)(chromo))
+                    // Use Tokio runtime handle for async in Rayon parallel context
+                    handle.block_on((self.fitness_fn)(chromo))
                 })
                 .collect();
             
