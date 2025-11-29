@@ -357,12 +357,15 @@ jobs:
           $uiImageName = "${{ env.IMAGE_NAME }}-ui"
           $shortSha = "${{ github.sha }}".Substring(0, 7)
           
+          Write-Host "DEBUG: Listing deployment directory..."
+          Get-ChildItem -Path BacktestingEngine/deployment -Recurse | Select-Object FullName
+          
           docker build `
             --platform linux/amd64 `
             --tag ${uiImageName}:$shortSha `
             --file BacktestingEngine/deployment/Dockerfile.ui `
             --progress=plain `
-            .
+            BacktestingEngine
             
           if ($LASTEXITCODE -ne 0) {
             throw "UI Docker build failed"
