@@ -43,7 +43,8 @@ spec:
         - name: api
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          # Use image's default CMD: /bin/server serve
+          command: ["/bin/server"]
+          args: ["api"]
           ports:
             - name: http
               containerPort: 8080
