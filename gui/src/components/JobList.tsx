@@ -13,6 +13,9 @@ interface BacktestJob {
   max_drawdown?: number;
   total_pnl?: number;
   win_rate?: number;
+  current_generation?: number;
+  total_generations?: number;
+  error_message?: string;
 }
 
 interface JobListProps {
@@ -150,6 +153,47 @@ export const JobList: React.FC<JobListProps> = ({
   const formatNumber = (num?: number, decimals = 2) => {
     if (num === undefined || num === null) return '-';
     return num.toFixed(decimals);
+  };
+
+  const formatElapsedTime = (startedAt: string): string => {
+    const start = new Date(startedAt).getTime();
+    const now = Date.now();
+    const elapsedSeconds = Math.floor((now - start) / 1000);
+    
+    if (elapsedSeconds < 60) return `${elapsedSeconds}s elapsed`;
+    const minutes = Math.floor(elapsedSeconds / 60);
+    const seconds = elapsedSeconds % 60;
+    if (minutes < 60) return `${minutes}m ${seconds}s elapsed`;
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return `${hours}h ${remainingMinutes}m elapsed`;
+  };
+
+  const estimateTimeRemaining = (startedAt: string, progress: number): string => {
+    if (progress <= 5 || progress >= 99) return '';
+    
+    const start = new Date(startedAt).getTime();
+    const now = Date.now();
+    const elapsedMs = now - start;
+    const progressRate = progress / 100;
+    const totalEstimatedMs = elapsedMs / progressRate;
+    const remainingMs = totalEstimatedMs - elapsedMs;
+    const remainingSeconds = Math.floor(remainingMs / 1000);
+    
+    if (remainingSeconds < 60) return `~${remainingSeconds}s remaining`;
+    const minutes = Math.floor(remainingSeconds / 60);
+    if (minutes < 60) return `~${minutes}m remaining`;
+    const hours = Math.floor(minutes / 60);
+    const remainingMinutes = minutes % 60;
+    return `~${hours}h ${remainingMinutes}m remaining`;
+  };
+
+  const getProgressStage = (progress: number): string => {
+    if (progress < 15) return '📂 Loading data...';
+    if (progress < 25) return '⚙️ Initializing...';
+    if (progress < 90) return '🚀 Running backtest...';
+    if (progress < 95) return '📊 Calculating metrics...';
+    return '✅ Finalizing...';
   };
 
   const handlePageChange = (newPage: number) => {
@@ -372,24 +416,51 @@ export const JobList: React.FC<JobListProps> = ({
                   <td style={{ padding: '12px' }}>{job.exchange}</td>
                   <td style={{ padding: '12px' }}>{getStatusBadge(job.status)}</td>
                   <td style={{ padding: '12px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <div style={{
-                        flex: 1,
-                        height: '8px',
-                        backgroundColor: '#e9ecef',
-                        borderRadius: '4px',
-                        overflow: 'hidden',
-                      }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <div style={{
-                          width: `${job.progress}%`,
-                          height: '100%',
-                          backgroundColor: job.status === 'completed' ? '#28a745' : '#17a2b8',
-                          transition: 'width 0.3s',
-                        }} />
+                          flex: 1,
+                          height: '8px',
+                          backgroundColor: '#e9ecef',
+                          borderRadius: '4px',
+                          overflow: 'hidden',
+                        }}>
+                          <div style={{
+                            width: `${job.progress}%`,
+                            height: '100%',
+                            backgroundColor: job.status === 'completed' ? '#28a745' : '#17a2b8',
+                            transition: 'width 0.3s',
+                          }} />
+                        </div>
+                        <span style={{ fontSize: '12px', minWidth: '35px' }}>
+                          {job.progress.toFixed(0)}%
+                        </span>
                       </div>
-                      <span style={{ fontSize: '12px', minWidth: '35px' }}>
-                        {job.progress.toFixed(0)}%
-                      </span>
+                      {/* Generation progress */}
+                      {job.current_generation !== undefined && job.total_generations !== undefined && job.total_generations > 0 && (
+                        <div style={{ fontSize: '11px', color: '#6c757d' }}>
+                          Generation {job.current_generation} of {job.total_generations}
+                        </div>
+                      )}
+                      {/* Stage description */}
+                      {(job.status === 'running' || job.status === 'queued') && (
+                        <div style={{ fontSize: '11px', color: '#6c757d' }}>
+                          {getProgressStage(job.progress)}
+                        </div>
+                      )}
+                      {/* Elapsed time and ETA */}
+                      {job.started_at && job.status === 'running' && (
+                        <div style={{ fontSize: '11px', color: '#6c757d' }}>
+                          {formatElapsedTime(job.started_at)}
+                          {job.progress > 5 && ` • ${estimateTimeRemaining(job.started_at, job.progress)}`}
+                        </div>
+                      )}
+                      {/* Error message preview */}
+                      {job.status === 'failed' && job.error_message && (
+                        <div style={{ fontSize: '11px', color: '#dc3545', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={job.error_message}>
+                          {job.error_message}
+                        </div>
+                      )}
                     </div>
                   </td>
                   <td style={{ padding: '12px' }}>{formatNumber(job.sharpe_ratio)}</td>

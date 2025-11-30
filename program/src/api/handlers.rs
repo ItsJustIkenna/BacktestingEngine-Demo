@@ -43,6 +43,8 @@ pub struct JobStatusResponse {
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
     pub error_message: Option<String>,
+    pub current_generation: Option<i32>,
+    pub total_generations: Option<i32>,
 }
 
 /// Job details response
@@ -141,6 +143,8 @@ pub async fn get_job_status(
         started_at: job.started_at.map(|dt| dt.to_rfc3339()),
         completed_at: job.completed_at.map(|dt| dt.to_rfc3339()),
         error_message: job.error_message,
+        current_generation: Some(job.current_generation),
+        total_generations: Some(job.total_generations),
     }))
 }
 
