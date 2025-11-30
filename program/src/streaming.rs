@@ -3,17 +3,28 @@
 //! Instead of loading all market data into memory at once, this module provides
 //! iterators that fetch data in chunks from the database, reducing memory pressure
 //! for large datasets (50K+ order book events).
+//!
+//! Only available with the `postgres` feature enabled.
 
+#[cfg(feature = "postgres")]
 use dataloader::MarketData;
+#[cfg(feature = "postgres")]
 use diesel::prelude::*;
+#[cfg(feature = "postgres")]
 use diesel::r2d2::{ConnectionManager, Pool};
+#[cfg(feature = "postgres")]
 use bigdecimal::BigDecimal;
+#[cfg(feature = "postgres")]
 use chrono::{DateTime, Utc, NaiveDateTime};
+#[cfg(feature = "postgres")]
 use uuid::Uuid;
+#[cfg(feature = "postgres")]
 use databaseschema::models::historical_order::HistoricalOrder;
 
+#[cfg(feature = "postgres")]
 const DEFAULT_CHUNK_SIZE: usize = 5000; // Load 5K events at a time
 
+#[cfg(feature = "postgres")]
 /// Streaming iterator for order book events from database
 pub struct OrderBookStreamIterator {
     pool: Pool<ConnectionManager<PgConnection>>,
@@ -27,6 +38,7 @@ pub struct OrderBookStreamIterator {
     finished: bool,
 }
 
+#[cfg(feature = "postgres")]
 impl OrderBookStreamIterator {
     pub fn new(
         pool: Pool<ConnectionManager<PgConnection>>,
@@ -48,7 +60,7 @@ impl OrderBookStreamIterator {
 
     /// Load next chunk from database
     fn load_next_chunk(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        use diesel::sql_types::{Timestamptz, Varchar, Numeric, Nullable, BigInt};
+        use diesel::sql_types::{Timestamptz, Varchar, Numeric, Nullable};
 
         #[derive(QueryableByName)]
         struct OrderEventRow {
@@ -133,6 +145,7 @@ impl OrderBookStreamIterator {
     }
 }
 
+#[cfg(feature = "postgres")]
 impl Iterator for OrderBookStreamIterator {
     type Item = MarketData;
 
@@ -159,6 +172,7 @@ impl Iterator for OrderBookStreamIterator {
     }
 }
 
+#[cfg(feature = "postgres")]
 /// Batch processor for genetic algorithm optimization
 /// Loads data once and creates references for parallel processing
 pub struct OrderBookBatchLoader {
@@ -167,6 +181,7 @@ pub struct OrderBookBatchLoader {
     exchange: String,
 }
 
+#[cfg(feature = "postgres")]
 impl OrderBookBatchLoader {
     pub fn new(
         pool: Pool<ConnectionManager<PgConnection>>,
@@ -214,7 +229,7 @@ impl OrderBookBatchLoader {
         &self,
         max_events: usize,
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
-        let mut stream = OrderBookStreamIterator::new(
+        let stream = OrderBookStreamIterator::new(
             self.pool.clone(),
             self.symbol.clone(),
             self.exchange.clone(),
