@@ -23,6 +23,8 @@ interface JobStatus {
   started_at: string | null;
   completed_at: string | null;
   error_message: string | null;
+  current_generation: number | null;
+  total_generations: number | null;
 }
 
 interface JobDetails {
@@ -295,6 +297,14 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
               <strong>Progress:</strong>
               <span>{displayProgress.toFixed(1)}%</span>
             </div>
+            {jobStatus.current_generation !== null && jobStatus.total_generations !== null && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                <strong>Generation:</strong>
+                <span style={{ color: '#007bff', fontWeight: 'bold' }}>
+                  {jobStatus.current_generation} of {jobStatus.total_generations}
+                </span>
+              </div>
+            )}
             {countdown !== null && countdown > 0 && jobStatus.status === 'running' && (
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
                 <strong>Time Remaining:</strong>
