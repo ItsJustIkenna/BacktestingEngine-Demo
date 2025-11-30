@@ -143,8 +143,8 @@ pub async fn get_job_status(
         started_at: job.started_at.map(|dt| dt.to_rfc3339()),
         completed_at: job.completed_at.map(|dt| dt.to_rfc3339()),
         error_message: job.error_message,
-        current_generation: Some(job.current_generation),
-        total_generations: Some(job.total_generations),
+        current_generation: if job.current_generation > 0 { Some(job.current_generation) } else { None },
+        total_generations: if job.total_generations > 0 { Some(job.total_generations) } else { None },
     }))
 }
 
