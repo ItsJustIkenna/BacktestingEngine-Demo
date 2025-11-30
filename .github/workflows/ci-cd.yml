@@ -223,6 +223,7 @@ jobs:
           repository: Nwagbara-Group-LLC/LoggingEngine
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           path: LoggingEngine
+          ref: main
           fetch-depth: 0
 
       - name: Login to GHCR
