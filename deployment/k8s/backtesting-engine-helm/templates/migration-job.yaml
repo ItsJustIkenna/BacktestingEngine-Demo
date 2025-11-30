@@ -1,0 +1,77 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "backtesting-engine.fullname" . }}-migration-{{ .Release.Revision }}
+  labels:
+    {{- include "backtesting-engine.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        {{- include "backtesting-engine.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migration
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: migration
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+          - /bin/sh
+          - -c
+          - |
+            echo "🔄 Running database migrations..."
+            
+            # Parse DATABASE_URL to get connection details
+            DB_HOST=$(echo $DATABASE_URL | sed -E 's|postgresql://[^@]+@([^:]+):.*|\1|')
+            DB_PORT=$(echo $DATABASE_URL | sed -E 's|.*:([0-9]+)/.*|\1|')
+            DB_USER=$(echo $DATABASE_URL | sed -E 's|postgresql://([^:]+):.*|\1|')
+            DB_NAME=$(echo $DATABASE_URL | sed -E 's|.*/([^?]+).*|\1|')
+            
+            # Wait for database
+            echo "⏳ Waiting for database connection..."
+            until pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" > /dev/null 2>&1; do
+              echo "   Database not ready, retrying in 2 seconds..."
+              sleep 2
+            done
+            echo "✅ Database connection established"
+            
+            # Run migrations
+            export PGPASSWORD=$(echo $DATABASE_URL | sed -E 's|postgresql://[^:]+:([^@]+)@.*|\1|')
+            
+            echo "📋 Applying migrations..."
+            psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" <<EOF
+            -- Add generation tracking columns
+            ALTER TABLE backtest_jobs 
+            ADD COLUMN IF NOT EXISTS current_generation INTEGER DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS total_generations INTEGER DEFAULT 0;
+            
+            SELECT 'Migration completed successfully' AS status;
+            EOF
+            
+            if [ $? -eq 0 ]; then
+              echo "✅ Migrations completed successfully"
+            else
+              echo "❌ Migration failed"
+              exit 1
+            fi
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.secrets.name }}
+              key: DATABASE_URL
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
