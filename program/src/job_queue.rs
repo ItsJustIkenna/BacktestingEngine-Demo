@@ -105,6 +105,8 @@ pub struct BacktestJob {
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub progress: f64, // 0.0 to 100.0
+    pub current_generation: i32, // Current generation for genetic optimization
+    pub total_generations: i32, // Total generations for genetic optimization
     pub error_message: Option<String>,
 }
 
@@ -144,6 +146,9 @@ pub trait JobQueue: Send + Sync {
     
     /// Update job progress
     async fn update_progress(&self, job_id: &str, progress: f64) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+    
+    /// Update generation progress for genetic optimization
+    async fn update_generation(&self, job_id: &str, current_generation: i32, total_generations: i32) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
     
     /// Update job heartbeat timestamp
     async fn update_heartbeat(&self, job_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;

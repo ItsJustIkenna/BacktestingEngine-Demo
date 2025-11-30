@@ -97,7 +97,7 @@ impl<C: Chromosome> GeneticOptimizer<C> {
             
             // Early stopping if converged OR if diversity is too low
             if generations_without_improvement >= CONVERGENCE_THRESHOLD {
-                println!("Converged after {} generations (no improvement for {} generations)", 
+                eprintln!("✅ Converged after {} generations (no improvement for {} generations)", 
                     generation + 1, CONVERGENCE_THRESHOLD);
                 break;
             }
@@ -153,9 +153,9 @@ impl<C: Chromosome> GeneticOptimizer<C> {
             
             population = new_population;
             
-            // Progress logging every 10 generations
-            if (generation + 1) % 10 == 0 {
-                println!("Generation {}/{}: Best fitness = {:.4}, Diversity = {:.4}, Adaptive mutation = {:.4}", 
+            // Progress logging every 5 generations for better visibility
+            if (generation + 1) % 5 == 0 || generation == 0 {
+                eprintln!("🧬 Generation {}/{}: Best fitness = {:.4}, Diversity = {:.4}, Mutation rate = {:.4}", 
                     generation + 1, self.config.generations, best_fitness, diversity, adaptive_mutation_rate);
             }
         }
