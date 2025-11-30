@@ -66,7 +66,7 @@ spec:
         - name: DATABASE_URL
           valueFrom:
             secretKeyRef:
-              name: {{ .Values.secrets.name }}
+              name: {{ .Values.secrets.existingSecret | default "backtesting-secrets" }}
               key: DATABASE_URL
         resources:
           requests:
