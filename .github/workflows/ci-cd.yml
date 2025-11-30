@@ -47,8 +47,10 @@ jobs:
           repository: Nwagbara-Group-LLC/databaseschema
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           path: databaseschema
+          ref: main
+          ref: main
 
-      - name: Checkout LoggingEngine
+      - name: Checkout SignalEngine
         uses: actions/checkout@v4
         with:
           repository: Nwagbara-Group-LLC/LoggingEngine
@@ -213,6 +215,7 @@ jobs:
           repository: Nwagbara-Group-LLC/databaseschema
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           path: databaseschema
+          ref: main
           fetch-depth: 0
 
       - name: Checkout LoggingEngine
