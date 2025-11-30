@@ -349,6 +349,44 @@ impl JobQueue for PostgresQueue {
                 let started_threshold = Utc::now() - chrono::Duration::minutes(10); // Fallback: 10min without heartbeat update
                 let heartbeat_threshold = Utc::now() - chrono::Duration::minutes(2); // Primary: 2min stale heartbeat
                 
+                // DEBUG: Log thresholds and check for running jobs
+                crate::log_info!(
+                    crate::logging_facade::MAIN_LOGGER,
+                    "🕐 Orphan thresholds: heartbeat_before={:?}, started_before={:?}",
+                    heartbeat_threshold, started_threshold
+                );
+                
+                // Check for any running jobs before claiming attempt
+                let running_count: i64 = backtest_jobs::table
+                    .filter(backtest_jobs::status.eq("running"))
+                    .count()
+                    .get_result(conn)?;
+                
+                if running_count > 0 {
+                    crate::log_info!(
+                        crate::logging_facade::MAIN_LOGGER,
+                        "📊 Found {} running jobs, checking if orphaned...",
+                        running_count
+                    );
+                    
+                    // Get details of running jobs
+                    let running_jobs: Vec<BacktestJobRecord> = backtest_jobs::table
+                        .filter(backtest_jobs::status.eq("running"))
+                        .load(conn)?;
+                    
+                    for rj in &running_jobs {
+                        let heartbeat_stale = rj.last_heartbeat.map_or(true, |hb| hb < heartbeat_threshold);
+                        let started_old = rj.started_at.map_or(false, |st| st < started_threshold);
+                        let should_recover = heartbeat_stale || (rj.last_heartbeat.is_none() && started_old);
+                        
+                        crate::log_info!(
+                            crate::logging_facade::MAIN_LOGGER,
+                            "  Job {}: started={:?}, heartbeat={:?}, should_recover={}",
+                            rj.job_id, rj.started_at, rj.last_heartbeat, should_recover
+                        );
+                    }
+                }
+                
                 // Try to find a queued job first, or recover orphaned "running" jobs
                 // A job is orphaned if:
                 // 1. Status is 'running' AND last_heartbeat is stale (>2 min old), OR
