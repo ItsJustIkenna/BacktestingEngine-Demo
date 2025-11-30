@@ -168,12 +168,14 @@ pub struct BacktestJobRecord {
     pub end_date: Option<chrono::DateTime<chrono::Utc>>,
     pub status: String,
     pub progress: bigdecimal::BigDecimal,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: chrono::DateTime<chrono::Utc>>,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub error_message: Option<String>,
     pub result_id: Option<uuid::Uuid>,
     pub last_heartbeat: Option<chrono::DateTime<chrono::Utc>>,
+    pub current_generation: Option<i32>,
+    pub total_generations: Option<i32>,
 }
 
 #[derive(Insertable)]
@@ -288,6 +290,8 @@ impl PostgresQueue {
             started_at: record.started_at,
             completed_at: record.completed_at,
             progress: f64::from_str(&record.progress.to_string())?,
+            current_generation: record.current_generation.unwrap_or(0),
+            total_generations: record.total_generations.unwrap_or(0),
             error_message: record.error_message,
         })
     }
@@ -503,6 +507,27 @@ impl JobQueue for PostgresQueue {
             
             diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(&job_id)))
                 .set(backtest_jobs::progress.eq(BigDecimal::from_str(&progress.to_string())?))
+                .execute(&mut conn)?;
+            
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        }).await??;
+        
+        Ok(())
+    }
+    
+    /// Update generation progress for genetic optimization
+    async fn update_generation(&self, job_id: &str, current_generation: i32, total_generations: i32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let pool = self.pool.clone();
+        let job_id = job_id.to_string();
+        
+        tokio::task::spawn_blocking(move || {
+            let mut conn = pool.get()?;
+            
+            diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(&job_id)))
+                .set((
+                    backtest_jobs::current_generation.eq(current_generation),
+                    backtest_jobs::total_generations.eq(total_generations),
+                ))
                 .execute(&mut conn)?;
             
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
