@@ -12,6 +12,7 @@ pub mod config;
 pub mod job_queue;
 pub mod api;
 pub mod worker;
+pub mod streaming; // Memory-efficient data loading
 
 // Re-export logging components for easy access
 pub use logging_facade::{

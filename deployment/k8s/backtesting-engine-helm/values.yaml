@@ -72,10 +72,10 @@ ui:
 resources:
   limits:
     cpu: "4000m"      # Increased for better performance
-    memory: "8Gi"     # Increased for genetic algorithm and Monte Carlo
+    memory: "16Gi"    # Increased to prevent OOMKill with large order books (50K+ events)
   requests:
     cpu: "2000m"      # Higher baseline for faster processing
-    memory: "4Gi"     # More memory for parallel operations
+    memory: "8Gi"     # More memory for parallel operations and genetic optimization
 
 # Node selection
 nodeSelector: {}

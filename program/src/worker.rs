@@ -304,85 +304,31 @@ impl Worker {
     }
     
     /// Load order book events (new, cancel, modify) for market making strategies
+    /// Uses sampling to reduce memory footprint for genetic optimization
     #[cfg(feature = "postgres")]
     async fn load_order_events(
         &self,
         symbol: &str,
         exchange: &str,
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
-        use diesel::prelude::*;
-        use diesel::sql_types::{Timestamptz, Varchar, Numeric, Nullable};
-        use databaseschema::models::historical_order::HistoricalOrder;
-        use uuid::Uuid;
-        
-        #[derive(QueryableByName)]
-        struct OrderEventRow {
-            #[diesel(sql_type = Timestamptz)]
-            timestamp: chrono::NaiveDateTime,
-            #[diesel(sql_type = Varchar)]
-            symbol: String,
-            #[diesel(sql_type = Varchar)]
-            exchange: String,
-            #[diesel(sql_type = Varchar)]
-            event_type: String,
-            #[diesel(sql_type = Varchar)]
-            side: String,
-            #[diesel(sql_type = Numeric)]
-            price_level: BigDecimal,
-            #[diesel(sql_type = Numeric)]
-            quantity: BigDecimal,
-            #[diesel(sql_type = Varchar)]
-            order_id: String,
-            #[diesel(sql_type = Nullable<Numeric>)]
-            prev_price: Option<BigDecimal>,
-            #[diesel(sql_type = Nullable<Numeric>)]
-            prev_quantity: Option<BigDecimal>,
-            #[diesel(sql_type = Varchar)]
-            status: String,
-        }
+        use crate::streaming::OrderBookBatchLoader;
         
         let pool = self.job_queue.get_pool()
             .ok_or("Database pool not available")?;
         
-        let mut conn = pool.get()
-            .map_err(|e| format!("Failed to get database connection: {}", e))?;
-        
-        // Query order book events (new, cancel, modify)
-        let query = format!(
-            "SELECT timestamp, symbol, exchange, event_type, side, price_level, quantity, \
-             order_id, prev_price, prev_quantity, status \
-             FROM historical_orders \
-             WHERE symbol = '{}' AND exchange = '{}' \
-             AND event_type IN ('new', 'cancel', 'modify') \
-             ORDER BY timestamp ASC LIMIT 50000",
-            symbol, exchange
+        let loader = OrderBookBatchLoader::new(
+            pool.clone(),
+            symbol.to_string(),
+            exchange.to_string(),
         );
         
-        let results: Vec<OrderEventRow> = diesel::sql_query(&query)
-            .load(&mut conn)
-            .map_err(|e| format!("Failed to load order events: {}", e))?;
+        // Load with limit to prevent OOM during genetic optimization
+        // 20K events is enough for meaningful backtesting while staying under memory limits
+        const MAX_EVENTS: usize = 20000;
         
-        let orders: Vec<MarketData> = results
-            .into_iter()
-            .map(|row| {
-                MarketData::Order(HistoricalOrder {
-                    event_id: Uuid::new_v4(),
-                    timestamp: chrono::DateTime::from_naive_utc_and_offset(row.timestamp, chrono::Utc),
-                    order_id: row.order_id,
-                    event_type: row.event_type,
-                    side: row.side,
-                    price_level: row.price_level,
-                    quantity: row.quantity,
-                    prev_price: row.prev_price,
-                    prev_quantity: row.prev_quantity,
-                    status: row.status,
-                    exchange: row.exchange,
-                    symbol: row.symbol,
-                    security_id: Uuid::new_v4(),
-                    exchange_id: Uuid::new_v4(),
-                })
-            })
-            .collect();
+        log_info!(MAIN_LOGGER, "📊 Loading order book data for market making strategy (max {} events)", MAX_EVENTS);
+        
+        let orders = loader.load_with_limit(MAX_EVENTS).await?;
         
         log_info!(MAIN_LOGGER, "📊 Loaded {} order book events for {}/{}", orders.len(), symbol, exchange);
         Ok(orders)

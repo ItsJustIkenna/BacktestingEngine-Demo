@@ -151,8 +151,8 @@ impl Default for ThresholdConfig {
 impl Default for GeneticConfig {
     fn default() -> Self {
         Self {
-            population_size: 50,        // Increased from hard-coded 20
-            generations: 100,           // Increased from hard-coded 50
+            population_size: 25,        // Reduced from 50 to prevent OOMKill with large datasets
+            generations: 50,            // Reduced from 100 for memory efficiency
             mutation_rate: 0.1,
             crossover_rate: 0.8,
             elite_ratio: 0.2,
