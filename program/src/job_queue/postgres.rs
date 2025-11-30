@@ -168,7 +168,7 @@ pub struct BacktestJobRecord {
     pub end_date: Option<chrono::DateTime<chrono::Utc>>,
     pub status: String,
     pub progress: bigdecimal::BigDecimal,
-    pub created_at: chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub error_message: Option<String>,
