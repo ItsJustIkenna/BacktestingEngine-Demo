@@ -85,9 +85,17 @@ impl Worker {
         });
         
         // Execute backtest (genetic or manual)
+        log_info!(MAIN_LOGGER, "🔀 Job {} optimization_method: '{}'", job.id, job.params.optimization_method);
+        
         let result = match job.params.optimization_method.as_str() {
-            "genetic" => self.execute_genetic_optimization(&job).await,
-            _ => self.execute_backtest(&job).await,
+            "genetic" => {
+                log_info!(MAIN_LOGGER, "🧬 Branching to genetic optimization for job {}", job.id);
+                self.execute_genetic_optimization(&job).await
+            },
+            _ => {
+                log_info!(MAIN_LOGGER, "📊 Branching to manual backtest for job {}", job.id);
+                self.execute_backtest(&job).await
+            },
         };
         
         let result = match result {
@@ -292,6 +300,8 @@ impl Worker {
         &self,
         job: &BacktestJob,
     ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
+        log_info!(MAIN_LOGGER, "🧬🧬🧬 ENTERED execute_genetic_optimization for job {}", job.id);
+        
         use genetic::{GeneticOptimizer, ProgressCallback};
         use genetic::chromosome::AvellanedaStoikovChromosome;
         use config::GeneticConfig;
@@ -428,6 +438,8 @@ impl Worker {
         
         // Run genetic optimization
         log_info!(MAIN_LOGGER, "🚀 Running genetic optimization...");
+        log_info!(MAIN_LOGGER, "   Config: pop_size={}, generations={}, mutation={}, crossover={}", 
+            config.population_size, config.generations, config.mutation_rate, config.crossover_rate);
         
         let optimizer = GeneticOptimizer {
             config,
@@ -435,7 +447,9 @@ impl Worker {
             progress_callback: Some(progress_callback),
         };
         
+        log_info!(MAIN_LOGGER, "🔄 Calling optimizer.run()...");
         let (best_chromosome, best_fitness) = optimizer.run().await;
+        log_info!(MAIN_LOGGER, "✅ optimizer.run() completed!");
         
         log_info!(MAIN_LOGGER, "🏆 Genetic optimization complete! Best fitness: {:.4}", best_fitness);
         log_info!(MAIN_LOGGER, "   Best params: γ={:.4}, q={:.4}, size={:.4}", 
