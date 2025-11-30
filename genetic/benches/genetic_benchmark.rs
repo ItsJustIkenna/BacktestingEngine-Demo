@@ -110,6 +110,7 @@ fn bench_genetic_optimizer_creation(c: &mut Criterion) {
             black_box(GeneticOptimizer {
                 config,
                 fitness_fn: fitness_fn.clone(),
+                progress_callback: None,
             })
         })
     });
@@ -202,6 +203,7 @@ fn bench_genetic_optimization_full(c: &mut Criterion) {
                 let optimizer = GeneticOptimizer {
                     config: config.clone(),
                     fitness_fn: fast_fitness.clone(),
+                    progress_callback: None,
                 };
                 rt.block_on(async {
                     black_box(optimizer.run().await)
