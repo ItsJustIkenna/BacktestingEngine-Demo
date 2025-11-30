@@ -41,6 +41,8 @@ impl JobQueue for InMemoryJobQueue {
             started_at: None,
             completed_at: None,
             progress: 0.0,
+            current_generation: 0,
+            total_generations: 0,
             error_message: None,
         };
         self.jobs.lock().unwrap().insert(job_id.clone(), job);
@@ -71,6 +73,14 @@ impl JobQueue for InMemoryJobQueue {
     async fn update_progress(&self, job_id: &str, progress: f64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if let Some(job) = self.jobs.lock().unwrap().get_mut(job_id) {
             job.progress = progress;
+        }
+        Ok(())
+    }
+    
+    async fn update_generation(&self, job_id: &str, current_generation: i32, total_generations: i32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(job) = self.jobs.lock().unwrap().get_mut(job_id) {
+            job.current_generation = current_generation;
+            job.total_generations = total_generations;
         }
         Ok(())
     }
