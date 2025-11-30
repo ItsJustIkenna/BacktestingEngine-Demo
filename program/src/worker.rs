@@ -84,8 +84,13 @@ impl Worker {
             }
         });
         
-        // Execute backtest
-        let result = match self.execute_backtest(&job).await {
+        // Execute backtest (genetic or manual)
+        let result = match job.params.optimization_method.as_str() {
+            "genetic" => self.execute_genetic_optimization(&job).await,
+            _ => self.execute_backtest(&job).await,
+        };
+        
+        let result = match result {
             Ok(result) => {
                 // Stop heartbeat task
                 heartbeat_handle.abort();
@@ -280,6 +285,257 @@ impl Worker {
         };
         
         Ok(backtest_result)
+    }
+    
+    /// Execute genetic optimization to find best strategy parameters
+    async fn execute_genetic_optimization(
+        &self,
+        job: &BacktestJob,
+    ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
+        use genetic::{GeneticOptimizer, ProgressCallback};
+        use genetic::chromosome::AvellanedaStoikovChromosome;
+        use config::GeneticConfig;
+        
+        let params = &job.params;
+        
+        log_info!(MAIN_LOGGER, "🧬 Starting genetic optimization for job {}: pop={}, gen={}", 
+            job.id, params.population_size, params.generations);
+        
+        // Update progress: loading data
+        self.job_queue.update_progress(&job.id, 10.0).await?;
+        
+        // Load market data once and share it
+        let data = self.load_market_data_for_strategy(&params.symbol, &params.exchange, &params.strategy_type).await?;
+        if data.is_empty() {
+            return Err("No market data available".into());
+        }
+        
+        log_info!(MAIN_LOGGER, "✅ Loaded {} data points for genetic optimization", data.len());
+        
+        // Update progress: initializing
+        self.job_queue.update_progress(&job.id, 15.0).await?;
+        
+        // Set total generations in database
+        self.job_queue.update_generation(&job.id, 0, params.generations as i32).await?;
+        
+        // Create genetic config
+        let config = GeneticConfig {
+            population_size: params.population_size,
+            generations: params.generations,
+            mutation_rate: 0.1,
+            crossover_rate: 0.7,
+        };
+        
+        // Create progress callback to update generation tracking
+        let job_queue = self.job_queue.clone();
+        let job_id = job.id.clone();
+        let total_gens = params.generations;
+        let progress_callback: ProgressCallback = Arc::new(move |current_gen, _total| {
+            let queue = job_queue.clone();
+            let id = job_id.clone();
+            Box::pin(async move {
+                // Update generation in database
+                if let Err(e) = queue.update_generation(&id, current_gen as i32, total_gens as i32).await {
+                    log_error!(MAIN_LOGGER, "⚠️ Failed to update generation for job {}: {}", id, e);
+                }
+                // Update progress (20% to 85% during optimization)
+                let progress = 20.0 + (65.0 * current_gen as f64 / total_gens as f64);
+                if let Err(e) = queue.update_progress(&id, progress).await {
+                    log_error!(MAIN_LOGGER, "⚠️ Failed to update progress for job {}: {}", id, e);
+                }
+                log_info!(MAIN_LOGGER, "🧬 Job {} - Generation {}/{}", id, current_gen, total_gens);
+            })
+        });
+        
+        // Prepare data for fitness function (as Arc for sharing)
+        let data_arc = Arc::new(data);
+        let data_for_final = Arc::clone(&data_arc); // Clone for use after optimization
+        let symbol = params.symbol.clone();
+        let exchange = params.exchange.clone();
+        let initial_capital = params.initial_capital;
+        let commission_rate = params.commission_rate;
+        
+        // Create fitness function that evaluates chromosomes
+        // THREAD SAFETY: We clone Arc references and create fresh state inside each async block
+        let fitness_fn = Arc::new(move |chromosome: &AvellanedaStoikovChromosome| {
+            let data = Arc::clone(&data_arc);
+            let symbol = symbol.clone();
+            let exchange = exchange.clone();
+            let chr = chromosome.clone(); // Clone the chromosome to move into async
+            
+            Box::pin(async move {
+                // Each async block gets its own fresh state - no shared mutable state
+                let mut backtest_config = BacktestConfig::default();
+                backtest_config.trading.initial_capital = initial_capital;
+                backtest_config.trading.commission_rate = commission_rate;
+                
+                let engine = BacktestEngine::new(backtest_config);
+                let mut portfolio = PortfolioState::default();
+                portfolio.balance = BigDecimal::from_f64(initial_capital).unwrap_or_default();
+                
+                let orderbook_config = OrderBookConfig::default();
+                let mut orderbook = OrderBook::new(symbol.clone(), exchange.clone(), orderbook_config);
+                let mut risk_manager = RiskManager::new();
+                
+                // Create strategy with chromosome parameters
+                let strategy_params = AvellanedaStoikovParams {
+                    risk_aversion: chr.risk_aversion,
+                    inventory_target: chr.inventory_target,
+                    order_size: chr.order_size,
+                    ..Default::default()
+                };
+                
+                let mut strategy_params_map = HashMap::new();
+                strategy_params_map.insert("risk_aversion".to_string(), config::ParameterValue::Float(chr.risk_aversion));
+                strategy_params_map.insert("inventory_target".to_string(), config::ParameterValue::Float(chr.inventory_target));
+                strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(chr.order_size));
+                
+                let strategy_config = StrategyConfig {
+                    id: "genetic-eval".to_string(),
+                    name: "Avellaneda-Stoikov".to_string(),
+                    strategy_type: "AvellanedaStoikov".to_string(),
+                    symbol: symbol.clone(),
+                    exchange: exchange.clone(),
+                    parameters: strategy_params_map,
+                    risk_limits: StrategyRiskLimits::default(),
+                    enabled: true,
+                };
+                
+                let strategy = AvellanedaStoikovStrategy::new(strategy_params);
+                let mut strategy_manager = StrategyManager::new();
+                if strategy_manager.register_strategy(strategy_config, strategy).is_err() {
+                    return 0.0;
+                }
+                
+                // Run backtest
+                match engine.run_backtest(
+                    &mut strategy_manager,
+                    &mut orderbook,
+                    &mut portfolio,
+                    &mut risk_manager,
+                    &data,
+                ).await {
+                    Ok(result) => {
+                        // Fitness = Sharpe ratio (primary) + PnL bonus
+                        let sharpe = result.core.sharpe_ratio.unwrap_or(0.0);
+                        let pnl = result.core.total_pnl.to_string().parse::<f64>().unwrap_or(0.0);
+                        sharpe + (pnl / initial_capital) * 0.1
+                    }
+                    Err(_) => 0.0,
+                }
+            }) as std::pin::Pin<Box<dyn std::future::Future<Output = f64> + Send>>
+        });
+        
+        // Run genetic optimization
+        log_info!(MAIN_LOGGER, "🚀 Running genetic optimization...");
+        
+        let optimizer = GeneticOptimizer {
+            config,
+            fitness_fn,
+            progress_callback: Some(progress_callback),
+        };
+        
+        let (best_chromosome, best_fitness) = optimizer.run().await;
+        
+        log_info!(MAIN_LOGGER, "🏆 Genetic optimization complete! Best fitness: {:.4}", best_fitness);
+        log_info!(MAIN_LOGGER, "   Best params: γ={:.4}, q={:.4}, size={:.4}", 
+            best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size);
+        
+        // Update progress: running final backtest with best parameters
+        self.job_queue.update_progress(&job.id, 90.0).await?;
+        
+        // Run final backtest with best parameters to get full results
+        let final_result = self.run_backtest_with_chromosome(
+            &job.id,
+            &params.symbol,
+            &params.exchange,
+            params.initial_capital,
+            params.commission_rate,
+            &best_chromosome,
+            &data_for_final,
+        ).await?;
+        
+        log_info!(MAIN_LOGGER, "✅ Final backtest complete: Sharpe={:.2}, PnL=${:.2}", 
+            final_result.sharpe_ratio, final_result.total_pnl);
+        
+        Ok(final_result)
+    }
+    
+    /// Helper: Run backtest with specific chromosome parameters
+    async fn run_backtest_with_chromosome(
+        &self,
+        job_id: &str,
+        symbol: &str,
+        exchange: &str,
+        initial_capital: f64,
+        commission_rate: f64,
+        chromosome: &genetic::chromosome::AvellanedaStoikovChromosome,
+        data: &[MarketData],
+    ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
+        let mut backtest_config = BacktestConfig::default();
+        backtest_config.trading.initial_capital = initial_capital;
+        backtest_config.trading.commission_rate = commission_rate;
+        
+        let engine = BacktestEngine::new(backtest_config);
+        let mut portfolio = PortfolioState::default();
+        portfolio.balance = BigDecimal::from_f64(initial_capital).unwrap_or_default();
+        
+        let orderbook_config = OrderBookConfig::default();
+        let mut orderbook = OrderBook::new(symbol.to_string(), exchange.to_string(), orderbook_config);
+        let mut risk_manager = RiskManager::new();
+        
+        let strategy_params = AvellanedaStoikovParams {
+            risk_aversion: chromosome.risk_aversion,
+            inventory_target: chromosome.inventory_target,
+            order_size: chromosome.order_size,
+            ..Default::default()
+        };
+        
+        let mut strategy_params_map = HashMap::new();
+        strategy_params_map.insert("risk_aversion".to_string(), config::ParameterValue::Float(chromosome.risk_aversion));
+        strategy_params_map.insert("inventory_target".to_string(), config::ParameterValue::Float(chromosome.inventory_target));
+        strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(chromosome.order_size));
+        
+        let strategy_config = StrategyConfig {
+            id: format!("final-{}", job_id),
+            name: "Avellaneda-Stoikov".to_string(),
+            strategy_type: "AvellanedaStoikov".to_string(),
+            symbol: symbol.to_string(),
+            exchange: exchange.to_string(),
+            parameters: strategy_params_map,
+            risk_limits: StrategyRiskLimits::default(),
+            enabled: true,
+        };
+        
+        let strategy = AvellanedaStoikovStrategy::new(strategy_params);
+        let mut strategy_manager = StrategyManager::new();
+        strategy_manager.register_strategy(strategy_config, strategy)
+            .map_err(|e| format!("Failed to register strategy: {}", e))?;
+        
+        let result = engine.run_backtest(
+            &mut strategy_manager,
+            &mut orderbook,
+            &mut portfolio,
+            &mut risk_manager,
+            data,
+        ).await?;
+        
+        let total_pnl = result.core.total_pnl.to_string().parse::<f64>()
+            .map_err(|e| format!("Failed to parse total_pnl: {}", e))?;
+        let max_drawdown = result.core.max_drawdown.to_string().parse::<f64>()
+            .map_err(|e| format!("Failed to parse max_drawdown: {}", e))?;
+        
+        Ok(BacktestResult {
+            job_id: job_id.to_string(),
+            total_pnl,
+            sharpe_ratio: result.core.sharpe_ratio.unwrap_or(0.0),
+            max_drawdown,
+            win_rate: result.core.win_rate.unwrap_or(0.0),
+            total_trades: result.core.num_trades,
+            profit_factor: result.core.profit_factor.unwrap_or(1.0),
+            equity_curve: result.core.equity_curve,
+            completed_at: Utc::now(),
+        })
     }
     
     /// Load market data intelligently based on strategy type

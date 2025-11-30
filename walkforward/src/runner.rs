@@ -111,6 +111,7 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
     let optimizer = GeneticOptimizer {
         config,
         fitness_fn,
+        progress_callback: None,
     };
     let (best_chromo, _score) = optimizer.run().await;
     // Convert chromosome to params - using all 14 parameters (Phase 2)

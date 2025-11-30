@@ -76,6 +76,7 @@ mod tests {
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn,
+            progress_callback: None,
         };
 
         // Test that we can run the optimizer
@@ -100,6 +101,7 @@ mod tests {
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn,
+            progress_callback: None,
         };
 
         let (best, fitness) = optimizer.run().await;
@@ -167,6 +169,7 @@ mod tests {
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn,
+            progress_callback: None,
         };
 
         let (best, fitness) = optimizer.run().await;
@@ -205,6 +208,7 @@ mod tests {
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn: slow_fitness_fn,
+            progress_callback: None,
         };
 
         let (_best, _fitness) = optimizer.run().await;
@@ -260,6 +264,7 @@ mod tests {
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn,
+            progress_callback: None,
         };
 
         let (best, fitness) = optimizer.run().await;
@@ -304,6 +309,7 @@ mod tests {
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn,
+            progress_callback: None,
         };
 
         let (best, fitness) = optimizer.run().await;

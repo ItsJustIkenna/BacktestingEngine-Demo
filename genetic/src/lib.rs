@@ -27,15 +27,20 @@ pub trait Chromosome: Clone + Send + Sync {
 /// Async fitness function type alias
 pub type AsyncFitnessFn<C> = Arc<dyn Fn(&C) -> std::pin::Pin<Box<dyn std::future::Future<Output = f64> + Send>> + Send + Sync>;
 
+/// Progress callback type for reporting generation progress
+pub type ProgressCallback = Arc<dyn Fn(usize, usize) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>;
+
 /// Main genetic algorithm optimizer (async fitness)
 pub struct GeneticOptimizer<C: Chromosome> {
     pub config: GeneticConfig,
     pub fitness_fn: AsyncFitnessFn<C>,
+    pub progress_callback: Option<ProgressCallback>,
 }
 
 impl<C: Chromosome> GeneticOptimizer<C> {
     pub async fn run(&self) -> (C, f64) {
-        let mut rng = rand::thread_rng();
+        // Use StdRng which is Send-safe (unlike thread_rng which uses Rc)
+        let mut rng = rand::rngs::StdRng::from_entropy();
         
         // 1. Initialize population
         let mut population: Vec<C> = (0..self.config.population_size)
@@ -54,6 +59,11 @@ impl<C: Chromosome> GeneticOptimizer<C> {
         let handle = tokio::runtime::Handle::current();
 
         for generation in 0..self.config.generations {
+            // Call progress callback if provided
+            if let Some(ref callback) = self.progress_callback {
+                callback(generation + 1, self.config.generations).await;
+            }
+            
             // 2. Evaluate fitness in parallel (OPTIMIZED)
             // Use Tokio runtime handle to execute async fitness functions in Rayon threads
             let fitnesses: Vec<f64> = population.par_iter()
@@ -214,6 +224,7 @@ mod tests {
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn,
+            progress_callback: None,
         };
         let (_best, _score) = optimizer.run().await;
         // assert!(_score > 0.0); // Example assertion

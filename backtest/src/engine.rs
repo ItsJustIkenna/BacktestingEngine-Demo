@@ -404,6 +404,7 @@ impl BacktestEngine {
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn,
+            progress_callback: None,
         };
         
         let (best_chromo, best_fitness) = optimizer.run().await;
