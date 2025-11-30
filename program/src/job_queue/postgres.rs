@@ -27,6 +27,8 @@ table! {
         error_message -> Nullable<Text>,
         result_id -> Nullable<Uuid>,
         last_heartbeat -> Nullable<Timestamptz>,
+        current_generation -> Nullable<Int4>,
+        total_generations -> Nullable<Int4>,
     }
 }
 
@@ -242,6 +244,8 @@ impl PostgresQueue {
             error_message: job.error_message.clone(),
             result_id: None,
             last_heartbeat: None,
+            current_generation: Some(job.current_generation),
+            total_generations: Some(job.total_generations),
         })
     }
     
