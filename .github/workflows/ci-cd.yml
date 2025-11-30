@@ -419,7 +419,7 @@ jobs:
     runs-on: [self-hosted, windows, x64]
     needs: build
     if: github.ref == 'refs/heads/main'
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout BacktestingEngine
         uses: actions/checkout@v4
@@ -580,7 +580,7 @@ jobs:
             "--set", "ui.image.pullPolicy=IfNotPresent",
             "--set", "secrets.existingSecret=backtesting-secrets",
             "--wait",
-            "--timeout", "15m"
+            "--timeout", "18m"
           )
           
           Write-Host "[INFO] Using Kubernetes secret: backtesting-secrets"
