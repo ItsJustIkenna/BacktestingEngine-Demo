@@ -446,11 +446,13 @@ impl Worker {
         log_info!(MAIN_LOGGER, "   Config: pop_size={}, generations={}, mutation={}, crossover={}", 
             config.population_size, config.generations, config.mutation_rate, config.crossover_rate);
         
+        log_info!(MAIN_LOGGER, "📌 Creating optimizer with progress callback...");
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn,
             progress_callback: Some(progress_callback),
         };
+        log_info!(MAIN_LOGGER, "✅ Optimizer created successfully");
         
         log_info!(MAIN_LOGGER, "🔄 Calling optimizer.run()...");
         let (best_chromosome, best_fitness) = optimizer.run().await;

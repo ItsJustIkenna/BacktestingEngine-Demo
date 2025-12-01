@@ -42,6 +42,9 @@ impl<C: Chromosome> GeneticOptimizer<C> {
         // Use StdRng which is Send-safe (unlike thread_rng which uses Rc)
         let mut rng = rand::rngs::StdRng::from_entropy();
         
+        // Log callback status
+        println!("🔍 Genetic optimizer starting - progress_callback present: {}", self.progress_callback.is_some());
+        
         // 1. Initialize population
         let mut population: Vec<C> = (0..self.config.population_size)
             .map(|_| C::random(&mut rng))
@@ -60,8 +63,13 @@ impl<C: Chromosome> GeneticOptimizer<C> {
 
         for generation in 0..self.config.generations {
             // Call progress callback if provided
+            println!("🔍 Generation {} - checking callback...", generation + 1);
             if let Some(ref callback) = self.progress_callback {
+                println!("📞 Calling progress callback for generation {}/{}", generation + 1, self.config.generations);
                 callback(generation + 1, self.config.generations).await;
+                println!("✅ Progress callback completed for generation {}", generation + 1);
+            } else {
+                println!("⚠️ No progress callback available");
             }
             
             // 2. Evaluate fitness in parallel (OPTIMIZED)
