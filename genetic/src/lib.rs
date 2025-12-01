@@ -6,7 +6,6 @@
 use std::sync::Arc;
 use config::GeneticConfig;
 use rand::prelude::*;
-use rayon::prelude::*;
 
 pub mod chromosome;
 // Fitness functions moved to backtest crate to avoid circular dependency
@@ -58,9 +57,6 @@ impl<C: Chromosome> GeneticOptimizer<C> {
         // Elite size (top 5% of population)
         let elite_size = (self.config.population_size as f64 * 0.05).ceil() as usize;
 
-        // Capture Tokio runtime handle for use in parallel threads
-        let handle = tokio::runtime::Handle::current();
-
         for generation in 0..self.config.generations {
             // Call progress callback if provided
             println!("🔍 Generation {} - checking callback...", generation + 1);
@@ -72,14 +68,27 @@ impl<C: Chromosome> GeneticOptimizer<C> {
                 println!("⚠️ No progress callback available");
             }
             
-            // 2. Evaluate fitness in parallel (OPTIMIZED)
-            // Use Tokio runtime handle to execute async fitness functions in Rayon threads
-            let fitnesses: Vec<f64> = population.par_iter()
-                .map(|chromo| {
-                    // Use Tokio runtime handle for async in Rayon parallel context
-                    handle.block_on((self.fitness_fn)(chromo))
-                })
-                .collect();
+            // 2. Evaluate fitness with controlled parallelism (prevent OOM)
+            // Limit concurrent evaluations to 4 to prevent memory exhaustion
+            // Full parallelism with large populations (50+) can exceed 16GB with backtests
+            use futures::stream::{FuturesUnordered, StreamExt};
+            
+            let mut futures = FuturesUnordered::new();
+            let mut results = Vec::with_capacity(population.len());
+            
+            // Process in batches of 4 to limit memory usage
+            for chunk in population.chunks(4) {
+                for chromo in chunk {
+                    futures.push((self.fitness_fn)(chromo));
+                }
+                
+                // Collect results from this batch
+                while let Some(fitness) = futures.next().await {
+                    results.push(fitness);
+                }
+            }
+            
+            let fitnesses = results;
             
             // Track best fitness in this generation
             let mut generation_best_fitness = best_fitness;

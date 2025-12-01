@@ -372,7 +372,7 @@ impl Worker {
         
         // Create fitness function that evaluates chromosomes
         // THREAD SAFETY: We clone Arc references and create fresh state inside each async block
-        let fitness_fn = Arc::new(move |chromosome: &AvellanedaStoikovChromosome| {
+        let fitness_fn: genetic::AsyncFitnessFn<AvellanedaStoikovChromosome> = Arc::new(move |chromosome: &AvellanedaStoikovChromosome| {
             let data = Arc::clone(&data_arc);
             let symbol = symbol.clone();
             let exchange = exchange.clone();
@@ -438,7 +438,7 @@ impl Worker {
                     }
                     Err(_) => 0.0,
                 }
-            }) as std::pin::Pin<Box<dyn std::future::Future<Output = f64> + Send>>
+            })
         });
         
         // Run genetic optimization
