@@ -14,11 +14,17 @@ use riskmanager::RiskManager;
 use dataloader::MarketData;
 #[cfg(feature = "postgres")]
 use databaseschema::models::historical_order::HistoricalOrder;
+use std::sync::Arc;
+
+/// Progress callback for Monte Carlo and Walk-Forward analysis
+/// Parameters: (phase_name, current, total)
+pub type ProgressCallback = Arc<dyn Fn(&str, usize, usize) + Send + Sync>;
 
 /// Main backtesting engine with intelligent analysis capabilities
 pub struct BacktestEngine {
     config: BacktestConfig,
     analysis_config: AnalysisConfig,
+    progress_callback: Option<ProgressCallback>,
 }
 
 /// Comprehensive backtest results with optional advanced analysis
@@ -62,7 +68,14 @@ impl BacktestEngine {
         Self {
             config,
             analysis_config,
+            progress_callback: None,
         }
+    }
+    
+    /// Set a progress callback for Monte Carlo and Walk-Forward analysis
+    pub fn with_progress_callback(mut self, callback: ProgressCallback) -> Self {
+        self.progress_callback = Some(callback);
+        self
     }
 
     /// Run backtest with automatic analysis mode selection
@@ -449,9 +462,17 @@ impl BacktestEngine {
     /// Run Monte Carlo simulation analysis
     async fn run_monte_carlo_analysis(&self, base_result: &BacktestResult) -> Result<monte_carlo::MonteCarloResult> {
         let num_runs = self.analysis_config.monte_carlo_runs;
+        let progress_callback = self.progress_callback.clone();
+        let base_result = base_result.clone();
         
-        // Run actual Monte Carlo simulation
-        let mc_result = monte_carlo::run_monte_carlo_simulation(base_result, num_runs)?;
+        // Run Monte Carlo in blocking thread pool (CPU-intensive, now parallel with Rayon)
+        let mc_result = tokio::task::spawn_blocking(move || {
+            monte_carlo::run_monte_carlo_simulation_with_progress(
+                &base_result, 
+                num_runs,
+                progress_callback
+            )
+        }).await??;
         
         Ok(mc_result)
     }
@@ -574,7 +595,13 @@ impl BacktestEngine {
         let mut in_sample_sharpes = Vec::with_capacity(windows.len());
         let mut out_of_sample_sharpes = Vec::with_capacity(windows.len());
         
-        for window in &windows {
+        let total_windows = windows.len();
+        for (window_idx, window) in windows.iter().enumerate() {
+            // Report progress
+            if let Some(ref callback) = self.progress_callback {
+                callback("walk_forward", window_idx + 1, total_windows);
+            }
+            
             // Split market data into training and test sets
             let train_data: Vec<_> = market_data.iter()
                 .filter(|md| {

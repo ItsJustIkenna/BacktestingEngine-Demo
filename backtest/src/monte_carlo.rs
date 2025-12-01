@@ -8,6 +8,8 @@ use metrics::PerformanceMetrics;
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use rand::prelude::*;
+use rayon::prelude::*;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonteCarloResult {
@@ -50,6 +52,18 @@ fn percentile(values: &mut [f64], p: f64) -> f64 {
     values[index.min(values.len() - 1)]
 }
 
+/// Run Monte Carlo simulation with progress callback
+/// 
+/// This simulates alternative "what if" scenarios by shuffling the order of trades
+/// while keeping the same trades, helping assess if results are due to luck or skill.
+pub fn run_monte_carlo_simulation_with_progress(
+    base_result: &BacktestResult,
+    num_runs: usize,
+    progress_callback: Option<std::sync::Arc<dyn Fn(&str, usize, usize) + Send + Sync>>,
+) -> anyhow::Result<MonteCarloResult> {
+    run_monte_carlo_simulation_internal(base_result, num_runs, progress_callback)
+}
+
 /// Run Monte Carlo simulation by randomizing trade sequences
 /// 
 /// This simulates alternative "what if" scenarios by shuffling the order of trades
@@ -58,8 +72,14 @@ pub fn run_monte_carlo_simulation(
     base_result: &BacktestResult,
     num_runs: usize,
 ) -> anyhow::Result<MonteCarloResult> {
-    let mut rng = rand::thread_rng();
-    
+    run_monte_carlo_simulation_internal(base_result, num_runs, None)
+}
+
+fn run_monte_carlo_simulation_internal(
+    base_result: &BacktestResult,
+    num_runs: usize,
+    progress_callback: Option<std::sync::Arc<dyn Fn(&str, usize, usize) + Send + Sync>>,
+) -> anyhow::Result<MonteCarloResult> {
     // Extract individual trade returns from equity curve
     let mut trade_returns: Vec<f64> = Vec::new();
     if base_result.equity_curve.len() > 1 {
@@ -95,16 +115,27 @@ pub fn run_monte_carlo_simulation(
     let bootstrap_runs = num_runs / 2; // Half bootstrap, half shuffle
     let shuffle_runs = num_runs - bootstrap_runs;
     
-    let mut all_net_profits = Vec::with_capacity(num_runs);
-    let mut all_sharpe_ratios = Vec::with_capacity(num_runs);
-    let mut all_max_drawdowns = Vec::with_capacity(num_runs);
-    let mut all_win_rates = Vec::with_capacity(num_runs);
+    // Use Arc<Mutex> for thread-safe progress reporting
+    let progress_counter = Arc::new(Mutex::new(0usize));
     
-    // Method 1: Trade order shuffling
-    for _ in 0..shuffle_runs {
-        // Shuffle trade returns
-        let mut shuffled_returns = trade_returns.clone();
-        shuffled_returns.shuffle(&mut rng);
+    // Method 1: Trade order shuffling (PARALLEL with Rayon)
+    let shuffle_results: Vec<_> = (0..shuffle_runs)
+        .into_par_iter()
+        .map(|_i| {
+            let mut rng = rand::thread_rng();
+            
+            // Report progress every 10 runs
+            if let Some(ref callback) = progress_callback {
+                let mut counter = progress_counter.lock().unwrap();
+                *counter += 1;
+                if *counter % 10 == 0 || *counter == num_runs {
+                    callback("monte_carlo", *counter, num_runs);
+                }
+            }
+            
+            // Shuffle trade returns
+            let mut shuffled_returns = trade_returns.clone();
+            shuffled_returns.shuffle(&mut rng);
         
         // Reconstruct equity curve from shuffled returns
         let mut equity = base_result.initial_capital;
@@ -116,7 +147,6 @@ pub fn run_monte_carlo_simulation(
         
         // Calculate metrics for this run
         let net_profit = equity - base_result.initial_capital;
-        all_net_profits.push(net_profit);
         
         // Calculate Sharpe ratio
         let sharpe = if !shuffled_returns.is_empty() {
@@ -130,7 +160,6 @@ pub fn run_monte_carlo_simulation(
         } else {
             0.0
         };
-        all_sharpe_ratios.push(sharpe);
         
         // Calculate max drawdown
         let mut peak = equity_curve[0];
@@ -144,18 +173,44 @@ pub fn run_monte_carlo_simulation(
                 max_dd = dd;
             }
         }
-        all_max_drawdowns.push(max_dd);
         
         // Calculate win rate
         let wins = shuffled_returns.iter().filter(|&&r| r > 0.0).count();
         let win_rate = wins as f64 / shuffled_returns.len() as f64;
+        
+        (net_profit, sharpe, max_dd, win_rate)
+    }).collect();
+    
+    // Extract results from parallel computation
+    let mut all_net_profits = Vec::with_capacity(num_runs);
+    let mut all_sharpe_ratios = Vec::with_capacity(num_runs);
+    let mut all_max_drawdowns = Vec::with_capacity(num_runs);
+    let mut all_win_rates = Vec::with_capacity(num_runs);
+    
+    for (net_profit, sharpe, max_dd, win_rate) in shuffle_results {
+        all_net_profits.push(net_profit);
+        all_sharpe_ratios.push(sharpe);
+        all_max_drawdowns.push(max_dd);
         all_win_rates.push(win_rate);
     }
     
-    // Method 2: Bootstrap resampling (sampling with replacement)
-    for _ in 0..bootstrap_runs {
-        // Bootstrap sample: sample with replacement
-        let mut bootstrap_returns = Vec::with_capacity(trade_returns.len());
+    // Method 2: Bootstrap resampling (PARALLEL with Rayon)
+    let bootstrap_results: Vec<_> = (0..bootstrap_runs)
+        .into_par_iter()
+        .map(|_i| {
+            let mut rng = rand::thread_rng();
+            
+            // Report progress every 10 runs
+            if let Some(ref callback) = progress_callback {
+                let mut counter = progress_counter.lock().unwrap();
+                *counter += 1;
+                if *counter % 10 == 0 || *counter == num_runs {
+                    callback("monte_carlo", *counter, num_runs);
+                }
+            }
+            
+            // Bootstrap sample: sample with replacement
+            let mut bootstrap_returns = Vec::with_capacity(trade_returns.len());
         for _ in 0..trade_returns.len() {
             let idx = rng.gen_range(0..trade_returns.len());
             bootstrap_returns.push(trade_returns[idx]);
@@ -171,7 +226,6 @@ pub fn run_monte_carlo_simulation(
         
         // Calculate metrics for this run
         let net_profit = equity - base_result.initial_capital;
-        all_net_profits.push(net_profit);
         
         // Calculate Sharpe ratio
         let sharpe = if !bootstrap_returns.is_empty() {
@@ -185,7 +239,6 @@ pub fn run_monte_carlo_simulation(
         } else {
             0.0
         };
-        all_sharpe_ratios.push(sharpe);
         
         // Calculate max drawdown
         let mut peak = equity_curve[0];
@@ -199,11 +252,19 @@ pub fn run_monte_carlo_simulation(
                 max_dd = dd;
             }
         }
-        all_max_drawdowns.push(max_dd);
         
         // Calculate win rate
         let wins = bootstrap_returns.iter().filter(|&&r| r > 0.0).count();
         let win_rate = wins as f64 / bootstrap_returns.len() as f64;
+        
+        (net_profit, sharpe, max_dd, win_rate)
+    }).collect();
+    
+    // Extract bootstrap results
+    for (net_profit, sharpe, max_dd, win_rate) in bootstrap_results {
+        all_net_profits.push(net_profit);
+        all_sharpe_ratios.push(sharpe);
+        all_max_drawdowns.push(max_dd);
         all_win_rates.push(win_rate);
     }
     

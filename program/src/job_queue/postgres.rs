@@ -32,6 +32,8 @@ table! {
         last_heartbeat -> Nullable<Timestamptz>,
         current_generation -> Nullable<Int4>,
         total_generations -> Nullable<Int4>,
+        current_phase -> Varchar,
+        phase_details -> Jsonb,
     }
 }
 
@@ -156,8 +158,9 @@ pub struct NewBacktestResult {
     pub strategy_metrics: Option<String>,
 }
 
-#[derive(Queryable, Insertable, AsChangeset, Clone, Debug)]
+#[derive(Queryable, Selectable, Clone, Debug)]
 #[diesel(table_name = backtest_jobs)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct BacktestJobRecord {
     pub id: uuid::Uuid,
     pub job_id: String,
@@ -184,6 +187,8 @@ pub struct BacktestJobRecord {
     pub last_heartbeat: Option<chrono::DateTime<chrono::Utc>>,
     pub current_generation: Option<i32>,
     pub total_generations: Option<i32>,
+    pub current_phase: String,
+    pub phase_details: serde_json::Value,
 }
 
 #[derive(Insertable)]
@@ -258,6 +263,8 @@ impl PostgresQueue {
             last_heartbeat: None,
             current_generation: Some(job.current_generation),
             total_generations: Some(job.total_generations),
+            current_phase: "initializing".to_string(),
+            phase_details: serde_json::json!({}),
         })
     }
     
@@ -308,6 +315,8 @@ impl PostgresQueue {
             progress: f64::from_str(&record.progress.to_string())?,
             current_generation: record.current_generation.unwrap_or(0),
             total_generations: record.total_generations.unwrap_or(0),
+            current_phase: record.current_phase,
+            phase_details: record.phase_details,
             error_message: record.error_message,
         })
     }
@@ -395,6 +404,7 @@ impl JobQueue for PostgresQueue {
                     // Get details of running jobs
                     let running_jobs: Vec<BacktestJobRecord> = backtest_jobs::table
                         .filter(backtest_jobs::status.eq("running"))
+                        .select(BacktestJobRecord::as_select())
                         .load(conn)?;
                     
                     for rj in &running_jobs {
@@ -431,10 +441,11 @@ impl JobQueue for PostgresQueue {
                     .order(backtest_jobs::created_at.asc())
                     .for_update()
                     .skip_locked()
+                    .select(BacktestJobRecord::as_select())
                     .first(conn)
                     .optional()?;
                 
-                if let Some(mut job_record) = job {
+                if let Some(job_record) = job {
                     if job_record.status == "running" {
                         crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔄 Recovering orphaned job {} (stale heartbeat detected)", job_record.job_id);
                     } else {
@@ -442,12 +453,13 @@ impl JobQueue for PostgresQueue {
                     }
                     
                     // Update status to running and set heartbeat
-                    job_record.status = "running".to_string();
-                    job_record.started_at = Some(Utc::now());
-                    job_record.last_heartbeat = Some(Utc::now());
-                    
+                    let now = Utc::now();
                     diesel::update(backtest_jobs::table.find(job_record.id))
-                        .set(&job_record)
+                        .set((
+                            backtest_jobs::status.eq("running"),
+                            backtest_jobs::started_at.eq(Some(now)),
+                            backtest_jobs::last_heartbeat.eq(Some(now)),
+                        ))
                         .execute(conn)?;
                     
                     Ok(Some(Self::record_to_job(job_record)?))
@@ -472,6 +484,7 @@ impl JobQueue for PostgresQueue {
             
             let record: Option<BacktestJobRecord> = backtest_jobs::table
                 .filter(backtest_jobs::job_id.eq(&job_id))
+                .select(BacktestJobRecord::as_select())
                 .first(&mut conn)
                 .optional()?;
             
@@ -555,6 +568,31 @@ impl JobQueue for PostgresQueue {
         Ok(())
     }
     
+    /// Update current phase of job execution
+    async fn update_phase(&self, job_id: &str, phase: &str, phase_details: serde_json::Value) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let pool = self.pool.clone();
+        let job_id = job_id.to_string();
+        let phase = phase.to_string();
+        let phase_details_str = serde_json::to_string(&phase_details)?;
+        
+        tokio::task::spawn_blocking(move || {
+            let mut conn = pool.get()?;
+            
+            // Use raw SQL to update JSONB field
+            diesel::sql_query(
+                "UPDATE backtest_jobs SET current_phase = $1, phase_details = $2::jsonb WHERE job_id = $3"
+            )
+            .bind::<diesel::sql_types::Text, _>(&phase)
+            .bind::<diesel::sql_types::Text, _>(&phase_details_str)
+            .bind::<diesel::sql_types::Text, _>(&job_id)
+            .execute(&mut conn)?;
+            
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        }).await??;
+        
+        Ok(())
+    }
+    
     /// Update job heartbeat timestamp
     /// Called every 30 seconds by worker to signal it's still alive
     async fn update_heartbeat(&self, job_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -590,6 +628,7 @@ impl JobQueue for PostgresQueue {
             // Get job to find dates and parameters
             let job: BacktestJobRecord = backtest_jobs::table
                 .filter(backtest_jobs::job_id.eq(&result.job_id))
+                .select(BacktestJobRecord::as_select())
                 .first(&mut conn)?;
             
             // Create backtest result record
@@ -835,6 +874,7 @@ impl PostgresQueue {
                 .order(backtest_jobs::created_at.desc())
                 .limit(query_clone.limit)
                 .offset(query_clone.offset)
+                .select(BacktestJobRecord::as_select())
                 .load(&mut conn)?;
             
             // Convert to summaries and fetch results if completed

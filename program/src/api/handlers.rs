@@ -45,6 +45,8 @@ pub struct JobStatusResponse {
     pub error_message: Option<String>,
     pub current_generation: Option<i32>,
     pub total_generations: Option<i32>,
+    pub current_phase: String,
+    pub phase_details: serde_json::Value,
 }
 
 /// Job details response
@@ -145,6 +147,8 @@ pub async fn get_job_status(
         error_message: job.error_message,
         current_generation: if job.current_generation > 0 { Some(job.current_generation) } else { None },
         total_generations: if job.total_generations > 0 { Some(job.total_generations) } else { None },
+        current_phase: job.current_phase,
+        phase_details: job.phase_details,
     }))
 }
 

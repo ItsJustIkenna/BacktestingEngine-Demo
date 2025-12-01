@@ -318,6 +318,13 @@ impl Worker {
         log_info!(MAIN_LOGGER, "🧬 Starting genetic optimization for job {}: pop={}, gen={}", 
             job.id, params.population_size, params.generations);
         
+        // Update phase: genetic optimization
+        self.job_queue.update_phase(&job.id, "genetic_optimization", serde_json::json!({
+            "population_size": params.population_size,
+            "generations": params.generations,
+            "current_generation": 0
+        })).await?;
+        
         // Update progress: loading data
         self.job_queue.update_progress(&job.id, 10.0).await?;
         
@@ -391,6 +398,8 @@ impl Worker {
                 backtest_config.trading.initial_capital = initial_capital;
                 backtest_config.trading.commission_rate = commission_rate;
                 backtest_config.analysis.skip_genetic_optimization = true; // Skip genetic optimization in fitness evaluation
+                backtest_config.analysis.auto_monte_carlo = false; // Skip Monte Carlo in fitness evaluation
+                backtest_config.analysis.auto_walk_forward = false; // Skip Walk-Forward in fitness evaluation
                 backtest_config.data.gap_detection.enabled = false; // Disable gap filling for fitness evaluation
                 
                 let engine = BacktestEngine::new(backtest_config);
@@ -471,6 +480,12 @@ impl Worker {
         log_info!(MAIN_LOGGER, "   Best params: γ={:.4}, q={:.4}, size={:.4}", 
             best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size);
         
+        // Update phase: running final analysis (Monte Carlo + Walk-Forward)
+        self.job_queue.update_phase(&job.id, "final_analysis", serde_json::json!({
+            "stage": "starting",
+            "best_fitness": best_fitness
+        })).await?;
+        
         // Update progress: running final backtest with best parameters
         self.job_queue.update_progress(&job.id, 90.0).await?;
         
@@ -508,7 +523,26 @@ impl Worker {
         backtest_config.analysis.skip_genetic_optimization = true; // Already done by worker
         backtest_config.data.gap_detection.enabled = false; // Disable gap filling - data is already dense (39 orders/min)
         
-        let engine = BacktestEngine::new(backtest_config);
+        // Create progress callback for Monte Carlo and Walk-Forward
+        let job_id_for_callback = Arc::new(job_id.to_string());
+        let job_queue_for_callback = Arc::new(self.job_queue.clone());
+        
+        let progress_callback = std::sync::Arc::new(move |phase: &str, current: usize, total: usize| {
+            let job_id = job_id_for_callback.as_ref().clone();
+            let job_queue = job_queue_for_callback.as_ref().clone();
+            let phase = phase.to_string();
+            
+            // Spawn task to update phase in background
+            tokio::spawn(async move {
+                let _ = job_queue.update_phase(&job_id, &phase, serde_json::json!({
+                    "current": current,
+                    "total": total
+                })).await;
+            });
+        });
+        
+        let engine = BacktestEngine::new(backtest_config)
+            .with_progress_callback(progress_callback);
         let mut portfolio = PortfolioState::default();
         portfolio.balance = BigDecimal::from_f64(initial_capital).unwrap_or_default();
         

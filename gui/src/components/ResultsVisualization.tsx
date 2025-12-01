@@ -25,6 +25,8 @@ interface JobStatus {
   error_message: string | null;
   current_generation: number | null;
   total_generations: number | null;
+  current_phase: string;
+  phase_details: any;
 }
 
 interface JobDetails {
@@ -297,6 +299,35 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 {jobStatus.status === 'running' ? '🏃 Running' : '⏳ Queued'}
               </span>
             </div>
+            {jobStatus.current_phase && jobStatus.current_phase !== 'initializing' && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                <strong>Phase:</strong>
+                <span style={{ color: '#007bff', fontWeight: 'bold' }}>
+                  {jobStatus.current_phase === 'genetic_optimization' && '🧬 Genetic Optimization'}
+                  {jobStatus.current_phase === 'monte_carlo' && '🎲 Monte Carlo Simulation'}
+                  {jobStatus.current_phase === 'walk_forward' && '🔄 Walk-Forward Analysis'}
+                  {jobStatus.current_phase === 'final_analysis' && '📊 Final Analysis'}
+                  {jobStatus.current_phase === 'completed' && '✅ Completed'}
+                  {jobStatus.current_phase === 'failed' && '❌ Failed'}
+                </span>
+              </div>
+            )}
+            {jobStatus.current_phase === 'monte_carlo' && jobStatus.phase_details?.current && jobStatus.phase_details?.total && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                <strong>Simulation:</strong>
+                <span style={{ color: '#007bff', fontWeight: 'bold' }}>
+                  {jobStatus.phase_details.current} of {jobStatus.phase_details.total} runs
+                </span>
+              </div>
+            )}
+            {jobStatus.current_phase === 'walk_forward' && jobStatus.phase_details?.current && jobStatus.phase_details?.total && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                <strong>Window:</strong>
+                <span style={{ color: '#007bff', fontWeight: 'bold' }}>
+                  {jobStatus.phase_details.current} of {jobStatus.phase_details.total}
+                </span>
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
               <strong>Progress:</strong>
               <span>{displayProgress.toFixed(1)}%</span>

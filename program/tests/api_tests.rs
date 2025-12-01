@@ -43,6 +43,8 @@ impl JobQueue for InMemoryJobQueue {
             progress: 0.0,
             current_generation: 0,
             total_generations: 0,
+            current_phase: "initializing".to_string(),
+            phase_details: serde_json::json!({}),
             error_message: None,
         };
         self.jobs.lock().unwrap().insert(job_id.clone(), job);
@@ -81,6 +83,14 @@ impl JobQueue for InMemoryJobQueue {
         if let Some(job) = self.jobs.lock().unwrap().get_mut(job_id) {
             job.current_generation = current_generation;
             job.total_generations = total_generations;
+        }
+        Ok(())
+    }
+    
+    async fn update_phase(&self, job_id: &str, phase: &str, phase_details: serde_json::Value) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(job) = self.jobs.lock().unwrap().get_mut(job_id) {
+            job.current_phase = phase.to_string();
+            job.phase_details = phase_details;
         }
         Ok(())
     }
