@@ -447,11 +447,13 @@ impl Worker {
             config.population_size, config.generations, config.mutation_rate, config.crossover_rate);
         
         log_info!(MAIN_LOGGER, "📌 Creating optimizer with progress callback...");
+        log_info!(MAIN_LOGGER, "🔍 DEBUG: progress_callback variable type check - callback should be Some");
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn,
             progress_callback: Some(progress_callback),
         };
+        log_info!(MAIN_LOGGER, "🔍 DEBUG: Optimizer.progress_callback.is_some() = {}", optimizer.progress_callback.is_some());
         log_info!(MAIN_LOGGER, "✅ Optimizer created successfully");
         
         log_info!(MAIN_LOGGER, "🔄 Calling optimizer.run()...");
