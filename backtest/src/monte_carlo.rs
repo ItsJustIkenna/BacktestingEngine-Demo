@@ -9,7 +9,6 @@ use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use rand::prelude::*;
 use rayon::prelude::*;
-use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonteCarloResult {

@@ -479,15 +479,14 @@ impl BacktestEngine {
     /// Run Monte Carlo simulation analysis
     async fn run_monte_carlo_analysis(&self, base_result: &BacktestResult) -> Result<monte_carlo::MonteCarloResult> {
         let num_runs = self.analysis_config.monte_carlo_runs;
-        let progress_callback = self.progress_callback.clone();
         let base_result = base_result.clone();
         
         // Run Monte Carlo in blocking thread pool (CPU-intensive, now parallel with Rayon)
+        // Don't pass progress callback since spawn_blocking can't await async tasks spawned by callback
         let mc_result = tokio::task::spawn_blocking(move || {
-            monte_carlo::run_monte_carlo_simulation_with_progress(
+            monte_carlo::run_monte_carlo_simulation(
                 &base_result, 
-                num_runs,
-                progress_callback
+                num_runs
             )
         }).await??;
         
