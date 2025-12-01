@@ -15,14 +15,15 @@ image:
   pullPolicy: IfNotPresent
   tag: "qa"
 
-# Resource allocation for QA (moderate)
+# Resource allocation for QA
+# Increased for parallel Monte Carlo and genetic optimization
 resources:
   limits:
-    cpu: "1500m"
-    memory: "3Gi"
+    cpu: "4000m"      # 4 CPU cores for parallel processing
+    memory: "8Gi"      # 8GB for genetic optimization
   requests:
-    cpu: "750m"
-    memory: "1.5Gi"
+    cpu: "2000m"      # 2 CPU cores minimum
+    memory: "4Gi"      # 4GB minimum
 
 # =============================================================================
 # Secrets Configuration - Azure Key Vault Integration
@@ -80,7 +81,7 @@ service:
 # =============================================================================
 
 livenessProbe:
-  enabled: true
+  enabled: false  # Workers are long-running background processors, no HTTP health endpoint
   httpGet:
     path: /health
     port: 8080

@@ -477,6 +477,9 @@ impl Worker {
         log_info!(MAIN_LOGGER, "   Best params: γ={:.4}, q={:.4}, size={:.4}", 
             best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size);
         
+        // Clear generation counter since genetic optimization is complete
+        self.job_queue.update_generation(&job.id, 0, 0).await?;
+        
         // Update phase: running final analysis (Monte Carlo + Walk-Forward)
         self.job_queue.update_phase(&job.id, "final_analysis", serde_json::json!({
             "stage": "starting",

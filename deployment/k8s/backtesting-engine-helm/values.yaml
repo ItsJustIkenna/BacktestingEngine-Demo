@@ -334,7 +334,7 @@ podDisruptionBudget:
 # =============================================================================
 
 livenessProbe:
-  enabled: true
+  enabled: false  # Workers are long-running background processors, no HTTP health endpoint
   httpGet:
     path: /health
     port: 8080

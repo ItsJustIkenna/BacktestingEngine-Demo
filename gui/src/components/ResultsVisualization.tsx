@@ -332,7 +332,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
               <strong>Progress:</strong>
               <span>{displayProgress.toFixed(1)}%</span>
             </div>
-            {jobStatus.current_generation !== null && jobStatus.total_generations !== null && (
+            {jobStatus.current_generation !== null && jobStatus.total_generations !== null && jobStatus.total_generations > 0 && (
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
                 <strong>Generation:</strong>
                 <span style={{ color: '#007bff', fontWeight: 'bold' }}>

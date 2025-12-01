@@ -15,14 +15,15 @@ image:
   pullPolicy: IfNotPresent
   tag: "latest"
 
-# Resource allocation for development (minimal)
+# Resource allocation for development
+# Increased for parallel Monte Carlo (Rayon) and genetic optimization
 resources:
   limits:
-    cpu: "500m"
-    memory: "1Gi"
+    cpu: "4000m"      # 4 CPU cores for parallel processing
+    memory: "8Gi"      # 8GB for genetic optimization (50 chromosomes)
   requests:
-    cpu: "250m"
-    memory: "512Mi"
+    cpu: "2000m"      # 2 CPU cores minimum
+    memory: "4Gi"      # 4GB minimum
 
 # =============================================================================
 # Secrets Configuration - Local Development
@@ -88,7 +89,7 @@ service:
 # =============================================================================
 
 livenessProbe:
-  enabled: true
+  enabled: false  # Workers are long-running background processors, no HTTP health endpoint
   httpGet:
     path: /health
     port: 8080
