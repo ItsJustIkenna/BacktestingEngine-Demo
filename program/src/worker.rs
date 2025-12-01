@@ -448,11 +448,14 @@ impl Worker {
         
         log_info!(MAIN_LOGGER, "📌 Creating optimizer with progress callback...");
         log_info!(MAIN_LOGGER, "🔍 DEBUG: progress_callback variable type check - callback should be Some");
+        println!("🔍 WORKER DEBUG: Creating optimizer with callback");
+        println!("🔍 WORKER DEBUG: progress_callback is Some");
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn,
             progress_callback: Some(progress_callback),
         };
+        println!("🔍 WORKER DEBUG: Optimizer created - callback.is_some() = {}", optimizer.progress_callback.is_some());
         log_info!(MAIN_LOGGER, "🔍 DEBUG: Optimizer.progress_callback.is_some() = {}", optimizer.progress_callback.is_some());
         log_info!(MAIN_LOGGER, "✅ Optimizer created successfully");
         
