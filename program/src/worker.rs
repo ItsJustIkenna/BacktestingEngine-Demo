@@ -521,6 +521,7 @@ impl Worker {
         backtest_config.trading.initial_capital = initial_capital;
         backtest_config.trading.commission_rate = commission_rate;
         backtest_config.analysis.skip_genetic_optimization = true; // Already done by worker
+        backtest_config.analysis.auto_walk_forward = false; // Already done by engine, prevent nested loop
         backtest_config.data.gap_detection.enabled = false; // Disable gap filling - data is already dense (39 orders/min)
         
         // Create progress callback for Monte Carlo and Walk-Forward
