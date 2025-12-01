@@ -163,27 +163,11 @@ fn run_monte_carlo_simulation_internal(
     let bootstrap_runs = num_runs / 2; // Half bootstrap, half shuffle
     let shuffle_runs = num_runs - bootstrap_runs;
     
-    // Use Arc<Mutex> for thread-safe progress reporting
-    let progress_counter = Arc::new(Mutex::new(0usize));
-    
     // Method 1: Trade order shuffling (PARALLEL with Rayon)
     let shuffle_results: Vec<_> = (0..shuffle_runs)
         .into_par_iter()
         .map(|_i| {
             let mut rng = rand::thread_rng();
-            
-            // Report progress every 10 runs (release lock before callback!)
-            if let Some(ref callback) = progress_callback {
-                let (should_report, count) = {
-                    let mut counter = progress_counter.lock().unwrap();
-                    *counter += 1;
-                    let count = *counter;
-                    (count % 10 == 0 || count == num_runs, count)
-                }; // Lock released here
-                if should_report {
-                    callback("monte_carlo", count, num_runs);
-                }
-            }
             
             // Shuffle trade returns
             let mut shuffled_returns = trade_returns.clone();
@@ -246,24 +230,16 @@ fn run_monte_carlo_simulation_internal(
         all_win_rates.push(win_rate);
     }
     
+    // Report progress after shuffle phase
+    if let Some(ref callback) = progress_callback {
+        callback("monte_carlo", shuffle_runs, num_runs);
+    }
+    
     // Method 2: Bootstrap resampling (PARALLEL with Rayon)
     let bootstrap_results: Vec<_> = (0..bootstrap_runs)
         .into_par_iter()
         .map(|_i| {
             let mut rng = rand::thread_rng();
-            
-            // Report progress every 10 runs (release lock before callback!)
-            if let Some(ref callback) = progress_callback {
-                let (should_report, count) = {
-                    let mut counter = progress_counter.lock().unwrap();
-                    *counter += 1;
-                    let count = *counter;
-                    (count % 10 == 0 || count == num_runs, count)
-                }; // Lock released here
-                if should_report {
-                    callback("monte_carlo", count, num_runs);
-                }
-            }
             
             // Bootstrap sample: sample with replacement
             let mut bootstrap_returns = Vec::with_capacity(trade_returns.len());
@@ -322,6 +298,11 @@ fn run_monte_carlo_simulation_internal(
         all_sharpe_ratios.push(sharpe);
         all_max_drawdowns.push(max_dd);
         all_win_rates.push(win_rate);
+    }
+    
+    // Report final progress (100%)
+    if let Some(ref callback) = progress_callback {
+        callback("monte_carlo", num_runs, num_runs);
     }
     
     // Calculate aggregate statistics
