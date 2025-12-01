@@ -78,8 +78,10 @@ impl Worker {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
             loop {
                 interval.tick().await;
+                log_info!(MAIN_LOGGER, "💓 Heartbeat update for job {}", heartbeat_job_id);
                 if let Err(e) = heartbeat_queue.update_heartbeat(&heartbeat_job_id).await {
                     log_error!(MAIN_LOGGER, "⚠️ Failed to update heartbeat for job {}: {}", heartbeat_job_id, e);
+                    break; // Exit loop on persistent errors
                 }
             }
         });

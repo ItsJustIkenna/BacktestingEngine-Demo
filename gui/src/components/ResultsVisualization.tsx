@@ -68,17 +68,6 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
       const statusData = await statusResponse.json();
       setJobStatus(statusData);
 
-      // Fetch job details (parameters) if not already loaded
-      if (!jobDetails) {
-        try {
-          const detailsResponse = await fetch(`/api/backtest/${jobId}`);
-          const detailsData = await detailsResponse.json();
-          setJobDetails(detailsData);
-        } catch (err) {
-          console.error('Failed to fetch job details:', err);
-        }
-      }
-
       // Calculate estimated time remaining for running jobs
       if (statusData.status === 'running' && statusData.started_at && statusData.progress > 0) {
         const startTime = new Date(statusData.started_at).getTime();
@@ -112,8 +101,23 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
       setError(err instanceof Error ? err.message : 'An error occurred');
       setLoading(false);
     }
-  }, [jobId, jobDetails]);
+  }, [jobId]);
 
+  // Fetch job details once on mount
+  useEffect(() => {
+    const fetchJobDetails = async () => {
+      try {
+        const detailsResponse = await fetch(`/api/backtest/${jobId}`);
+        const detailsData = await detailsResponse.json();
+        setJobDetails(detailsData);
+      } catch (err) {
+        console.error('Failed to fetch job details:', err);
+      }
+    };
+    fetchJobDetails();
+  }, [jobId]);
+
+  // Poll for status updates
   useEffect(() => {
     fetchData();
   }, [fetchData]);
