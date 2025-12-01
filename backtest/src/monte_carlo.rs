@@ -172,12 +172,16 @@ fn run_monte_carlo_simulation_internal(
         .map(|_i| {
             let mut rng = rand::thread_rng();
             
-            // Report progress every 10 runs
+            // Report progress every 10 runs (release lock before callback!)
             if let Some(ref callback) = progress_callback {
-                let mut counter = progress_counter.lock().unwrap();
-                *counter += 1;
-                if *counter % 10 == 0 || *counter == num_runs {
-                    callback("monte_carlo", *counter, num_runs);
+                let (should_report, count) = {
+                    let mut counter = progress_counter.lock().unwrap();
+                    *counter += 1;
+                    let count = *counter;
+                    (count % 10 == 0 || count == num_runs, count)
+                }; // Lock released here
+                if should_report {
+                    callback("monte_carlo", count, num_runs);
                 }
             }
             
@@ -248,12 +252,16 @@ fn run_monte_carlo_simulation_internal(
         .map(|_i| {
             let mut rng = rand::thread_rng();
             
-            // Report progress every 10 runs
+            // Report progress every 10 runs (release lock before callback!)
             if let Some(ref callback) = progress_callback {
-                let mut counter = progress_counter.lock().unwrap();
-                *counter += 1;
-                if *counter % 10 == 0 || *counter == num_runs {
-                    callback("monte_carlo", *counter, num_runs);
+                let (should_report, count) = {
+                    let mut counter = progress_counter.lock().unwrap();
+                    *counter += 1;
+                    let count = *counter;
+                    (count % 10 == 0 || count == num_runs, count)
+                }; // Lock released here
+                if should_report {
+                    callback("monte_carlo", count, num_runs);
                 }
             }
             
