@@ -69,10 +69,7 @@ impl Worker {
         println!("🎯 Worker {} claimed job: {} (symbol={}, exchange={})", 
             self.id, job.id, job.params.symbol, job.params.exchange);
         
-        // Update status to running
-        self.job_queue
-            .update_job_status(&job.id, JobStatus::Running, None)
-            .await?;
+        // Note: get_next_job() already set status to "running" atomically in the database
         
         // Spawn heartbeat task to update job every 30 seconds
         let heartbeat_queue = self.job_queue.clone();

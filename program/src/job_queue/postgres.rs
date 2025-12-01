@@ -378,8 +378,8 @@ impl JobQueue for PostgresQueue {
             // This prevents multiple workers from grabbing the same job
             let result = conn.transaction::<_, Box<dyn std::error::Error + Send + Sync>, _>(|conn| {
                 // Calculate thresholds for orphaned job detection
-                let started_threshold = Utc::now() - chrono::Duration::minutes(10); // Fallback: 10min without heartbeat update
-                let heartbeat_threshold = Utc::now() - chrono::Duration::minutes(2); // Primary: 2min stale heartbeat
+                let started_threshold = Utc::now() - chrono::Duration::minutes(30); // Fallback: 30min without heartbeat update
+                let heartbeat_threshold = Utc::now() - chrono::Duration::minutes(5); // Primary: 5min stale heartbeat
                 
                 // DEBUG: Log thresholds and check for running jobs
                 crate::log_info!(
