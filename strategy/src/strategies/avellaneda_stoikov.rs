@@ -334,8 +334,24 @@ impl Strategy for AvellanedaStoikovStrategy {
                 snapshot.price_level.clone()
             }
             #[cfg(feature = "postgres")]
-            dataloader::MarketData::Order(_) => {
-                return Err(StrategyError::MarketDataError("No mid price available".to_string()));
+            dataloader::MarketData::Order(order) => {
+                // For order-level data, calculate mid price from context spread if available
+                // Otherwise use the last known price from history, or the order price as fallback
+                if let Some(spread) = &context.spread {
+                    // If we have spread, use the last known price + half spread as approximation
+                    if !context.price_history.is_empty() {
+                        let last_price = &context.price_history.last().unwrap().price;
+                        // Assume last_price is roughly the mid, so mid ≈ last_price
+                        last_price.clone()
+                    } else {
+                        // Use order price as fallback
+                        order.price_level.clone()
+                    }
+                } else if !context.price_history.is_empty() {
+                    context.price_history.last().unwrap().price.clone()
+                } else {
+                    order.price_level.clone()
+                }
             }
             dataloader::MarketData::Candle(candle) => {
                 // Use close price as mid price approximation

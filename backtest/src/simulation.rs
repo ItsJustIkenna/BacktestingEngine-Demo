@@ -5,6 +5,8 @@
 use strategy::{StrategyManager, StrategyContext};
 use strategy::traits::{MarketSession, SessionType};
 use orderbook::OrderBook;
+#[cfg(feature = "postgres")]
+use orderbook::{OrderBookEvent, BookSide};
 use portfoliomanager::PortfolioState;
 use riskmanager::RiskManager;
 use dataloader::MarketData;
@@ -170,9 +172,11 @@ impl SimulationLoop {
                     // (Assume conversion function exists)
                     // orderbook.apply_event(OrderBookEvent::Snapshot { ... })
                 }
-                MarketData::Order(_order) => {
-                    // Process historical order data
-                    // Can be used to reconstruct order book or analyze order flow
+                MarketData::Order(order) => {
+                    // Convert HistoricalOrder to OrderBookEvent and apply to orderbook
+                    if let Some(event) = convert_historical_order_to_event(order) {
+                        let _ = orderbook.apply_event(event);
+                    }
                 }
                 MarketData::Trade(_trade) => {
                     // Convert trade to OrderBookEvent::Trade and apply
@@ -213,7 +217,13 @@ impl SimulationLoop {
                 portfolio_state: portfolio.clone(),
                 price_history: Vec::new(), // Empty for simplicity, could be filled from historical data
                 volume_history: Vec::new(), // Empty for simplicity 
-                spread: None,
+                spread: {
+                    // Calculate spread from orderbook best bid/ask
+                    match (orderbook.best_bid(), orderbook.best_ask()) {
+                        (Some(bid), Some(ask)) => Some(ask.clone() - bid.clone()),
+                        _ => None,
+                    }
+                },
                 market_session: MarketSession {
                     is_open: true,
                     session_type: SessionType::Regular,
@@ -365,5 +375,85 @@ impl SimulationLoop {
         });
 
         result
+    }
+}
+
+/// Convert HistoricalOrder from database to OrderBookEvent
+/// This allows us to reconstruct orderbook state during backtest simulation
+#[cfg(feature = "postgres")]
+fn convert_historical_order_to_event(order: &databaseschema::models::HistoricalOrder) -> Option<OrderBookEvent> {
+    use chrono::Utc;
+    
+    let event_type = order.get_event_type();
+    let order_id = order.get_order_id().to_string();
+    let timestamp = *order.get_timestamp();
+    
+    match event_type {
+        "NEW" => {
+            // Parse side
+            let side = match BookSide::from_str(order.get_side()) {
+                Some(s) => s,
+                None => {
+                    BACKTEST_LOGGER.warn(&format!(
+                        "Invalid side '{}' for order {}", 
+                        order.get_side(), 
+                        order_id
+                    ));
+                    return None;
+                }
+            };
+            
+            Some(OrderBookEvent::NewOrder {
+                order_id,
+                side,
+                price: order.get_price_level().clone(),
+                quantity: order.get_quantity().clone(),
+                timestamp,
+            })
+        }
+        "MODIFY" => {
+            Some(OrderBookEvent::ModifyOrder {
+                order_id,
+                new_quantity: order.get_quantity().clone(),
+                timestamp,
+            })
+        }
+        "CANCEL" => {
+            Some(OrderBookEvent::CancelOrder {
+                order_id,
+                timestamp,
+            })
+        }
+        "TRADE" => {
+            // Parse side for trade
+            let side = match BookSide::from_str(order.get_side()) {
+                Some(s) => s,
+                None => {
+                    BACKTEST_LOGGER.warn(&format!(
+                        "Invalid side '{}' for trade order {}", 
+                        order.get_side(), 
+                        order_id
+                    ));
+                    return None;
+                }
+            };
+            
+            Some(OrderBookEvent::Trade {
+                aggressor_order_id: None,  // Historical data may not have aggressor ID
+                passive_order_id: Some(order_id),
+                side,
+                price: order.get_price_level().clone(),
+                quantity: order.get_quantity().clone(),
+                timestamp,
+            })
+        }
+        _ => {
+            BACKTEST_LOGGER.warn(&format!(
+                "Unknown event type '{}' for order {}", 
+                event_type, 
+                order_id
+            ));
+            None
+        }
     }
 }
