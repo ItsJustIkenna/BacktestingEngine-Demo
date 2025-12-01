@@ -75,6 +75,54 @@ pub fn run_monte_carlo_simulation(
     run_monte_carlo_simulation_internal(base_result, num_runs, None)
 }
 
+/// Run lightweight Monte Carlo for genetic fitness evaluation
+/// 
+/// Returns only the mean and standard deviation of Sharpe ratios for fast consistency checking.
+/// Used in lazy evaluation to assess parameter stability without full analysis.
+pub fn run_lightweight_monte_carlo(
+    base_result: &BacktestResult,
+    num_runs: usize,
+) -> anyhow::Result<(f64, f64)> {
+    // Extract individual trade returns from equity curve
+    let mut trade_returns: Vec<f64> = Vec::new();
+    if base_result.equity_curve.len() > 1 {
+        for i in 1..base_result.equity_curve.len() {
+            let ret = base_result.equity_curve[i] - base_result.equity_curve[i - 1];
+            trade_returns.push(ret);
+        }
+    }
+    
+    // If no trades, return zero mean/stddev
+    if trade_returns.is_empty() {
+        return Ok((0.0, 0.0));
+    }
+    
+    // Run Monte Carlo simulations in parallel
+    let sharpe_ratios: Vec<f64> = (0..num_runs)
+        .into_par_iter()
+        .map(|_| {
+            let mut rng = rand::thread_rng();
+            let mut shuffled_returns = trade_returns.clone();
+            shuffled_returns.shuffle(&mut rng);
+            
+            // Calculate Sharpe ratio for this shuffle
+            let mean_ret = mean(&shuffled_returns);
+            let std_ret = std_dev(&shuffled_returns);
+            if std_ret > 0.0 {
+                mean_ret / std_ret * (252.0_f64.sqrt()) // Annualized
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    
+    // Return mean and standard deviation of Sharpe ratios
+    let mean_sharpe = mean(&sharpe_ratios);
+    let std_sharpe = std_dev(&sharpe_ratios);
+    
+    Ok((mean_sharpe, std_sharpe))
+}
+
 fn run_monte_carlo_simulation_internal(
     base_result: &BacktestResult,
     num_runs: usize,

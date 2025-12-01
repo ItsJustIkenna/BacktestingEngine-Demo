@@ -106,6 +106,9 @@ fn bench_genetic_optimizer_creation(c: &mut Criterion) {
                 generations: 100,
                 mutation_rate: 0.01,
                 crossover_rate: 0.8,
+                use_monte_carlo_fitness: false,
+                mc_sample_size: 50,
+                top_percentile_threshold: 0.10,
             };
             black_box(GeneticOptimizer {
                 config,
@@ -196,6 +199,9 @@ fn bench_genetic_optimization_full(c: &mut Criterion) {
             generations: 10, // Keep generations low for benchmarking
             mutation_rate: 0.01,
             crossover_rate: 0.8,
+            use_monte_carlo_fitness: false,
+            mc_sample_size: 50,
+            top_percentile_threshold: 0.10,
         };
         
         group.bench_with_input(BenchmarkId::new("full_optimization", pop_size), &config, |b, config| {

@@ -68,8 +68,7 @@ mod tests {
             population_size: 50,
             generations: 100,
             crossover_rate: 0.7,
-            mutation_rate: 0.1,
-        };
+            mutation_rate: 0.1, use_monte_carlo_fitness: false, mc_sample_size: 50, top_percentile_threshold: 0.10, };
 
         let fitness_fn = create_test_fitness_fn();
 
@@ -93,8 +92,7 @@ mod tests {
             population_size: 30,
             generations: 10, // Small for fast test
             crossover_rate: 0.8,
-            mutation_rate: 0.2,
-        };
+            mutation_rate: 0.2, use_monte_carlo_fitness: false, mc_sample_size: 50, top_percentile_threshold: 0.10, };
 
         let fitness_fn = create_test_fitness_fn();
 
@@ -149,8 +147,7 @@ mod tests {
             population_size: 20,
             generations: 50,
             crossover_rate: 0.7,
-            mutation_rate: 0.1,
-        };
+            mutation_rate: 0.1, use_monte_carlo_fitness: false, mc_sample_size: 50, top_percentile_threshold: 0.10, };
 
         // Simple fitness function for A-S parameters
         let fitness_fn: AsyncFitnessFn<AvellanedaStoikovChromosome> = Arc::new(|chromo| {
@@ -186,8 +183,7 @@ mod tests {
             population_size: 10,
             generations: 5,
             crossover_rate: 0.5,
-            mutation_rate: 0.1,
-        };
+            mutation_rate: 0.1, use_monte_carlo_fitness: false, mc_sample_size: 50, top_percentile_threshold: 0.10, };
 
         // Counter to track how many fitness evaluations occurred
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -226,8 +222,7 @@ mod tests {
             population_size: 100,
             generations: 50,
             crossover_rate: 0.7,
-            mutation_rate: 0.1,
-        };
+            mutation_rate: 0.1, use_monte_carlo_fitness: false, mc_sample_size: 50, top_percentile_threshold: 0.10, };
         
         assert!(config.population_size > 0);
         assert!(config.generations > 0);
@@ -239,8 +234,7 @@ mod tests {
             population_size: 1,
             generations: 1,
             crossover_rate: 0.0,
-            mutation_rate: 0.0,
-        };
+            mutation_rate: 0.0, use_monte_carlo_fitness: false, mc_sample_size: 50, top_percentile_threshold: 0.10, };
         
         assert!(edge_config.population_size > 0);
         assert!(edge_config.generations > 0);
@@ -253,6 +247,9 @@ mod tests {
             generations: 1,
             crossover_rate: 0.0, // No crossover for this test
             mutation_rate: 0.0,  // No mutation for this test
+            use_monte_carlo_fitness: false,
+            mc_sample_size: 50,
+            top_percentile_threshold: 0.10,
         };
 
         // Fitness function that returns the first value
@@ -301,8 +298,7 @@ mod tests {
             population_size: 20,
             generations: 5,
             crossover_rate: 0.9,
-            mutation_rate: 0.3,
-        };
+            mutation_rate: 0.3, use_monte_carlo_fitness: false, mc_sample_size: 50, top_percentile_threshold: 0.10, };
 
         let fitness_fn = create_test_fitness_fn();
 
@@ -319,3 +315,4 @@ mod tests {
         assert_eq!(best.values.len(), 5);
     }
 }
+

@@ -435,7 +435,18 @@ pub struct GeneticConfig {
     pub generations: usize,
     pub crossover_rate: f64,
     pub mutation_rate: f64,
+    
+    // Lazy evaluation parameters for Monte Carlo consistency checking
+    #[serde(default)]
+    pub use_monte_carlo_fitness: bool,     // Enable MC consistency in fitness
+    #[serde(default = "default_mc_sample_size")]
+    pub mc_sample_size: usize,             // Number of MC runs for fitness (50-100)
+    #[serde(default = "default_top_percentile")]
+    pub top_percentile_threshold: f64,     // Only evaluate top N% (e.g., 0.10 for top 10%)
 }
+
+fn default_mc_sample_size() -> usize { 50 }
+fn default_top_percentile() -> f64 { 0.10 }
 
 /// Configuration for order book reconstruction
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -680,6 +691,9 @@ impl Default for GeneticConfig {
             generations: 100,
             crossover_rate: 0.8,
             mutation_rate: 0.1,
+            use_monte_carlo_fitness: false,     // Disabled by default (faster)
+            mc_sample_size: 50,                 // Fast MC for fitness eval
+            top_percentile_threshold: 0.10,     // Only check top 10%
         }
     }
 }

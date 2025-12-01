@@ -207,7 +207,7 @@ impl BacktestEngine {
         };
         
         let walk_forward_result = match current_mode {
-            AnalysisMode::Production => {
+            AnalysisMode::Production if self.analysis_config.auto_walk_forward => {
                 println!("🔄 Running Walk-Forward analysis...");
                 // Pass current strategy parameters to test robustness across time windows
                 Some(self.run_walk_forward_analysis(
@@ -268,7 +268,7 @@ impl BacktestEngine {
         }
     }
     
-    /// Run the core backtest simulation
+    /// Run the core backtest simulation (internal use for Walk-Forward, etc.)
     async fn run_core_simulation(
         &self,
         strategy_manager: &mut StrategyManager,
@@ -289,6 +289,19 @@ impl BacktestEngine {
         ).await;
         
         Ok(result)
+    }
+    
+    /// Run the core backtest simulation without analysis (Monte Carlo, Walk-Forward)
+    /// This is used by genetic optimization fitness functions for fast evaluation
+    pub async fn run_core_simulation_direct(
+        &self,
+        strategy_manager: &mut StrategyManager,
+        orderbook: &mut OrderBook,
+        portfolio: &mut PortfolioState,
+        risk_manager: &mut RiskManager,
+        market_data: &[MarketData],
+    ) -> Result<BacktestResult> {
+        self.run_core_simulation(strategy_manager, orderbook, portfolio, risk_manager, market_data).await
     }
     
     /// Run genetic optimization to find optimal strategy parameters (MANDATORY)
@@ -318,6 +331,9 @@ impl BacktestEngine {
             generations,
             crossover_rate: 0.7,
             mutation_rate: 0.2,
+            use_monte_carlo_fitness: false,
+            mc_sample_size: 50,
+            top_percentile_threshold: 0.10,
         };
         
         // Create fitness function that runs backtest with parameters

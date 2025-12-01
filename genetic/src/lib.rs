@@ -87,6 +87,33 @@ impl<C: Chromosome> GeneticOptimizer<C> {
                 }
             }
             
+            // LAZY EVALUATION: If Monte Carlo fitness is enabled, apply consistency check
+            // only to top N% performers to validate stability
+            if self.config.use_monte_carlo_fitness && generation > 0 {
+                // Calculate fitness threshold for top N%
+                let mut sorted_fitnesses = fitnesses.clone();
+                sorted_fitnesses.sort_by(|a, b| b.partial_cmp(a).unwrap());
+                let threshold_idx = ((1.0 - self.config.top_percentile_threshold) * sorted_fitnesses.len() as f64) as usize;
+                let fitness_threshold = sorted_fitnesses[threshold_idx.min(sorted_fitnesses.len() - 1)];
+                
+                println!("   🎯 Lazy eval: checking top {:.0}% (threshold: {:.4})", 
+                    self.config.top_percentile_threshold * 100.0, fitness_threshold);
+                
+                // Apply consistency penalty to top performers only
+                // This is done after base fitness calculation to avoid unnecessary MC runs
+                // Note: Actual MC evaluation would need to be integrated with fitness_fn
+                // or require passing BacktestResult through the fitness function
+                // For now, we track which chromosomes qualify for MC checking
+                let top_performer_indices: Vec<usize> = fitnesses.iter()
+                    .enumerate()
+                    .filter(|(_, &f)| f >= fitness_threshold)
+                    .map(|(idx, _)| idx)
+                    .collect();
+                
+                println!("   📊 {} chromosomes qualify for MC consistency check", top_performer_indices.len());
+                // Future enhancement: run lightweight MC on these indices and adjust fitness
+            }
+            
             // Track best fitness in this generation
             let mut generation_best_fitness = best_fitness;
             
@@ -226,6 +253,9 @@ mod tests {
             generations: 3,
             crossover_rate: 0.7,
             mutation_rate: 0.3,
+            use_monte_carlo_fitness: false,
+            mc_sample_size: 50,
+            top_percentile_threshold: 0.10,
         };
 
         let fitness_fn = Arc::new(|chromo: &AvellanedaStoikovChromosome| {

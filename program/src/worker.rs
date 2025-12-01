@@ -345,6 +345,7 @@ impl Worker {
             generations: params.generations,
             mutation_rate: 0.1,
             crossover_rate: 0.7,
+            ..Default::default() // Use defaults for MC lazy eval (disabled)
         };
         
         // Create progress callback to update generation tracking
@@ -437,8 +438,9 @@ impl Worker {
                     return 0.0;
                 }
                 
-                // Run backtest
-                match engine.run_backtest(
+                // Run ONLY core simulation (no Monte Carlo, no Walk-Forward)
+                // Fitness evaluation should be fast and not trigger analysis loops
+                match engine.run_core_simulation_direct(
                     &mut strategy_manager,
                     &mut orderbook,
                     &mut portfolio,
@@ -447,8 +449,8 @@ impl Worker {
                 ).await {
                     Ok(result) => {
                         // Fitness = Sharpe ratio (primary) + PnL bonus
-                        let sharpe = result.core.sharpe_ratio.unwrap_or(0.0);
-                        let pnl = result.core.total_pnl.to_string().parse::<f64>().unwrap_or(0.0);
+                        let sharpe = result.sharpe_ratio.unwrap_or(0.0);
+                        let pnl = result.total_pnl.to_string().parse::<f64>().unwrap_or(0.0);
                         sharpe + (pnl / initial_capital) * 0.1
                     }
                     Err(_) => 0.0,

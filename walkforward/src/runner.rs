@@ -102,6 +102,9 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
         generations: 10,
         crossover_rate: 0.7,
         mutation_rate: 0.2,
+        use_monte_carlo_fitness: false,
+        mc_sample_size: 50,
+        top_percentile_threshold: 0.10,
     };
     let fitness_fn = Arc::new(|chromo: &AvellanedaStoikovChromosome| {
         // Simple fitness based on parameter values since full backtesting is complex
