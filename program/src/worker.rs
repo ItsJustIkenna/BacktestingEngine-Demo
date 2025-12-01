@@ -36,6 +36,7 @@ impl Worker {
     
     /// Start the worker loop
     pub async fn run(self) {
+        println!("🚀 Worker {} started and polling for jobs", self.id);
         log_info!(MAIN_LOGGER, "Worker {} started", self.id);
         
         loop {
