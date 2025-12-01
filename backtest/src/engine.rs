@@ -209,6 +209,7 @@ impl BacktestEngine {
         let walk_forward_result = match current_mode {
             AnalysisMode::Production => {
                 println!("🔄 Running Walk-Forward analysis...");
+                // Pass current strategy parameters to test robustness across time windows
                 Some(self.run_walk_forward_analysis(
                     strategy_manager, orderbook, portfolio, risk_manager, market_data
                 ).await?)
@@ -592,7 +593,6 @@ impl BacktestEngine {
             });
         }
         
-        let mut in_sample_sharpes = Vec::with_capacity(windows.len());
         let mut out_of_sample_sharpes = Vec::with_capacity(windows.len());
         
         let total_windows = windows.len();
@@ -602,26 +602,8 @@ impl BacktestEngine {
                 callback("walk_forward", window_idx + 1, total_windows);
             }
             
-            // Split market data into training and test sets
-            let train_data: Vec<_> = market_data.iter()
-                .filter(|md| {
-                    #[cfg(feature = "postgres")]
-                    let ts = match md {
-                        MarketData::Candle(c) => c.timestamp,
-                        MarketData::Trade(t) => t.timestamp,
-                        MarketData::Snapshot(s) => s.timestamp,
-                        MarketData::Order(o) => o.timestamp,
-                    };
-                    #[cfg(not(feature = "postgres"))]
-                    let ts = match md {
-                        MarketData::Candle(c) => c.timestamp,
-                        MarketData::Trade(t) => t.timestamp,
-                    };
-                    ts >= window.optimization_window.start_date && ts < window.optimization_window.end_date
-                })
-                .cloned()
-                .collect();
-                
+            // Split market data into test sets only
+            // We use CURRENT optimized parameters (no re-optimization)
             let test_data: Vec<_> = market_data.iter()
                 .filter(|md| {
                     #[cfg(feature = "postgres")]
@@ -641,32 +623,12 @@ impl BacktestEngine {
                 .cloned()
                 .collect();
             
-            if train_data.is_empty() || test_data.is_empty() {
+            if test_data.is_empty() {
                 continue;
             }
             
-            // Run optimization on training data
-            let optimal_params = self.run_genetic_optimization(
-                strategy_manager,
-                orderbook,
-                portfolio,
-                risk_manager,
-                &train_data,
-            ).await?;
-            
-            // Apply optimized parameters
-            strategy_manager.update_all_parameters(optimal_params.clone()).await?;
-            
-            // Run in-sample backtest (on training data)
-            let train_result = self.run_core_simulation(
-                strategy_manager,
-                orderbook,
-                portfolio,
-                risk_manager,
-                &train_data,
-            ).await?;
-            
-            // Run out-of-sample test (on test data) 
+            // Test the ALREADY-OPTIMIZED parameters on this time window
+            // This validates if parameters are robust across different market conditions
             let test_result = self.run_core_simulation(
                 strategy_manager,
                 orderbook,
@@ -675,15 +637,12 @@ impl BacktestEngine {
                 &test_data,
             ).await?;
             
-            if let Some(train_sharpe) = train_result.sharpe_ratio {
-                in_sample_sharpes.push(train_sharpe);
-            }
             if let Some(test_sharpe) = test_result.sharpe_ratio {
                 out_of_sample_sharpes.push(test_sharpe);
             }
         }
         
-        let periods_tested = in_sample_sharpes.len();
+        let periods_tested = out_of_sample_sharpes.len();
         if periods_tested == 0 {
             return Ok(WalkForwardSummary {
                 periods_tested: 0,
@@ -693,7 +652,6 @@ impl BacktestEngine {
             });
         }
         
-        let avg_in_sample = in_sample_sharpes.iter().sum::<f64>() / in_sample_sharpes.len() as f64;
         let avg_out_sample = out_of_sample_sharpes.iter().sum::<f64>() / out_of_sample_sharpes.len() as f64;
         
         // Calculate consistency (lower std dev = higher consistency)
@@ -704,12 +662,9 @@ impl BacktestEngine {
         let std_dev = variance.sqrt();
         let consistency_score = (1.0 - (std_dev / (mean.abs() + 1e-6))).max(0.0).min(1.0);
         
-        // Degradation from in-sample to out-of-sample
-        let degradation = if avg_in_sample > 0.0 {
-            ((avg_in_sample - avg_out_sample) / avg_in_sample).max(0.0)
-        } else {
-            0.0
-        };
+        // Measure parameter stability across time windows (lower = more stable)
+        // High std dev relative to mean indicates parameters don't generalize well
+        let degradation = (std_dev / (mean.abs() + 1e-6)).min(1.0);
         
         Ok(WalkForwardSummary {
             periods_tested,
