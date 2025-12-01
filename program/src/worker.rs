@@ -527,13 +527,17 @@ impl Worker {
         let job_id_for_callback = Arc::new(job_id.to_string());
         let job_queue_for_callback = Arc::new(self.job_queue.clone());
         
+        // Get a handle to the current tokio runtime so we can spawn from Rayon threads
+        let runtime_handle = tokio::runtime::Handle::current();
+        
         let progress_callback = std::sync::Arc::new(move |phase: &str, current: usize, total: usize| {
             let job_id = job_id_for_callback.as_ref().clone();
             let job_queue = job_queue_for_callback.as_ref().clone();
             let phase = phase.to_string();
+            let handle = runtime_handle.clone();
             
-            // Spawn task to update phase in background
-            tokio::spawn(async move {
+            // Spawn task on the tokio runtime from any thread (including Rayon threads)
+            handle.spawn(async move {
                 let _ = job_queue.update_phase(&job_id, &phase, serde_json::json!({
                     "current": current,
                     "total": total
