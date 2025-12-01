@@ -383,6 +383,7 @@ impl Worker {
                 let mut backtest_config = BacktestConfig::default();
                 backtest_config.trading.initial_capital = initial_capital;
                 backtest_config.trading.commission_rate = commission_rate;
+                backtest_config.analysis.skip_genetic_optimization = true; // Skip genetic optimization in fitness evaluation
                 backtest_config.data.gap_detection.enabled = false; // Disable gap filling for fitness evaluation
                 
                 let engine = BacktestEngine::new(backtest_config);
