@@ -65,6 +65,8 @@ impl Worker {
         
         log_info!(MAIN_LOGGER, "🎯 Worker {} claimed job: {} (symbol={}, exchange={})", 
             self.id, job.id, job.params.symbol, job.params.exchange);
+        println!("🎯 Worker {} claimed job: {} (symbol={}, exchange={})", 
+            self.id, job.id, job.params.symbol, job.params.exchange);
         
         // Update status to running
         self.job_queue
@@ -78,8 +80,10 @@ impl Worker {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
             loop {
                 interval.tick().await;
+                println!("💓 Heartbeat update for job {}", heartbeat_job_id);
                 log_info!(MAIN_LOGGER, "💓 Heartbeat update for job {}", heartbeat_job_id);
                 if let Err(e) = heartbeat_queue.update_heartbeat(&heartbeat_job_id).await {
+                    eprintln!("⚠️ Failed to update heartbeat for job {}: {}", heartbeat_job_id, e);
                     log_error!(MAIN_LOGGER, "⚠️ Failed to update heartbeat for job {}: {}", heartbeat_job_id, e);
                     break; // Exit loop on persistent errors
                 }
