@@ -337,7 +337,7 @@ impl Strategy for AvellanedaStoikovStrategy {
             dataloader::MarketData::Order(order) => {
                 // For order-level data, calculate mid price from context spread if available
                 // Otherwise use the last known price from history, or the order price as fallback
-                if let Some(spread) = &context.spread {
+                if let Some(_spread) = &context.spread {
                     // If we have spread, use the last known price + half spread as approximation
                     if !context.price_history.is_empty() {
                         let last_price = &context.price_history.last().unwrap().price;

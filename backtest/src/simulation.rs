@@ -7,6 +7,8 @@ use strategy::traits::{MarketSession, SessionType};
 use orderbook::OrderBook;
 #[cfg(feature = "postgres")]
 use orderbook::{OrderBookEvent, BookSide};
+#[cfg(feature = "postgres")]
+use databaseschema::models::historical_order::HistoricalOrder;
 use portfoliomanager::PortfolioState;
 use riskmanager::RiskManager;
 use dataloader::MarketData;
@@ -381,8 +383,7 @@ impl SimulationLoop {
 /// Convert HistoricalOrder from database to OrderBookEvent
 /// This allows us to reconstruct orderbook state during backtest simulation
 #[cfg(feature = "postgres")]
-fn convert_historical_order_to_event(order: &databaseschema::models::HistoricalOrder) -> Option<OrderBookEvent> {
-    use chrono::Utc;
+fn convert_historical_order_to_event(order: &HistoricalOrder) -> Option<OrderBookEvent> {
     
     let event_type = order.get_event_type();
     let order_id = order.get_order_id().to_string();
@@ -394,7 +395,7 @@ fn convert_historical_order_to_event(order: &databaseschema::models::HistoricalO
             let side = match BookSide::from_str(order.get_side()) {
                 Some(s) => s,
                 None => {
-                    BACKTEST_LOGGER.warn(&format!(
+                    BACKTEST_LOGGER.warn(format!(
                         "Invalid side '{}' for order {}", 
                         order.get_side(), 
                         order_id
@@ -429,7 +430,7 @@ fn convert_historical_order_to_event(order: &databaseschema::models::HistoricalO
             let side = match BookSide::from_str(order.get_side()) {
                 Some(s) => s,
                 None => {
-                    BACKTEST_LOGGER.warn(&format!(
+                    BACKTEST_LOGGER.warn(format!(
                         "Invalid side '{}' for trade order {}", 
                         order.get_side(), 
                         order_id
@@ -448,7 +449,7 @@ fn convert_historical_order_to_event(order: &databaseschema::models::HistoricalO
             })
         }
         _ => {
-            BACKTEST_LOGGER.warn(&format!(
+            BACKTEST_LOGGER.warn(format!(
                 "Unknown event type '{}' for order {}", 
                 event_type, 
                 order_id
