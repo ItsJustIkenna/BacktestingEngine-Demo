@@ -344,14 +344,19 @@ impl Worker {
             let queue = job_queue.clone();
             let id = job_id.clone();
             Box::pin(async move {
+                log_info!(MAIN_LOGGER, "📊 Progress callback fired: generation {}/{}", current_gen, total_gens);
                 // Update generation in database
                 if let Err(e) = queue.update_generation(&id, current_gen as i32, total_gens as i32).await {
                     log_error!(MAIN_LOGGER, "⚠️ Failed to update generation for job {}: {}", id, e);
+                } else {
+                    log_info!(MAIN_LOGGER, "✅ Generation updated successfully in database");
                 }
                 // Update progress (20% to 85% during optimization)
                 let progress = 20.0 + (65.0 * current_gen as f64 / total_gens as f64);
                 if let Err(e) = queue.update_progress(&id, progress).await {
                     log_error!(MAIN_LOGGER, "⚠️ Failed to update progress for job {}: {}", id, e);
+                } else {
+                    log_info!(MAIN_LOGGER, "✅ Progress updated to {:.1}%", progress);
                 }
                 log_info!(MAIN_LOGGER, "🧬 Job {} - Generation {}/{}", id, current_gen, total_gens);
             })
