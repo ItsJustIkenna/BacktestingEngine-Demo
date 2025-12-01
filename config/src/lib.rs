@@ -846,6 +846,8 @@ impl BacktestConfig {
 pub struct AnalysisConfig {
     /// Analysis mode: "development", "validation", "production"
     pub mode: AnalysisMode,
+    /// Skip genetic optimization (used when worker already did it)
+    pub skip_genetic_optimization: bool,
     /// Enable automatic Monte Carlo simulation
     pub auto_monte_carlo: bool,
     /// Number of Monte Carlo runs (default: 500)
@@ -889,6 +891,7 @@ impl Default for AnalysisConfig {
         // 3. Monte Carlo simulation (parameter robustness)
         Self {
             mode: AnalysisMode::Production,
+            skip_genetic_optimization: false,
             auto_monte_carlo: true,
             monte_carlo_runs: 500,
             auto_walk_forward: true,

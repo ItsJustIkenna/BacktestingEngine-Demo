@@ -132,19 +132,23 @@ impl BacktestEngine {
         // Use processed_data for all subsequent operations
         let market_data = &processed_data;
         
-        // MANDATORY: Run genetic optimization first to find optimal parameters
-        println!("🧬 Running genetic optimization (mandatory for HFT strategies)...");
-        let optimized_params = self.run_genetic_optimization(
-            strategy_manager,
-            orderbook,
-            portfolio,
-            risk_manager,
-            market_data
-        ).await?;
-        
-        // Apply optimized parameters to all strategies
-        strategy_manager.update_all_parameters(optimized_params).await?;
-        println!("✅ Genetic optimization complete - parameters updated");
+        // MANDATORY: Run genetic optimization first to find optimal parameters (unless skipped)
+        if !self.analysis_config.skip_genetic_optimization {
+            println!("🧬 Running genetic optimization (mandatory for HFT strategies)...");
+            let optimized_params = self.run_genetic_optimization(
+                strategy_manager,
+                orderbook,
+                portfolio,
+                risk_manager,
+                market_data
+            ).await?;
+            
+            // Apply optimized parameters to all strategies
+            strategy_manager.update_all_parameters(optimized_params).await?;
+            println!("✅ Genetic optimization complete - parameters updated");
+        } else {
+            println!("⏭️ Skipping genetic optimization (already done by worker)");
+        }
         
         // Run core backtest simulation with optimized parameters
         let mut core_result = self.run_core_simulation(
