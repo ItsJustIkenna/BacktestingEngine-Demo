@@ -69,15 +69,15 @@ impl<C: Chromosome> GeneticOptimizer<C> {
             }
             
             // 2. Evaluate fitness with controlled parallelism (prevent OOM)
-            // Limit concurrent evaluations to 4 to prevent memory exhaustion
-            // Full parallelism with large populations (50+) can exceed 16GB with backtests
+            // Limit concurrent evaluations to 2 to prevent memory exhaustion
+            // Even 4 concurrent backtests can exceed 16GB with large datasets
             use futures::stream::{FuturesUnordered, StreamExt};
             
             let mut futures = FuturesUnordered::new();
             let mut results = Vec::with_capacity(population.len());
             
-            // Process in batches of 4 to limit memory usage
-            for chunk in population.chunks(4) {
+            // Process in batches of 2 to limit memory usage
+            for chunk in population.chunks(2) {
                 for chromo in chunk {
                     futures.push((self.fitness_fn)(chromo));
                 }
