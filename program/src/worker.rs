@@ -574,6 +574,7 @@ impl Worker {
         strategy_manager.register_strategy(strategy_config, strategy)
             .map_err(|e| format!("Failed to register strategy: {}", e))?;
         
+        log_info!(MAIN_LOGGER, "🎯 About to call engine.run_backtest() for job {}", job_id);
         let result = engine.run_backtest(
             &mut strategy_manager,
             &mut orderbook,
@@ -582,10 +583,15 @@ impl Worker {
             data,
         ).await?;
         
+        log_info!(MAIN_LOGGER, "✅ engine.run_backtest() returned for job {}", job_id);
+        log_info!(MAIN_LOGGER, "📊 Parsing results for job {}", job_id);
+        
         let total_pnl = result.core.total_pnl.to_string().parse::<f64>()
             .map_err(|e| format!("Failed to parse total_pnl: {}", e))?;
         let max_drawdown = result.core.max_drawdown.to_string().parse::<f64>()
             .map_err(|e| format!("Failed to parse max_drawdown: {}", e))?;
+        
+        log_info!(MAIN_LOGGER, "📦 Creating BacktestResult for job {}", job_id);
         
         Ok(BacktestResult {
             job_id: job_id.to_string(),
