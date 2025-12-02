@@ -143,8 +143,20 @@ enum Commands {
     },
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
+    // Create custom runtime with larger blocking thread pool
+    // Default is 512, but with 4 workers each making frequent DB calls, we need more
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .max_blocking_threads(2048) // Increased from default 512
+        .enable_all()
+        .build()
+        .expect("Failed to create Tokio runtime");
+    
+    runtime.block_on(async_main());
+}
+
+async fn async_main() {
     let cli = Cli::parse();
     match cli.command {
         Commands::Serve { bind, backend, redis_url: _, workers } => {
