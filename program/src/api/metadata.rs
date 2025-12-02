@@ -54,15 +54,18 @@ pub async fn get_symbols(
     };
 
     // Query symbols from database
-    let mut conn = pool.get().map_err(|e| {
+    let mut conn = pool.get().await.map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get database connection: {}", e))
     })?;
 
-    let symbols: Vec<Symbol> = securities::table
-        .select(securities::symbol)
-        .order(securities::symbol.asc())
-        .load::<String>(&mut conn)
-        .map_err(|e| {
+    let symbols: Vec<Symbol> = diesel_async::RunQueryDsl::load(
+        securities::table
+            .select(securities::symbol)
+            .order(securities::symbol.asc()),
+        &mut conn
+    )
+    .await
+    .map_err(|e| {
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to query symbols: {}", e))
         })?
         .into_iter()
@@ -87,15 +90,18 @@ pub async fn get_exchanges(
     };
 
     // Query exchanges from database
-    let mut conn = pool.get().map_err(|e| {
+    let mut conn = pool.get().await.map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get database connection: {}", e))
     })?;
 
-    let exchanges: Vec<Exchange> = exchanges::table
-        .select(exchanges::exchange)
-        .order(exchanges::exchange.asc())
-        .load::<String>(&mut conn)
-        .map_err(|e| {
+    let exchanges: Vec<Exchange> = diesel_async::RunQueryDsl::load(
+        exchanges::table
+            .select(exchanges::exchange)
+            .order(exchanges::exchange.asc()),
+        &mut conn
+    )
+    .await
+    .map_err(|e| {
             (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to query exchanges: {}", e))
         })?
         .into_iter()

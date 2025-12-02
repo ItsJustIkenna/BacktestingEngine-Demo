@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
+use std::sync::Arc;
 
 /// Job status states
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -168,7 +169,7 @@ pub trait JobQueue: Send + Sync {
     async fn queue_length(&self) -> Result<usize, Box<dyn std::error::Error + Send + Sync>>;
     
     /// Get database connection pool (if available)
-    fn get_pool(&self) -> Option<&diesel::r2d2::Pool<diesel::r2d2::ConnectionManager<diesel::pg::PgConnection>>> {
+    fn get_pool(&self) -> Option<Arc<diesel_async::pooled_connection::deadpool::Pool<diesel_async::AsyncPgConnection>>> {
         None
     }
     

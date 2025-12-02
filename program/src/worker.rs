@@ -23,6 +23,10 @@ use portfoliomanager::PortfolioState;
 use config::BacktestConfig;
 use dataloader::MarketData;
 
+/// Progress update threshold - only update DB every 5% to reduce load
+/// (20 updates per job instead of 500)
+const PROGRESS_UPDATE_THRESHOLD: f64 = 5.0;
+
 /// Backtest worker
 pub struct Worker {
     id: usize,
@@ -275,7 +279,7 @@ impl Worker {
         
         log_info!(MAIN_LOGGER, "🚀 Starting backtest execution for job {}", job.id);
         
-        // Run backtest without progress tracking (was causing blocking thread pool exhaustion)
+        // Run backtest (progress tracked manually after completion)
         let start_time = std::time::Instant::now();
         
         let result = engine
@@ -343,9 +347,6 @@ impl Worker {
         
         log_info!(MAIN_LOGGER, "✅ Loaded {} data points for genetic optimization", data.len());
         
-        // Skip database updates during optimization to prevent spawn_blocking exhaustion
-        // Progress will be tracked via heartbeat only
-        
         // Create genetic config
         let config = GeneticConfig {
             population_size: params.population_size,
@@ -355,7 +356,29 @@ impl Worker {
             ..Default::default() // Use defaults for MC lazy eval (disabled)
         };
         
-        // No progress callback - reduces database calls from 40+ to near zero during optimization
+        // Progress callback for generation tracking (every 5% of generations)
+        let job_id_for_progress = job.id.clone();
+        let job_queue_for_progress = Arc::clone(&self.job_queue);
+        let total_generations = params.generations as usize;
+        let generation_threshold = (total_generations as f64 * PROGRESS_UPDATE_THRESHOLD / 100.0).max(1.0) as usize;
+        
+        let generation_callback: Arc<dyn Fn(usize, usize) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync> = 
+            Arc::new(move |current: usize, _total: usize| {
+                let should_update = current % generation_threshold == 0 || current == total_generations;
+                
+                if should_update {
+                    let job_id = job_id_for_progress.clone();
+                    let job_queue = Arc::clone(&job_queue_for_progress);
+                    
+                    Box::pin(async move {
+                        if let Err(e) = job_queue.update_generation(&job_id, current as i32, total_generations as i32).await {
+                            log_error!(MAIN_LOGGER, "Failed to update generation for {}: {}", job_id, e);
+                        }
+                    })
+                } else {
+                    Box::pin(async {})
+                }
+            });
         
         // Prepare data for fitness function (as Arc for sharing)
         let data_arc = Arc::new(data);
@@ -442,14 +465,14 @@ impl Worker {
         });
         
         // Run genetic optimization
-        log_info!(MAIN_LOGGER, "🚀 Running genetic optimization without progress tracking...");
+        log_info!(MAIN_LOGGER, "🚀 Running genetic optimization with generation tracking (every {}%)...", PROGRESS_UPDATE_THRESHOLD);
         log_info!(MAIN_LOGGER, "   Config: pop_size={}, generations={}, mutation={}, crossover={}", 
             config.population_size, config.generations, config.mutation_rate, config.crossover_rate);
         
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn,
-            progress_callback: None, // No callback = no database spam
+            progress_callback: Some(generation_callback), // Track every 5% of generations
         };
         
         log_info!(MAIN_LOGGER, "🔄 Calling optimizer.run()...");
@@ -603,8 +626,13 @@ impl Worker {
         symbol: &str,
         exchange: &str,
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
-        use crate::streaming::OrderBookBatchLoader;
+        // TODO: streaming module needs async pool migration
+        // use crate::streaming::OrderBookBatchLoader;
         
+        log_info!(MAIN_LOGGER, "⚠️  Order book loading temporarily disabled during async migration");
+        Err("OrderBook loading requires streaming module async migration".into())
+        
+        /* Commented out until streaming.rs is migrated to diesel-async
         let pool = self.job_queue.get_pool()
             .ok_or("Database pool not available")?;
         
@@ -624,6 +652,7 @@ impl Worker {
         
         log_info!(MAIN_LOGGER, "📊 Loaded {} order book events for {}/{}", orders.len(), symbol, exchange);
         Ok(orders)
+        */
     }
     
     #[cfg(not(feature = "postgres"))]
@@ -645,6 +674,7 @@ impl Worker {
         {
             use diesel::prelude::*;
             use diesel::sql_types::{Timestamptz, Varchar, Numeric, BigInt};
+            use diesel_async::RunQueryDsl;
             use dataloader::Candle;
             
             #[derive(QueryableByName)]
@@ -673,7 +703,11 @@ impl Worker {
             let pool = self.job_queue.get_pool()
                 .ok_or("Database pool not available")?;
             
-            let mut conn = pool.get()
+            let symbol = symbol.to_string();
+            let exchange = exchange.to_string();
+            
+            // Get async connection
+            let mut conn = pool.get().await
                 .map_err(|e| format!("Failed to get database connection: {}", e))?;
             
             // Query candles_1m view for the symbol/exchange
@@ -688,6 +722,7 @@ impl Worker {
             
             let results: Vec<CandleRow> = diesel::sql_query(&query)
                 .load(&mut conn)
+                .await
                 .map_err(|e| format!("Failed to load candles: {}", e))?;
             
             let candles: Vec<MarketData> = results

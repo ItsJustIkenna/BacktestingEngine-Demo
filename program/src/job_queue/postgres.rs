@@ -1,7 +1,7 @@
 use super::*;
 use diesel::prelude::*;
-use diesel::r2d2::{ConnectionManager, Pool};
-use diesel::pg::PgConnection;
+use diesel_async::{AsyncPgConnection, AsyncConnection, RunQueryDsl};
+use diesel_async::pooled_connection::{AsyncDieselConnectionManager, deadpool};
 use std::sync::Arc;
 
 // Define the diesel table schema
@@ -211,21 +211,30 @@ pub struct NewBacktestJob {
 }
 
 pub struct PostgresQueue {
-    pool: Arc<Pool<ConnectionManager<PgConnection>>>,
+    pool: Arc<deadpool::Pool<AsyncPgConnection>>,
 }
 
 impl PostgresQueue {
-    /// Create a new PostgreSQL-backed job queue
+    /// Create a new PostgreSQL-backed job queue with async connection pool
     pub fn new(database_url: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let manager = ConnectionManager::<PgConnection>::new(database_url);
-        let pool = Pool::builder()
-            .max_size(20) // Increased from 10 to handle 4 workers + heartbeats + concurrent operations
-            .connection_timeout(std::time::Duration::from_secs(10)) // Fail fast instead of hanging
-            .build(manager)?;
+        let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(database_url);
+        let pool = deadpool::Pool::builder(config)
+            .max_size(20) // Match previous pool size
+            .build()?;
         
         Ok(Self {
             pool: Arc::new(pool),
         })
+    }
+    
+    /// Get the async connection pool (for data loading)
+    pub fn get_async_pool(&self) -> Option<Arc<deadpool::Pool<AsyncPgConnection>>> {
+        Some(Arc::clone(&self.pool))
+    }
+    
+    /// Legacy sync pool getter - no longer used
+    pub fn get_pool(&self) -> Option<Arc<deadpool::Pool<AsyncPgConnection>>> {
+        Some(Arc::clone(&self.pool))
     }
     
     /// Convert BacktestJob to database record
@@ -330,70 +339,62 @@ impl JobQueue for PostgresQueue {
         use std::str::FromStr;
         
         let job_id = Uuid::new_v4().to_string();
-        let pool = self.pool.clone();
         
         crate::log_info!(crate::logging_facade::MAIN_LOGGER, "💾 Submitting job {} to PostgreSQL: symbol={}, exchange={}", 
             job_id, params.symbol, params.exchange);
         
-        // Run blocking database operation in dedicated thread pool
-        let job_id_clone = job_id.clone();
-        tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get()?;
-            
-            let new_job = NewBacktestJob {
-                job_id: job_id_clone,
-                symbol: params.symbol,
-                exchange: params.exchange,
-                strategy_type: params.strategy_type,
-                optimization_method: params.optimization_method,
-                population_size: if params.population_size > 0 { Some(params.population_size as i32) } else { None },
-                generations: if params.generations > 0 { Some(params.generations as i32) } else { None },
-                risk_aversion: BigDecimal::from_str(&params.risk_aversion.to_string())?,
-                inventory_target: BigDecimal::from_str(&params.inventory_target.to_string())?,
-                order_size: BigDecimal::from_str(&params.order_size.to_string())?,
-                initial_capital: BigDecimal::from_str(&params.initial_capital.to_string())?,
-                commission_rate: BigDecimal::from_str(&params.commission_rate.to_string())?,
-                start_date: params.start_date.as_ref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc))),
-                end_date: params.end_date.as_ref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc))),
-            };
-            
-            diesel::insert_into(backtest_jobs::table)
-                .values(&new_job)
-                .execute(&mut conn)?;
-            
-            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-        }).await??;
+        let mut conn = self.pool.get().await?;
+        
+        let new_job = NewBacktestJob {
+            job_id: job_id.clone(),
+            symbol: params.symbol,
+            exchange: params.exchange,
+            strategy_type: params.strategy_type,
+            optimization_method: params.optimization_method,
+            population_size: if params.population_size > 0 { Some(params.population_size as i32) } else { None },
+            generations: if params.generations > 0 { Some(params.generations as i32) } else { None },
+            risk_aversion: BigDecimal::from_str(&params.risk_aversion.to_string())?,
+            inventory_target: BigDecimal::from_str(&params.inventory_target.to_string())?,
+            order_size: BigDecimal::from_str(&params.order_size.to_string())?,
+            initial_capital: BigDecimal::from_str(&params.initial_capital.to_string())?,
+            commission_rate: BigDecimal::from_str(&params.commission_rate.to_string())?,
+            start_date: params.start_date.as_ref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc))),
+            end_date: params.end_date.as_ref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc))),
+        };
+        
+        diesel::insert_into(backtest_jobs::table)
+            .values(&new_job)
+            .execute(&mut conn)
+            .await?;
         
         Ok(job_id)
     }
     
     async fn get_next_job(&self) -> Result<Option<BacktestJob>, Box<dyn std::error::Error + Send + Sync>> {
-        let pool = self.pool.clone();
-        
         crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔍 Polling PostgreSQL for next queued job");
         
-        tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get()?;
-            
-            // Use FOR UPDATE SKIP LOCKED for atomic job claiming
-            // This prevents multiple workers from grabbing the same job
-            let result = conn.transaction::<_, Box<dyn std::error::Error + Send + Sync>, _>(|conn| {
+        let mut conn = self.pool.get().await?;
+        
+        // Use FOR UPDATE SKIP LOCKED for atomic job claiming
+        // diesel-async supports transactions
+        let result = conn.transaction::<_, Box<dyn std::error::Error + Send + Sync>, _>(|conn| {
+            Box::pin(async move {
                 // Calculate thresholds for orphaned job detection
-                let started_threshold = Utc::now() - chrono::Duration::minutes(30); // Fallback: 30min without heartbeat update
-                let heartbeat_threshold = Utc::now() - chrono::Duration::minutes(5); // Primary: 5min stale heartbeat
+                let started_threshold = Utc::now() - chrono::Duration::minutes(30);
+                let heartbeat_threshold = Utc::now() - chrono::Duration::minutes(5);
                 
-                // DEBUG: Log thresholds and check for running jobs
                 crate::log_info!(
                     crate::logging_facade::MAIN_LOGGER,
                     "🕐 Orphan thresholds: heartbeat_before={:?}, started_before={:?}",
                     heartbeat_threshold, started_threshold
                 );
                 
-                // Check for any running jobs before claiming attempt
+                // Check for running jobs
                 let running_count: i64 = backtest_jobs::table
                     .filter(backtest_jobs::status.eq("running"))
                     .count()
-                    .get_result(conn)?;
+                    .get_result(conn)
+                    .await?;
                 
                 if running_count > 0 {
                     crate::log_info!(
@@ -402,11 +403,11 @@ impl JobQueue for PostgresQueue {
                         running_count
                     );
                     
-                    // Get details of running jobs
                     let running_jobs: Vec<BacktestJobRecord> = backtest_jobs::table
                         .filter(backtest_jobs::status.eq("running"))
                         .select(BacktestJobRecord::as_select())
-                        .load(conn)?;
+                        .load(conn)
+                        .await?;
                     
                     for rj in &running_jobs {
                         let heartbeat_stale = rj.last_heartbeat.map_or(true, |hb| hb < heartbeat_threshold);
@@ -421,10 +422,7 @@ impl JobQueue for PostgresQueue {
                     }
                 }
                 
-                // Try to find a queued job first, or recover orphaned "running" jobs
-                // A job is orphaned if:
-                // 1. Status is 'running' AND last_heartbeat is stale (>2 min old), OR
-                // 2. Status is 'running' AND started_at >10 min ago AND no heartbeat ever set
+                // Find queued job or recover orphaned running jobs
                 let job: Option<BacktestJobRecord> = backtest_jobs::table
                     .filter(
                         backtest_jobs::status.eq("queued")
@@ -444,6 +442,7 @@ impl JobQueue for PostgresQueue {
                     .skip_locked()
                     .select(BacktestJobRecord::as_select())
                     .first(conn)
+                    .await
                     .optional()?;
                 
                 if let Some(job_record) = job {
@@ -453,7 +452,6 @@ impl JobQueue for PostgresQueue {
                         crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🎯 Claiming job {} from queue", job_record.job_id);
                     }
                     
-                    // Update status to running and set heartbeat
                     let now = Utc::now();
                     diesel::update(backtest_jobs::table.find(job_record.id))
                         .set((
@@ -461,39 +459,36 @@ impl JobQueue for PostgresQueue {
                             backtest_jobs::started_at.eq(Some(now)),
                             backtest_jobs::last_heartbeat.eq(Some(now)),
                         ))
-                        .execute(conn)?;
+                        .execute(conn)
+                        .await?;
                     
                     Ok(Some(Self::record_to_job(job_record)?))
                 } else {
                     crate::log_info!(crate::logging_facade::MAIN_LOGGER, "⏸️ No jobs available in queue");
                     Ok(None)
                 }
-            })?;
-            
-            Ok(result)
-        }).await?
+            })
+        }).await?;
+        
+        Ok(result)
     }
     
     async fn get_job(&self, job_id: &str) -> Result<Option<BacktestJob>, Box<dyn std::error::Error + Send + Sync>> {
-        let pool = self.pool.clone();
-        let job_id = job_id.to_string();
-        
         crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔎 Fetching job {} from PostgreSQL", job_id);
         
-        tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get()?;
-            
-            let record: Option<BacktestJobRecord> = backtest_jobs::table
-                .filter(backtest_jobs::job_id.eq(&job_id))
-                .select(BacktestJobRecord::as_select())
-                .first(&mut conn)
-                .optional()?;
-            
-            match record {
-                Some(r) => Ok(Some(Self::record_to_job(r)?)),
-                None => Ok(None),
-            }
-        }).await?
+        let mut conn = self.pool.get().await?;
+        
+        let record: Option<BacktestJobRecord> = backtest_jobs::table
+            .filter(backtest_jobs::job_id.eq(job_id))
+            .select(BacktestJobRecord::as_select())
+            .first(&mut conn)
+            .await
+            .optional()?;
+        
+        match record {
+            Some(r) => Ok(Some(Self::record_to_job(r)?)),
+            None => Ok(None),
+        }
     }
     
     async fn update_job_status(
@@ -502,28 +497,22 @@ impl JobQueue for PostgresQueue {
         status: JobStatus,
         error_message: Option<String>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let pool = self.pool.clone();
-        let job_id = job_id.to_string();
+        let mut conn = self.pool.get().await?;
         
-        tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get()?;
-            
-            let status_str = match status {
-                JobStatus::Queued => "queued",
-                JobStatus::Running => "running",
-                JobStatus::Completed => "completed",
-                JobStatus::Failed => "failed",
-            };
-            
-            diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(&job_id)))
-                .set((
-                    backtest_jobs::status.eq(status_str),
-                    backtest_jobs::error_message.eq(error_message),
-                ))
-                .execute(&mut conn)?;
-            
-            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-        }).await??;
+        let status_str = match status {
+            JobStatus::Queued => "queued",
+            JobStatus::Running => "running",
+            JobStatus::Completed => "completed",
+            JobStatus::Failed => "failed",
+        };
+        
+        diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(job_id)))
+            .set((
+                backtest_jobs::status.eq(status_str),
+                backtest_jobs::error_message.eq(error_message),
+            ))
+            .execute(&mut conn)
+            .await?;
         
         Ok(())
     }
@@ -532,64 +521,45 @@ impl JobQueue for PostgresQueue {
         use bigdecimal::BigDecimal;
         use std::str::FromStr;
         
-        let pool = self.pool.clone();
-        let job_id = job_id.to_string();
+        let mut conn = self.pool.get().await?;
         
-        tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get()?;
-            
-            diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(&job_id)))
-                .set(backtest_jobs::progress.eq(BigDecimal::from_str(&progress.to_string())?))
-                .execute(&mut conn)?;
-            
-            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-        }).await??;
+        diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(job_id)))
+            .set(backtest_jobs::progress.eq(BigDecimal::from_str(&progress.to_string())?))
+            .execute(&mut conn)
+            .await?;
         
         Ok(())
     }
     
     /// Update generation progress for genetic optimization
     async fn update_generation(&self, job_id: &str, current_generation: i32, total_generations: i32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let pool = self.pool.clone();
-        let job_id = job_id.to_string();
+        let mut conn = self.pool.get().await?;
         
-        tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get()?;
-            
-            diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(&job_id)))
-                .set((
-                    backtest_jobs::current_generation.eq(current_generation),
-                    backtest_jobs::total_generations.eq(total_generations),
-                ))
-                .execute(&mut conn)?;
-            
-            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-        }).await??;
+        diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(job_id)))
+            .set((
+                backtest_jobs::current_generation.eq(current_generation),
+                backtest_jobs::total_generations.eq(total_generations),
+            ))
+            .execute(&mut conn)
+            .await?;
         
         Ok(())
     }
     
     /// Update current phase of job execution
     async fn update_phase(&self, job_id: &str, phase: &str, phase_details: serde_json::Value) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let pool = self.pool.clone();
-        let job_id = job_id.to_string();
-        let phase = phase.to_string();
         let phase_details_str = serde_json::to_string(&phase_details)?;
+        let mut conn = self.pool.get().await?;
         
-        tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get()?;
-            
-            // Use raw SQL to update JSONB field
-            diesel::sql_query(
-                "UPDATE backtest_jobs SET current_phase = $1, phase_details = $2::jsonb WHERE job_id = $3"
-            )
-            .bind::<diesel::sql_types::Text, _>(&phase)
-            .bind::<diesel::sql_types::Text, _>(&phase_details_str)
-            .bind::<diesel::sql_types::Text, _>(&job_id)
-            .execute(&mut conn)?;
-            
-            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-        }).await??;
+        // Use raw SQL to update JSONB field
+        diesel::sql_query(
+            "UPDATE backtest_jobs SET current_phase = $1, phase_details = $2::jsonb WHERE job_id = $3"
+        )
+        .bind::<diesel::sql_types::Text, _>(phase)
+        .bind::<diesel::sql_types::Text, _>(&phase_details_str)
+        .bind::<diesel::sql_types::Text, _>(job_id)
+        .execute(&mut conn)
+        .await?;
         
         Ok(())
     }
@@ -597,18 +567,12 @@ impl JobQueue for PostgresQueue {
     /// Update job heartbeat timestamp
     /// Called every 30 seconds by worker to signal it's still alive
     async fn update_heartbeat(&self, job_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let pool = self.pool.clone();
-        let job_id = job_id.to_string();
+        let mut conn = self.pool.get().await?;
         
-        tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get()?;
-            
-            diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(&job_id)))
-                .set(backtest_jobs::last_heartbeat.eq(Utc::now()))
-                .execute(&mut conn)?;
-            
-            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-        }).await??;
+        diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(job_id)))
+            .set(backtest_jobs::last_heartbeat.eq(Utc::now()))
+            .execute(&mut conn)
+            .await?;
         
         Ok(())
     }
@@ -620,203 +584,189 @@ impl JobQueue for PostgresQueue {
         crate::log_info!(crate::logging_facade::MAIN_LOGGER, "💾 Storing result for job {}: sharpe={:.2}, pnl=${:.2}, trades={}", 
             result.job_id, result.sharpe_ratio, result.total_pnl, result.total_trades);
         
-        let pool = self.pool.clone();
-        let result = result.clone();
+        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔌 Getting async connection from pool for job {}", result.job_id);
+        let mut conn = self.pool.get().await
+            .map_err(|e| {
+                crate::log_error!(crate::logging_facade::MAIN_LOGGER, "❌ Failed to get connection from pool for job {}: {}", result.job_id, e);
+                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
+            })?;
         
-        tokio::task::spawn_blocking(move || {
-            crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔌 Getting connection from pool for job {}", result.job_id);
-            let mut conn = match pool.get() {
-                Ok(c) => {
-                    crate::log_info!(crate::logging_facade::MAIN_LOGGER, "✅ Got connection from pool for job {}", result.job_id);
-                    c
-                }
-                Err(e) => {
-                    crate::log_error!(crate::logging_facade::MAIN_LOGGER, "❌ Failed to get connection from pool for job {}: {}", result.job_id, e);
-                    return Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
-                }
-            };
-            
-            crate::log_info!(crate::logging_facade::MAIN_LOGGER, "📖 Querying job record for job {}", result.job_id);
-            // Get job to find dates and parameters
-            let job: BacktestJobRecord = backtest_jobs::table
-                .filter(backtest_jobs::job_id.eq(&result.job_id))
-                .select(BacktestJobRecord::as_select())
-                .first(&mut conn)?;
-            
-            // Create backtest result record
-            let backtest_uuid = uuid::Uuid::parse_str(&result.job_id)?;
-            
-            // Calculate annualized metrics (simplified - using 252 trading days)
-            let total_return_bd = BigDecimal::from_str(&result.total_pnl.to_string())?;
-            let annualized_return = total_return_bd.clone(); // Simplified
-            
-            let new_result = NewBacktestResult {
-                backtest_id: backtest_uuid,
-                strategy_name: "Avellaneda-Stoikov".to_string(),
-                symbol: job.symbol.clone(),
-                start_date: job.start_date.unwrap_or_else(|| chrono::Utc::now() - chrono::Duration::days(30)),
-                end_date: job.end_date.unwrap_or_else(|| chrono::Utc::now()),
-                initial_capital: job.initial_capital.clone(),
-                commission_rate: job.commission_rate.clone(),
-                slippage_model_type: "None".to_string(),
-                slippage_fixed_rate: None,
-                slippage_sqrt_rate: None,
-                slippage_linear_rate: None,
-                temporary_impact: BigDecimal::from(0),
-                permanent_impact: BigDecimal::from(0),
-                participation_rate_limit: BigDecimal::from_str("0.1")?,
-                benchmark: None,
-                rebalancing_frequency: "Never".to_string(),
-                point_in_time: true,
-                warmup_period_days: 30,
-                total_return: total_return_bd.clone(),
-                annualized_return,
-                volatility: BigDecimal::from(0), // Would need equity curve analysis
-                sharpe_ratio: Some(BigDecimal::from_str(&result.sharpe_ratio.to_string())?),
-                sortino_ratio: None,
-                max_drawdown: BigDecimal::from_str(&result.max_drawdown.to_string())?,
-                calmar_ratio: None,
-                win_rate: BigDecimal::from_str(&result.win_rate.to_string())?,
-                profit_factor: BigDecimal::from_str(&result.profit_factor.to_string())?,
-                avg_trade_return: if result.total_trades > 0 {
-                    total_return_bd / BigDecimal::from(result.total_trades as i64)
-                } else {
-                    BigDecimal::from(0)
-                },
-                total_trades: result.total_trades as i32,
-                best_trade: None,
-                worst_trade: None,
-                avg_time_in_trade: None,
-                value_at_risk_95: None,
-                expected_shortfall_95: None,
-                beta: None,
-                correlation_with_benchmark: None,
-                tracking_error: None,
-                information_ratio: None,
-                jensen_alpha: None,
-                max_drawdown_duration_days: None,
-                current_drawdown: BigDecimal::from(0),
-                avg_drawdown: None,
-                benchmark_return: None,
-                excess_return: None,
-                outperformance_periods: None,
-                underperformance_periods: None,
-                total_orders: 0,
-                filled_orders: 0,
-                cancelled_orders: 0,
-                avg_slippage: BigDecimal::from(0),
-                total_commission_paid: BigDecimal::from(0),
-                avg_fill_time_seconds: None,
-                strategy_metrics: Some(serde_json::to_string(&serde_json::json!({
-                    "risk_aversion": job.risk_aversion.to_string(),
-                    "inventory_target": job.inventory_target.to_string(),
-                    "order_size": job.order_size.to_string(),
-                    "equity_curve": result.equity_curve
-                }))?),
-            };
-            
-            crate::log_info!(crate::logging_facade::MAIN_LOGGER, "💿 Inserting result into database for job {}", result.job_id);
-            // Insert result into database
-            let result_id: uuid::Uuid = diesel::insert_into(backtest_results::table)
-                .values(&new_result)
-                .returning(backtest_results::id)
-                .get_result(&mut conn)?;
-            
-            crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔗 Updating job with result_id for job {}", result.job_id);
-            // Update job with result_id
-            diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(&result.job_id)))
-                .set(backtest_jobs::result_id.eq(Some(result_id)))
-                .execute(&mut conn)?;
-            
-            crate::log_info!(crate::logging_facade::MAIN_LOGGER, "✅ Database operations completed for job {}", result.job_id);
-            Ok(())
-        }).await??;
+        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "✅ Got async connection from pool for job {}", result.job_id);
         
+        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "📖 Querying job record for job {}", result.job_id);
+        // Get job to find dates and parameters
+        let job: BacktestJobRecord = backtest_jobs::table
+            .filter(backtest_jobs::job_id.eq(&result.job_id))
+            .select(BacktestJobRecord::as_select())
+            .first(&mut conn)
+            .await?;
+        
+        // Create backtest result record
+        let backtest_uuid = uuid::Uuid::parse_str(&result.job_id)?;
+        
+        // Calculate annualized metrics (simplified - using 252 trading days)
+        let total_return_bd = BigDecimal::from_str(&result.total_pnl.to_string())?;
+        let annualized_return = total_return_bd.clone(); // Simplified
+        
+        let new_result = NewBacktestResult {
+            backtest_id: backtest_uuid,
+            strategy_name: "Avellaneda-Stoikov".to_string(),
+            symbol: job.symbol.clone(),
+            start_date: job.start_date.unwrap_or_else(|| chrono::Utc::now() - chrono::Duration::days(30)),
+            end_date: job.end_date.unwrap_or_else(|| chrono::Utc::now()),
+            initial_capital: job.initial_capital.clone(),
+            commission_rate: job.commission_rate.clone(),
+            slippage_model_type: "None".to_string(),
+            slippage_fixed_rate: None,
+            slippage_sqrt_rate: None,
+            slippage_linear_rate: None,
+            temporary_impact: BigDecimal::from(0),
+            permanent_impact: BigDecimal::from(0),
+            participation_rate_limit: BigDecimal::from_str("0.1")?,
+            benchmark: None,
+            rebalancing_frequency: "Never".to_string(),
+            point_in_time: true,
+            warmup_period_days: 30,
+            total_return: total_return_bd.clone(),
+            annualized_return,
+            volatility: BigDecimal::from(0), // Would need equity curve analysis
+            sharpe_ratio: Some(BigDecimal::from_str(&result.sharpe_ratio.to_string())?),
+            sortino_ratio: None,
+            max_drawdown: BigDecimal::from_str(&result.max_drawdown.to_string())?,
+            calmar_ratio: None,
+            win_rate: BigDecimal::from_str(&result.win_rate.to_string())?,
+            profit_factor: BigDecimal::from_str(&result.profit_factor.to_string())?,
+            avg_trade_return: if result.total_trades > 0 {
+                total_return_bd / BigDecimal::from(result.total_trades as i64)
+            } else {
+                BigDecimal::from(0)
+            },
+            total_trades: result.total_trades as i32,
+            best_trade: None,
+            worst_trade: None,
+            avg_time_in_trade: None,
+            value_at_risk_95: None,
+            expected_shortfall_95: None,
+            beta: None,
+            correlation_with_benchmark: None,
+            tracking_error: None,
+            information_ratio: None,
+            jensen_alpha: None,
+            max_drawdown_duration_days: None,
+            current_drawdown: BigDecimal::from(0),
+            avg_drawdown: None,
+            benchmark_return: None,
+            excess_return: None,
+            outperformance_periods: None,
+            underperformance_periods: None,
+            total_orders: 0,
+            filled_orders: 0,
+            cancelled_orders: 0,
+            avg_slippage: BigDecimal::from(0),
+            total_commission_paid: BigDecimal::from(0),
+            avg_fill_time_seconds: None,
+            strategy_metrics: Some(serde_json::to_string(&serde_json::json!({
+                "risk_aversion": job.risk_aversion.to_string(),
+                "inventory_target": job.inventory_target.to_string(),
+                "order_size": job.order_size.to_string(),
+                "equity_curve": result.equity_curve
+            }))?),
+        };
+        
+        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "💿 Inserting result into database for job {}", result.job_id);
+        // Insert result into database
+        let result_id: uuid::Uuid = diesel::insert_into(backtest_results::table)
+            .values(&new_result)
+            .returning(backtest_results::id)
+            .get_result(&mut conn)
+            .await?;
+        
+        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔗 Updating job with result_id for job {}", result.job_id);
+        // Update job with result_id
+        diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(&result.job_id)))
+            .set(backtest_jobs::result_id.eq(Some(result_id)))
+            .execute(&mut conn)
+            .await?;
+        
+        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "✅ Database operations completed for job {}", result.job_id);
         Ok(())
     }
     
     async fn get_result(&self, job_id: &str) -> Result<Option<BacktestResult>, Box<dyn std::error::Error + Send + Sync>> {
-        let pool = self.pool.clone();
-        let job_id = job_id.to_string();
+        let mut conn = self.pool.get().await?;
         
-        tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get()?;
-            
-            // Parse job_id as UUID
-            let backtest_uuid = match uuid::Uuid::parse_str(&job_id) {
-                Ok(u) => u,
-                Err(_) => return Ok(None),
-            };
-            
-            // Query backtest_results by backtest_id
-            let result: Option<(bigdecimal::BigDecimal, Option<bigdecimal::BigDecimal>, bigdecimal::BigDecimal, 
-                                bigdecimal::BigDecimal, i32, bigdecimal::BigDecimal, 
-                                Option<String>, chrono::DateTime<chrono::Utc>)> = 
-                backtest_results::table
-                    .filter(backtest_results::backtest_id.eq(backtest_uuid))
-                    .select((
-                        backtest_results::total_return,
-                        backtest_results::sharpe_ratio,
-                        backtest_results::max_drawdown,
-                        backtest_results::win_rate,
-                        backtest_results::total_trades,
-                        backtest_results::profit_factor,
-                        backtest_results::strategy_metrics,
-                        backtest_results::created_at,
-                    ))
-                    .first(&mut conn)
-                    .optional()?;
-            
-            match result {
-                Some((total_return, sharpe_ratio, max_drawdown, win_rate, 
-                      total_trades, profit_factor, strategy_metrics, created_at)) => {
-                    // Extract equity curve from strategy_metrics JSON string
-                    let equity_curve = if let Some(metrics_str) = strategy_metrics {
-                        if let Ok(metrics) = serde_json::from_str::<serde_json::Value>(&metrics_str) {
-                            metrics.get("equity_curve")
-                                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                                .unwrap_or_else(Vec::new)
-                        } else {
-                            Vec::new()
-                        }
+        // Parse job_id as UUID
+        let backtest_uuid = match uuid::Uuid::parse_str(job_id) {
+            Ok(u) => u,
+            Err(_) => return Ok(None),
+        };
+        
+        // Query backtest_results by backtest_id
+        let result: Option<(bigdecimal::BigDecimal, Option<bigdecimal::BigDecimal>, bigdecimal::BigDecimal, 
+                            bigdecimal::BigDecimal, i32, bigdecimal::BigDecimal, 
+                            Option<String>, chrono::DateTime<chrono::Utc>)> = 
+            backtest_results::table
+                .filter(backtest_results::backtest_id.eq(backtest_uuid))
+                .select((
+                    backtest_results::total_return,
+                    backtest_results::sharpe_ratio,
+                    backtest_results::max_drawdown,
+                    backtest_results::win_rate,
+                    backtest_results::total_trades,
+                    backtest_results::profit_factor,
+                    backtest_results::strategy_metrics,
+                    backtest_results::created_at,
+                ))
+                .first(&mut conn)
+                .await
+                .optional()?;
+        
+        match result {
+            Some((total_return, sharpe_ratio, max_drawdown, win_rate, 
+                  total_trades, profit_factor, strategy_metrics, created_at)) => {
+                // Extract equity curve from strategy_metrics JSON string
+                let equity_curve = if let Some(metrics_str) = strategy_metrics {
+                    if let Ok(metrics) = serde_json::from_str::<serde_json::Value>(&metrics_str) {
+                        metrics.get("equity_curve")
+                            .and_then(|v| serde_json::from_value(v.clone()).ok())
+                            .unwrap_or_else(Vec::new)
                     } else {
                         Vec::new()
-                    };
-                    
-                    Ok(Some(BacktestResult {
-                        job_id,
-                        total_pnl: total_return.to_string().parse().unwrap_or(0.0),
-                        sharpe_ratio: sharpe_ratio.map(|s| s.to_string().parse().unwrap_or(0.0)).unwrap_or(0.0),
-                        max_drawdown: max_drawdown.to_string().parse().unwrap_or(0.0),
-                        win_rate: win_rate.to_string().parse().unwrap_or(0.0),
-                        total_trades: total_trades as usize,
-                        profit_factor: profit_factor.to_string().parse().unwrap_or(1.0),
-                        equity_curve,
-                        completed_at: created_at,
-                    }))
-                }
-                None => Ok(None),
+                    }
+                } else {
+                    Vec::new()
+                };
+                
+                Ok(Some(BacktestResult {
+                    job_id: job_id.to_string(),
+                    total_pnl: total_return.to_string().parse().unwrap_or(0.0),
+                    sharpe_ratio: sharpe_ratio.map(|s| s.to_string().parse().unwrap_or(0.0)).unwrap_or(0.0),
+                    max_drawdown: max_drawdown.to_string().parse().unwrap_or(0.0),
+                    win_rate: win_rate.to_string().parse().unwrap_or(0.0),
+                    total_trades: total_trades as usize,
+                    profit_factor: profit_factor.to_string().parse().unwrap_or(1.0),
+                    equity_curve,
+                    completed_at: created_at,
+                }))
             }
-        }).await?
+            None => Ok(None),
+        }
     }
     
     async fn queue_length(&self) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-        let pool = self.pool.clone();
+        let mut conn = self.pool.get().await?;
         
-        tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get()?;
-            
-            let count: i64 = backtest_jobs::table
-                .filter(backtest_jobs::status.eq("queued"))
-                .count()
-                .get_result(&mut conn)?;
-            
-            Ok(count as usize)
-        }).await?
+        let count: i64 = backtest_jobs::table
+            .filter(backtest_jobs::status.eq("queued"))
+            .count()
+            .get_result(&mut conn)
+            .await?;
+        
+        Ok(count as usize)
     }
     
-    fn get_pool(&self) -> Option<&diesel::r2d2::Pool<diesel::r2d2::ConnectionManager<diesel::pg::PgConnection>>> {
-        Some(&self.pool)
+    fn get_pool(&self) -> Option<Arc<deadpool::Pool<AsyncPgConnection>>> {
+        Some(Arc::clone(&self.pool))
     }
     
     fn as_any(&self) -> &dyn std::any::Any {
@@ -832,65 +782,63 @@ impl PostgresQueue {
     ) -> Result<(Vec<crate::api::history::BacktestSummary>, usize), Box<dyn std::error::Error + Send + Sync>> {
         use diesel::prelude::*;
         
-        let pool = self.pool.clone();
-        let query_clone = query.clone();
+        let mut conn = self.pool.get().await?;
         
-        tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get()?;
-            
-            // Build count query
-            let mut count_query = backtest_jobs::table.into_boxed();
-            if let Some(ref status) = query_clone.status {
-                count_query = count_query.filter(backtest_jobs::status.eq(status));
+        // Build count query
+        let mut count_query = backtest_jobs::table.into_boxed();
+        if let Some(ref status) = query.status {
+            count_query = count_query.filter(backtest_jobs::status.eq(status));
+        }
+        if let Some(ref symbol) = query.symbol {
+            count_query = count_query.filter(backtest_jobs::symbol.eq(symbol));
+        }
+        if let Some(ref exchange) = query.exchange {
+            count_query = count_query.filter(backtest_jobs::exchange.eq(exchange));
+        }
+        if let Some(ref start_str) = query.start_date {
+            if let Ok(start_dt) = chrono::DateTime::parse_from_rfc3339(start_str) {
+                count_query = count_query.filter(backtest_jobs::created_at.ge(start_dt.with_timezone(&chrono::Utc)));
             }
-            if let Some(ref symbol) = query_clone.symbol {
-                count_query = count_query.filter(backtest_jobs::symbol.eq(symbol));
+        }
+        if let Some(ref end_str) = query.end_date {
+            if let Ok(end_dt) = chrono::DateTime::parse_from_rfc3339(end_str) {
+                count_query = count_query.filter(backtest_jobs::created_at.le(end_dt.with_timezone(&chrono::Utc)));
             }
-            if let Some(ref exchange) = query_clone.exchange {
-                count_query = count_query.filter(backtest_jobs::exchange.eq(exchange));
+        }
+        let total: i64 = diesel_async::RunQueryDsl::get_result(count_query.count(), &mut conn).await?;
+        let total = total as usize;
+        
+        // Build data query with same filters
+        let mut data_query = backtest_jobs::table.into_boxed();
+        if let Some(ref status) = query.status {
+            data_query = data_query.filter(backtest_jobs::status.eq(status));
+        }
+        if let Some(ref symbol) = query.symbol {
+            data_query = data_query.filter(backtest_jobs::symbol.eq(symbol));
+        }
+        if let Some(ref exchange) = query.exchange {
+            data_query = data_query.filter(backtest_jobs::exchange.eq(exchange));
+        }
+        if let Some(ref start_str) = query.start_date {
+            if let Ok(start_dt) = chrono::DateTime::parse_from_rfc3339(start_str) {
+                data_query = data_query.filter(backtest_jobs::created_at.ge(start_dt.with_timezone(&chrono::Utc)));
             }
-            if let Some(ref start_str) = query_clone.start_date {
-                if let Ok(start_dt) = chrono::DateTime::parse_from_rfc3339(start_str) {
-                    count_query = count_query.filter(backtest_jobs::created_at.ge(start_dt.with_timezone(&chrono::Utc)));
-                }
+        }
+        if let Some(ref end_str) = query.end_date {
+            if let Ok(end_dt) = chrono::DateTime::parse_from_rfc3339(end_str) {
+                data_query = data_query.filter(backtest_jobs::created_at.le(end_dt.with_timezone(&chrono::Utc)));
             }
-            if let Some(ref end_str) = query_clone.end_date {
-                if let Ok(end_dt) = chrono::DateTime::parse_from_rfc3339(end_str) {
-                    count_query = count_query.filter(backtest_jobs::created_at.le(end_dt.with_timezone(&chrono::Utc)));
-                }
-            }
-            let total: i64 = count_query.count().get_result(&mut conn)?;
-            let total = total as usize;
-            
-            // Build data query with same filters
-            let mut data_query = backtest_jobs::table.into_boxed();
-            if let Some(ref status) = query_clone.status {
-                data_query = data_query.filter(backtest_jobs::status.eq(status));
-            }
-            if let Some(ref symbol) = query_clone.symbol {
-                data_query = data_query.filter(backtest_jobs::symbol.eq(symbol));
-            }
-            if let Some(ref exchange) = query_clone.exchange {
-                data_query = data_query.filter(backtest_jobs::exchange.eq(exchange));
-            }
-            if let Some(ref start_str) = query_clone.start_date {
-                if let Ok(start_dt) = chrono::DateTime::parse_from_rfc3339(start_str) {
-                    data_query = data_query.filter(backtest_jobs::created_at.ge(start_dt.with_timezone(&chrono::Utc)));
-                }
-            }
-            if let Some(ref end_str) = query_clone.end_date {
-                if let Ok(end_dt) = chrono::DateTime::parse_from_rfc3339(end_str) {
-                    data_query = data_query.filter(backtest_jobs::created_at.le(end_dt.with_timezone(&chrono::Utc)));
-                }
-            }
-            
-            // Get paginated results
-            let jobs: Vec<BacktestJobRecord> = data_query
+        }
+        
+        // Get paginated results
+        let jobs: Vec<BacktestJobRecord> = diesel_async::RunQueryDsl::load(
+            data_query
                 .order(backtest_jobs::created_at.desc())
-                .limit(query_clone.limit)
-                .offset(query_clone.offset)
-                .select(BacktestJobRecord::as_select())
-                .load(&mut conn)?;
+                .limit(query.limit)
+                .offset(query.offset)
+                .select(BacktestJobRecord::as_select()),
+            &mut conn
+        ).await?;
             
             // Convert to summaries and fetch results if completed
             let mut summaries = Vec::new();
@@ -913,18 +861,21 @@ impl PostgresQueue {
                 
                 // If completed, fetch results
                 if let Some(result_uuid) = job.result_id {
-                    if let Ok(Some(result)) = backtest_results::table
-                        .filter(backtest_results::id.eq(result_uuid))
-                        .select((
-                            backtest_results::total_return,
-                            backtest_results::sharpe_ratio,
-                            backtest_results::max_drawdown,
-                            backtest_results::win_rate,
-                            backtest_results::total_trades,
-                        ))
-                        .first::<(bigdecimal::BigDecimal, Option<bigdecimal::BigDecimal>, bigdecimal::BigDecimal, bigdecimal::BigDecimal, i32)>(&mut conn)
-                        .optional()
-                    {
+                    let results: Vec<(bigdecimal::BigDecimal, Option<bigdecimal::BigDecimal>, bigdecimal::BigDecimal, bigdecimal::BigDecimal, i32)> = 
+                        diesel_async::RunQueryDsl::load(
+                            backtest_results::table
+                                .filter(backtest_results::id.eq(result_uuid))
+                                .select((
+                                    backtest_results::total_return,
+                                    backtest_results::sharpe_ratio,
+                                    backtest_results::max_drawdown,
+                                    backtest_results::win_rate,
+                                    backtest_results::total_trades,
+                                )),
+                            &mut conn
+                        ).await?;
+                    
+                    if let Some(result) = results.into_iter().next() {
                         summary.total_pnl = Some(result.0.to_string().parse().unwrap_or(0.0));
                         summary.sharpe_ratio = result.1.map(|v| v.to_string().parse().unwrap_or(0.0));
                         summary.max_drawdown = Some(result.2.to_string().parse().unwrap_or(0.0));
@@ -937,7 +888,6 @@ impl PostgresQueue {
             }
             
             Ok((summaries, total))
-        }).await?
     }
 }
 
