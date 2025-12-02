@@ -11,7 +11,11 @@ use dataloader::MarketData;
 #[cfg(feature = "postgres")]
 use diesel::prelude::*;
 #[cfg(feature = "postgres")]
-use diesel::r2d2::{ConnectionManager, Pool};
+use diesel_async::{AsyncPgConnection, RunQueryDsl};
+#[cfg(feature = "postgres")]
+use diesel_async::pooled_connection::deadpool;
+#[cfg(feature = "postgres")]
+use std::sync::Arc;
 #[cfg(feature = "postgres")]
 use bigdecimal::BigDecimal;
 #[cfg(feature = "postgres")]
@@ -27,7 +31,7 @@ const DEFAULT_CHUNK_SIZE: usize = 5000; // Load 5K events at a time
 #[cfg(feature = "postgres")]
 /// Streaming iterator for order book events from database
 pub struct OrderBookStreamIterator {
-    pool: Pool<ConnectionManager<PgConnection>>,
+    pool: Arc<deadpool::Pool<AsyncPgConnection>>,
     symbol: String,
     exchange: String,
     chunk_size: usize,
@@ -41,7 +45,7 @@ pub struct OrderBookStreamIterator {
 #[cfg(feature = "postgres")]
 impl OrderBookStreamIterator {
     pub fn new(
-        pool: Pool<ConnectionManager<PgConnection>>,
+        pool: Arc<deadpool::Pool<AsyncPgConnection>>,
         symbol: String,
         exchange: String,
     ) -> Self {
@@ -59,7 +63,7 @@ impl OrderBookStreamIterator {
     }
 
     /// Load next chunk from database
-    fn load_next_chunk(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    async fn load_next_chunk(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use diesel::sql_types::{Timestamptz, Varchar, Numeric, Nullable};
 
         #[derive(QueryableByName)]
@@ -88,7 +92,7 @@ impl OrderBookStreamIterator {
             status: String,
         }
 
-        let mut conn = self.pool.get()
+        let mut conn = self.pool.get().await
             .map_err(|e| format!("Failed to get database connection: {}", e))?;
 
         // Query order book events with LIMIT/OFFSET for chunking
@@ -104,6 +108,7 @@ impl OrderBookStreamIterator {
 
         let results: Vec<OrderEventRow> = diesel::sql_query(&query)
             .load(&mut conn)
+            .await
             .map_err(|e| format!("Failed to load order events chunk: {}", e))?;
 
         if results.is_empty() {
@@ -143,40 +148,28 @@ impl OrderBookStreamIterator {
     pub fn total_loaded(&self) -> usize {
         self.total_loaded
     }
-}
-
-#[cfg(feature = "postgres")]
-impl Iterator for OrderBookStreamIterator {
-    type Item = MarketData;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        // If current chunk is exhausted, load next chunk
-        if self.chunk_index >= self.current_chunk.len() {
-            if self.finished {
-                return None;
-            }
-
-            if let Err(e) = self.load_next_chunk() {
-                eprintln!("Error loading chunk: {}", e);
-                return None;
-            }
-
-            if self.current_chunk.is_empty() {
-                return None;
-            }
+    
+    /// Load all remaining data (async)
+    pub async fn load_all(&mut self) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        let mut all_data = Vec::new();
+        
+        while !self.finished {
+            self.load_next_chunk().await?;
+            all_data.extend(self.current_chunk.drain(..));
         }
-
-        let item = self.current_chunk[self.chunk_index].clone();
-        self.chunk_index += 1;
-        Some(item)
+        
+        Ok(all_data)
     }
 }
+
+// Removed sync Iterator trait - incompatible with async diesel
+// Users should call load_all() instead
 
 #[cfg(feature = "postgres")]
 /// Batch processor for genetic algorithm optimization
 /// Loads data once and creates references for parallel processing
 pub struct OrderBookBatchLoader {
-    pool: Pool<ConnectionManager<PgConnection>>,
+    pool: Arc<deadpool::Pool<AsyncPgConnection>>,
     symbol: String,
     exchange: String,
 }
@@ -184,7 +177,7 @@ pub struct OrderBookBatchLoader {
 #[cfg(feature = "postgres")]
 impl OrderBookBatchLoader {
     pub fn new(
-        pool: Pool<ConnectionManager<PgConnection>>,
+        pool: Arc<deadpool::Pool<AsyncPgConnection>>,
         symbol: String,
         exchange: String,
     ) -> Self {
@@ -207,19 +200,18 @@ impl OrderBookBatchLoader {
             self.exchange.clone(),
         );
 
-        let mut sampled_data = Vec::new();
-        let mut count = 0;
-
-        for event in &mut stream {
-            // Sample events deterministically
-            if (count as f64 * sample_rate) % 1.0 < sample_rate {
-                sampled_data.push(event);
-            }
-            count += 1;
-        }
+        let all_data = stream.load_all().await?;
+        let total = all_data.len();
+        
+        let sampled_data: Vec<MarketData> = all_data
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| (*i as f64 * sample_rate) % 1.0 < sample_rate)
+            .map(|(_, event)| event)
+            .collect();
 
         println!("📊 Sampled {} events from {} total (rate: {:.1}%)", 
-                 sampled_data.len(), stream.total_loaded(), sample_rate * 100.0);
+                 sampled_data.len(), total, sample_rate * 100.0);
 
         Ok(sampled_data)
     }
@@ -229,17 +221,14 @@ impl OrderBookBatchLoader {
         &self,
         max_events: usize,
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
-        let stream = OrderBookStreamIterator::new(
+        let mut stream = OrderBookStreamIterator::new(
             self.pool.clone(),
             self.symbol.clone(),
             self.exchange.clone(),
         );
 
-        let mut data = Vec::with_capacity(max_events);
-
-        for event in stream.take(max_events) {
-            data.push(event);
-        }
+        let mut data = stream.load_all().await?;
+        data.truncate(max_events);
 
         println!("📊 Loaded {} events (limit: {})", data.len(), max_events);
 

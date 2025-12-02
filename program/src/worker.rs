@@ -626,18 +626,13 @@ impl Worker {
         symbol: &str,
         exchange: &str,
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
-        // TODO: streaming module needs async pool migration
-        // use crate::streaming::OrderBookBatchLoader;
+        use crate::streaming::OrderBookBatchLoader;
         
-        log_info!(MAIN_LOGGER, "⚠️  Order book loading temporarily disabled during async migration");
-        Err("OrderBook loading requires streaming module async migration".into())
-        
-        /* Commented out until streaming.rs is migrated to diesel-async
         let pool = self.job_queue.get_pool()
             .ok_or("Database pool not available")?;
         
         let loader = OrderBookBatchLoader::new(
-            pool.clone(),
+            pool,
             symbol.to_string(),
             exchange.to_string(),
         );
@@ -652,7 +647,6 @@ impl Worker {
         
         log_info!(MAIN_LOGGER, "📊 Loaded {} order book events for {}/{}", orders.len(), symbol, exchange);
         Ok(orders)
-        */
     }
     
     #[cfg(not(feature = "postgres"))]
