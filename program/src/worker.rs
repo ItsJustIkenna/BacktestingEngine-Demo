@@ -113,13 +113,29 @@ impl Worker {
         let result = match result {
             Ok(result) => {
                 // Gracefully stop heartbeat task and wait for it to complete
+                log_info!(MAIN_LOGGER, "🛑 Stopping heartbeat for job {}", job.id);
+                println!("🛑 Stopping heartbeat for job {}", job.id);
                 let _ = heartbeat_tx.send(()).await;
-                let _ = tokio::time::timeout(tokio::time::Duration::from_secs(5), heartbeat_handle).await;
+                
+                match tokio::time::timeout(tokio::time::Duration::from_secs(5), heartbeat_handle).await {
+                    Ok(_) => {
+                        log_info!(MAIN_LOGGER, "✅ Heartbeat stopped successfully for job {}", job.id);
+                        println!("✅ Heartbeat stopped successfully for job {}", job.id);
+                    }
+                    Err(_) => {
+                        log_error!(MAIN_LOGGER, "⚠️ Heartbeat timeout after 5s for job {}", job.id);
+                        println!("⚠️ Heartbeat timeout after 5s for job {}", job.id);
+                    }
+                }
                 
                 log_info!(MAIN_LOGGER, "💾 Storing results for job: {}", job.id);
+                println!("💾 Storing results for job: {}", job.id);
                 
                 // Store results
                 self.job_queue.store_result(&result).await?;
+                
+                log_info!(MAIN_LOGGER, "✅ Results stored successfully for job: {}", job.id);
+                println!("✅ Results stored successfully for job: {}", job.id);
                 
                 // Update status to completed
                 self.job_queue
@@ -497,6 +513,7 @@ impl Worker {
         // to avoid deadlock with heartbeat task
         
         // Run final backtest with best parameters to get full results
+        println!("🚀 About to run final backtest for job {}", job.id);
         log_info!(MAIN_LOGGER, "🚀 About to run final backtest for job {}", job.id);
         let final_result = self.run_backtest_with_chromosome(
             &job.id,
