@@ -626,10 +626,23 @@ impl JobQueue for PostgresQueue {
         tokio::task::spawn_blocking(move || {
             use diesel::Connection;
             
-            let mut conn = pool.get()?;
+            crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔌 Getting connection from pool for job {}", result.job_id);
+            let mut conn = match pool.get() {
+                Ok(c) => {
+                    crate::log_info!(crate::logging_facade::MAIN_LOGGER, "✅ Got connection from pool for job {}", result.job_id);
+                    c
+                }
+                Err(e) => {
+                    crate::log_error!(crate::logging_facade::MAIN_LOGGER, "❌ Failed to get connection from pool for job {}: {}", result.job_id, e);
+                    return Err(Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
+                }
+            };
+            
+            crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔄 Starting transaction for job {}", result.job_id);
             
             // Wrap everything in a transaction for proper lock management and atomicity
             conn.transaction::<_, Box<dyn std::error::Error + Send + Sync>, _>(|conn| {
+                crate::log_info!(crate::logging_facade::MAIN_LOGGER, "📖 Querying job record for job {}", result.job_id);
                 // Get job to find dates and parameters
                 let job: BacktestJobRecord = backtest_jobs::table
                     .filter(backtest_jobs::job_id.eq(&result.job_id))
