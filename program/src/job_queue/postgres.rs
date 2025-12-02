@@ -219,7 +219,8 @@ impl PostgresQueue {
     pub fn new(database_url: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let manager = ConnectionManager::<PgConnection>::new(database_url);
         let pool = Pool::builder()
-            .max_size(10)
+            .max_size(20) // Increased from 10 to handle 4 workers + heartbeats + concurrent operations
+            .connection_timeout(std::time::Duration::from_secs(10)) // Fail fast instead of hanging
             .build(manager)?;
         
         Ok(Self {
@@ -623,13 +624,17 @@ impl JobQueue for PostgresQueue {
         let result = result.clone();
         
         tokio::task::spawn_blocking(move || {
+            use diesel::Connection;
+            
             let mut conn = pool.get()?;
             
-            // Get job to find dates and parameters
-            let job: BacktestJobRecord = backtest_jobs::table
-                .filter(backtest_jobs::job_id.eq(&result.job_id))
-                .select(BacktestJobRecord::as_select())
-                .first(&mut conn)?;
+            // Wrap everything in a transaction for proper lock management and atomicity
+            conn.transaction::<_, Box<dyn std::error::Error + Send + Sync>, _>(|conn| {
+                // Get job to find dates and parameters
+                let job: BacktestJobRecord = backtest_jobs::table
+                    .filter(backtest_jobs::job_id.eq(&result.job_id))
+                    .select(BacktestJobRecord::as_select())
+                    .first(conn)?;
             
             // Create backtest result record
             let backtest_uuid = uuid::Uuid::parse_str(&result.job_id)?;
@@ -707,14 +712,15 @@ impl JobQueue for PostgresQueue {
             let result_id: uuid::Uuid = diesel::insert_into(backtest_results::table)
                 .values(&new_result)
                 .returning(backtest_results::id)
-                .get_result(&mut conn)?;
+                .get_result(conn)?;
             
             // Update job with result_id
             diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(&result.job_id)))
                 .set(backtest_jobs::result_id.eq(Some(result_id)))
-                .execute(&mut conn)?;
+                .execute(conn)?;
             
-            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+            Ok(())
+            }) // End transaction
         }).await??;
         
         Ok(())
