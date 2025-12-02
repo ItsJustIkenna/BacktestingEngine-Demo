@@ -74,16 +74,24 @@ impl Worker {
         // Spawn heartbeat task to update job every 30 seconds
         let heartbeat_queue = self.job_queue.clone();
         let heartbeat_job_id = job.id.clone();
+        let (heartbeat_tx, mut heartbeat_rx) = tokio::sync::mpsc::channel::<()>(1);
         let heartbeat_handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
             loop {
-                interval.tick().await;
-                println!("💓 Heartbeat update for job {}", heartbeat_job_id);
-                log_info!(MAIN_LOGGER, "💓 Heartbeat update for job {}", heartbeat_job_id);
-                if let Err(e) = heartbeat_queue.update_heartbeat(&heartbeat_job_id).await {
-                    eprintln!("⚠️ Failed to update heartbeat for job {}: {}", heartbeat_job_id, e);
-                    log_error!(MAIN_LOGGER, "⚠️ Failed to update heartbeat for job {}: {}", heartbeat_job_id, e);
-                    break; // Exit loop on persistent errors
+                tokio::select! {
+                    _ = interval.tick() => {
+                        println!("💓 Heartbeat update for job {}", heartbeat_job_id);
+                        log_info!(MAIN_LOGGER, "💓 Heartbeat update for job {}", heartbeat_job_id);
+                        if let Err(e) = heartbeat_queue.update_heartbeat(&heartbeat_job_id).await {
+                            eprintln!("⚠️ Failed to update heartbeat for job {}: {}", heartbeat_job_id, e);
+                            log_error!(MAIN_LOGGER, "⚠️ Failed to update heartbeat for job {}: {}", heartbeat_job_id, e);
+                            break; // Exit loop on persistent errors
+                        }
+                    }
+                    _ = heartbeat_rx.recv() => {
+                        log_info!(MAIN_LOGGER, "💓 Heartbeat task gracefully stopping for job {}", heartbeat_job_id);
+                        break; // Graceful shutdown
+                    }
                 }
             }
         });
@@ -104,8 +112,9 @@ impl Worker {
         
         let result = match result {
             Ok(result) => {
-                // Stop heartbeat task
-                heartbeat_handle.abort();
+                // Gracefully stop heartbeat task and wait for it to complete
+                let _ = heartbeat_tx.send(()).await;
+                let _ = tokio::time::timeout(tokio::time::Duration::from_secs(5), heartbeat_handle).await;
                 
                 log_info!(MAIN_LOGGER, "💾 Storing results for job: {}", job.id);
                 
@@ -130,8 +139,9 @@ impl Worker {
                 Ok(true)
             }
             Err(e) => {
-                // Stop heartbeat task
-                heartbeat_handle.abort();
+                // Gracefully stop heartbeat task
+                let _ = heartbeat_tx.send(()).await;
+                let _ = tokio::time::timeout(tokio::time::Duration::from_secs(5), heartbeat_handle).await;
                 
                 let error_msg = format!("Backtest failed: {}", e);
                 log_error!(MAIN_LOGGER, "❌ Worker {} job {} failed: {}", self.id, job.id, error_msg);
