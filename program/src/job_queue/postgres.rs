@@ -624,8 +624,6 @@ impl JobQueue for PostgresQueue {
         let result = result.clone();
         
         tokio::task::spawn_blocking(move || {
-            use diesel::Connection;
-            
             crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔌 Getting connection from pool for job {}", result.job_id);
             let mut conn = match pool.get() {
                 Ok(c) => {
@@ -638,16 +636,12 @@ impl JobQueue for PostgresQueue {
                 }
             };
             
-            crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔄 Starting transaction for job {}", result.job_id);
-            
-            // Wrap everything in a transaction for proper lock management and atomicity
-            conn.transaction::<_, Box<dyn std::error::Error + Send + Sync>, _>(|conn| {
-                crate::log_info!(crate::logging_facade::MAIN_LOGGER, "📖 Querying job record for job {}", result.job_id);
-                // Get job to find dates and parameters
-                let job: BacktestJobRecord = backtest_jobs::table
-                    .filter(backtest_jobs::job_id.eq(&result.job_id))
-                    .select(BacktestJobRecord::as_select())
-                    .first(conn)?;
+            crate::log_info!(crate::logging_facade::MAIN_LOGGER, "📖 Querying job record for job {}", result.job_id);
+            // Get job to find dates and parameters
+            let job: BacktestJobRecord = backtest_jobs::table
+                .filter(backtest_jobs::job_id.eq(&result.job_id))
+                .select(BacktestJobRecord::as_select())
+                .first(&mut conn)?;
             
             // Create backtest result record
             let backtest_uuid = uuid::Uuid::parse_str(&result.job_id)?;
@@ -721,19 +715,21 @@ impl JobQueue for PostgresQueue {
                 }))?),
             };
             
+            crate::log_info!(crate::logging_facade::MAIN_LOGGER, "💿 Inserting result into database for job {}", result.job_id);
             // Insert result into database
             let result_id: uuid::Uuid = diesel::insert_into(backtest_results::table)
                 .values(&new_result)
                 .returning(backtest_results::id)
-                .get_result(conn)?;
+                .get_result(&mut conn)?;
             
+            crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔗 Updating job with result_id for job {}", result.job_id);
             // Update job with result_id
             diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(&result.job_id)))
                 .set(backtest_jobs::result_id.eq(Some(result_id)))
-                .execute(conn)?;
+                .execute(&mut conn)?;
             
+            crate::log_info!(crate::logging_facade::MAIN_LOGGER, "✅ Database operations completed for job {}", result.job_id);
             Ok(())
-            }) // End transaction
         }).await??;
         
         Ok(())
