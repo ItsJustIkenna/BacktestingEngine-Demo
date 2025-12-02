@@ -137,6 +137,8 @@ pub static MAIN_LOGGER: once_cell::sync::Lazy<Arc<UltraLogger>> =
 /// These use tokio::spawn to ensure non-blocking operation in sync contexts
 
 #[macro_export]
+/// Log info level messages using UltraLogger
+#[macro_export]
 macro_rules! log_info {
     ($logger:expr, $fmt:expr $(, $arg:expr)*) => {{
         let logger = $logger.clone();

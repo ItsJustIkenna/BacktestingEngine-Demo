@@ -22,4 +22,6 @@ pub use logging_facade::{
     BacktestEngineLogger,
 };
 
-// Logging macros are defined in logging_facade.rs and don't need re-export
+// Logging macros (log_info, log_warn, log_error, log_debug, log_trace) are automatically
+// exported at the crate root via #[macro_export] in logging_facade.rs
+
