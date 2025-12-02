@@ -184,9 +184,6 @@ impl Worker {
         log_info!(MAIN_LOGGER, "📂 Loading market data for job {}: symbol={}, exchange={}, strategy={}", 
             job.id, params.symbol, params.exchange, params.strategy_type);
         
-        // Update progress: loading data
-        self.job_queue.update_progress(&job.id, 10.0).await?;
-        
         // Load market data intelligently based on strategy type
         let data = self.load_market_data_for_strategy(&params.symbol, &params.exchange, &params.strategy_type).await?;
         
@@ -197,9 +194,6 @@ impl Worker {
         }
         
         log_info!(MAIN_LOGGER, "✅ Loaded {} data points for job {}", data.len(), job.id);
-        
-        // Update progress: initializing
-        self.job_queue.update_progress(&job.id, 20.0).await?;
         
         log_info!(MAIN_LOGGER, "⚙️ Initializing backtest engine for job {}: capital=${:.2}, commission={:.4}", 
             job.id, params.initial_capital, params.commission_rate);
@@ -261,24 +255,10 @@ impl Worker {
                 format!("Failed to register strategy: {}", e)
             })?;
         
-        // Update progress: running backtest
-        self.job_queue.update_progress(&job.id, 30.0).await?;
-        
         log_info!(MAIN_LOGGER, "🚀 Starting backtest execution for job {}", job.id);
         
-        // Run backtest with progress updates
+        // Run backtest without progress tracking (was causing blocking thread pool exhaustion)
         let start_time = std::time::Instant::now();
-        
-        // Simulate progress during execution (temporary solution until engine supports callbacks)
-        let job_id = job.id.clone();
-        let queue = self.job_queue.clone();
-        let progress_handle = tokio::spawn(async move {
-            // Update progress from 30% to 85% over the backtest duration
-            for progress in (35..=85).step_by(5) {
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                let _ = queue.update_progress(&job_id, progress as f64).await;
-            }
-        });
         
         let result = engine
             .run_backtest(
@@ -290,16 +270,10 @@ impl Worker {
             )
             .await?;
         
-        // Cancel progress updates once backtest is done
-        progress_handle.abort();
-        
         let execution_time = start_time.elapsed();
         
         log_info!(MAIN_LOGGER, "⏱️ Backtest execution completed for job {} in {:.2}s", 
             job.id, execution_time.as_secs_f64());
-        
-        // Update progress: calculating metrics
-        self.job_queue.update_progress(&job.id, 90.0).await?;
         
         log_info!(MAIN_LOGGER, "📈 Calculating final metrics for job {}: trades={}, pnl=${:.2}", 
             job.id, result.core.num_trades, result.core.total_pnl);
@@ -332,7 +306,7 @@ impl Worker {
     ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
         log_info!(MAIN_LOGGER, "🧬🧬🧬 ENTERED execute_genetic_optimization for job {}", job.id);
         
-        use genetic::{GeneticOptimizer, ProgressCallback};
+        use genetic::GeneticOptimizer;
         use genetic::chromosome::AvellanedaStoikovChromosome;
         use config::GeneticConfig;
         
@@ -341,15 +315,7 @@ impl Worker {
         log_info!(MAIN_LOGGER, "🧬 Starting genetic optimization for job {}: pop={}, gen={}", 
             job.id, params.population_size, params.generations);
         
-        // Update phase: genetic optimization
-        self.job_queue.update_phase(&job.id, "genetic_optimization", serde_json::json!({
-            "population_size": params.population_size,
-            "generations": params.generations,
-            "current_generation": 0
-        })).await?;
-        
-        // Update progress: loading data
-        self.job_queue.update_progress(&job.id, 10.0).await?;
+        // Skip all database updates during optimization to prevent spawn_blocking exhaustion
         
         // Load market data once and share it
         let data = self.load_market_data_for_strategy(&params.symbol, &params.exchange, &params.strategy_type).await?;
@@ -359,11 +325,8 @@ impl Worker {
         
         log_info!(MAIN_LOGGER, "✅ Loaded {} data points for genetic optimization", data.len());
         
-        // Update progress: initializing
-        self.job_queue.update_progress(&job.id, 15.0).await?;
-        
-        // Set total generations in database
-        self.job_queue.update_generation(&job.id, 0, params.generations as i32).await?;
+        // Skip database updates during optimization to prevent spawn_blocking exhaustion
+        // Progress will be tracked via heartbeat only
         
         // Create genetic config
         let config = GeneticConfig {
@@ -374,31 +337,7 @@ impl Worker {
             ..Default::default() // Use defaults for MC lazy eval (disabled)
         };
         
-        // Create progress callback to update generation tracking
-        let job_queue = self.job_queue.clone();
-        let job_id = job.id.clone();
-        let total_gens = params.generations;
-        let progress_callback: ProgressCallback = Arc::new(move |current_gen, _total| {
-            let queue = job_queue.clone();
-            let id = job_id.clone();
-            Box::pin(async move {
-                log_info!(MAIN_LOGGER, "📊 Progress callback fired: generation {}/{}", current_gen, total_gens);
-                // Update generation in database
-                if let Err(e) = queue.update_generation(&id, current_gen as i32, total_gens as i32).await {
-                    log_error!(MAIN_LOGGER, "⚠️ Failed to update generation for job {}: {}", id, e);
-                } else {
-                    log_info!(MAIN_LOGGER, "✅ Generation updated successfully in database");
-                }
-                // Update progress (20% to 85% during optimization)
-                let progress = 20.0 + (65.0 * current_gen as f64 / total_gens as f64);
-                if let Err(e) = queue.update_progress(&id, progress).await {
-                    log_error!(MAIN_LOGGER, "⚠️ Failed to update progress for job {}: {}", id, e);
-                } else {
-                    log_info!(MAIN_LOGGER, "✅ Progress updated to {:.1}%", progress);
-                }
-                log_info!(MAIN_LOGGER, "🧬 Job {} - Generation {}/{}", id, current_gen, total_gens);
-            })
-        });
+        // No progress callback - reduces database calls from 40+ to near zero during optimization
         
         // Prepare data for fitness function (as Arc for sharing)
         let data_arc = Arc::new(data);
@@ -485,17 +424,15 @@ impl Worker {
         });
         
         // Run genetic optimization
-        log_info!(MAIN_LOGGER, "🚀 Running genetic optimization...");
+        log_info!(MAIN_LOGGER, "🚀 Running genetic optimization without progress tracking...");
         log_info!(MAIN_LOGGER, "   Config: pop_size={}, generations={}, mutation={}, crossover={}", 
             config.population_size, config.generations, config.mutation_rate, config.crossover_rate);
         
-        log_info!(MAIN_LOGGER, "📌 Creating optimizer with progress callback...");
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn,
-            progress_callback: Some(progress_callback),
+            progress_callback: None, // No callback = no database spam
         };
-        log_info!(MAIN_LOGGER, "✅ Optimizer created successfully");
         
         log_info!(MAIN_LOGGER, "🔄 Calling optimizer.run()...");
         let (best_chromosome, best_fitness) = optimizer.run().await;
