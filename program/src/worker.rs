@@ -489,19 +489,15 @@ impl Worker {
         log_info!(MAIN_LOGGER, "   Best params: γ={:.4}, q={:.4}, size={:.4}", 
             best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size);
         
-        // Clear generation counter since genetic optimization is complete
-        self.job_queue.update_generation(&job.id, 0, 0).await?;
+        // Skip database updates here to avoid deadlock with heartbeat task
+        // Heartbeat will be stopped after execute_genetic_optimization() returns
+        // Progress is already at ~85% from genetic optimization callback
         
-        // Update phase: running final analysis (Monte Carlo + Walk-Forward)
-        self.job_queue.update_phase(&job.id, "final_analysis", serde_json::json!({
-            "stage": "starting",
-            "best_fitness": best_fitness
-        })).await?;
-        
-        // Update progress: running final backtest with best parameters
-        self.job_queue.update_progress(&job.id, 90.0).await?;
+        // Note: Progress already at 90% from earlier update, skip redundant DB call
+        // to avoid deadlock with heartbeat task
         
         // Run final backtest with best parameters to get full results
+        log_info!(MAIN_LOGGER, "🚀 About to run final backtest for job {}", job.id);
         let final_result = self.run_backtest_with_chromosome(
             &job.id,
             &params.symbol,
