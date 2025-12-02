@@ -77,8 +77,16 @@ impl Worker {
         let (heartbeat_tx, mut heartbeat_rx) = tokio::sync::mpsc::channel::<()>(1);
         let heartbeat_handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 tokio::select! {
+                    // Prioritize shutdown signal over heartbeat tick
+                    biased;
+                    
+                    _ = heartbeat_rx.recv() => {
+                        log_info!(MAIN_LOGGER, "💓 Heartbeat task gracefully stopping for job {}", heartbeat_job_id);
+                        break; // Graceful shutdown
+                    }
                     _ = interval.tick() => {
                         println!("💓 Heartbeat update for job {}", heartbeat_job_id);
                         log_info!(MAIN_LOGGER, "💓 Heartbeat update for job {}", heartbeat_job_id);
@@ -87,10 +95,6 @@ impl Worker {
                             log_error!(MAIN_LOGGER, "⚠️ Failed to update heartbeat for job {}: {}", heartbeat_job_id, e);
                             break; // Exit loop on persistent errors
                         }
-                    }
-                    _ = heartbeat_rx.recv() => {
-                        log_info!(MAIN_LOGGER, "💓 Heartbeat task gracefully stopping for job {}", heartbeat_job_id);
-                        break; // Graceful shutdown
                     }
                 }
             }
