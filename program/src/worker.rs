@@ -131,11 +131,25 @@ impl Worker {
                 log_info!(MAIN_LOGGER, "💾 Storing results for job: {}", job.id);
                 println!("💾 Storing results for job: {}", job.id);
                 
-                // Store results
-                self.job_queue.store_result(&result).await?;
-                
-                log_info!(MAIN_LOGGER, "✅ Results stored successfully for job: {}", job.id);
-                println!("✅ Results stored successfully for job: {}", job.id);
+                // Store results with timeout to detect spawn_blocking exhaustion
+                match tokio::time::timeout(
+                    tokio::time::Duration::from_secs(30),
+                    self.job_queue.store_result(&result)
+                ).await {
+                    Ok(Ok(_)) => {
+                        log_info!(MAIN_LOGGER, "✅ Results stored successfully for job: {}", job.id);
+                        println!("✅ Results stored successfully for job: {}", job.id);
+                    }
+                    Ok(Err(e)) => {
+                        log_error!(MAIN_LOGGER, "❌ Failed to store results for job {}: {}", job.id, e);
+                        return Err(format!("Failed to store results: {}", e).into());
+                    }
+                    Err(_) => {
+                        log_error!(MAIN_LOGGER, "⏱️ TIMEOUT storing results for job {} after 30s - spawn_blocking likely exhausted!", job.id);
+                        println!("⏱️ TIMEOUT storing results for job {} - spawn_blocking exhausted!", job.id);
+                        return Err("Timeout storing results - blocking thread pool exhausted".into());
+                    }
+                }
                 
                 // Update status to completed
                 self.job_queue

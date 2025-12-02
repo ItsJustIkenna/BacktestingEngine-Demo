@@ -145,10 +145,12 @@ enum Commands {
 
 fn main() {
     // Create custom runtime with larger blocking thread pool
-    // Default is 512, but with 4 workers each making frequent DB calls, we need more
+    // Even with progress tracking removed, Diesel (sync) still needs many blocking threads
+    // for: get_next_job, update_heartbeat (every 30s), store_result, update_job_status, data loading
     let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(4)
-        .max_blocking_threads(2048) // Increased from default 512
+        .worker_threads(8) // Increased from 4
+        .max_blocking_threads(4096) // Increased from 2048 - nuclear option for Diesel sync driver
+        .thread_keep_alive(std::time::Duration::from_secs(60))
         .enable_all()
         .build()
         .expect("Failed to create Tokio runtime");
