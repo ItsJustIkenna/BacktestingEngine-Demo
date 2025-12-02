@@ -106,10 +106,12 @@ impl OrderBookStreamIterator {
             self.symbol, self.exchange, self.chunk_size, self.offset
         );
 
-        let results: Vec<OrderEventRow> = diesel::sql_query(&query)
-            .load(&mut conn)
-            .await
-            .map_err(|e| format!("Failed to load order events chunk: {}", e))?;
+        let results: Vec<OrderEventRow> = diesel_async::RunQueryDsl::load(
+            diesel::sql_query(&query),
+            &mut conn
+        )
+        .await
+        .map_err(|e| format!("Failed to load order events chunk: {}", e))?;
 
         if results.is_empty() {
             self.finished = true;

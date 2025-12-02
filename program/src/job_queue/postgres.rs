@@ -227,6 +227,53 @@ impl PostgresQueue {
         })
     }
     
+    /// Downsample equity curve to max_points using largest-triangle-three-buckets algorithm
+    fn downsample_equity_curve(curve: &[f64], max_points: usize) -> Vec<f64> {
+        if curve.len() <= max_points {
+            return curve.to_vec();
+        }
+        
+        let mut result = Vec::with_capacity(max_points);
+        let bucket_size = (curve.len() - 2) as f64 / (max_points - 2) as f64;
+        
+        // Always keep first point
+        result.push(curve[0]);
+        
+        let mut a = 0;
+        for i in 0..(max_points - 2) {
+            let avg_range_start = ((i + 1) as f64 * bucket_size).floor() as usize + 1;
+            let avg_range_end = ((i + 2) as f64 * bucket_size).floor() as usize + 1;
+            let avg_range_end = avg_range_end.min(curve.len());
+            
+            let avg_x = (avg_range_start + avg_range_end) as f64 / 2.0;
+            let avg_y: f64 = curve[avg_range_start..avg_range_end].iter().sum::<f64>() 
+                / (avg_range_end - avg_range_start) as f64;
+            
+            let range_start = (a + 1).max(1);
+            let range_end = ((i + 1) as f64 * bucket_size).floor() as usize + 1;
+            let range_end = range_end.min(curve.len());
+            
+            let mut max_area = -1.0;
+            let mut max_area_point = range_start;
+            
+            for idx in range_start..range_end {
+                let area = ((idx as f64 - a as f64) * (avg_y - curve[a]) - (avg_x - a as f64) * (curve[idx] - curve[a])).abs();
+                if area > max_area {
+                    max_area = area;
+                    max_area_point = idx;
+                }
+            }
+            
+            result.push(curve[max_area_point]);
+            a = max_area_point;
+        }
+        
+        // Always keep last point
+        result.push(curve[curve.len() - 1]);
+        
+        result
+    }
+    
     /// Get the async connection pool (for data loading)
     pub fn get_async_pool(&self) -> Option<Arc<deadpool::Pool<AsyncPgConnection>>> {
         Some(Arc::clone(&self.pool))
@@ -669,7 +716,7 @@ impl JobQueue for PostgresQueue {
                 "risk_aversion": job.risk_aversion.to_string(),
                 "inventory_target": job.inventory_target.to_string(),
                 "order_size": job.order_size.to_string(),
-                "equity_curve": result.equity_curve
+                "equity_curve": Self::downsample_equity_curve(&result.equity_curve, 1000)
             }))?),
         };
         
