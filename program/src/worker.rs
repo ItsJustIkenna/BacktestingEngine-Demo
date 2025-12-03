@@ -191,9 +191,16 @@ impl ProgressTracker {
     /// Returns a callback that updates in-memory state (fast)
     pub fn generation_callback(self: &Arc<Self>) -> Arc<dyn Fn(usize, usize) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync> {
         let tracker = Arc::clone(self);
+        let job_id = self.job_id.clone();
         Arc::new(move |current: usize, total: usize| {
             let tracker = Arc::clone(&tracker);
+            let job_id = job_id.clone();
             Box::pin(async move {
+                // Log progress every 5 generations or on first/last
+                if current == 1 || current == total || current % 5 == 0 {
+                    log_info!(GENETIC_LOGGER, "Job {} generation {}/{} ({:.1}%)", 
+                        job_id, current, total, (current as f64 / total as f64) * 100.0);
+                }
                 tracker.set_generation(current as i32, total as i32).await;
                 // Try to flush if enough time has passed (non-blocking check)
                 let _ = tracker.maybe_flush().await;
