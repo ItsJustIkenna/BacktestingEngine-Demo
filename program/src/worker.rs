@@ -1549,9 +1549,15 @@ impl Worker {
             
             log_debug!(MAIN_LOGGER, "Executing candle query for {} on {}", symbol, exchange);
             
-            let results: Vec<CandleRow> = diesel::sql_query(&query)
-                .load(&mut conn)
-                .await
+            // Execute query with timeout to prevent hanging on slow queries
+            let results: Vec<CandleRow> = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                diesel::sql_query(&query).load(&mut conn)
+            ).await
+                .map_err(|_| {
+                    log_error!(MAIN_LOGGER, "Query timeout loading candles for {} on {} (30s limit)", symbol, exchange);
+                    "Query execution timeout - database may be overloaded"
+                })?
                 .map_err(|e| {
                     log_error!(MAIN_LOGGER, "Failed to load candles for {} on {}: {}", symbol, exchange, e);
                     format!("Failed to load candles: {}", e)

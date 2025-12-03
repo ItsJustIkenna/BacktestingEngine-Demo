@@ -125,12 +125,16 @@ impl OrderBookStreamIterator {
         log_debug!(MAIN_LOGGER, "Executing query for {} {} (limit={}, offset={})", 
             self.symbol, self.exchange, self.chunk_size, self.offset);
 
-        let results: Vec<OrderEventRow> = diesel_async::RunQueryDsl::load(
-            diesel::sql_query(&query),
-            &mut conn
-        )
-        .await
-        .map_err(|e| format!("Failed to load order events chunk: {}", e))?;
+        let results: Vec<OrderEventRow> = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn)
+        ).await
+            .map_err(|_| {
+                log_error!(MAIN_LOGGER, "Query timeout loading order events for {} {} at offset {} (30s limit)", 
+                    self.symbol, self.exchange, self.offset);
+                "Query execution timeout - database may be overloaded"
+            })?
+            .map_err(|e| format!("Failed to load order events chunk: {}", e))?;
 
         if results.is_empty() {
             self.finished = true;
