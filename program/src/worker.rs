@@ -594,6 +594,7 @@ impl Worker {
         })).await;
         
         // Load market data once and share it
+        log_info!(GENETIC_LOGGER, "Job {} loading market data for {} on {}", job.id, params.symbol, params.exchange);
         let data = self.load_market_data_for_strategy(&params.symbol, &params.exchange, &params.strategy_type).await?;
         if data.is_empty() {
             log_error!(GENETIC_LOGGER, "Job {} no market data available", job.id);
@@ -1439,6 +1440,8 @@ impl Worker {
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
         use crate::streaming::OrderBookBatchLoader;
         
+        log_info!(MAIN_LOGGER, "Loading order events for {} on {}", symbol, exchange);
+        
         let pool = self.job_queue.get_pool()
             .ok_or("Database pool not available")?;
         
@@ -1452,11 +1455,11 @@ impl Worker {
         // 20K events is enough for meaningful backtesting while staying under memory limits
         const MAX_EVENTS: usize = 20000;
         
-        // log_info!(...)
+        log_info!(MAIN_LOGGER, "Starting batch load with limit {}", MAX_EVENTS);
         
         let orders = loader.load_with_limit(MAX_EVENTS).await?;
         
-        // log_info!(...)
+        log_info!(MAIN_LOGGER, "Loaded {} order events", orders.len());
         Ok(orders)
     }
     

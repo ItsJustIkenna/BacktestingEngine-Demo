@@ -24,6 +24,10 @@ use chrono::{DateTime, Utc, NaiveDateTime};
 use uuid::Uuid;
 #[cfg(feature = "postgres")]
 use databaseschema::models::historical_order::HistoricalOrder;
+#[cfg(feature = "postgres")]
+use crate::{log_info, log_error, log_debug};
+#[cfg(feature = "postgres")]
+use crate::logging_facade::MAIN_LOGGER;
 
 #[cfg(feature = "postgres")]
 const DEFAULT_CHUNK_SIZE: usize = 5000; // Load 5K events at a time
@@ -93,12 +97,19 @@ impl OrderBookStreamIterator {
         }
 
         // Use timeout to prevent indefinite blocking on pool exhaustion
+        log_debug!(MAIN_LOGGER, "Getting database connection for chunk load (offset={})", self.offset);
         let mut conn = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             self.pool.get()
         ).await
-            .map_err(|_| "Connection pool timeout - possible deadlock or pool exhaustion")?
-            .map_err(|e| format!("Failed to get database connection: {}", e))?;
+            .map_err(|_| {
+                log_error!(MAIN_LOGGER, "Connection pool timeout at offset {}", self.offset);
+                "Connection pool timeout - possible deadlock or pool exhaustion"
+            })?
+            .map_err(|e| {
+                log_error!(MAIN_LOGGER, "Failed to get database connection: {}", e);
+                format!("Failed to get database connection: {}", e)
+            })?;
 
         // Query order book events with LIMIT/OFFSET for chunking
         let query = format!(
@@ -110,6 +121,9 @@ impl OrderBookStreamIterator {
              ORDER BY timestamp ASC LIMIT {} OFFSET {}",
             self.symbol, self.exchange, self.chunk_size, self.offset
         );
+
+        log_debug!(MAIN_LOGGER, "Executing query for {} {} (limit={}, offset={})", 
+            self.symbol, self.exchange, self.chunk_size, self.offset);
 
         let results: Vec<OrderEventRow> = diesel_async::RunQueryDsl::load(
             diesel::sql_query(&query),
