@@ -1416,15 +1416,18 @@ impl Worker {
         exchange: &str,
         strategy_type: &str,
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        log_info!(MAIN_LOGGER, "Loading market data for strategy_type='{}' symbol={} exchange={}", 
+            strategy_type, symbol, exchange);
+        
         match strategy_type {
             "market_making" => {
-                // log_info!(...)
+                log_info!(MAIN_LOGGER, "Using order events loader for market_making strategy");
                 // For market making, load order events to reconstruct order book
                 self.load_order_events(symbol, exchange).await
             }
             _ => {
+                log_info!(MAIN_LOGGER, "Using candle loader for '{}' strategy", strategy_type);
                 // Default to candles for other strategies
-                // log_info!(...)
                 self.load_market_data(symbol, exchange).await
             }
         }
@@ -1485,6 +1488,8 @@ impl Worker {
             use diesel_async::RunQueryDsl;
             use dataloader::Candle;
             
+            log_info!(MAIN_LOGGER, "Loading candle data for {} on {}", symbol, exchange);
+            
             #[derive(QueryableByName)]
             struct CandleRow {
                 #[diesel(sql_type = Timestamptz)]
@@ -1509,14 +1514,28 @@ impl Worker {
             
             // Get database pool from job queue
             let pool = self.job_queue.get_pool()
-                .ok_or("Database pool not available")?;
+                .ok_or_else(|| {
+                    log_error!(MAIN_LOGGER, "Database pool not available for {} on {}", symbol, exchange);
+                    "Database pool not available"
+                })?;
             
             let symbol = symbol.to_string();
             let exchange = exchange.to_string();
             
-            // Get async connection
-            let mut conn = pool.get().await
-                .map_err(|e| format!("Failed to get database connection: {}", e))?;
+            // Get async connection with timeout
+            log_debug!(MAIN_LOGGER, "Acquiring database connection for candle load");
+            let mut conn = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                pool.get()
+            ).await
+                .map_err(|_| {
+                    log_error!(MAIN_LOGGER, "Connection pool timeout loading candles for {} on {}", symbol, exchange);
+                    "Connection pool timeout - possible deadlock or pool exhaustion"
+                })?
+                .map_err(|e| {
+                    log_error!(MAIN_LOGGER, "Failed to get database connection: {}", e);
+                    format!("Failed to get database connection: {}", e)
+                })?;
             
             // Query candles_1m view for the symbol/exchange
             // Note: For now we load 1-minute candles. Could make timeframe configurable.
@@ -1528,10 +1547,17 @@ impl Worker {
                 symbol, exchange
             );
             
+            log_debug!(MAIN_LOGGER, "Executing candle query for {} on {}", symbol, exchange);
+            
             let results: Vec<CandleRow> = diesel::sql_query(&query)
                 .load(&mut conn)
                 .await
-                .map_err(|e| format!("Failed to load candles: {}", e))?;
+                .map_err(|e| {
+                    log_error!(MAIN_LOGGER, "Failed to load candles for {} on {}: {}", symbol, exchange, e);
+                    format!("Failed to load candles: {}", e)
+                })?;
+            
+            log_info!(MAIN_LOGGER, "Loaded {} candle rows for {} on {}", results.len(), symbol, exchange);
             
             let candles: Vec<MarketData> = results
                 .into_iter()
@@ -1550,12 +1576,12 @@ impl Worker {
                 })
                 .collect();
             
-            // log_info!(...)
             Ok(candles)
         }
         #[cfg(not(feature = "postgres"))]
         {
             let _ = (symbol, exchange);
+            log_error!(MAIN_LOGGER, "PostgreSQL feature not enabled - cannot load market data");
             Err("PostgreSQL feature not enabled".into())
         }
     }
