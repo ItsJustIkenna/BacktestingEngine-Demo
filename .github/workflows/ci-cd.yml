@@ -252,18 +252,10 @@ jobs:
         id: image-check
         shell: powershell
         run: |
-          Write-Host "Checking if image exists..."
-          $imageTag = "${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          $ErrorActionPreference = 'SilentlyContinue'
-          docker pull $imageTag 2>&1 | Out-Null
-          if ($LASTEXITCODE -eq 0) {
-            echo "exists=true" >> $env:GITHUB_OUTPUT
-            Write-Host "[OK] Image cache hit"
-          } else {
-            echo "exists=false" >> $env:GITHUB_OUTPUT
-            Write-Host "[INFO] Will build image"
-          }
-          exit 0
+          # DISABLED: Image caching can cause stale builds when dependencies (LoggingEngine, databaseschema) change
+          # The build uses SHA from BacktestingEngine only, missing dependency updates
+          echo "exists=false" >> $env:GITHUB_OUTPUT
+          Write-Host "[INFO] Image caching disabled - will always rebuild to include dependency changes"
 
       - name: Build & Push Image
         if: steps.image-check.outputs.exists != 'true'
