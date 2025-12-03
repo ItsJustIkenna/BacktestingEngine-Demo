@@ -395,7 +395,7 @@ fn convert_historical_order_to_event(order: &HistoricalOrder) -> Option<OrderBoo
             let side = match BookSide::from_str(order.get_side()) {
                 Some(s) => s,
                 None => {
-                    BACKTEST_LOGGER.warn(format!(
+                    BACKTEST_LOGGER.warn_sync(format!(
                         "Invalid side '{}' for order {}", 
                         order.get_side(), 
                         order_id
@@ -430,7 +430,7 @@ fn convert_historical_order_to_event(order: &HistoricalOrder) -> Option<OrderBoo
             let side = match BookSide::from_str(order.get_side()) {
                 Some(s) => s,
                 None => {
-                    BACKTEST_LOGGER.warn(format!(
+                    BACKTEST_LOGGER.warn_sync(format!(
                         "Invalid side '{}' for trade order {}", 
                         order.get_side(), 
                         order_id
@@ -449,7 +449,7 @@ fn convert_historical_order_to_event(order: &HistoricalOrder) -> Option<OrderBoo
             })
         }
         _ => {
-            BACKTEST_LOGGER.warn(format!(
+            BACKTEST_LOGGER.warn_sync(format!(
                 "Unknown event type '{}' for order {}", 
                 event_type, 
                 order_id

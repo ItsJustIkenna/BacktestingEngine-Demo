@@ -11,7 +11,7 @@ use dataloader::MarketData;
 #[cfg(feature = "postgres")]
 use diesel::prelude::*;
 #[cfg(feature = "postgres")]
-use diesel_async::{AsyncPgConnection, RunQueryDsl};
+use diesel_async::AsyncPgConnection;
 #[cfg(feature = "postgres")]
 use diesel_async::pooled_connection::deadpool;
 #[cfg(feature = "postgres")]

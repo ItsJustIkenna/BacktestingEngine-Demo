@@ -348,7 +348,7 @@ impl IntoResponse for AppError {
 /// POST /api/backtest/:id/cancel
 pub async fn cancel_backtest(
     State(_state): State<ApiState>,
-    Path(_job_id_str): Path<String>,
+    Path(job_id_str): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     
     #[cfg(feature = "postgres")]
@@ -420,7 +420,7 @@ pub async fn cancel_backtest(
 /// DELETE /api/backtest/:id
 pub async fn delete_backtest(
     State(_state): State<ApiState>,
-    Path(_job_id_str): Path<String>,
+    Path(job_id_str): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     
     #[cfg(feature = "postgres")]
