@@ -620,18 +620,26 @@ impl JobQueue for PostgresQueue {
         use bigdecimal::BigDecimal;
         use std::str::FromStr;
         
+        log_debug!(crate::MAIN_LOGGER, "Job {} updating progress to {:.1}%", job_id, progress);
+        
         let mut conn = self.get_conn_with_timeout().await?;
         
-        diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(job_id)))
+        let rows = diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(job_id)))
             .set(backtest_jobs::progress.eq(BigDecimal::from_str(&progress.to_string())?))
             .execute(&mut conn)
             .await?;
+        
+        if rows == 0 {
+            log_warn!(crate::MAIN_LOGGER, "Job {} progress update affected 0 rows", job_id);
+        }
         
         Ok(())
     }
     
     /// Update generation progress for genetic optimization
     async fn update_generation(&self, job_id: &str, current_generation: i32, total_generations: i32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        log_debug!(crate::MAIN_LOGGER, "Job {} updating generation {}/{}", job_id, current_generation, total_generations);
+        
         let mut conn = self.get_conn_with_timeout().await?;
         
         diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(job_id)))
@@ -647,6 +655,8 @@ impl JobQueue for PostgresQueue {
     
     /// Update current phase of job execution
     async fn update_phase(&self, job_id: &str, phase: &str, phase_details: serde_json::Value) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        log_debug!(crate::MAIN_LOGGER, "Job {} updating phase to '{}'", job_id, phase);
+        
         let phase_details_str = serde_json::to_string(&phase_details)?;
         let mut conn = self.get_conn_with_timeout().await?;
         

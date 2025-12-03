@@ -10,6 +10,7 @@ use tokio::time::interval;
 
 use super::handlers::ApiState;
 use crate::job_queue::JobStatus;
+use crate::{log_info, log_debug, MAIN_LOGGER};
 
 /// WebSocket handler for backtest progress
 pub async fn ws_handler(
@@ -24,16 +25,27 @@ pub async fn ws_handler(
 async fn handle_socket(socket: WebSocket, state: ApiState, job_id: String) {
     let (mut sender, mut receiver) = socket.split();
     
+    log_info!(MAIN_LOGGER, "WebSocket connection established for job {}", job_id);
+    
     // Spawn a task to send progress updates
+    let job_id_clone = job_id.clone();
     let send_task = tokio::spawn(async move {
         let mut ticker = interval(Duration::from_millis(500)); // Poll every 500ms for smoother updates
+        let mut last_progress: f64 = -1.0;
         
         loop {
             ticker.tick().await;
             
             // Fetch job status
-            match state.job_queue.get_job(&job_id).await {
+            match state.job_queue.get_job(&job_id_clone).await {
                 Ok(Some(job)) => {
+                    // Log when progress changes
+                    if (job.progress - last_progress).abs() >= 0.1 {
+                        log_debug!(MAIN_LOGGER, "WebSocket sending progress update | job={} progress={:.1}% phase={}", 
+                            job.id, job.progress, &job.current_phase);
+                        last_progress = job.progress;
+                    }
+                    
                     let message = serde_json::json!({
                         "job_id": job.id,
                         "status": format!("{:?}", job.status).to_lowercase(),
@@ -50,11 +62,13 @@ async fn handle_socket(socket: WebSocket, state: ApiState, job_id: String) {
                         .await
                         .is_err()
                     {
+                        log_debug!(MAIN_LOGGER, "WebSocket client disconnected for job {}", job.id);
                         break; // Client disconnected
                     }
                     
                     // Stop sending if job is completed or failed
                     if job.status == JobStatus::Completed || job.status == JobStatus::Failed {
+                        log_info!(MAIN_LOGGER, "WebSocket closing for job {} - status: {:?}", job.id, job.status);
                         // Send one final message with result info
                         if job.status == JobStatus::Completed {
                             let final_msg = serde_json::json!({

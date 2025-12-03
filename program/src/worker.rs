@@ -323,6 +323,19 @@ impl Worker {
         // Execute backtest (genetic, walkforward, or manual)
         log_info!(MAIN_LOGGER, "Job {} starting optimization_method={}", job.id, job.params.optimization_method);
         
+        // Set initial progress so UI shows job is running
+        log_info!(MAIN_LOGGER, "Job {} setting initial progress to 0%", job.id);
+        if let Err(e) = self.job_queue.update_progress(&job.id, 0.0).await {
+            log_error!(MAIN_LOGGER, "Job {} failed to set initial progress: {}", job.id, e);
+        }
+        if let Err(e) = self.job_queue.update_phase(&job.id, "initializing", serde_json::json!({
+            "optimization_method": job.params.optimization_method,
+            "symbol": job.params.symbol,
+            "exchange": job.params.exchange,
+        })).await {
+            log_error!(MAIN_LOGGER, "Job {} failed to set initial phase: {}", job.id, e);
+        }
+        
         let result = match job.params.optimization_method.as_str() {
             "genetic" => {
                 log_info!(GENETIC_LOGGER, "Job {} starting genetic optimization | pop_size={} generations={}", 
@@ -415,19 +428,26 @@ impl Worker {
     ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
         let params = &job.params;
         log_debug!(BACKTEST_LOGGER, "Job {} loading market data for {} on {}", job.id, params.symbol, params.exchange);
-                // log_info!(...)
+        
+        // Update phase: loading data
+        let _ = self.job_queue.update_phase(&job.id, "loading_data", serde_json::json!({
+            "symbol": params.symbol,
+            "exchange": params.exchange,
+        })).await;
+        let _ = self.job_queue.update_progress(&job.id, 5.0).await;
         
         // Load market data intelligently based on strategy type
         let data = self.load_market_data_for_strategy(&params.symbol, &params.exchange, &params.strategy_type).await?;
         
         if data.is_empty() {
-            // log_error!(...)
             return Err("No market data available".into());
         }
         
-        // log_info!(...)
-        
-        // log_info!(...)
+        // Update phase: preparing backtest
+        let _ = self.job_queue.update_phase(&job.id, "preparing", serde_json::json!({
+            "data_points": data.len(),
+        })).await;
+        let _ = self.job_queue.update_progress(&job.id, 15.0).await;
         
         // Create configuration
         let mut backtest_config = BacktestConfig::default();
@@ -485,9 +505,14 @@ impl Worker {
                 format!("Failed to register strategy: {}", e)
             })?;
         
-        // log_info!(...)
+        // Update phase: running backtest
+        let _ = self.job_queue.update_phase(&job.id, "running_backtest", serde_json::json!({
+            "strategy": "AvellanedaStoikov",
+            "data_points": data.len(),
+        })).await;
+        let _ = self.job_queue.update_progress(&job.id, 25.0).await;
         
-        // Run backtest (progress tracked manually after completion)
+        // Run backtest
         let start_time = std::time::Instant::now();
         
         let result = engine
@@ -500,7 +525,13 @@ impl Worker {
             )
             .await?;
         
-        let _execution_time = start_time.elapsed();
+        let execution_time = start_time.elapsed();
+        
+        // Update phase: processing results
+        let _ = self.job_queue.update_phase(&job.id, "processing_results", serde_json::json!({
+            "execution_time_ms": execution_time.as_millis(),
+        })).await;
+        let _ = self.job_queue.update_progress(&job.id, 90.0).await;
         
         // Convert to API result format
         let total_pnl = result.core.total_pnl.to_string().parse::<f64>()
@@ -522,6 +553,14 @@ impl Worker {
         
         log_info!(BACKTEST_LOGGER, "Job {} backtest complete | pnl={:.2} sharpe={:.3} trades={}", 
             job.id, backtest_result.total_pnl, backtest_result.sharpe_ratio, backtest_result.total_trades);
+        
+        // Final progress update
+        let _ = self.job_queue.update_progress(&job.id, 100.0).await;
+        let _ = self.job_queue.update_phase(&job.id, "completed", serde_json::json!({
+            "total_pnl": backtest_result.total_pnl,
+            "sharpe_ratio": backtest_result.sharpe_ratio,
+            "total_trades": backtest_result.total_trades,
+        })).await;
         
         Ok(backtest_result)
     }
