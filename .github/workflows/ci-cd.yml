@@ -157,12 +157,25 @@ jobs:
           }
           cargo audit
 
+      - name: Check GUI Folder Exists
+        id: gui-check
+        shell: powershell
+        run: |
+          if (Test-Path "BacktestingEngine/gui/package.json") {
+            echo "exists=true" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "⚠️ GUI folder not found - skipping UI steps"
+            echo "exists=false" >> $env:GITHUB_OUTPUT
+          }
+
       - name: Install Node.js
+        if: steps.gui-check.outputs.exists == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '18'
 
       - name: Install UI Dependencies
+        if: steps.gui-check.outputs.exists == 'true'
         shell: powershell
         run: |
           cd BacktestingEngine/gui
@@ -170,6 +183,7 @@ jobs:
           Write-Host "✅ UI dependencies installed!"
 
       - name: Run UI Tests
+        if: steps.gui-check.outputs.exists == 'true'
         shell: powershell
         run: |
           cd BacktestingEngine/gui
@@ -182,6 +196,7 @@ jobs:
           }
 
       - name: Build UI
+        if: steps.gui-check.outputs.exists == 'true'
         shell: powershell
         run: |
           cd BacktestingEngine/gui
