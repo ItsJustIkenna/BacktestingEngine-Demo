@@ -595,7 +595,19 @@ impl Worker {
         
         // Load market data once and share it
         log_info!(GENETIC_LOGGER, "Job {} loading market data for {} on {}", job.id, params.symbol, params.exchange);
-        let data = self.load_market_data_for_strategy(&params.symbol, &params.exchange, &params.strategy_type).await?;
+        log_info!(GENETIC_LOGGER, "Job {} BEFORE calling load_market_data_for_strategy", job.id);
+        
+        let data = match self.load_market_data_for_strategy(&params.symbol, &params.exchange, &params.strategy_type).await {
+            Ok(d) => {
+                log_info!(GENETIC_LOGGER, "Job {} load_market_data_for_strategy returned {} records", job.id, d.len());
+                d
+            }
+            Err(e) => {
+                log_error!(GENETIC_LOGGER, "Job {} load_market_data_for_strategy FAILED: {}", job.id, e);
+                return Err(e);
+            }
+        };
+        
         if data.is_empty() {
             log_error!(GENETIC_LOGGER, "Job {} no market data available", job.id);
             return Err("No market data available".into());
@@ -1416,7 +1428,7 @@ impl Worker {
         exchange: &str,
         strategy_type: &str,
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
-        log_info!(MAIN_LOGGER, "Loading market data for strategy_type='{}' symbol={} exchange={}", 
+        log_info!(MAIN_LOGGER, "ENTER load_market_data_for_strategy | strategy_type='{}' symbol={} exchange={}", 
             strategy_type, symbol, exchange);
         
         match strategy_type {
