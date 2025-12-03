@@ -561,7 +561,12 @@ impl JobQueue for PostgresQueue {
                         .execute(conn)
                         .await?;
                     
-                    Ok(Some(Self::record_to_job(job_record)?))
+                    // Create updated record with started_at set
+                    let mut updated_record = job_record;
+                    updated_record.status = "running".to_string();
+                    updated_record.started_at = Some(now);
+                    
+                    Ok(Some(Self::record_to_job(updated_record)?))
                 } else {
                     // crate::log_info!(...)
                     Ok(None)
@@ -620,7 +625,7 @@ impl JobQueue for PostgresQueue {
         use bigdecimal::BigDecimal;
         use std::str::FromStr;
         
-        log_debug!(crate::MAIN_LOGGER, "Job {} updating progress to {:.1}%", job_id, progress);
+        log_info!(crate::MAIN_LOGGER, "Job {} progress: {:.1}%", job_id, progress);
         
         let mut conn = self.get_conn_with_timeout().await?;
         
@@ -638,7 +643,7 @@ impl JobQueue for PostgresQueue {
     
     /// Update generation progress for genetic optimization
     async fn update_generation(&self, job_id: &str, current_generation: i32, total_generations: i32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        log_debug!(crate::MAIN_LOGGER, "Job {} updating generation {}/{}", job_id, current_generation, total_generations);
+        log_info!(crate::MAIN_LOGGER, "Job {} generation {}/{}", job_id, current_generation, total_generations);
         
         let mut conn = self.get_conn_with_timeout().await?;
         
@@ -655,7 +660,7 @@ impl JobQueue for PostgresQueue {
     
     /// Update current phase of job execution
     async fn update_phase(&self, job_id: &str, phase: &str, phase_details: serde_json::Value) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        log_debug!(crate::MAIN_LOGGER, "Job {} updating phase to '{}'", job_id, phase);
+        log_info!(crate::MAIN_LOGGER, "Job {} phase: '{}'", job_id, phase);
         
         let phase_details_str = serde_json::to_string(&phase_details)?;
         let mut conn = self.get_conn_with_timeout().await?;

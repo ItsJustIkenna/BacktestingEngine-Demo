@@ -54,20 +54,79 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
   const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true); // Start with loading true for initial load
   const [error, setError] = useState<string | null>(null);
   const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState<number | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [displayProgress, setDisplayProgress] = useState<number>(0);
+  const [copied, setCopied] = useState(false);
+  const [actionLoading, setActionLoading] = useState<'cancel' | 'delete' | null>(null);
+  const isFirstLoad = React.useRef(true);
+
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
+  const cancelJob = async () => {
+    if (!window.confirm('Are you sure you want to cancel this job? This action cannot be undone.')) {
+      return;
+    }
+    setActionLoading('cancel');
+    try {
+      const response = await fetch(`/api/backtest/${jobId}/cancel`, { method: 'POST' });
+      if (response.ok) {
+        alert('Job cancelled successfully');
+        if (onBack) onBack();
+      } else {
+        const data = await response.json();
+        alert(`Failed to cancel job: ${data.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      alert(`Failed to cancel job: ${err}`);
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const deleteJob = async () => {
+    if (!window.confirm('Are you sure you want to delete this job? All results will be permanently removed.')) {
+      return;
+    }
+    setActionLoading('delete');
+    try {
+      const response = await fetch(`/api/backtest/${jobId}`, { method: 'DELETE' });
+      if (response.ok) {
+        alert('Job deleted successfully');
+        if (onBack) onBack();
+      } else {
+        const data = await response.json();
+        alert(`Failed to delete job: ${data.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      alert(`Failed to delete job: ${err}`);
+    } finally {
+      setActionLoading(null);
+    }
+  };
 
   const fetchData = useCallback(async () => {
-    setLoading(true);
+    // Only show loading spinner on first load to avoid page flicker
+    if (isFirstLoad.current) {
+      setLoading(true);
+    }
     setError(null);
 
     try {
       // First fetch job status
       const statusResponse = await fetch(`/api/backtest/${jobId}/status`);
       const statusData = await statusResponse.json();
+      console.log(`[FetchData] Job ${jobId} status: ${statusData.status}, progress: ${statusData.progress}%`);
       setJobStatus(statusData);
 
       // Calculate estimated time remaining for running jobs
@@ -82,6 +141,9 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
       } else {
         setEstimatedTimeRemaining(null);
       }
+
+      // Mark first load as complete to stop showing loading spinner on subsequent polls
+      isFirstLoad.current = false;
 
       // If completed, fetch results
       if (statusData.status === 'completed') {
@@ -145,6 +207,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
   // Smooth progress interpolation between API updates
   useEffect(() => {
     if (jobStatus && jobStatus.status === 'running' && jobStatus.started_at) {
+      console.log(`[Progress Update] API progress: ${jobStatus.progress}%, setting displayProgress`);
       setDisplayProgress(jobStatus.progress);
       
       // Gradually increment progress between updates
@@ -235,8 +298,23 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
       <div style={{ padding: '20px', maxWidth: '1000px', margin: '0 auto' }}>
         <div style={{ marginBottom: '20px' }}>
           <h2 style={{ margin: '0 0 10px 0' }}>Backtest In Progress</h2>
-          <div style={{ fontSize: '14px', color: '#666' }}>
+          <div style={{ fontSize: '14px', color: '#666', display: 'flex', alignItems: 'center', gap: '8px' }}>
             Job ID: <code>{jobId}</code>
+            <button
+              onClick={() => copyToClipboard(jobId)}
+              style={{
+                padding: '2px 8px',
+                fontSize: '12px',
+                backgroundColor: copied ? '#28a745' : '#6c757d',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+              title="Copy Job ID to clipboard"
+            >
+              {copied ? '✓ Copied' : '📋 Copy'}
+            </button>
           </div>
         </div>
 
@@ -387,26 +465,60 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
               <div><strong>Started:</strong> {new Date(jobStatus.started_at).toLocaleString()}</div>
             )}
             <div style={{ marginTop: '10px', fontStyle: 'italic' }}>
-              🔄 Page will auto-refresh every 3 seconds until complete...
+              🔄 Progress updates every 3 seconds...
             </div>
           </div>
         </div>
 
-        {onBack && (
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+          {onBack && (
+            <button
+              onClick={onBack}
+              style={{
+                padding: '10px 20px',
+                backgroundColor: '#6c757d',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              ← Back to Job List
+            </button>
+          )}
+          {jobStatus && (jobStatus.status === 'running' || jobStatus.status === 'queued') && (
+            <button
+              onClick={cancelJob}
+              disabled={actionLoading !== null}
+              style={{
+                padding: '10px 20px',
+                backgroundColor: '#ffc107',
+                color: '#000',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: actionLoading ? 'not-allowed' : 'pointer',
+                opacity: actionLoading ? 0.6 : 1,
+              }}
+            >
+              {actionLoading === 'cancel' ? '⏳ Cancelling...' : '⚠️ Cancel Job'}
+            </button>
+          )}
           <button
-            onClick={onBack}
+            onClick={deleteJob}
+            disabled={actionLoading !== null}
             style={{
               padding: '10px 20px',
-              backgroundColor: '#6c757d',
+              backgroundColor: '#dc3545',
               color: 'white',
               border: 'none',
               borderRadius: '4px',
-              cursor: 'pointer',
+              cursor: actionLoading ? 'not-allowed' : 'pointer',
+              opacity: actionLoading ? 0.6 : 1,
             }}
           >
-            ← Back to Job List
+            {actionLoading === 'delete' ? '⏳ Deleting...' : '🗑️ Delete Job'}
           </button>
-        )}
+        </div>
       </div>
     );
   }
@@ -426,28 +538,62 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         </div>
         {jobStatus && (
           <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
-            <div><strong>Job ID:</strong> {jobStatus.job_id}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <strong>Job ID:</strong> {jobStatus.job_id}
+              <button
+                onClick={() => copyToClipboard(jobStatus.job_id)}
+                style={{
+                  padding: '2px 8px',
+                  fontSize: '12px',
+                  backgroundColor: copied ? '#28a745' : '#6c757d',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                }}
+                title="Copy Job ID to clipboard"
+              >
+                {copied ? '✓ Copied' : '📋 Copy'}
+              </button>
+            </div>
             <div><strong>Status:</strong> {jobStatus.status}</div>
             {jobStatus.error_message && (
               <div><strong>Error Details:</strong> {jobStatus.error_message}</div>
             )}
           </div>
         )}
-        {onBack && (
+        <div style={{ display: 'flex', gap: '10px' }}>
+          {onBack && (
+            <button
+              onClick={onBack}
+              style={{
+                padding: '8px 16px',
+                backgroundColor: '#007bff',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+            >
+              ← Back to Job List
+            </button>
+          )}
           <button
-            onClick={onBack}
+            onClick={deleteJob}
+            disabled={actionLoading !== null}
             style={{
               padding: '8px 16px',
-              backgroundColor: '#007bff',
+              backgroundColor: '#dc3545',
               color: 'white',
               border: 'none',
               borderRadius: '4px',
-              cursor: 'pointer',
+              cursor: actionLoading ? 'not-allowed' : 'pointer',
+              opacity: actionLoading ? 0.6 : 1,
             }}
           >
-            ← Back to Job List
+            {actionLoading === 'delete' ? '⏳ Deleting...' : '🗑️ Delete Job'}
           </button>
-        )}
+        </div>
       </div>
     );
   }
@@ -467,8 +613,24 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
       }}>
         <div>
           <h2>Backtest Results</h2>
-          <div style={{ color: '#666', fontSize: '14px' }}>
-            Job ID: <code>{result.job_id}</code> | {result.symbol} on {result.exchange}
+          <div style={{ color: '#666', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            Job ID: <code>{result.job_id}</code>
+            <button
+              onClick={() => copyToClipboard(result.job_id)}
+              style={{
+                padding: '2px 8px',
+                fontSize: '12px',
+                backgroundColor: copied ? '#28a745' : '#6c757d',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+              }}
+              title="Copy Job ID to clipboard"
+            >
+              {copied ? '✓ Copied' : '📋 Copy'}
+            </button>
+            <span>| {result.symbol} on {result.exchange}</span>
           </div>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
@@ -513,6 +675,21 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
               Back
             </button>
           )}
+          <button
+            onClick={deleteJob}
+            disabled={actionLoading !== null}
+            style={{
+              padding: '8px 16px',
+              backgroundColor: '#dc3545',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: actionLoading ? 'not-allowed' : 'pointer',
+              opacity: actionLoading ? 0.6 : 1,
+            }}
+          >
+            {actionLoading === 'delete' ? '⏳ Deleting...' : '🗑️ Delete'}
+          </button>
         </div>
       </div>
 
