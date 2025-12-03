@@ -302,11 +302,12 @@ jobs:
           $shortSha = "${{ github.sha }}".Substring(0, 7)
           Write-Host "[INFO] Building with immutable tag: $shortSha"
           
+          # Use --no-cache to ensure dependencies (LoggingEngine, databaseschema) are freshly copied
           docker build `
             --platform linux/amd64 `
             --tag ${{ env.IMAGE_NAME }}:$shortSha `
             --file BacktestingEngine/deployment/Dockerfile `
-            --build-arg BUILDKIT_INLINE_CACHE=1 `
+            --no-cache `
             --progress=plain `
             .
             
