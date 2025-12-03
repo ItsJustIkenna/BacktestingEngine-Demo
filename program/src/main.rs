@@ -1,12 +1,10 @@
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
 
-mod api;
-mod job_queue;
-mod streaming;
-mod worker;
-
-use job_queue::{JobQueue, PostgresQueue};
+// Use the library's modules (they have access to macros properly)
+use program::job_queue::{JobQueue, PostgresQueue};
+use program::worker;
+use program::api;
 
 #[derive(Parser)]
 #[command(name = "backtesting-engine")]

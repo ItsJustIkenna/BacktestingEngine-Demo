@@ -37,6 +37,14 @@ pub struct BacktestJobParams {
     #[serde(default = "default_generations")]
     pub generations: usize,
     
+    // Walk-forward analysis parameters (used when optimization_method == "walkforward")
+    #[serde(default)]
+    pub walkforward_optimization_days: Option<i64>, // Length of optimization window in days (default: 180)
+    #[serde(default)]
+    pub walkforward_test_days: Option<i64>, // Length of test window in days (default: 30)
+    #[serde(default)]
+    pub walkforward_step_days: Option<i64>, // Step size between windows in days (default: 30)
+    
     // Manual strategy parameters (used when optimization_method == "manual")
     #[serde(default = "default_risk_aversion")]
     pub risk_aversion: f64,

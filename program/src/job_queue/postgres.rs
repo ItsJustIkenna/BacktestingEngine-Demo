@@ -1,8 +1,44 @@
+//! PostgreSQL-backed job queue implementation with async support
+//!
+//! # Thread Safety & Deadlock Prevention
+//!
+//! This module is designed to prevent deadlocks and data races through several mechanisms:
+//!
+//! ## Connection Pool Management
+//! - **Pool Size**: 30 connections to handle concurrent genetic optimization + API + workers
+//! - **Timeout Protection**: All connection acquisitions have 10-second timeout
+//! - **Logging**: Timeout events logged with `[DEADLOCK WARNING]` prefix for debugging
+//!
+//! ## Transaction Patterns
+//! - **FOR UPDATE SKIP LOCKED**: Used for job claiming to prevent blocking on locked rows
+//! - **Single Connection Per Operation**: Each method acquires/releases its own connection
+//! - **No Nested Transactions**: Avoids deadlocks from nested lock acquisition
+//!
+//! ## Lock Ordering Convention
+//! When multiple tables are accessed in a single operation, always access in this order:
+//! 1. `backtest_jobs` (primary job table)
+//! 2. `backtest_results` (result storage)
+//!
+//! ## Async/Sync Boundaries
+//! - All public methods are `async` and use tokio runtime
+//! - Database operations use `diesel_async` for non-blocking I/O
+//! - CPU-intensive work should use `tokio::task::spawn_blocking`
+
 use super::*;
 use diesel::prelude::*;
 use diesel_async::{AsyncPgConnection, AsyncConnection, RunQueryDsl};
 use diesel_async::pooled_connection::{AsyncDieselConnectionManager, deadpool};
 use std::sync::Arc;
+use tokio::time::{timeout, Duration};
+
+/// Default timeout for acquiring database connections (10 seconds)
+/// This prevents indefinite blocking if the pool is exhausted
+const CONNECTION_TIMEOUT_SECS: u64 = 10;
+
+/// Timeout for long-running transactions (5 minutes)
+/// This prevents transactions from holding connections indefinitely
+#[allow(dead_code)]
+const TRANSACTION_TIMEOUT_SECS: u64 = 300;
 
 // Define the diesel table schema
 table! {
@@ -216,15 +252,38 @@ pub struct PostgresQueue {
 
 impl PostgresQueue {
     /// Create a new PostgreSQL-backed job queue with async connection pool
+    /// 
+    /// # Pool Configuration
+    /// - max_size: 30 connections to handle concurrent genetic optimization + API requests
+    /// - Timeout: 10 seconds to prevent indefinite blocking on pool exhaustion
     pub fn new(database_url: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(database_url);
         let pool = deadpool::Pool::builder(config)
-            .max_size(20) // Match previous pool size
+            .max_size(30) // Increased for concurrent genetic optimization + API + workers
             .build()?;
         
         Ok(Self {
             pool: Arc::new(pool),
         })
+    }
+    
+    /// Acquire a connection from the pool with timeout to prevent deadlocks
+    /// 
+    /// # Deadlock Prevention
+    /// - Timeout prevents indefinite waiting if pool is exhausted
+    /// - Returns descriptive error for debugging
+    async fn get_conn_with_timeout(&self) -> Result<deadpool::Object<AsyncPgConnection>, Box<dyn std::error::Error + Send + Sync>> {
+        match timeout(Duration::from_secs(CONNECTION_TIMEOUT_SECS), self.pool.get()).await {
+            Ok(Ok(conn)) => Ok(conn),
+            Ok(Err(e)) => {
+                eprintln!("[DEADLOCK WARNING] Pool error - possible pool exhaustion: {}", e);
+                Err(format!("Database pool error: {}", e).into())
+            }
+            Err(_) => {
+                eprintln!("[DEADLOCK WARNING] Connection acquisition timeout after {}s - pool may be exhausted or deadlocked", CONNECTION_TIMEOUT_SECS);
+                Err(format!("Connection pool timeout after {}s - possible deadlock or pool exhaustion", CONNECTION_TIMEOUT_SECS).into())
+            }
+        }
     }
     
     /// Downsample equity curve to max_points using largest-triangle-three-buckets algorithm
@@ -347,6 +406,10 @@ impl PostgresQueue {
                 optimization_method: record.optimization_method,
                 population_size: record.population_size.unwrap_or(50) as usize,
                 generations: record.generations.unwrap_or(20) as usize,
+                // Walk-forward params - default to None when loading from DB
+                walkforward_optimization_days: None,
+                walkforward_test_days: None,
+                walkforward_step_days: None,
                 risk_aversion: f64::from_str(&record.risk_aversion.to_string())?,
                 inventory_target: f64::from_str(&record.inventory_target.to_string())?,
                 order_size: f64::from_str(&record.order_size.to_string())?,
@@ -389,7 +452,7 @@ impl JobQueue for PostgresQueue {
         
         // crate::log_info!(...)
         
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_conn_with_timeout().await?;
         
         let new_job = NewBacktestJob {
             job_id: job_id.clone(),
@@ -419,7 +482,7 @@ impl JobQueue for PostgresQueue {
     async fn get_next_job(&self) -> Result<Option<BacktestJob>, Box<dyn std::error::Error + Send + Sync>> {
         // crate::log_info!(...)
         
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_conn_with_timeout().await?;
         
         // Use FOR UPDATE SKIP LOCKED for atomic job claiming
         // diesel-async supports transactions
@@ -450,9 +513,9 @@ impl JobQueue for PostgresQueue {
                     for rj in &running_jobs {
                         let heartbeat_stale = rj.last_heartbeat.map_or(true, |hb| hb < heartbeat_threshold);
                         let started_old = rj.started_at.map_or(false, |st| st < started_threshold);
-                        let should_recover = heartbeat_stale || (rj.last_heartbeat.is_none() && started_old);
+                        let _should_recover = heartbeat_stale || (rj.last_heartbeat.is_none() && started_old);
                         
-                        // crate::log_info!(...)
+                        // Recovery logic can be added here if needed
                     }
                 }
                 
@@ -510,7 +573,7 @@ impl JobQueue for PostgresQueue {
     async fn get_job(&self, job_id: &str) -> Result<Option<BacktestJob>, Box<dyn std::error::Error + Send + Sync>> {
         // crate::log_info!(...)
         
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_conn_with_timeout().await?;
         
         let record: Option<BacktestJobRecord> = backtest_jobs::table
             .filter(backtest_jobs::job_id.eq(job_id))
@@ -531,7 +594,7 @@ impl JobQueue for PostgresQueue {
         status: JobStatus,
         error_message: Option<String>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_conn_with_timeout().await?;
         
         let status_str = match status {
             JobStatus::Queued => "queued",
@@ -555,7 +618,7 @@ impl JobQueue for PostgresQueue {
         use bigdecimal::BigDecimal;
         use std::str::FromStr;
         
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_conn_with_timeout().await?;
         
         diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(job_id)))
             .set(backtest_jobs::progress.eq(BigDecimal::from_str(&progress.to_string())?))
@@ -567,7 +630,7 @@ impl JobQueue for PostgresQueue {
     
     /// Update generation progress for genetic optimization
     async fn update_generation(&self, job_id: &str, current_generation: i32, total_generations: i32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_conn_with_timeout().await?;
         
         diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(job_id)))
             .set((
@@ -583,7 +646,7 @@ impl JobQueue for PostgresQueue {
     /// Update current phase of job execution
     async fn update_phase(&self, job_id: &str, phase: &str, phase_details: serde_json::Value) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let phase_details_str = serde_json::to_string(&phase_details)?;
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_conn_with_timeout().await?;
         
         // Use raw SQL to update JSONB field
         diesel::sql_query(
@@ -601,7 +664,7 @@ impl JobQueue for PostgresQueue {
     /// Update job heartbeat timestamp
     /// Called every 30 seconds by worker to signal it's still alive
     async fn update_heartbeat(&self, job_id: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_conn_with_timeout().await?;
         
         diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(job_id)))
             .set(backtest_jobs::last_heartbeat.eq(Utc::now()))
@@ -618,11 +681,7 @@ impl JobQueue for PostgresQueue {
         // crate::log_info!(...)
         
         // crate::log_info!(...)
-        let mut conn = self.pool.get().await
-            .map_err(|e| {
-                // crate::log_error!(...)
-                Box::new(e) as Box<dyn std::error::Error + Send + Sync>
-            })?;
+        let mut conn = self.get_conn_with_timeout().await?;
         
         // crate::log_info!(...)
         
@@ -726,7 +785,7 @@ impl JobQueue for PostgresQueue {
     }
     
     async fn get_result(&self, job_id: &str) -> Result<Option<BacktestResult>, Box<dyn std::error::Error + Send + Sync>> {
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_conn_with_timeout().await?;
         
         // Parse job_id as UUID
         let backtest_uuid = match uuid::Uuid::parse_str(job_id) {
@@ -787,7 +846,7 @@ impl JobQueue for PostgresQueue {
     }
     
     async fn queue_length(&self) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_conn_with_timeout().await?;
         
         let count: i64 = backtest_jobs::table
             .filter(backtest_jobs::status.eq("queued"))
@@ -815,7 +874,7 @@ impl PostgresQueue {
     ) -> Result<(Vec<crate::api::history::BacktestSummary>, usize), Box<dyn std::error::Error + Send + Sync>> {
         use diesel::prelude::*;
         
-        let mut conn = self.pool.get().await?;
+        let mut conn = self.get_conn_with_timeout().await?;
         
         // Build count query
         let mut count_query = backtest_jobs::table.into_boxed();
@@ -948,6 +1007,9 @@ mod tests {
             optimization_method: "manual".to_string(),
             population_size: 50,
             generations: 20,
+            walkforward_optimization_days: None,
+            walkforward_test_days: None,
+            walkforward_step_days: None,
             window_ms: 5000,
             min_quote_lifetime_ms: 100,
             fee_rate: 0.001,

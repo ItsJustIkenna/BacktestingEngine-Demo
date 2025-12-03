@@ -86,10 +86,9 @@ pub async fn submit_backtest(
             Ok((start, end)) => {
                 params.start_date = Some(start.clone());
                 params.end_date = Some(end.clone());
-                // log_info!(...)
             },
-            Err(e) => {
-                // log_warn!(...)
+            Err(_e) => {
+                // Date range lookup failed - will use defaults
             }
         }
     }
@@ -349,9 +348,8 @@ impl IntoResponse for AppError {
 /// POST /api/backtest/:id/cancel
 pub async fn cancel_backtest(
     State(_state): State<ApiState>,
-    Path(job_id_str): Path<String>,
+    Path(_job_id_str): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // log_info!(...)
     
     #[cfg(feature = "postgres")]
     {
@@ -422,9 +420,8 @@ pub async fn cancel_backtest(
 /// DELETE /api/backtest/:id
 pub async fn delete_backtest(
     State(_state): State<ApiState>,
-    Path(job_id_str): Path<String>,
+    Path(_job_id_str): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // log_info!(...)
     
     #[cfg(feature = "postgres")]
     {

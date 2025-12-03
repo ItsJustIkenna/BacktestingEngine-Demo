@@ -92,7 +92,12 @@ impl OrderBookStreamIterator {
             status: String,
         }
 
-        let mut conn = self.pool.get().await
+        // Use timeout to prevent indefinite blocking on pool exhaustion
+        let mut conn = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.pool.get()
+        ).await
+            .map_err(|_| "Connection pool timeout - possible deadlock or pool exhaustion")?
             .map_err(|e| format!("Failed to get database connection: {}", e))?;
 
         // Query order book events with LIMIT/OFFSET for chunking
