@@ -298,16 +298,24 @@ jobs:
           "@
           Set-Content -Path ".dockerignore" -Value $dockerignoreContent
           
+          # Get dependency commit SHAs for cache busting
+          $loggingSha = (git -C LoggingEngine rev-parse --short HEAD)
+          $dbSchemaSha = (git -C databaseschema rev-parse --short HEAD)
+          Write-Host "[INFO] Dependency versions: LoggingEngine=$loggingSha, databaseschema=$dbSchemaSha"
+          
           Write-Host "[BUILD] Starting build..."
           $shortSha = "${{ github.sha }}".Substring(0, 7)
           Write-Host "[INFO] Building with immutable tag: $shortSha"
           
-          # Use --no-cache to ensure dependencies (LoggingEngine, databaseschema) are freshly copied
+          # Use build-args to bust cache when dependencies change
+          # Docker will rebuild COPY layers when these args change
           docker build `
             --platform linux/amd64 `
             --tag ${{ env.IMAGE_NAME }}:$shortSha `
             --file BacktestingEngine/deployment/Dockerfile `
-            --no-cache `
+            --build-arg LOGGING_ENGINE_SHA=$loggingSha `
+            --build-arg DATABASE_SCHEMA_SHA=$dbSchemaSha `
+            --build-arg BUILDKIT_INLINE_CACHE=1 `
             --progress=plain `
             .
             

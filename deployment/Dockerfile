@@ -7,10 +7,18 @@
 ARG RUST_VERSION=1.82.0
 ARG APP_NAME=program
 
+# Cache-busting args: when these change, Docker invalidates the cache for subsequent layers
+ARG LOGGING_ENGINE_SHA=latest
+ARG DATABASE_SCHEMA_SHA=latest
+
 ################################################################################
 # Stage 1: Build the Rust backend
 FROM rust:${RUST_VERSION}-slim-bookworm AS backend-build
 ARG APP_NAME
+
+# Re-declare cache-busting args in this stage (ARGs don't persist across FROM)
+ARG LOGGING_ENGINE_SHA
+ARG DATABASE_SCHEMA_SHA
 
 # Install necessary build dependencies
 RUN apt-get update && apt-get install -y \
@@ -28,7 +36,10 @@ ENV RUST_BACKTRACE=0
 # Set up workspace structure
 WORKDIR /app
 
-# Copy dependencies
+# Cache bust: these labels change when dependency SHAs change, invalidating COPY cache
+LABEL logging_engine_sha="${LOGGING_ENGINE_SHA}" database_schema_sha="${DATABASE_SCHEMA_SHA}"
+
+# Copy dependencies (cache invalidated when SHAs change via LABEL above)
 COPY databaseschema/ ./databaseschema/
 COPY LoggingEngine/ ./LoggingEngine/
 
