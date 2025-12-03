@@ -10,8 +10,8 @@ use serde::Serialize;
 use std::sync::Arc;
 
 use crate::job_queue::{BacktestJobParams, BacktestResult, JobQueue, JobStatus};
-use crate::{log_info, log_error, log_warn};
-use crate::logging_facade::MAIN_LOGGER;
+// use crate::{log_info, log_error, log_warn};
+// use crate::logging_facade::MAIN_LOGGER;
 
 /// API state shared across handlers
 #[derive(Clone)]
@@ -70,15 +70,14 @@ pub async fn submit_backtest(
     State(state): State<ApiState>,
     Json(mut params): Json<BacktestJobParams>,
 ) -> Result<Json<JobSubmitResponse>, AppError> {
-    log_info!(MAIN_LOGGER, "📥 Received backtest request: symbol={}, exchange={}, capital=${:.2}, method={}", 
-        params.symbol, params.exchange, params.initial_capital, params.optimization_method);
+    // log_info!(...)
     
     // Auto-populate commission rate if not provided
     if params.commission_rate == 0.0 || params.fee_rate == 0.0 {
         let commission = get_exchange_commission_rate(&params.exchange);
         params.commission_rate = commission;
         params.fee_rate = commission;
-        log_info!(MAIN_LOGGER, "📊 Auto-populated commission rate for {}: {:.4}%", params.exchange, commission * 100.0);
+        // log_info!(...)
     }
     
     // Auto-populate date range if not provided
@@ -87,10 +86,10 @@ pub async fn submit_backtest(
             Ok((start, end)) => {
                 params.start_date = Some(start.clone());
                 params.end_date = Some(end.clone());
-                log_info!(MAIN_LOGGER, "📅 Auto-populated date range: {} to {}", start, end);
+                // log_info!(...)
             },
             Err(e) => {
-                log_warn!(MAIN_LOGGER, "⚠️ Could not auto-populate date range: {}", e);
+                // log_warn!(...)
             }
         }
     }
@@ -100,11 +99,11 @@ pub async fn submit_backtest(
         .submit_job(params)
         .await
         .map_err(|e| {
-            log_error!(MAIN_LOGGER, "❌ Failed to submit job: {}", e);
+            // log_error!(...)
             AppError::Internal(format!("Failed to submit job: {}", e))
         })?;
     
-    log_info!(MAIN_LOGGER, "✅ Job submitted successfully: job_id={}", job_id);
+    // log_info!(...)
     
     Ok(Json(JobSubmitResponse {
         job_id: job_id.clone(),
@@ -119,23 +118,22 @@ pub async fn get_job_status(
     State(state): State<ApiState>,
     Path(job_id): Path<String>,
 ) -> Result<Json<JobStatusResponse>, AppError> {
-    log_info!(MAIN_LOGGER, "🔍 Status check for job: {}", job_id);
+    // log_info!(...)
     
     let job = state
         .job_queue
         .get_job(&job_id)
         .await
         .map_err(|e| {
-            log_error!(MAIN_LOGGER, "❌ Failed to fetch job {}: {}", job_id, e);
+            // log_error!(...)
             AppError::Internal(format!("Failed to fetch job: {}", e))
         })?
         .ok_or_else(|| {
-            log_warn!(MAIN_LOGGER, "⚠️ Job {} not found", job_id);
+            // log_warn!(...)
             AppError::NotFound(format!("Job {} not found", job_id))
         })?;
     
-    log_info!(MAIN_LOGGER, "✅ Status retrieved for job {}: status={:?}, progress={:.1}%", 
-        job_id, job.status, job.progress);
+    // log_info!(...)
     
     Ok(Json(JobStatusResponse {
         job_id: job.id,
@@ -158,22 +156,22 @@ pub async fn get_job_details(
     State(state): State<ApiState>,
     Path(job_id): Path<String>,
 ) -> Result<Json<JobDetailsResponse>, AppError> {
-    log_info!(MAIN_LOGGER, "🔍 Details requested for job: {}", job_id);
+    // log_info!(...)
     
     let job = state
         .job_queue
         .get_job(&job_id)
         .await
         .map_err(|e| {
-            log_error!(MAIN_LOGGER, "❌ Failed to fetch job {}: {}", job_id, e);
+            // log_error!(...)
             AppError::Internal(format!("Failed to fetch job: {}", e))
         })?
         .ok_or_else(|| {
-            log_warn!(MAIN_LOGGER, "⚠️ Job {} not found", job_id);
+            // log_warn!(...)
             AppError::NotFound(format!("Job {} not found", job_id))
         })?;
     
-    log_info!(MAIN_LOGGER, "✅ Details retrieved for job {}", job_id);
+    // log_info!(...)
     
     Ok(Json(JobDetailsResponse {
         job_id: job.id,
@@ -195,7 +193,7 @@ pub async fn get_job_results(
     State(state): State<ApiState>,
     Path(job_id): Path<String>,
 ) -> Result<Json<BacktestResult>, AppError> {
-    log_info!(MAIN_LOGGER, "📊 Results requested for job: {}", job_id);
+    // log_info!(...)
     
     // Check if job is completed
     let job = state
@@ -203,11 +201,11 @@ pub async fn get_job_results(
         .get_job(&job_id)
         .await
         .map_err(|e| {
-            log_error!(MAIN_LOGGER, "❌ Failed to fetch job {}: {}", job_id, e);
+            // log_error!(...)
             AppError::Internal(format!("Failed to fetch job: {}", e))
         })?
         .ok_or_else(|| {
-            log_warn!(MAIN_LOGGER, "⚠️ Job {} not found", job_id);
+            // log_warn!(...)
             AppError::NotFound(format!("Job {} not found", job_id))
         })?;
     
@@ -220,21 +218,20 @@ pub async fn get_job_results(
                 .get_result(&job_id)
                 .await
                 .map_err(|e| {
-                    log_error!(MAIN_LOGGER, "❌ Failed to fetch results for job {}: {}", job_id, e);
+                    // log_error!(...)
                     AppError::Internal(format!("Failed to fetch results: {}", e))
                 })?
                 .ok_or_else(|| {
-                    log_warn!(MAIN_LOGGER, "⚠️ Results not found for completed job: {}", job_id);
+                    // log_warn!(...)
                     AppError::NotFound(format!("Results for job {} not found", job_id))
                 })?;
             
-            log_info!(MAIN_LOGGER, "✅ Results retrieved for job {}: sharpe={:.2}, trades={}", 
-                job_id, result.sharpe_ratio, result.total_trades);
+            // log_info!(...)
             
             return Ok(Json(result));
         },
         JobStatus::Running => {
-            log_info!(MAIN_LOGGER, "⏳ Job {} still running: {:.1}% complete", job_id, job.progress);
+            // log_info!(...)
             return Err(AppError::StillRunning { 
                 job_id: job_id.clone(), 
                 progress: job.progress,
@@ -242,14 +239,14 @@ pub async fn get_job_results(
             });
         },
         JobStatus::Failed => {
-            log_warn!(MAIN_LOGGER, "❌ Job {} failed: {:?}", job_id, job.error_message);
+            // log_warn!(...)
             return Err(AppError::JobFailed {
                 job_id: job_id.clone(),
                 error: job.error_message.unwrap_or_else(|| "Unknown error".to_string()),
             });
         },
         JobStatus::Queued => {
-            log_info!(MAIN_LOGGER, "⏸️ Job {} still queued, not started yet", job_id);
+            // log_info!(...)
             return Err(AppError::NotStarted {
                 job_id: job_id.clone(),
                 created_at: job.created_at.to_rfc3339(),
@@ -277,18 +274,18 @@ pub async fn health_check() -> impl IntoResponse {
 /// Queue stats endpoint
 /// GET /api/stats
 pub async fn queue_stats(State(state): State<ApiState>) -> Result<impl IntoResponse, AppError> {
-    log_info!(MAIN_LOGGER, "📈 Queue statistics requested");
+    // log_info!(...)
     
     let queue_length = state
         .job_queue
         .queue_length()
         .await
         .map_err(|e| {
-            log_error!(MAIN_LOGGER, "❌ Failed to get queue length: {}", e);
+            // log_error!(...)
             AppError::Internal(format!("Failed to get queue length: {}", e))
         })?;
     
-    log_info!(MAIN_LOGGER, "✅ Queue stats: {} jobs pending", queue_length);
+    // log_info!(...)
     
     Ok(Json(serde_json::json!({
         "queue_length": queue_length,
@@ -354,7 +351,7 @@ pub async fn cancel_backtest(
     State(_state): State<ApiState>,
     Path(job_id_str): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    log_info!(MAIN_LOGGER, "Request to cancel job: {}", job_id_str);
+    // log_info!(...)
     
     #[cfg(feature = "postgres")]
     {
@@ -381,13 +378,13 @@ pub async fn cancel_backtest(
         
         match job {
             None => {
-                log_warn!(MAIN_LOGGER, "Job {} not found", job_id_str);
+                // log_warn!(...)
                 return Err(AppError::NotFound(format!("Job {} not found", job_id_str)));
             }
             Some((_, job_status)) => {
                 // Only allow cancellation of running or queued jobs
                 if !is_cancellable_status(&job_status) {
-                    log_warn!(MAIN_LOGGER, "Job {} cannot be cancelled (status: {})", job_id_str, job_status);
+                    // log_warn!(...)
                     return Err(AppError::BadRequest(format!(
                         "Job cannot be cancelled. Current status: {}. Only running or queued jobs can be cancelled.",
                         job_status
@@ -406,7 +403,7 @@ pub async fn cancel_backtest(
                     .await
                     .map_err(|e| AppError::Internal(format!("Failed to cancel job: {}", e)))?;
                 
-                log_info!(MAIN_LOGGER, "Job {} cancelled successfully", job_id_str);
+                // log_info!(...)
                 
                 return Ok(Json(serde_json::json!({
                     "message": "Job cancelled successfully",
@@ -427,7 +424,7 @@ pub async fn delete_backtest(
     State(_state): State<ApiState>,
     Path(job_id_str): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    log_info!(MAIN_LOGGER, "Request to delete job: {}", job_id_str);
+    // log_info!(...)
     
     #[cfg(feature = "postgres")]
     {
@@ -456,13 +453,13 @@ pub async fn delete_backtest(
         
         match job {
             None => {
-                log_warn!(MAIN_LOGGER, "Job {} not found", job_id_str);
+                // log_warn!(...)
                 return Err(AppError::NotFound(format!("Job {} not found", job_id_str)));
             }
             Some((_, job_status, job_result_id)) => {
                 // Only allow deletion of completed, failed, or cancelled jobs
                 if !is_deletable_status(&job_status) {
-                    log_warn!(MAIN_LOGGER, "Job {} cannot be deleted (status: {})", job_id_str, job_status);
+                    // log_warn!(...)
                     return Err(AppError::BadRequest(format!(
                         "Job cannot be deleted while {}. Please cancel the job first or wait for it to complete.",
                         job_status
@@ -476,7 +473,7 @@ pub async fn delete_backtest(
                         .await
                         .map_err(|e| AppError::Internal(format!("Failed to delete backtest results: {}", e)))?;
                     
-                    log_info!(MAIN_LOGGER, "Deleted backtest results for job {}", job_id_str);
+                    // log_info!(...)
                 }
                 
                 // Delete the job itself
@@ -485,7 +482,7 @@ pub async fn delete_backtest(
                     .await
                     .map_err(|e| AppError::Internal(format!("Failed to delete job: {}", e)))?;
                 
-                log_info!(MAIN_LOGGER, "Job {} deleted successfully", job_id_str);
+                // log_info!(...)
                 
                 return Ok(Json(serde_json::json!({
                     "message": "Job and all associated data deleted successfully",
@@ -517,7 +514,7 @@ fn is_deletable_status(status: &str) -> bool {
 pub async fn cleanup_old_backtests(
     State(_state): State<ApiState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    log_info!(MAIN_LOGGER, "Request to cleanup old backtests");
+    // log_info!(...)
     
     #[cfg(feature = "postgres")]
     {
@@ -552,7 +549,7 @@ pub async fn cleanup_old_backtests(
         let job_count = old_jobs.len();
         
         if job_count == 0 {
-            log_info!(MAIN_LOGGER, "No old backtests to cleanup");
+            // log_info!(...)
             return Ok(Json(serde_json::json!({
                 "message": "No old backtests found to cleanup",
                 "deleted_count": 0,
@@ -573,7 +570,7 @@ pub async fn cleanup_old_backtests(
             .await
             .map_err(|e| AppError::Internal(format!("Failed to delete results: {}", e)))?;
             
-            log_info!(MAIN_LOGGER, "Deleted {} backtest results", result_count);
+            // log_info!(...)
         }
         
         // Delete the jobs
@@ -583,7 +580,7 @@ pub async fn cleanup_old_backtests(
             .await
             .map_err(|e| AppError::Internal(format!("Failed to delete jobs: {}", e)))?;
         
-        log_info!(MAIN_LOGGER, "Cleanup: deleted {} old backtests (older than {} days)", deleted_count, retention_days);
+        // log_info!(...)
         
         return Ok(Json(serde_json::json!({
             "message": format!("Successfully cleaned up old backtests"),
@@ -670,3 +667,5 @@ async fn get_date_range_for_symbol(
     #[cfg(not(feature = "postgres"))]
     Err("Date range auto-detection not supported for this backend".to_string())
 }
+
+

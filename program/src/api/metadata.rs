@@ -132,3 +132,5 @@ pub async fn get_exchanges(
         "Database features not enabled. Build with --features postgres".to_string(),
     ))
 }
+
+

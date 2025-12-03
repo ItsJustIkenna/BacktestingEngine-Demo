@@ -10,8 +10,8 @@ use chrono::Utc;
 use bigdecimal::{BigDecimal, FromPrimitive};
 
 use crate::job_queue::{BacktestJob, BacktestResult, JobQueue, JobStatus};
-use crate::{log_info, log_error};
-use crate::logging_facade::MAIN_LOGGER;
+// use crate::{log_info, log_error};
+// use crate::logging_facade::MAIN_LOGGER;
 
 // Import existing backtest infrastructure
 use backtest::BacktestEngine;
@@ -41,7 +41,7 @@ impl Worker {
     /// Start the worker loop
     pub async fn run(self) {
         println!("🚀 Worker {} started and polling for jobs", self.id);
-        log_info!(MAIN_LOGGER, "Worker {} started", self.id);
+        // log_info!(...)
         
         loop {
             match self.process_next_job().await {
@@ -53,7 +53,7 @@ impl Worker {
                     sleep(Duration::from_secs(1)).await;
                 }
                 Err(e) => {
-                    log_error!(MAIN_LOGGER, "⚠️ Worker {} error: {}", self.id, e);
+                    // log_error!(...)
                     sleep(Duration::from_secs(5)).await;
                 }
             }
@@ -68,8 +68,7 @@ impl Worker {
             None => return Ok(false), // No job available
         };
         
-        log_info!(MAIN_LOGGER, "🎯 Worker {} claimed job: {} (symbol={}, exchange={})", 
-            self.id, job.id, job.params.symbol, job.params.exchange);
+        // log_info!(...)
         println!("🎯 Worker {} claimed job: {} (symbol={}, exchange={})", 
             self.id, job.id, job.params.symbol, job.params.exchange);
         
@@ -88,15 +87,15 @@ impl Worker {
                     biased;
                     
                     _ = heartbeat_rx.recv() => {
-                        log_info!(MAIN_LOGGER, "💓 Heartbeat task gracefully stopping for job {}", heartbeat_job_id);
+                        // log_info!(...)
                         break; // Graceful shutdown
                     }
                     _ = interval.tick() => {
                         println!("💓 Heartbeat update for job {}", heartbeat_job_id);
-                        log_info!(MAIN_LOGGER, "💓 Heartbeat update for job {}", heartbeat_job_id);
+                        // log_info!(...)
                         if let Err(e) = heartbeat_queue.update_heartbeat(&heartbeat_job_id).await {
                             eprintln!("⚠️ Failed to update heartbeat for job {}: {}", heartbeat_job_id, e);
-                            log_error!(MAIN_LOGGER, "⚠️ Failed to update heartbeat for job {}: {}", heartbeat_job_id, e);
+                            // log_error!(...)
                             break; // Exit loop on persistent errors
                         }
                     }
@@ -105,15 +104,15 @@ impl Worker {
         });
         
         // Execute backtest (genetic or manual)
-        log_info!(MAIN_LOGGER, "🔀 Job {} optimization_method: '{}'", job.id, job.params.optimization_method);
+        // log_info!(...)
         
         let result = match job.params.optimization_method.as_str() {
             "genetic" => {
-                log_info!(MAIN_LOGGER, "🧬 Branching to genetic optimization for job {}", job.id);
+                // log_info!(...)
                 self.execute_genetic_optimization(&job).await
             },
             _ => {
-                log_info!(MAIN_LOGGER, "📊 Branching to manual backtest for job {}", job.id);
+                // log_info!(...)
                 self.execute_backtest(&job).await
             },
         };
@@ -121,22 +120,22 @@ impl Worker {
         let result = match result {
             Ok(result) => {
                 // Gracefully stop heartbeat task and wait for it to complete
-                log_info!(MAIN_LOGGER, "🛑 Stopping heartbeat for job {}", job.id);
+                // log_info!(...)
                 println!("🛑 Stopping heartbeat for job {}", job.id);
                 let _ = heartbeat_tx.send(()).await;
                 
                 match tokio::time::timeout(tokio::time::Duration::from_secs(5), heartbeat_handle).await {
                     Ok(_) => {
-                        log_info!(MAIN_LOGGER, "✅ Heartbeat stopped successfully for job {}", job.id);
+                        // log_info!(...)
                         println!("✅ Heartbeat stopped successfully for job {}", job.id);
                     }
                     Err(_) => {
-                        log_error!(MAIN_LOGGER, "⚠️ Heartbeat timeout after 5s for job {}", job.id);
+                        // log_error!(...)
                         println!("⚠️ Heartbeat timeout after 5s for job {}", job.id);
                     }
                 }
                 
-                log_info!(MAIN_LOGGER, "💾 Storing results for job: {}", job.id);
+                // log_info!(...)
                 println!("💾 Storing results for job: {}", job.id);
                 
                 // Store results with timeout to detect spawn_blocking exhaustion
@@ -145,15 +144,15 @@ impl Worker {
                     self.job_queue.store_result(&result)
                 ).await {
                     Ok(Ok(_)) => {
-                        log_info!(MAIN_LOGGER, "✅ Results stored successfully for job: {}", job.id);
+                        // log_info!(...)
                         println!("✅ Results stored successfully for job: {}", job.id);
                     }
                     Ok(Err(e)) => {
-                        log_error!(MAIN_LOGGER, "❌ Failed to store results for job {}: {}", job.id, e);
+                        // log_error!(...)
                         return Err(format!("Failed to store results: {}", e).into());
                     }
                     Err(_) => {
-                        log_error!(MAIN_LOGGER, "⏱️ TIMEOUT storing results for job {} after 30s - spawn_blocking likely exhausted!", job.id);
+                        // log_error!(...)
                         println!("⏱️ TIMEOUT storing results for job {} - spawn_blocking exhausted!", job.id);
                         return Err("Timeout storing results - blocking thread pool exhausted".into());
                     }
@@ -164,15 +163,7 @@ impl Worker {
                     .update_job_status(&job.id, JobStatus::Completed, None)
                     .await?;
                 
-                log_info!(
-                    MAIN_LOGGER,
-                    "✅ Worker {} completed job {} - Sharpe: {:.2}, PnL: ${:.2}, Trades: {}",
-                    self.id,
-                    job.id,
-                    result.sharpe_ratio,
-                    result.total_pnl,
-                    result.total_trades
-                );
+                // log_info!(...)
                 
                 Ok(true)
             }
@@ -182,7 +173,7 @@ impl Worker {
                 let _ = tokio::time::timeout(tokio::time::Duration::from_secs(5), heartbeat_handle).await;
                 
                 let error_msg = format!("Backtest failed: {}", e);
-                log_error!(MAIN_LOGGER, "❌ Worker {} job {} failed: {}", self.id, job.id, error_msg);
+                // log_error!(...)
                 
                 // Update status to failed
                 self.job_queue
@@ -203,22 +194,19 @@ impl Worker {
     ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
         let params = &job.params;
         
-        log_info!(MAIN_LOGGER, "📂 Loading market data for job {}: symbol={}, exchange={}, strategy={}", 
-            job.id, params.symbol, params.exchange, params.strategy_type);
+        // log_info!(...)
         
         // Load market data intelligently based on strategy type
         let data = self.load_market_data_for_strategy(&params.symbol, &params.exchange, &params.strategy_type).await?;
         
         if data.is_empty() {
-            log_error!(MAIN_LOGGER, "❌ No market data available for job {}: symbol={}, exchange={}", 
-                job.id, params.symbol, params.exchange);
+            // log_error!(...)
             return Err("No market data available".into());
         }
         
-        log_info!(MAIN_LOGGER, "✅ Loaded {} data points for job {}", data.len(), job.id);
+        // log_info!(...)
         
-        log_info!(MAIN_LOGGER, "⚙️ Initializing backtest engine for job {}: capital=${:.2}, commission={:.4}", 
-            job.id, params.initial_capital, params.commission_rate);
+        // log_info!(...)
         
         // Create configuration
         let mut backtest_config = BacktestConfig::default();
@@ -266,18 +254,17 @@ impl Worker {
         
         let strategy = AvellanedaStoikovStrategy::new(strategy_params);
         
-        log_info!(MAIN_LOGGER, "📊 Registering strategy for job {}: gamma={:.4}, k={:.4}, order_size={:.4}", 
-            job.id, params.risk_aversion, params.inventory_target, params.order_size);
+        // log_info!(...)
         
         let mut strategy_manager = StrategyManager::new();
         strategy_manager
             .register_strategy(strategy_config.clone(), strategy)
             .map_err(|e| {
-                log_error!(MAIN_LOGGER, "❌ Failed to register strategy for job {}: {}", job.id, e);
+                // log_error!(...)
                 format!("Failed to register strategy: {}", e)
             })?;
         
-        log_info!(MAIN_LOGGER, "🚀 Starting backtest execution for job {}", job.id);
+        // log_info!(...)
         
         // Run backtest (progress tracked manually after completion)
         let start_time = std::time::Instant::now();
@@ -294,11 +281,9 @@ impl Worker {
         
         let execution_time = start_time.elapsed();
         
-        log_info!(MAIN_LOGGER, "⏱️ Backtest execution completed for job {} in {:.2}s", 
-            job.id, execution_time.as_secs_f64());
+        // log_info!(...)
         
-        log_info!(MAIN_LOGGER, "📈 Calculating final metrics for job {}: trades={}, pnl=${:.2}", 
-            job.id, result.core.num_trades, result.core.total_pnl);
+        // log_info!(...)
         
         // Convert to API result format
         let total_pnl = result.core.total_pnl.to_string().parse::<f64>()
@@ -326,7 +311,7 @@ impl Worker {
         &self,
         job: &BacktestJob,
     ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
-        log_info!(MAIN_LOGGER, "🧬🧬🧬 ENTERED execute_genetic_optimization for job {}", job.id);
+        // log_info!(...)
         
         use genetic::GeneticOptimizer;
         use genetic::chromosome::AvellanedaStoikovChromosome;
@@ -334,8 +319,7 @@ impl Worker {
         
         let params = &job.params;
         
-        log_info!(MAIN_LOGGER, "🧬 Starting genetic optimization for job {}: pop={}, gen={}", 
-            job.id, params.population_size, params.generations);
+        // log_info!(...)
         
         // Skip all database updates during optimization to prevent spawn_blocking exhaustion
         
@@ -345,7 +329,7 @@ impl Worker {
             return Err("No market data available".into());
         }
         
-        log_info!(MAIN_LOGGER, "✅ Loaded {} data points for genetic optimization", data.len());
+        // log_info!(...)
         
         // Create genetic config
         let config = GeneticConfig {
@@ -372,7 +356,7 @@ impl Worker {
                     
                     Box::pin(async move {
                         if let Err(e) = job_queue.update_generation(&job_id, current as i32, total_generations as i32).await {
-                            log_error!(MAIN_LOGGER, "Failed to update generation for {}: {}", job_id, e);
+                            // log_error!(...)
                         }
                     })
                 } else {
@@ -465,9 +449,8 @@ impl Worker {
         });
         
         // Run genetic optimization
-        log_info!(MAIN_LOGGER, "🚀 Running genetic optimization with generation tracking (every {}%)...", PROGRESS_UPDATE_THRESHOLD);
-        log_info!(MAIN_LOGGER, "   Config: pop_size={}, generations={}, mutation={}, crossover={}", 
-            config.population_size, config.generations, config.mutation_rate, config.crossover_rate);
+        // log_info!(...)
+        // log_info!(...)
         
         let optimizer = GeneticOptimizer {
             config,
@@ -475,13 +458,12 @@ impl Worker {
             progress_callback: Some(generation_callback), // Track every 5% of generations
         };
         
-        log_info!(MAIN_LOGGER, "🔄 Calling optimizer.run()...");
+        // log_info!(...)
         let (best_chromosome, best_fitness) = optimizer.run().await;
-        log_info!(MAIN_LOGGER, "✅ optimizer.run() completed!");
+        // log_info!(...)
         
-        log_info!(MAIN_LOGGER, "🏆 Genetic optimization complete! Best fitness: {:.4}", best_fitness);
-        log_info!(MAIN_LOGGER, "   Best params: γ={:.4}, q={:.4}, size={:.4}", 
-            best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size);
+        // log_info!(...)
+        // log_info!(...)
         
         // Skip database updates here to avoid deadlock with heartbeat task
         // Heartbeat will be stopped after execute_genetic_optimization() returns
@@ -492,7 +474,7 @@ impl Worker {
         
         // Run final backtest with best parameters to get full results
         println!("🚀 About to run final backtest for job {}", job.id);
-        log_info!(MAIN_LOGGER, "🚀 About to run final backtest for job {}", job.id);
+        // log_info!(...)
         let final_result = self.run_backtest_with_chromosome(
             &job.id,
             &params.symbol,
@@ -503,8 +485,7 @@ impl Worker {
             &data_for_final,
         ).await?;
         
-        log_info!(MAIN_LOGGER, "✅ Final backtest complete: Sharpe={:.2}, PnL=${:.2}", 
-            final_result.sharpe_ratio, final_result.total_pnl);
+        // log_info!(...)
         
         Ok(final_result)
     }
@@ -565,7 +546,7 @@ impl Worker {
         strategy_manager.register_strategy(strategy_config, strategy)
             .map_err(|e| format!("Failed to register strategy: {}", e))?;
         
-        log_info!(MAIN_LOGGER, "🎯 About to call engine.run_backtest() for job {}", job_id);
+        // log_info!(...)
         let result = engine.run_backtest(
             &mut strategy_manager,
             &mut orderbook,
@@ -574,15 +555,15 @@ impl Worker {
             data,
         ).await?;
         
-        log_info!(MAIN_LOGGER, "✅ engine.run_backtest() returned for job {}", job_id);
-        log_info!(MAIN_LOGGER, "📊 Parsing results for job {}", job_id);
+        // log_info!(...)
+        // log_info!(...)
         
         let total_pnl = result.core.total_pnl.to_string().parse::<f64>()
             .map_err(|e| format!("Failed to parse total_pnl: {}", e))?;
         let max_drawdown = result.core.max_drawdown.to_string().parse::<f64>()
             .map_err(|e| format!("Failed to parse max_drawdown: {}", e))?;
         
-        log_info!(MAIN_LOGGER, "📦 Creating BacktestResult for job {}", job_id);
+        // log_info!(...)
         
         Ok(BacktestResult {
             job_id: job_id.to_string(),
@@ -606,13 +587,13 @@ impl Worker {
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
         match strategy_type {
             "market_making" => {
-                log_info!(MAIN_LOGGER, "📊 Loading order book data for market making strategy");
+                // log_info!(...)
                 // For market making, load order events to reconstruct order book
                 self.load_order_events(symbol, exchange).await
             }
             _ => {
                 // Default to candles for other strategies
-                log_info!(MAIN_LOGGER, "📊 Loading candle data for strategy type: {}", strategy_type);
+                // log_info!(...)
                 self.load_market_data(symbol, exchange).await
             }
         }
@@ -641,11 +622,11 @@ impl Worker {
         // 20K events is enough for meaningful backtesting while staying under memory limits
         const MAX_EVENTS: usize = 20000;
         
-        log_info!(MAIN_LOGGER, "📊 Loading order book data for market making strategy (max {} events)", MAX_EVENTS);
+        // log_info!(...)
         
         let orders = loader.load_with_limit(MAX_EVENTS).await?;
         
-        log_info!(MAIN_LOGGER, "📊 Loaded {} order book events for {}/{}", orders.len(), symbol, exchange);
+        // log_info!(...)
         Ok(orders)
     }
     
@@ -736,7 +717,7 @@ impl Worker {
                 })
                 .collect();
             
-            log_info!(MAIN_LOGGER, "📊 Loaded {} candles for {}/{}", candles.len(), symbol, exchange);
+            // log_info!(...)
             Ok(candles)
         }
         #[cfg(not(feature = "postgres"))]
@@ -756,7 +737,7 @@ pub fn spawn_workers(num_workers: usize, job_queue: Arc<dyn JobQueue>) {
                 .enable_all()
                 .build()
                 .unwrap_or_else(|e| {
-                    log_error!(MAIN_LOGGER, "Failed to create worker runtime: {}", e);
+                    // log_error!(...)
                     panic!("Cannot create worker runtime");
                 });
             
@@ -767,5 +748,7 @@ pub fn spawn_workers(num_workers: usize, job_queue: Arc<dyn JobQueue>) {
         });
     }
     
-    log_info!(MAIN_LOGGER, "Spawned {} workers", num_workers);
+    // log_info!(...)
 }
+
+

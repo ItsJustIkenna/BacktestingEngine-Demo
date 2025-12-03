@@ -1,9 +1,12 @@
 use clap::{Parser, Subcommand};
+use std::sync::Arc;
 
 mod api;
 mod job_queue;
 mod streaming;
 mod worker;
+
+use job_queue::{JobQueue, PostgresQueue};
 
 #[derive(Parser)]
 #[command(name = "backtesting-engine")]
@@ -29,7 +32,7 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ultra_logger::init();
+    println!("🚀 Backtesting Engine starting...");
 
     let cli = Cli::parse();
 
@@ -38,21 +41,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let database_url = std::env::var("DATABASE_URL")
                 .expect("DATABASE_URL must be set");
 
-            let postgres_pool = job_queue::postgres::PostgresQueue::new(&database_url).await?;
+            println!("📦 Connecting to database...");
+            let postgres_queue = PostgresQueue::new(&database_url)
+                .map_err(|e| format!("Failed to connect: {}", e))?;
+            let job_queue: Arc<dyn JobQueue> = Arc::new(postgres_queue);
 
-            // Spawn the worker task
-            let worker_pool = postgres_pool.clone();
-            tokio::spawn(async move {
-                if let Err(e) = worker::run(worker_pool).await {
-                    eprintln!("Worker error: {:?}", e);
-                }
-            });
+            // Spawn worker tasks
+            for i in 0..4 {
+                let queue = Arc::clone(&job_queue);
+                tokio::spawn(async move {
+                    let worker = worker::Worker::new(i, queue);
+                    worker.run().await;
+                });
+            }
 
-            // Start the API server
-            println!("Starting server on {}:{}", host, port);
-            api::serve(&host, port, postgres_pool).await?;
+            // Build and start the API server
+            let app = api::build_router(Arc::clone(&job_queue));
+            let bind_addr = format!("{}:{}", host, port);
+            let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+            
+            println!("✅ Server ready at http://{}", bind_addr);
+            axum::serve(listener, app).await?;
         }
     }
 
     Ok(())
 }
+

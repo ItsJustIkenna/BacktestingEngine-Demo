@@ -100,3 +100,5 @@ async fn handle_socket(socket: WebSocket, state: ApiState, job_id: String) {
         _ = receive_task => {},
     }
 }
+
+

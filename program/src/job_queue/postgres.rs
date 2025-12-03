@@ -387,8 +387,7 @@ impl JobQueue for PostgresQueue {
         
         let job_id = Uuid::new_v4().to_string();
         
-        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "💾 Submitting job {} to PostgreSQL: symbol={}, exchange={}", 
-            job_id, params.symbol, params.exchange);
+        // crate::log_info!(...)
         
         let mut conn = self.pool.get().await?;
         
@@ -418,7 +417,7 @@ impl JobQueue for PostgresQueue {
     }
     
     async fn get_next_job(&self) -> Result<Option<BacktestJob>, Box<dyn std::error::Error + Send + Sync>> {
-        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔍 Polling PostgreSQL for next queued job");
+        // crate::log_info!(...)
         
         let mut conn = self.pool.get().await?;
         
@@ -430,11 +429,7 @@ impl JobQueue for PostgresQueue {
                 let started_threshold = Utc::now() - chrono::Duration::minutes(30);
                 let heartbeat_threshold = Utc::now() - chrono::Duration::minutes(5);
                 
-                crate::log_info!(
-                    crate::logging_facade::MAIN_LOGGER,
-                    "🕐 Orphan thresholds: heartbeat_before={:?}, started_before={:?}",
-                    heartbeat_threshold, started_threshold
-                );
+                // crate::log_info!(...)
                 
                 // Check for running jobs
                 let running_count: i64 = backtest_jobs::table
@@ -444,11 +439,7 @@ impl JobQueue for PostgresQueue {
                     .await?;
                 
                 if running_count > 0 {
-                    crate::log_info!(
-                        crate::logging_facade::MAIN_LOGGER,
-                        "📊 Found {} running jobs, checking if orphaned...",
-                        running_count
-                    );
+                    // crate::log_info!(...)
                     
                     let running_jobs: Vec<BacktestJobRecord> = backtest_jobs::table
                         .filter(backtest_jobs::status.eq("running"))
@@ -461,11 +452,7 @@ impl JobQueue for PostgresQueue {
                         let started_old = rj.started_at.map_or(false, |st| st < started_threshold);
                         let should_recover = heartbeat_stale || (rj.last_heartbeat.is_none() && started_old);
                         
-                        crate::log_info!(
-                            crate::logging_facade::MAIN_LOGGER,
-                            "  Job {}: started={:?}, heartbeat={:?}, should_recover={}",
-                            rj.job_id, rj.started_at, rj.last_heartbeat, should_recover
-                        );
+                        // crate::log_info!(...)
                     }
                 }
                 
@@ -494,9 +481,9 @@ impl JobQueue for PostgresQueue {
                 
                 if let Some(job_record) = job {
                     if job_record.status == "running" {
-                        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔄 Recovering orphaned job {} (stale heartbeat detected)", job_record.job_id);
+                        // crate::log_info!(...)
                     } else {
-                        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🎯 Claiming job {} from queue", job_record.job_id);
+                        // crate::log_info!(...)
                     }
                     
                     let now = Utc::now();
@@ -511,7 +498,7 @@ impl JobQueue for PostgresQueue {
                     
                     Ok(Some(Self::record_to_job(job_record)?))
                 } else {
-                    crate::log_info!(crate::logging_facade::MAIN_LOGGER, "⏸️ No jobs available in queue");
+                    // crate::log_info!(...)
                     Ok(None)
                 }
             })
@@ -521,7 +508,7 @@ impl JobQueue for PostgresQueue {
     }
     
     async fn get_job(&self, job_id: &str) -> Result<Option<BacktestJob>, Box<dyn std::error::Error + Send + Sync>> {
-        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔎 Fetching job {} from PostgreSQL", job_id);
+        // crate::log_info!(...)
         
         let mut conn = self.pool.get().await?;
         
@@ -628,19 +615,18 @@ impl JobQueue for PostgresQueue {
         use bigdecimal::BigDecimal;
         use std::str::FromStr;
         
-        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "💾 Storing result for job {}: sharpe={:.2}, pnl=${:.2}, trades={}", 
-            result.job_id, result.sharpe_ratio, result.total_pnl, result.total_trades);
+        // crate::log_info!(...)
         
-        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔌 Getting async connection from pool for job {}", result.job_id);
+        // crate::log_info!(...)
         let mut conn = self.pool.get().await
             .map_err(|e| {
-                crate::log_error!(crate::logging_facade::MAIN_LOGGER, "❌ Failed to get connection from pool for job {}: {}", result.job_id, e);
+                // crate::log_error!(...)
                 Box::new(e) as Box<dyn std::error::Error + Send + Sync>
             })?;
         
-        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "✅ Got async connection from pool for job {}", result.job_id);
+        // crate::log_info!(...)
         
-        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "📖 Querying job record for job {}", result.job_id);
+        // crate::log_info!(...)
         // Get job to find dates and parameters
         let job: BacktestJobRecord = backtest_jobs::table
             .filter(backtest_jobs::job_id.eq(&result.job_id))
@@ -720,7 +706,7 @@ impl JobQueue for PostgresQueue {
             }))?),
         };
         
-        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "💿 Inserting result into database for job {}", result.job_id);
+        // crate::log_info!(...)
         // Insert result into database
         let result_id: uuid::Uuid = diesel::insert_into(backtest_results::table)
             .values(&new_result)
@@ -728,14 +714,14 @@ impl JobQueue for PostgresQueue {
             .get_result(&mut conn)
             .await?;
         
-        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "🔗 Updating job with result_id for job {}", result.job_id);
+        // crate::log_info!(...)
         // Update job with result_id
         diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(&result.job_id)))
             .set(backtest_jobs::result_id.eq(Some(result_id)))
             .execute(&mut conn)
             .await?;
         
-        crate::log_info!(crate::logging_facade::MAIN_LOGGER, "✅ Database operations completed for job {}", result.job_id);
+        // crate::log_info!(...)
         Ok(())
     }
     
@@ -987,3 +973,5 @@ mod tests {
         assert_eq!(next_job.status, JobStatus::Running);
     }
 }
+
+

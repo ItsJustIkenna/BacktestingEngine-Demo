@@ -7,8 +7,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::job_queue::PostgresQueue;
-use crate::{log_info, log_error};
-use crate::logging_facade::MAIN_LOGGER;
+// use crate::{log_info, log_error};
+// use crate::logging_facade::MAIN_LOGGER;
 
 /// Query parameters for historical backtests
 #[derive(Debug, Clone, Deserialize)]
@@ -74,8 +74,7 @@ pub async fn get_backtests(
     State(state): State<super::handlers::ApiState>,
     Query(query): Query<HistoryQuery>,
 ) -> Result<Json<HistoryResponse>, super::handlers::AppError> {
-    log_info!(MAIN_LOGGER, "📚 Historical backtests query: status={:?}, symbol={:?}, exchange={:?}, start={:?}, end={:?}, limit={}, offset={}",
-        query.status, query.symbol, query.exchange, query.start_date, query.end_date, query.limit, query.offset);
+    // log_info!(...)
     
     // This endpoint only works with PostgreSQL backend
     // Try to downcast to PostgresQueue
@@ -91,12 +90,11 @@ pub async fn get_backtests(
         .get_historical_backtests(&query)
         .await
         .map_err(|e| {
-            log_error!(MAIN_LOGGER, "❌ Failed to query historical backtests: {}", e);
+            // log_error!(...)
             super::handlers::AppError::Internal(e.to_string())
         })?;
     
-    log_info!(MAIN_LOGGER, "✅ Historical query successful: {} results out of {} total", 
-        backtests.len(), total);
+    // log_info!(...)
     
     Ok(Json(HistoryResponse {
         backtests,
@@ -105,3 +103,5 @@ pub async fn get_backtests(
         offset: query.offset,
     }))
 }
+
+
