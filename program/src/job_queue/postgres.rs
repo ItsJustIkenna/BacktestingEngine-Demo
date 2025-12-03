@@ -489,8 +489,10 @@ impl JobQueue for PostgresQueue {
         let result = conn.transaction::<_, Box<dyn std::error::Error + Send + Sync>, _>(|conn| {
             Box::pin(async move {
                 // Calculate thresholds for orphaned job detection
+                // Use conservative timeouts to avoid recovering jobs that are still processing
+                // Heartbeat interval is 30s, so 10 minutes means ~20 missed heartbeats
                 let started_threshold = Utc::now() - chrono::Duration::minutes(30);
-                let heartbeat_threshold = Utc::now() - chrono::Duration::minutes(5);
+                let heartbeat_threshold = Utc::now() - chrono::Duration::minutes(10);
                 
                 // crate::log_info!(...)
                 
@@ -678,14 +680,10 @@ impl JobQueue for PostgresQueue {
         use bigdecimal::BigDecimal;
         use std::str::FromStr;
         
-        // crate::log_info!(...)
+        let start = std::time::Instant::now();
         
-        // crate::log_info!(...)
         let mut conn = self.get_conn_with_timeout().await?;
         
-        // crate::log_info!(...)
-        
-        // crate::log_info!(...)
         // Get job to find dates and parameters
         let job: BacktestJobRecord = backtest_jobs::table
             .filter(backtest_jobs::job_id.eq(&result.job_id))
@@ -699,6 +697,9 @@ impl JobQueue for PostgresQueue {
         // Calculate annualized metrics (simplified - using 252 trading days)
         let total_return_bd = BigDecimal::from_str(&result.total_pnl.to_string())?;
         let annualized_return = total_return_bd.clone(); // Simplified
+        
+        // Downsample equity curve to 500 points max (reduced from 1000 for faster serialization)
+        let equity_curve_downsampled = Self::downsample_equity_curve(&result.equity_curve, 500);
         
         let new_result = NewBacktestResult {
             backtest_id: backtest_uuid,
@@ -761,11 +762,10 @@ impl JobQueue for PostgresQueue {
                 "risk_aversion": job.risk_aversion.to_string(),
                 "inventory_target": job.inventory_target.to_string(),
                 "order_size": job.order_size.to_string(),
-                "equity_curve": Self::downsample_equity_curve(&result.equity_curve, 1000)
+                "equity_curve": equity_curve_downsampled
             }))?),
         };
         
-        // crate::log_info!(...)
         // Insert result into database
         let result_id: uuid::Uuid = diesel::insert_into(backtest_results::table)
             .values(&new_result)
@@ -773,14 +773,17 @@ impl JobQueue for PostgresQueue {
             .get_result(&mut conn)
             .await?;
         
-        // crate::log_info!(...)
         // Update job with result_id
         diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(&result.job_id)))
             .set(backtest_jobs::result_id.eq(Some(result_id)))
             .execute(&mut conn)
             .await?;
         
-        // crate::log_info!(...)
+        let elapsed = start.elapsed();
+        if elapsed.as_millis() > 1000 {
+            eprintln!("[PERF] store_result took {}ms for job {}", elapsed.as_millis(), result.job_id);
+        }
+        
         Ok(())
     }
     

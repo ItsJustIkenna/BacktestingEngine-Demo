@@ -296,17 +296,21 @@ impl Worker {
         let heartbeat_handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut tick_count: u32 = 0;
             loop {
                 tokio::select! {
                     // Prioritize shutdown signal over heartbeat tick
                     biased;
                     
                     _ = heartbeat_rx.recv() => {
-                        // log_info!(...)
                         break; // Graceful shutdown
                     }
                     _ = interval.tick() => {
-                        log_debug!(MAIN_LOGGER, "💓 Heartbeat update for job {}", heartbeat_job_id);
+                        tick_count += 1;
+                        // Only log every 10th heartbeat to reduce noise (every 5 minutes)
+                        if tick_count % 10 == 1 {
+                            log_debug!(MAIN_LOGGER, "💓 Heartbeat #{} for job {}", tick_count, heartbeat_job_id);
+                        }
                         if let Err(e) = heartbeat_queue.update_heartbeat(&heartbeat_job_id).await {
                             log_warn!(MAIN_LOGGER, "⚠️ Failed to update heartbeat for job {}: {}", heartbeat_job_id, e);
                             break; // Exit loop on persistent errors
@@ -340,50 +344,44 @@ impl Worker {
         
         let result = match result {
             Ok(result) => {
-                // Gracefully stop heartbeat task and wait for it to complete
-                log_debug!(MAIN_LOGGER, "Job {} stopping heartbeat task", job.id);
-                log_debug!(MAIN_LOGGER, "🛑 Stopping heartbeat for job {}", job.id);
-                let _ = heartbeat_tx.send(()).await;
-                
-                match tokio::time::timeout(tokio::time::Duration::from_secs(5), heartbeat_handle).await {
-                    Ok(_) => {
-                        log_debug!(MAIN_LOGGER, "Job {} heartbeat stopped successfully", job.id);
-                        log_debug!(MAIN_LOGGER, "✅ Heartbeat stopped successfully for job {}", job.id);
-                    }
-                    Err(_) => {
-                        log_warn!(MAIN_LOGGER, "Job {} heartbeat timeout after 5s", job.id);
-                        log_debug!(MAIN_LOGGER, "⚠️ Heartbeat timeout after 5s for job {}", job.id);
-                    }
-                }
+                // IMPORTANT: Keep heartbeat running during result storage to prevent
+                // other workers from "recovering" this job while we're still processing
                 
                 log_info!(MAIN_LOGGER, "Job {} storing results | pnl={:.2} sharpe={:.3} trades={}", 
                     job.id, result.total_pnl, result.sharpe_ratio, result.total_trades);
-                log_debug!(MAIN_LOGGER, "💾 Storing results for job: {}", job.id);
                 
                 // Store results with timeout to detect spawn_blocking exhaustion
-                match tokio::time::timeout(
+                let store_result = tokio::time::timeout(
                     tokio::time::Duration::from_secs(30),
                     self.job_queue.store_result(&result)
-                ).await {
+                ).await;
+                
+                // Update status to completed BEFORE stopping heartbeat
+                // This prevents race condition where another worker sees stale heartbeat
+                let status_result = self.job_queue
+                    .update_job_status(&job.id, JobStatus::Completed, None)
+                    .await;
+                
+                // NOW stop heartbeat - job is already marked complete
+                log_debug!(MAIN_LOGGER, "Job {} stopping heartbeat task", job.id);
+                let _ = heartbeat_tx.send(()).await;
+                let _ = tokio::time::timeout(tokio::time::Duration::from_secs(2), heartbeat_handle).await;
+                
+                // Check results after heartbeat is stopped
+                match store_result {
                     Ok(Ok(_)) => {
                         log_info!(MAIN_LOGGER, "Job {} results stored successfully", job.id);
-                        log_debug!(MAIN_LOGGER, "✅ Results stored successfully for job: {}", job.id);
                     }
                     Ok(Err(e)) => {
                         log_error!(MAIN_LOGGER, "Job {} failed to store results: {}", job.id, e);
-                        return Err(format!("Failed to store results: {}", e).into());
+                        // Job is already marked complete, but results may be missing
                     }
                     Err(_) => {
-                        log_error!(MAIN_LOGGER, "Job {} TIMEOUT storing results - spawn_blocking exhausted", job.id);
-                        log_debug!(MAIN_LOGGER, "⏱️ TIMEOUT storing results for job {} - spawn_blocking exhausted!", job.id);
-                        return Err("Timeout storing results - blocking thread pool exhausted".into());
+                        log_error!(MAIN_LOGGER, "Job {} TIMEOUT storing results", job.id);
                     }
                 }
                 
-                // Update status to completed
-                self.job_queue
-                    .update_job_status(&job.id, JobStatus::Completed, None)
-                    .await?;
+                status_result?;
                 
                 log_info!(MAIN_LOGGER, "Job {} completed successfully | total_pnl={:.2} sharpe={:.3} max_dd={:.2}% trades={}", 
                     job.id, result.total_pnl, result.sharpe_ratio, result.max_drawdown * 100.0, result.total_trades);
@@ -393,7 +391,7 @@ impl Worker {
             Err(e) => {
                 // Gracefully stop heartbeat task
                 let _ = heartbeat_tx.send(()).await;
-                let _ = tokio::time::timeout(tokio::time::Duration::from_secs(5), heartbeat_handle).await;
+                let _ = tokio::time::timeout(tokio::time::Duration::from_secs(2), heartbeat_handle).await;
                 
                 let error_msg = format!("Backtest failed: {}", e);
                 log_error!(MAIN_LOGGER, "Job {} failed: {}", job.id, error_msg);

@@ -26,7 +26,7 @@ async fn handle_socket(socket: WebSocket, state: ApiState, job_id: String) {
     
     // Spawn a task to send progress updates
     let send_task = tokio::spawn(async move {
-        let mut ticker = interval(Duration::from_secs(1));
+        let mut ticker = interval(Duration::from_millis(500)); // Poll every 500ms for smoother updates
         
         loop {
             ticker.tick().await;
@@ -38,6 +38,10 @@ async fn handle_socket(socket: WebSocket, state: ApiState, job_id: String) {
                         "job_id": job.id,
                         "status": format!("{:?}", job.status).to_lowercase(),
                         "progress": job.progress,
+                        "current_generation": job.current_generation,
+                        "total_generations": job.total_generations,
+                        "phase": job.current_phase,
+                        "phase_details": job.phase_details,
                         "timestamp": chrono::Utc::now().to_rfc3339(),
                     });
                     
@@ -51,6 +55,16 @@ async fn handle_socket(socket: WebSocket, state: ApiState, job_id: String) {
                     
                     // Stop sending if job is completed or failed
                     if job.status == JobStatus::Completed || job.status == JobStatus::Failed {
+                        // Send one final message with result info
+                        if job.status == JobStatus::Completed {
+                            let final_msg = serde_json::json!({
+                                "job_id": job.id,
+                                "status": "completed",
+                                "progress": 100.0,
+                                "message": "Backtest completed successfully",
+                            });
+                            let _ = sender.send(Message::Text(final_msg.to_string())).await;
+                        }
                         let _ = sender
                             .send(Message::Close(None))
                             .await;

@@ -41,9 +41,6 @@ impl<C: Chromosome> GeneticOptimizer<C> {
         // Use StdRng which is Send-safe (unlike thread_rng which uses Rc)
         let mut rng = rand::rngs::StdRng::from_entropy();
         
-        // Log callback status
-        println!("🔍 Genetic optimizer starting - progress_callback present: {}", self.progress_callback.is_some());
-        
         // 1. Initialize population
         let mut population: Vec<C> = (0..self.config.population_size)
             .map(|_| C::random(&mut rng))
@@ -59,13 +56,8 @@ impl<C: Chromosome> GeneticOptimizer<C> {
 
         for generation in 0..self.config.generations {
             // Call progress callback if provided
-            println!("🔍 Generation {} - checking callback...", generation + 1);
             if let Some(ref callback) = self.progress_callback {
-                println!("📞 Calling progress callback for generation {}/{}", generation + 1, self.config.generations);
                 callback(generation + 1, self.config.generations).await;
-                println!("✅ Progress callback completed for generation {}", generation + 1);
-            } else {
-                println!("⚠️ No progress callback available");
             }
             
             // 2. Evaluate fitness with controlled parallelism (prevent OOM)
@@ -94,24 +86,10 @@ impl<C: Chromosome> GeneticOptimizer<C> {
                 let mut sorted_fitnesses = fitnesses.clone();
                 sorted_fitnesses.sort_by(|a, b| b.partial_cmp(a).unwrap());
                 let threshold_idx = ((1.0 - self.config.top_percentile_threshold) * sorted_fitnesses.len() as f64) as usize;
-                let fitness_threshold = sorted_fitnesses[threshold_idx.min(sorted_fitnesses.len() - 1)];
+                let _fitness_threshold = sorted_fitnesses[threshold_idx.min(sorted_fitnesses.len() - 1)];
                 
-                println!("   🎯 Lazy eval: checking top {:.0}% (threshold: {:.4})", 
-                    self.config.top_percentile_threshold * 100.0, fitness_threshold);
-                
-                // Apply consistency penalty to top performers only
-                // This is done after base fitness calculation to avoid unnecessary MC runs
-                // Note: Actual MC evaluation would need to be integrated with fitness_fn
-                // or require passing BacktestResult through the fitness function
-                // For now, we track which chromosomes qualify for MC checking
-                let top_performer_indices: Vec<usize> = fitnesses.iter()
-                    .enumerate()
-                    .filter(|(_, &f)| f >= fitness_threshold)
-                    .map(|(idx, _)| idx)
-                    .collect();
-                
-                println!("   📊 {} chromosomes qualify for MC consistency check", top_performer_indices.len());
-                // Future enhancement: run lightweight MC on these indices and adjust fitness
+                // Future enhancement: Apply MC consistency check to top performers
+                // Currently disabled - would need integration with fitness_fn
             }
             
             // Track best fitness in this generation

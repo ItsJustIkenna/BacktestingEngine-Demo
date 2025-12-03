@@ -1,4 +1,6 @@
 use crate::types::BacktestResult;
+use crate::logging_facade::BACKTEST_LOGGER;
+use crate::log_info;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -64,8 +66,7 @@ impl HtmlExporter {
         // Write to file
         fs::write(output_path, html_content)?;
         
-        println!("📊 Detailed equity curve exported to: {}", output_path.display());
-        println!("🌐 Open this file in any web browser for interactive viewing");
+        log_info!(BACKTEST_LOGGER, "Equity curve exported to: {}", output_path.display());
         
         Ok(())
     }

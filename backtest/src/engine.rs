@@ -6,6 +6,8 @@ use anyhow::Result;
 use serde::{Serialize, Deserialize};
 
 use crate::{BacktestResult, monte_carlo, simulation::SimulationLoop};
+use crate::logging_facade::BACKTEST_LOGGER;
+use crate::{log_info, log_debug};
 use config::{BacktestConfig, AnalysisMode, AnalysisConfig};
 use strategy::{StrategyManager, simple_export::ExportConfig};
 use orderbook::OrderBook;
@@ -113,21 +115,22 @@ impl BacktestEngine {
         let mut current_mode = self.determine_analysis_mode(export_requested);
         let original_mode = current_mode;
         
-        println!("🔍 Starting Backtest Analysis - Mode: {:?}", current_mode);
+        log_info!(BACKTEST_LOGGER, "Starting Backtest Analysis - Mode: {:?}", current_mode);
         
         // PRE-PROCESSING: Analyze and handle data gaps BEFORE optimization/simulation
-        println!("📊 Analyzing data quality...");
         #[cfg(feature = "postgres")]
         let data_quality_report = self.generate_data_quality_report(market_data, &[]);
         #[cfg(not(feature = "postgres"))]
         let data_quality_report = self.generate_data_quality_report(market_data);
-        println!("   Data Quality Score: {:.1}/10", data_quality_report.overall_score);
-        println!("   Total Data Points: {}", data_quality_report.total_data_points);
-        println!("   Gaps Detected: {} ({} severe/critical)", 
+        
+        let severe_gap_count = data_quality_report.gaps_detected.iter()
+            .filter(|g| matches!(g.severity, crate::types::GapSeverity::Severe | crate::types::GapSeverity::Critical))
+            .count();
+        log_info!(BACKTEST_LOGGER, "Data Quality: {:.1}/10, {} points, {} gaps ({} severe)", 
+            data_quality_report.overall_score, 
+            data_quality_report.total_data_points,
             data_quality_report.gaps_detected.len(),
-            data_quality_report.gaps_detected.iter()
-                .filter(|g| matches!(g.severity, crate::types::GapSeverity::Severe | crate::types::GapSeverity::Critical))
-                .count()
+            severe_gap_count
         );
         
         // Apply gap filling strategy if configured
@@ -138,7 +141,7 @@ impl BacktestEngine {
         };
         
         if processed_data.len() != market_data.len() {
-            println!("   📝 Gap filling applied: {} → {} data points", 
+            log_debug!(BACKTEST_LOGGER, "Gap filling applied: {} → {} data points", 
                 market_data.len(), processed_data.len());
         }
         
@@ -147,7 +150,7 @@ impl BacktestEngine {
         
         // MANDATORY: Run genetic optimization first to find optimal parameters (unless skipped)
         if !self.analysis_config.skip_genetic_optimization {
-            println!("🧬 Running genetic optimization (mandatory for HFT strategies)...");
+            log_info!(BACKTEST_LOGGER, "Running genetic optimization");
             let optimized_params = self.run_genetic_optimization(
                 strategy_manager,
                 orderbook,
@@ -158,9 +161,9 @@ impl BacktestEngine {
             
             // Apply optimized parameters to all strategies
             strategy_manager.update_all_parameters(optimized_params).await?;
-            println!("✅ Genetic optimization complete - parameters updated");
+            log_info!(BACKTEST_LOGGER, "Genetic optimization complete");
         } else {
-            println!("⏭️ Skipping genetic optimization (already done by worker)");
+            log_debug!(BACKTEST_LOGGER, "Skipping genetic optimization (already done by worker)");
         }
         
         // Run core backtest simulation with optimized parameters
@@ -184,7 +187,7 @@ impl BacktestEngine {
                 current_mode = AnalysisMode::Validation;
                 mode_escalated = true;
                 escalation_triggers.push("Poor performance detected - escalated to Validation".to_string());
-                println!("📈 Auto-escalating to Validation mode");
+                log_info!(BACKTEST_LOGGER, "Auto-escalating to Validation mode");
             }
         }
         
@@ -193,7 +196,7 @@ impl BacktestEngine {
                 current_mode = AnalysisMode::Production;
                 mode_escalated = true;
                 escalation_triggers.push("Excellent performance detected - escalated to Production".to_string());
-                println!("🚀 Auto-escalating to Production mode");
+                log_info!(BACKTEST_LOGGER, "Auto-escalating to Production mode");
             }
         }
         
@@ -201,14 +204,14 @@ impl BacktestEngine {
         let monte_carlo_result = match current_mode {
             AnalysisMode::Development => None,
             AnalysisMode::Validation | AnalysisMode::Production => {
-                println!("🎲 Running Monte Carlo analysis...");
+                log_debug!(BACKTEST_LOGGER, "Running Monte Carlo analysis");
                 Some(self.run_monte_carlo_analysis(&core_result).await?)
             }
         };
         
         let walk_forward_result = match current_mode {
             AnalysisMode::Production if self.analysis_config.auto_walk_forward => {
-                println!("🔄 Running Walk-Forward analysis...");
+                log_debug!(BACKTEST_LOGGER, "Running Walk-Forward analysis");
                 // Pass current strategy parameters to test robustness across time windows
                 Some(self.run_walk_forward_analysis(
                     strategy_manager, orderbook, portfolio, risk_manager, market_data
@@ -236,7 +239,7 @@ impl BacktestEngine {
             metadata,
         };
         
-        println!("✅ Backtest completed in {:.1}s", total_runtime);
+        log_info!(BACKTEST_LOGGER, "Backtest completed in {:.1}s", total_runtime);
         
         Ok(results)
     }
@@ -433,7 +436,7 @@ impl BacktestEngine {
             }) as Pin<Box<dyn Future<Output = f64> + Send + 'static>>
         });
         
-        println!("   Population: {}, Generations: {}", population_size, generations);
+        log_debug!(BACKTEST_LOGGER, "Genetic: pop={}, gen={}", population_size, generations);
         
         let optimizer = GeneticOptimizer {
             config,
@@ -443,16 +446,8 @@ impl BacktestEngine {
         
         let (best_chromo, best_fitness) = optimizer.run().await;
         
-        println!("   Best fitness score: {:.4}", best_fitness);
-        println!("   Optimized parameters:");
-        println!("     risk_aversion: {:.4}", best_chromo.risk_aversion);
-        println!("     order_size: {:.4}", best_chromo.order_size);
-        println!("     volatility_cap: {:.4}", best_chromo.volatility_cap);
-        println!("     Phase 2 dynamic adjustments:");
-        println!("       volatility_adjustment_factor: {:.3}", best_chromo.volatility_adjustment_factor);
-        println!("       inventory_penalty_factor: {:.3}", best_chromo.inventory_penalty_factor);
-        println!("       trend_sensitivity: {:.3}", best_chromo.trend_sensitivity);
-        println!("       flow_sensitivity: {:.3}", best_chromo.flow_sensitivity);
+        log_info!(BACKTEST_LOGGER, "Best fitness: {:.4}, risk_aversion={:.4}, order_size={:.4}", 
+            best_fitness, best_chromo.risk_aversion, best_chromo.order_size);
         
         // Convert chromosome to parameter map (Phase 2: all 14 parameters)
         let mut params = std::collections::HashMap::new();
