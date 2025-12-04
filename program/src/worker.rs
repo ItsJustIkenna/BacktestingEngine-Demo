@@ -641,6 +641,7 @@ impl Worker {
         })).await;
         
         // Load market data
+        log_info!(GENETIC_LOGGER, "Job {} loading market data for {} on {}", job.id, params.symbol, params.exchange);
         
         let data = self.load_market_data_for_strategy(&params.symbol, &params.exchange, &params.strategy_type).await?;
         
