@@ -597,12 +597,17 @@ impl Worker {
         log_info!(GENETIC_LOGGER, "Job {} loading market data for {} on {}", job.id, params.symbol, params.exchange);
         log_info!(GENETIC_LOGGER, "Job {} BEFORE calling load_market_data_for_strategy", job.id);
         
+        // SYNC println to bypass async logging
+        println!("[SYNC] Job {} about to call load_market_data_for_strategy with strategy_type={}", job.id, params.strategy_type);
+        
         let data = match self.load_market_data_for_strategy(&params.symbol, &params.exchange, &params.strategy_type).await {
             Ok(d) => {
+                println!("[SYNC] Job {} load_market_data_for_strategy returned {} records", job.id, d.len());
                 log_info!(GENETIC_LOGGER, "Job {} load_market_data_for_strategy returned {} records", job.id, d.len());
                 d
             }
             Err(e) => {
+                println!("[SYNC] Job {} load_market_data_for_strategy FAILED: {}", job.id, e);
                 log_error!(GENETIC_LOGGER, "Job {} load_market_data_for_strategy FAILED: {}", job.id, e);
                 return Err(e);
             }
@@ -1428,7 +1433,11 @@ impl Worker {
         exchange: &str,
         strategy_type: &str,
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
-        // Use GENETIC_LOGGER to ensure visibility (MAIN_LOGGER logs might be filtered)
+        // SYNC println to bypass async logging - appears immediately in container logs
+        println!("[SYNC] ENTER load_market_data_for_strategy | type='{}' sym={} ex={}", 
+            strategy_type, symbol, exchange);
+        
+        // Also log via async logger for Elasticsearch
         log_info!(GENETIC_LOGGER, "ENTER load_market_data_for_strategy | type='{}' sym={} ex={}", 
             strategy_type, symbol, exchange);
         
