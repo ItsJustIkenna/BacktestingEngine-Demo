@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 use config::GeneticConfig;
+use futures::stream::{FuturesUnordered, StreamExt};
 use rand::prelude::*;
 use ultra_logger::UltraLogger;
 use once_cell::sync::Lazy;
@@ -102,22 +103,36 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
         for generation in 0..self.config.generations {
             // Progress callback
             if let Some(ref callback) = self.progress_callback {
+                eprintln!("GENETIC DEBUG: {}Gen {}: Calling progress callback...", job_tag, generation + 1);
                 log_info!("{}Gen {}: Calling progress callback...", job_tag, generation + 1);
                 callback(generation + 1, self.config.generations).await;
+                eprintln!("GENETIC DEBUG: {}Gen {}: Progress callback returned", job_tag, generation + 1);
                 log_info!("{}Gen {}: Progress callback returned", job_tag, generation + 1);
             }
             
+            eprintln!("GENETIC DEBUG: {}Gen {}: Starting fitness evaluation for {} chromosomes", job_tag, generation + 1, population.len());
             log_info!("{}Gen {}: Starting fitness evaluation for {} chromosomes", 
                 job_tag, generation + 1, population.len());
             
-            // Evaluate all chromosomes sequentially
-            // (CPU-bound work - async overhead would hurt performance)
+            // Evaluate fitness with controlled parallelism (prevent OOM)
+            // Process in batches of 4 to limit memory usage while still parallelizing
+            let mut futures = FuturesUnordered::new();
             let mut fitness_results = Vec::with_capacity(population.len());
-            for (i, chromo) in population.iter().enumerate() {
-                if i == 0 || i == population.len() - 1 || i % 10 == 0 {
-                    log_info!("{}Gen {}: Evaluating chromosome {}/{}", job_tag, generation + 1, i + 1, population.len());
+            
+            for (chunk_idx, chunk) in population.chunks(4).enumerate() {
+                // Queue up fitness evaluations for this batch
+                for chromo in chunk {
+                    futures.push((self.fitness_fn)(chromo));
                 }
-                fitness_results.push((self.fitness_fn)(chromo).await);
+                // Collect results from this batch before starting next
+                while let Some(result) = futures.next().await {
+                    fitness_results.push(result);
+                }
+                
+                if chunk_idx % 3 == 0 {
+                    log_info!("{}Gen {}: Completed batch {}, {} chromosomes evaluated", 
+                        job_tag, generation + 1, chunk_idx + 1, fitness_results.len());
+                }
             }
             
             log_info!("{}Gen {}: Fitness evaluation complete", job_tag, generation + 1);
