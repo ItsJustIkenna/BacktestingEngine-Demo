@@ -21,11 +21,15 @@ static GENETIC_LOGGER: Lazy<Arc<UltraLogger>> = Lazy::new(|| {
     Arc::new(UltraLogger::new("BacktestingEngine-genetic".to_string()))
 });
 
-/// Log info message (synchronous - for use in genetic algorithm hot path)
+/// Log info message using tokio::spawn for async logging (matches worker's pattern)
 macro_rules! log_info {
-    ($($arg:tt)*) => {
-        GENETIC_LOGGER.info_sync(format!($($arg)*))
-    };
+    ($($arg:tt)*) => {{
+        let logger = GENETIC_LOGGER.clone();
+        let msg = format!($($arg)*);
+        tokio::spawn(async move {
+            let _ = logger.info(msg).await;
+        });
+    }};
 }
 
 /// Represents a set of strategy parameters (chromosome)
