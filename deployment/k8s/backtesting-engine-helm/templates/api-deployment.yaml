@@ -79,8 +79,8 @@ spec:
             periodSeconds: 5
           resources:
             limits:
-              cpu: "500m"
-              memory: "512Mi"
+              cpu: {{ .Values.api.resources.limits.cpu | default "2000m" | quote }}
+              memory: {{ .Values.api.resources.limits.memory | default "4Gi" | quote }}
             requests:
-              cpu: "250m"
-              memory: "256Mi"
+              cpu: {{ .Values.api.resources.requests.cpu | default "500m" | quote }}
+              memory: {{ .Values.api.resources.requests.memory | default "2Gi" | quote }}

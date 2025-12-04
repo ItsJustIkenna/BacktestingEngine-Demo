@@ -97,19 +97,24 @@ impl OrderBookStreamIterator {
         }
 
         // Use timeout to prevent indefinite blocking on pool exhaustion
+        println!("[SYNC] Getting database connection for chunk load (offset={})", self.offset);
         log_debug!(MAIN_LOGGER, "Getting database connection for chunk load (offset={})", self.offset);
         let mut conn = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             self.pool.get()
         ).await
             .map_err(|_| {
+                println!("[SYNC] ERROR: Connection pool timeout at offset {}", self.offset);
                 log_error!(MAIN_LOGGER, "Connection pool timeout at offset {}", self.offset);
                 "Connection pool timeout - possible deadlock or pool exhaustion"
             })?
             .map_err(|e| {
+                println!("[SYNC] ERROR: Failed to get database connection: {}", e);
                 log_error!(MAIN_LOGGER, "Failed to get database connection: {}", e);
                 format!("Failed to get database connection: {}", e)
             })?;
+        
+        println!("[SYNC] Got database connection, executing query (offset={})", self.offset);
 
         // Query order book events with LIMIT/OFFSET for chunking
         let query = format!(
@@ -122,6 +127,7 @@ impl OrderBookStreamIterator {
             self.symbol, self.exchange, self.chunk_size, self.offset
         );
 
+        println!("[SYNC] Query: LIMIT {} OFFSET {} for {} {}", self.chunk_size, self.offset, self.symbol, self.exchange);
         log_debug!(MAIN_LOGGER, "Executing query for {} {} (limit={}, offset={})", 
             self.symbol, self.exchange, self.chunk_size, self.offset);
 
@@ -130,13 +136,20 @@ impl OrderBookStreamIterator {
             diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn)
         ).await
             .map_err(|_| {
+                println!("[SYNC] ERROR: Query timeout at offset {} (30s limit)", self.offset);
                 log_error!(MAIN_LOGGER, "Query timeout loading order events for {} {} at offset {} (30s limit)", 
                     self.symbol, self.exchange, self.offset);
                 "Query execution timeout - database may be overloaded"
             })?
-            .map_err(|e| format!("Failed to load order events chunk: {}", e))?;
+            .map_err(|e| {
+                println!("[SYNC] ERROR: Query failed: {}", e);
+                format!("Failed to load order events chunk: {}", e)
+            })?;
+
+        println!("[SYNC] Query returned {} rows at offset {}", results.len(), self.offset);
 
         if results.is_empty() {
+            println!("[SYNC] No more results, finished loading");
             self.finished = true;
             return Ok(());
         }
@@ -176,12 +189,28 @@ impl OrderBookStreamIterator {
     
     /// Load all remaining data (async)
     pub async fn load_all(&mut self) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        self.load_up_to(usize::MAX).await
+    }
+    
+    /// Load data up to a maximum number of events (async)
+    /// Stops loading once max_events is reached to prevent OOM
+    pub async fn load_up_to(&mut self, max_events: usize) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
         let mut all_data = Vec::new();
         
-        while !self.finished {
+        while !self.finished && all_data.len() < max_events {
             self.load_next_chunk().await?;
-            all_data.extend(self.current_chunk.drain(..));
+            
+            // Only take what we need to reach max_events
+            let remaining = max_events.saturating_sub(all_data.len());
+            let to_take = remaining.min(self.current_chunk.len());
+            all_data.extend(self.current_chunk.drain(..to_take));
+            
+            if all_data.len() >= max_events {
+                break;
+            }
         }
+        
+        log_info!(MAIN_LOGGER, "Loaded {} order events (limit: {})", all_data.len(), max_events);
         
         Ok(all_data)
     }
@@ -252,8 +281,9 @@ impl OrderBookBatchLoader {
             self.exchange.clone(),
         );
 
-        let mut data = stream.load_all().await?;
-        data.truncate(max_events);
+        // Use load_up_to to stop loading once we have enough events
+        // This prevents loading all data just to truncate it
+        let data = stream.load_up_to(max_events).await?;
 
         println!("📊 Loaded {} events (limit: {})", data.len(), max_events);
 

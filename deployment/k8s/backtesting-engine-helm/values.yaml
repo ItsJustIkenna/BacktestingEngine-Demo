@@ -41,6 +41,14 @@ api:
   service:
     type: ClusterIP
     port: 8080
+  # API pod resource limits - needs enough memory to load market data
+  resources:
+    limits:
+      cpu: "2000m"
+      memory: "4Gi"      # Increased from 512Mi to prevent OOMKill when loading order events
+    requests:
+      cpu: "500m"
+      memory: "2Gi"
 
 # UI configuration
 ui:
@@ -189,7 +197,7 @@ config:
   performance:
     worker_threads: 4
   database:
-    host: "host.docker.internal"  # Override at deployment
+    host: ""  # Required: Set via --set config.database.host or Azure Key Vault
     port: 5432
     database: "backtesting"
     username: "postgres"  # Override at deployment

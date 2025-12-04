@@ -601,13 +601,22 @@ jobs:
             "--set", "ui.image.tag=$imageTag",
             "--set", "ui.image.pullPolicy=IfNotPresent",
             "--set", "secrets.existingSecret=backtesting-secrets",
+            # Database configuration from Azure Key Vault secrets
+            "--set", "config.database.host=$($env:POSTGRES_HOST)",
+            "--set", "config.database.port=$($env:POSTGRES_PORT)",
+            "--set", "config.database.database=$($env:POSTGRES_DB)",
+            "--set", "config.database.username=$($env:POSTGRES_USER)",
+            "--set", "externalDatabase.host=$($env:POSTGRES_HOST)",
+            "--set", "externalDatabase.port=$($env:POSTGRES_PORT)",
+            "--set", "externalDatabase.database=$($env:POSTGRES_DB)",
+            "--set", "externalDatabase.username=$($env:POSTGRES_USER)",
             "--wait",
             "--timeout", "18m"
           )
           
           Write-Host "[INFO] Using Kubernetes secret: backtesting-secrets"
-          
-          Write-Host "[INFO] Database and Elasticsearch configured"
+          Write-Host "[INFO] Database host: $($env:POSTGRES_HOST)"
+          Write-Host "[INFO] Database: $($env:POSTGRES_DB)"
           
           # Check and clear any stuck Helm operations
           Write-Host "[INFO] Checking Helm release status..."
