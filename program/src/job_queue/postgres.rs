@@ -740,42 +740,70 @@ impl JobQueue for PostgresQueue {
             point_in_time: true,
             warmup_period_days: 30,
             total_return: total_return_bd.clone(),
-            annualized_return,
-            volatility: BigDecimal::from(0), // Would need equity curve analysis
+            annualized_return: result.annualized_return
+                .map(|v| BigDecimal::from_str(&v.to_string()).unwrap_or(BigDecimal::from(0)))
+                .unwrap_or(annualized_return),
+            volatility: result.volatility
+                .map(|v| BigDecimal::from_str(&v.to_string()).unwrap_or(BigDecimal::from(0)))
+                .unwrap_or(BigDecimal::from(0)),
             sharpe_ratio: Some(BigDecimal::from_str(&result.sharpe_ratio.to_string())?),
-            sortino_ratio: None,
+            sortino_ratio: result.sortino_ratio
+                .map(|v| BigDecimal::from_str(&v.to_string()).ok())
+                .flatten(),
             max_drawdown: BigDecimal::from_str(&result.max_drawdown.to_string())?,
-            calmar_ratio: None,
+            calmar_ratio: result.calmar_ratio
+                .map(|v| BigDecimal::from_str(&v.to_string()).ok())
+                .flatten(),
             win_rate: BigDecimal::from_str(&result.win_rate.to_string())?,
             profit_factor: BigDecimal::from_str(&result.profit_factor.to_string())?,
-            avg_trade_return: if result.total_trades > 0 {
-                total_return_bd / BigDecimal::from(result.total_trades as i64)
-            } else {
-                BigDecimal::from(0)
-            },
+            avg_trade_return: result.avg_trade_return
+                .map(|v| BigDecimal::from_str(&v.to_string()).unwrap_or(BigDecimal::from(0)))
+                .unwrap_or_else(|| if result.total_trades > 0 {
+                    total_return_bd.clone() / BigDecimal::from(result.total_trades as i64)
+                } else {
+                    BigDecimal::from(0)
+                }),
             total_trades: result.total_trades as i32,
-            best_trade: None,
-            worst_trade: None,
-            avg_time_in_trade: None,
-            value_at_risk_95: None,
-            expected_shortfall_95: None,
+            best_trade: result.best_trade
+                .map(|v| BigDecimal::from_str(&v.to_string()).ok())
+                .flatten(),
+            worst_trade: result.worst_trade
+                .map(|v| BigDecimal::from_str(&v.to_string()).ok())
+                .flatten(),
+            avg_time_in_trade: result.avg_time_in_trade
+                .map(|v| BigDecimal::from_str(&v.to_string()).ok())
+                .flatten(),
+            value_at_risk_95: result.value_at_risk_95
+                .map(|v| BigDecimal::from_str(&v.to_string()).ok())
+                .flatten(),
+            expected_shortfall_95: result.expected_shortfall_95
+                .map(|v| BigDecimal::from_str(&v.to_string()).ok())
+                .flatten(),
             beta: None,
             correlation_with_benchmark: None,
             tracking_error: None,
             information_ratio: None,
             jensen_alpha: None,
-            max_drawdown_duration_days: None,
-            current_drawdown: BigDecimal::from(0),
-            avg_drawdown: None,
+            max_drawdown_duration_days: result.max_drawdown_duration_days,
+            current_drawdown: result.current_drawdown
+                .map(|v| BigDecimal::from_str(&v.to_string()).unwrap_or(BigDecimal::from(0)))
+                .unwrap_or(BigDecimal::from(0)),
+            avg_drawdown: result.avg_drawdown
+                .map(|v| BigDecimal::from_str(&v.to_string()).ok())
+                .flatten(),
             benchmark_return: None,
             excess_return: None,
             outperformance_periods: None,
             underperformance_periods: None,
-            total_orders: 0,
-            filled_orders: 0,
-            cancelled_orders: 0,
-            avg_slippage: BigDecimal::from(0),
-            total_commission_paid: BigDecimal::from(0),
+            total_orders: result.total_orders.unwrap_or(0),
+            filled_orders: result.filled_orders.unwrap_or(0),
+            cancelled_orders: result.cancelled_orders.unwrap_or(0),
+            avg_slippage: result.avg_slippage
+                .map(|v| BigDecimal::from_str(&v.to_string()).unwrap_or(BigDecimal::from(0)))
+                .unwrap_or(BigDecimal::from(0)),
+            total_commission_paid: result.total_commission_paid
+                .map(|v| BigDecimal::from_str(&v.to_string()).unwrap_or(BigDecimal::from(0)))
+                .unwrap_or(BigDecimal::from(0)),
             avg_fill_time_seconds: None,
             strategy_metrics: Some(serde_json::json!({
                 "risk_aversion": job.risk_aversion.to_string(),
