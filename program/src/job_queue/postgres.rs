@@ -814,7 +814,7 @@ impl JobQueue for PostgresQueue {
         // Query backtest_results by backtest_id
         let result: Option<(bigdecimal::BigDecimal, Option<bigdecimal::BigDecimal>, bigdecimal::BigDecimal, 
                             bigdecimal::BigDecimal, i32, bigdecimal::BigDecimal, 
-                            Option<String>, chrono::DateTime<chrono::Utc>)> = 
+                            Option<serde_json::Value>, chrono::DateTime<chrono::Utc>)> = 
             backtest_results::table
                 .filter(backtest_results::backtest_id.eq(backtest_uuid))
                 .select((
@@ -834,15 +834,11 @@ impl JobQueue for PostgresQueue {
         match result {
             Some((total_return, sharpe_ratio, max_drawdown, win_rate, 
                   total_trades, profit_factor, strategy_metrics, created_at)) => {
-                // Extract equity curve from strategy_metrics JSON string
-                let equity_curve = if let Some(metrics_str) = strategy_metrics {
-                    if let Ok(metrics) = serde_json::from_str::<serde_json::Value>(&metrics_str) {
-                        metrics.get("equity_curve")
-                            .and_then(|v| serde_json::from_value(v.clone()).ok())
-                            .unwrap_or_else(Vec::new)
-                    } else {
-                        Vec::new()
-                    }
+                // Extract equity curve from strategy_metrics JSON
+                let equity_curve = if let Some(metrics) = strategy_metrics {
+                    metrics.get("equity_curve")
+                        .and_then(|v| serde_json::from_value(v.clone()).ok())
+                        .unwrap_or_else(Vec::new)
                 } else {
                     Vec::new()
                 };
