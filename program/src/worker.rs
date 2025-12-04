@@ -668,6 +668,7 @@ impl Worker {
         log_info!(GENETIC_LOGGER, "Job {} loaded {} market data points", job.id, data.len());
         
         // For genetic optimization, use a subsample to speed up fitness evaluation
+        // With true parallelism (spawn_blocking), we can use more samples
         // We'll run the full backtest on the winning chromosome after optimization
         const MAX_OPTIMIZATION_SAMPLES: usize = 5000;
         let optimization_data: Vec<MarketData> = if data.len() > MAX_OPTIMIZATION_SAMPLES {
@@ -703,7 +704,6 @@ impl Worker {
         
         // Create fitness function that evaluates chromosomes and returns equity curve for robustness analysis
         // THREAD SAFETY: We clone Arc references and create fresh state inside each async block
-        // Use spawn_blocking to actually parallelize CPU-bound simulation work
         let fitness_fn: genetic::AsyncFitnessFn<AvellanedaStoikovChromosome> = Arc::new(move |chromosome: &AvellanedaStoikovChromosome| {
             let data = Arc::clone(&data_arc);
             let symbol = symbol.clone();
@@ -711,82 +711,69 @@ impl Worker {
             let chr = chromosome.clone(); // Clone the chromosome to move into async
             
             Box::pin(async move {
-                // Use spawn_blocking to run CPU-bound simulation on thread pool
-                let result = tokio::task::spawn_blocking(move || {
-                    // Create a new runtime for the blocking task
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .expect("Failed to create runtime");
-                    
-                    rt.block_on(async {
-                        // Each async block gets its own fresh state - no shared mutable state
-                        let mut backtest_config = BacktestConfig::default();
-                        backtest_config.trading.initial_capital = initial_capital;
-                        backtest_config.trading.commission_rate = commission_rate;
-                        backtest_config.analysis.skip_genetic_optimization = true;
-                        backtest_config.analysis.auto_monte_carlo = false;
-                        backtest_config.analysis.auto_walk_forward = false;
-                        backtest_config.data.gap_detection.enabled = false;
-                        
-                        let engine = BacktestEngine::new(backtest_config);
-                        let mut portfolio = PortfolioState::default();
-                        portfolio.balance = BigDecimal::from_f64(initial_capital).unwrap_or_default();
-                        
-                        let orderbook_config = OrderBookConfig::default();
-                        let mut orderbook = OrderBook::new(symbol.clone(), exchange.clone(), orderbook_config);
-                        let mut risk_manager = RiskManager::new();
-                        
-                        // Create strategy with chromosome parameters
-                        let strategy_params = AvellanedaStoikovParams {
-                            risk_aversion: chr.risk_aversion,
-                            inventory_target: chr.inventory_target,
-                            order_size: chr.order_size,
-                            ..Default::default()
-                        };
-                        
-                        let mut strategy_params_map = HashMap::new();
-                        strategy_params_map.insert("risk_aversion".to_string(), config::ParameterValue::Float(chr.risk_aversion));
-                        strategy_params_map.insert("inventory_target".to_string(), config::ParameterValue::Float(chr.inventory_target));
-                        strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(chr.order_size));
-                        
-                        let strategy_config = StrategyConfig {
-                            id: "genetic-eval".to_string(),
-                            name: "Avellaneda-Stoikov".to_string(),
-                            strategy_type: "AvellanedaStoikov".to_string(),
-                            symbol: symbol.clone(),
-                            exchange: exchange.clone(),
-                            parameters: strategy_params_map,
-                            risk_limits: StrategyRiskLimits::default(),
-                            enabled: true,
-                        };
-                        
-                        let strategy = AvellanedaStoikovStrategy::new(strategy_params);
-                        let mut strategy_manager = StrategyManager::new();
-                        if strategy_manager.register_strategy(strategy_config, strategy).is_err() {
-                            return genetic::FitnessResult::failure();
-                        }
-                        
-                        // Run ONLY core simulation (no Monte Carlo, no Walk-Forward)
-                        match engine.run_core_simulation_direct(
-                            &mut strategy_manager,
-                            &mut orderbook,
-                            &mut portfolio,
-                            &mut risk_manager,
-                            &data,
-                        ).await {
-                            Ok(result) => {
-                                let sharpe = result.sharpe_ratio.unwrap_or(0.0);
-                                let pnl = result.total_pnl.to_string().parse::<f64>().unwrap_or(0.0);
-                                let fitness = sharpe + (pnl / initial_capital) * 0.1;
-                                genetic::FitnessResult::new(fitness, result.equity_curve)
-                            }
-                            Err(_) => genetic::FitnessResult::failure(),
-                        }
-                    })
-                }).await;
+                // Each async block gets its own fresh state - no shared mutable state
+                let mut backtest_config = BacktestConfig::default();
+                backtest_config.trading.initial_capital = initial_capital;
+                backtest_config.trading.commission_rate = commission_rate;
+                backtest_config.analysis.skip_genetic_optimization = true;
+                backtest_config.analysis.auto_monte_carlo = false;
+                backtest_config.analysis.auto_walk_forward = false;
+                backtest_config.data.gap_detection.enabled = false;
                 
-                result.unwrap_or_else(|_| genetic::FitnessResult::failure())
+                let engine = BacktestEngine::new(backtest_config);
+                let mut portfolio = PortfolioState::default();
+                portfolio.balance = BigDecimal::from_f64(initial_capital).unwrap_or_default();
+                
+                let orderbook_config = OrderBookConfig::default();
+                let mut orderbook = OrderBook::new(symbol.clone(), exchange.clone(), orderbook_config);
+                let mut risk_manager = RiskManager::new();
+                
+                // Create strategy with chromosome parameters
+                let strategy_params = AvellanedaStoikovParams {
+                    risk_aversion: chr.risk_aversion,
+                    inventory_target: chr.inventory_target,
+                    order_size: chr.order_size,
+                    ..Default::default()
+                };
+                
+                let mut strategy_params_map = HashMap::new();
+                strategy_params_map.insert("risk_aversion".to_string(), config::ParameterValue::Float(chr.risk_aversion));
+                strategy_params_map.insert("inventory_target".to_string(), config::ParameterValue::Float(chr.inventory_target));
+                strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(chr.order_size));
+                
+                let strategy_config = StrategyConfig {
+                    id: "genetic-eval".to_string(),
+                    name: "Avellaneda-Stoikov".to_string(),
+                    strategy_type: "AvellanedaStoikov".to_string(),
+                    symbol: symbol.clone(),
+                    exchange: exchange.clone(),
+                    parameters: strategy_params_map,
+                    risk_limits: StrategyRiskLimits::default(),
+                    enabled: true,
+                };
+                
+                let strategy = AvellanedaStoikovStrategy::new(strategy_params);
+                let mut strategy_manager = StrategyManager::new();
+                if strategy_manager.register_strategy(strategy_config, strategy).is_err() {
+                    return genetic::FitnessResult::failure();
+                }
+                
+                // Run ONLY core simulation (no Monte Carlo, no Walk-Forward)
+                match engine.run_core_simulation_direct(
+                    &mut strategy_manager,
+                    &mut orderbook,
+                    &mut portfolio,
+                    &mut risk_manager,
+                    &data,
+                ).await {
+                    Ok(result) => {
+                        let sharpe = result.sharpe_ratio.unwrap_or(0.0);
+                        let pnl = result.total_pnl.to_string().parse::<f64>().unwrap_or(0.0);
+                        let fitness = sharpe + (pnl / initial_capital) * 0.1;
+                        genetic::FitnessResult::new(fitness, result.equity_curve)
+                    }
+                    Err(_) => genetic::FitnessResult::failure(),
+                }
             })
         });
         

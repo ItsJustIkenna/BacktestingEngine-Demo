@@ -56,7 +56,7 @@ pub struct GeneticOptimizer<C: Chromosome> {
     pub progress_callback: Option<ProgressCallback>,
 }
 
-impl<C: Chromosome> GeneticOptimizer<C> {
+impl<C: Chromosome + 'static> GeneticOptimizer<C> {
     pub async fn run(&self) -> (C, f64) {
         // Use StdRng which is Send-safe (unlike thread_rng which uses Rc)
         let mut rng = rand::rngs::StdRng::from_entropy();
@@ -82,13 +82,27 @@ impl<C: Chromosome> GeneticOptimizer<C> {
                 callback(generation + 1, self.config.generations).await;
             }
             
-            // 2. Evaluate fitness with controlled parallelism (prevent OOM)
-            // Process all chromosomes concurrently using join_all for simplicity
+            // 2. Evaluate fitness in parallel using spawn_blocking for CPU-bound work
+            // Each spawn_blocking task runs on tokio's blocking thread pool
             use futures::future::join_all;
             
-            let fitness_futures: Vec<_> = population.iter()
-                .map(|chromo| (self.fitness_fn)(chromo))
-                .collect();
+            let fitness_futures: Vec<_> = population.iter().map(|chromo| {
+                let chromo = chromo.clone();
+                let fitness_fn = Arc::clone(&self.fitness_fn);
+                
+                async move {
+                    // Run the CPU-bound fitness evaluation on a blocking thread
+                    let handle = tokio::task::spawn_blocking(move || {
+                        // Create a lightweight runtime just for this evaluation
+                        let rt = tokio::runtime::Builder::new_current_thread()
+                            .build()
+                            .expect("Failed to create runtime");
+                        rt.block_on(fitness_fn(&chromo))
+                    });
+                    
+                    handle.await.unwrap_or_else(|_| FitnessResult::failure())
+                }
+            }).collect();
             
             let fitness_results: Vec<FitnessResult> = join_all(fitness_futures).await;
             
