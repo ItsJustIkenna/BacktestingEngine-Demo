@@ -31,7 +31,8 @@ fn create_test_trade(symbol: &str, price: f64) -> MarketData {
     })
 }
 
-// Benchmark DataLoader creation
+// Benchmark DataLoader creation (only for non-postgres builds)
+#[cfg(not(feature = "postgres"))]
 fn bench_dataloader_creation(c: &mut Criterion) {
     c.bench_function("dataloader_creation", |b| {
         b.iter(|| {
@@ -39,6 +40,11 @@ fn bench_dataloader_creation(c: &mut Criterion) {
             black_box(loader)
         })
     });
+}
+
+#[cfg(feature = "postgres")]
+fn bench_dataloader_creation(_c: &mut Criterion) {
+    // Skip for postgres builds - requires database connection
 }
 
 // Benchmark market data creation
@@ -75,6 +81,7 @@ fn bench_market_data_processing(c: &mut Criterion) {
                     MarketData::Trade(trade) => {
                         sum += &trade.price;
                     }
+                    _ => {} // Handle Order/Snapshot variants when postgres is enabled
                 }
             }
             black_box(sum)

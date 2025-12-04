@@ -346,10 +346,11 @@ mod tests {
     fn create_mock_dataloader() -> Arc<DataLoader> {
         // This is a mock for testing - the actual pool creation would be handled elsewhere
         // For unit tests, we'll create a minimal DataLoader that won't be used for actual DB operations
-        use databaseschema::CustomAsyncPgConnectionManager;
+        use diesel_async::pooled_connection::AsyncDieselConnectionManager;
+        use diesel_async::AsyncPgConnection;
         use deadpool::managed::Pool;
         
-        let manager = CustomAsyncPgConnectionManager::new("postgresql://mock".to_string());
+        let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new("postgresql://mock");
         let pool = Pool::builder(manager).max_size(1).build().unwrap();
         Arc::new(DataLoader::new(Arc::new(pool)))
     }

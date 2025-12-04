@@ -79,6 +79,7 @@ mod tests {
             config,
             fitness_fn,
             progress_callback: None,
+            job_id: None,
         };
 
         // Test that we can run the optimizer
@@ -103,6 +104,7 @@ mod tests {
             config,
             fitness_fn,
             progress_callback: None,
+            job_id: None,
         };
 
         let (best, fitness) = optimizer.run().await;
@@ -170,6 +172,7 @@ mod tests {
             config,
             fitness_fn,
             progress_callback: None,
+            job_id: None,
         };
 
         let (best, fitness) = optimizer.run().await;
@@ -208,6 +211,7 @@ mod tests {
             config,
             fitness_fn: slow_fitness_fn,
             progress_callback: None,
+            job_id: None,
         };
 
         let (_best, _fitness) = optimizer.run().await;
@@ -265,6 +269,7 @@ mod tests {
             config,
             fitness_fn,
             progress_callback: None,
+            job_id: None,
         };
 
         let (best, fitness) = optimizer.run().await;
@@ -309,6 +314,7 @@ mod tests {
             config,
             fitness_fn,
             progress_callback: None,
+            job_id: None,
         };
 
         let (best, fitness) = optimizer.run().await;

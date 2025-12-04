@@ -1855,6 +1855,7 @@ dependencies = [
  "databaseschema",
  "dataloader",
  "deadpool 0.12.3",
+ "diesel-async",
  "indexmap",
  "once_cell",
  "ordered-float",

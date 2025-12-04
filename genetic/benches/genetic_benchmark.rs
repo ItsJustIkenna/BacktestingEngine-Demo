@@ -118,6 +118,7 @@ fn bench_genetic_optimizer_creation(c: &mut Criterion) {
                 config,
                 fitness_fn: fitness_fn.clone(),
                 progress_callback: None,
+                job_id: None,
             })
         })
     });
@@ -214,6 +215,7 @@ fn bench_genetic_optimization_full(c: &mut Criterion) {
                     config: config.clone(),
                     fitness_fn: fast_fitness.clone(),
                     progress_callback: None,
+                    job_id: None,
                 };
                 rt.block_on(async {
                     black_box(optimizer.run().await)

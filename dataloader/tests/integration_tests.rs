@@ -43,6 +43,7 @@ fn create_test_candle() -> Candle {
     }
 }
 
+#[cfg(not(feature = "postgres"))]
 #[tokio::test]
 async fn test_dataloader_creation() {
     // Test non-postgres DataLoader creation
@@ -53,6 +54,7 @@ async fn test_dataloader_creation() {
     assert!(true); // Placeholder - DataLoader created successfully
 }
 
+#[cfg(not(feature = "postgres"))]
 #[tokio::test]
 async fn test_dataloader_mock_creation() {
     // Test mock DataLoader creation for testing
@@ -160,6 +162,7 @@ async fn test_candle_ohlc_logic() {
     assert!(candle.trade_count > 0);
 }
 
+#[cfg(not(feature = "postgres"))]
 #[tokio::test]
 async fn test_cache_invalidation() {
     // Test basic DataLoader functionality without database
