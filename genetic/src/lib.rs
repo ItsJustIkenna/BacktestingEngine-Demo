@@ -101,12 +101,20 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
                 callback(generation + 1, self.config.generations).await;
             }
             
+            log_info!("{}Gen {}: Starting fitness evaluation for {} chromosomes", 
+                job_tag, generation + 1, population.len());
+            
             // Evaluate all chromosomes sequentially
             // (CPU-bound work - async overhead would hurt performance)
             let mut fitness_results = Vec::with_capacity(population.len());
-            for chromo in population.iter() {
+            for (i, chromo) in population.iter().enumerate() {
+                if i == 0 || i == population.len() - 1 || i % 10 == 0 {
+                    log_info!("{}Gen {}: Evaluating chromosome {}/{}", job_tag, generation + 1, i + 1, population.len());
+                }
                 fitness_results.push((self.fitness_fn)(chromo).await);
             }
+            
+            log_info!("{}Gen {}: Fitness evaluation complete", job_tag, generation + 1);
             
             // Extract raw fitness values
             let mut fitnesses: Vec<f64> = fitness_results.iter().map(|r| r.fitness).collect();
