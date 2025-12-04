@@ -1,6 +1,6 @@
 //! Integration tests for the genetic algorithm module
 
-use genetic::{GeneticOptimizer, Chromosome, AsyncFitnessFn};
+use genetic::{GeneticOptimizer, Chromosome, AsyncFitnessFn, FitnessResult};
 use genetic::chromosome::AvellanedaStoikovChromosome;
 use config::GeneticConfig;
 use rand::prelude::*;
@@ -57,7 +57,10 @@ mod tests {
             let values = chromosome.values.clone();
             Box::pin(async move {
                 // Simple fitness function: minimize sum of squares
-                -values.iter().map(|&x| x * x).sum::<f64>()
+                let fitness = -values.iter().map(|&x| x * x).sum::<f64>();
+                // Create a mock equity curve for testing
+                let equity_curve = vec![100.0, 101.0, 102.0, 101.5, 103.0];
+                FitnessResult::new(fitness, equity_curve)
             })
         })
     }
@@ -159,7 +162,7 @@ mod tests {
                 let risk_score = if risk > 0.01 && risk < 0.05 { 10.0 } else { 1.0 };
                 let size_score = if size > 0.1 && size < 0.5 { 10.0 } else { 1.0 };
                 let inv_score = if inv_target.abs() < 0.5 { 5.0 } else { 1.0 };
-                risk_score + size_score + inv_score
+                FitnessResult::new(risk_score + size_score + inv_score, Vec::new())
             })
         });
 
@@ -197,7 +200,7 @@ mod tests {
             Box::pin(async move {
                 counter.fetch_add(1, Ordering::SeqCst);
                 // Return fitness based on first value
-                values.get(0).copied().unwrap_or(0.0)
+                FitnessResult::new(values.get(0).copied().unwrap_or(0.0), Vec::new())
             })
         });
 
@@ -255,7 +258,7 @@ mod tests {
         // Fitness function that returns the first value
         let fitness_fn: AsyncFitnessFn<TestChromosome> = Arc::new(|chromo| {
             let first_val = chromo.values.get(0).copied().unwrap_or(0.0);
-            Box::pin(async move { first_val })
+            Box::pin(async move { FitnessResult::new(first_val, Vec::new()) })
         });
 
         let optimizer = GeneticOptimizer {

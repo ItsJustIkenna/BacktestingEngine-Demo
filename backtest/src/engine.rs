@@ -432,8 +432,11 @@ impl BacktestEngine {
                     fitness *= 0.5;
                 }
                 
-                fitness.max(0.0) // Ensure non-negative
-            }) as Pin<Box<dyn Future<Output = f64> + Send + 'static>>
+                let final_fitness = fitness.max(0.0); // Ensure non-negative
+                
+                // Return fitness AND equity curve for robustness analysis
+                genetic::FitnessResult::new(final_fitness, result.equity_curve)
+            }) as Pin<Box<dyn Future<Output = genetic::FitnessResult> + Send + 'static>>
         });
         
         log_debug!(BACKTEST_LOGGER, "Genetic: pop={}, gen={}", population_size, generations);

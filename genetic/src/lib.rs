@@ -2,6 +2,9 @@
 /// 
 /// Provides async genetic algorithm optimization for finding optimal
 /// trading strategy parameters with parallel fitness evaluation.
+/// 
+/// Includes robustness-weighted fitness using Monte Carlo consistency checks
+/// on top performers to prevent overfitting to lucky parameter combinations.
 
 use std::sync::Arc;
 use config::GeneticConfig;
@@ -23,8 +26,25 @@ pub trait Chromosome: Clone + Send + Sync {
     fn distance(&self, other: &Self) -> f64;
 }
 
-/// Async fitness function type alias
-pub type AsyncFitnessFn<C> = Arc<dyn Fn(&C) -> std::pin::Pin<Box<dyn std::future::Future<Output = f64> + Send>> + Send + Sync>;
+/// Fitness result containing both the raw fitness and equity curve for robustness analysis
+#[derive(Clone)]
+pub struct FitnessResult {
+    pub fitness: f64,
+    pub equity_curve: Vec<f64>,
+}
+
+impl FitnessResult {
+    pub fn new(fitness: f64, equity_curve: Vec<f64>) -> Self {
+        Self { fitness, equity_curve }
+    }
+    
+    pub fn failure() -> Self {
+        Self { fitness: 0.0, equity_curve: Vec::new() }
+    }
+}
+
+/// Async fitness function type alias - returns fitness AND equity curve for MC analysis
+pub type AsyncFitnessFn<C> = Arc<dyn Fn(&C) -> std::pin::Pin<Box<dyn std::future::Future<Output = FitnessResult> + Send>> + Send + Sync>;
 
 /// Progress callback type for reporting generation progress
 pub type ProgressCallback = Arc<dyn Fn(usize, usize) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync>;
@@ -47,7 +67,9 @@ impl<C: Chromosome> GeneticOptimizer<C> {
             .collect();
         
         let mut best = population[0].clone();
-        let mut best_fitness = (self.fitness_fn)(&best).await;
+        let initial_result = (self.fitness_fn)(&best).await;
+        let mut best_fitness = initial_result.fitness;
+        let mut best_equity_curve = initial_result.equity_curve;
         let mut generations_without_improvement = 0;
         const CONVERGENCE_THRESHOLD: usize = 10;
         
@@ -65,7 +87,7 @@ impl<C: Chromosome> GeneticOptimizer<C> {
             use futures::stream::{FuturesUnordered, StreamExt};
             
             let mut futures = FuturesUnordered::new();
-            let mut fitnesses = Vec::with_capacity(population.len());
+            let mut fitness_results: Vec<FitnessResult> = Vec::with_capacity(population.len());
             
             // Process in batches of 4 to limit memory usage
             for chunk in population.chunks(4) {
@@ -74,32 +96,29 @@ impl<C: Chromosome> GeneticOptimizer<C> {
                 }
                 
                 // Collect results from this batch
-                while let Some(fitness) = futures.next().await {
-                    fitnesses.push(fitness);
+                while let Some(result) = futures.next().await {
+                    fitness_results.push(result);
                 }
             }
             
-            // LAZY EVALUATION: If Monte Carlo fitness is enabled, apply consistency check
-            // only to top N% performers to validate stability
+            // Extract raw fitness values
+            let mut fitnesses: Vec<f64> = fitness_results.iter().map(|r| r.fitness).collect();
+            
+            // ROBUSTNESS-WEIGHTED FITNESS: Apply Monte Carlo consistency check
+            // to top N% performers to validate stability and prevent overfitting
             if self.config.use_monte_carlo_fitness && generation > 0 {
-                // Calculate fitness threshold for top N%
-                let mut sorted_fitnesses = fitnesses.clone();
-                sorted_fitnesses.sort_by(|a, b| b.partial_cmp(a).unwrap());
-                let threshold_idx = ((1.0 - self.config.top_percentile_threshold) * sorted_fitnesses.len() as f64) as usize;
-                let _fitness_threshold = sorted_fitnesses[threshold_idx.min(sorted_fitnesses.len() - 1)];
-                
-                // Future enhancement: Apply MC consistency check to top performers
-                // Currently disabled - would need integration with fitness_fn
+                self.apply_robustness_penalty(&mut fitnesses, &fitness_results);
             }
             
             // Track best fitness in this generation
             let mut generation_best_fitness = best_fitness;
             
             // 3. Sort population by fitness for elitism
-            let mut indexed_population: Vec<(usize, &C, f64)> = population.iter()
+            let mut indexed_population: Vec<(usize, &C, f64, &FitnessResult)> = population.iter()
                 .enumerate()
                 .zip(fitnesses.iter())
-                .map(|((idx, c), &fit)| (idx, c, fit))
+                .zip(fitness_results.iter())
+                .map(|(((idx, c), &fit), result)| (idx, c, fit, result))
                 .collect();
             indexed_population.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
             
@@ -111,6 +130,7 @@ impl<C: Chromosome> GeneticOptimizer<C> {
                     generation_best_fitness = indexed_population[i].2;
                     best = indexed_population[i].1.clone();
                     best_fitness = generation_best_fitness;
+                    best_equity_curve = indexed_population[i].3.equity_curve.clone();
                 }
             }
             
@@ -189,7 +209,101 @@ impl<C: Chromosome> GeneticOptimizer<C> {
             }
         }
         
+        // Run final robustness check on the best chromosome
+        if self.config.use_monte_carlo_fitness && !best_equity_curve.is_empty() {
+            let (mean_sharpe, std_sharpe) = Self::run_lightweight_monte_carlo(&best_equity_curve, self.config.mc_sample_size);
+            eprintln!("🎲 Best chromosome robustness: mean_sharpe={:.3}, std_sharpe={:.3}", mean_sharpe, std_sharpe);
+        }
+        
         (best, best_fitness)
+    }
+    
+    /// Apply robustness penalty to top performers using Monte Carlo consistency check
+    /// 
+    /// This prevents overfitting by penalizing parameter sets that got lucky.
+    /// Only applies to top N% to save computation.
+    fn apply_robustness_penalty(&self, fitnesses: &mut [f64], results: &[FitnessResult]) {
+        // Find fitness threshold for top N%
+        let mut sorted = fitnesses.to_vec();
+        sorted.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        let threshold_idx = ((1.0 - self.config.top_percentile_threshold) * sorted.len() as f64) as usize;
+        let fitness_threshold = sorted[threshold_idx.min(sorted.len().saturating_sub(1))];
+        
+        // Apply MC consistency check only to top performers
+        for (i, result) in results.iter().enumerate() {
+            if fitnesses[i] >= fitness_threshold && !result.equity_curve.is_empty() {
+                let (mean_sharpe, std_sharpe) = Self::run_lightweight_monte_carlo(
+                    &result.equity_curve, 
+                    self.config.mc_sample_size
+                );
+                
+                // Calculate robustness penalty based on coefficient of variation
+                // High std relative to mean = unstable = penalty
+                let cv = if mean_sharpe.abs() > 0.001 {
+                    std_sharpe / mean_sharpe.abs()
+                } else {
+                    1.0 // Max penalty if mean is near zero
+                };
+                
+                // Penalty ranges from 0 (perfect consistency) to 0.5 (very unstable)
+                // CV of 0.5 or higher = 50% penalty
+                let penalty = (cv * 0.5).min(0.5);
+                
+                // Apply penalty
+                fitnesses[i] *= 1.0 - penalty;
+            }
+        }
+    }
+    
+    /// Run lightweight Monte Carlo by shuffling trade returns
+    /// Returns (mean_sharpe, std_sharpe)
+    fn run_lightweight_monte_carlo(equity_curve: &[f64], num_runs: usize) -> (f64, f64) {
+        use rayon::prelude::*;
+        
+        if equity_curve.len() < 2 {
+            return (0.0, 0.0);
+        }
+        
+        // Extract trade returns from equity curve
+        let trade_returns: Vec<f64> = equity_curve.windows(2)
+            .map(|w| w[1] - w[0])
+            .collect();
+        
+        if trade_returns.is_empty() {
+            return (0.0, 0.0);
+        }
+        
+        // Run Monte Carlo in parallel
+        let sharpe_ratios: Vec<f64> = (0..num_runs)
+            .into_par_iter()
+            .map(|_| {
+                let mut rng = rand::thread_rng();
+                let mut shuffled = trade_returns.clone();
+                shuffled.shuffle(&mut rng);
+                
+                // Calculate Sharpe ratio
+                let mean_ret: f64 = shuffled.iter().sum::<f64>() / shuffled.len() as f64;
+                let variance: f64 = shuffled.iter()
+                    .map(|r| (r - mean_ret).powi(2))
+                    .sum::<f64>() / (shuffled.len() - 1).max(1) as f64;
+                let std_ret = variance.sqrt();
+                
+                if std_ret > 0.0 {
+                    mean_ret / std_ret * 252.0_f64.sqrt() // Annualized
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        
+        // Calculate mean and std of Sharpe ratios
+        let mean_sharpe: f64 = sharpe_ratios.iter().sum::<f64>() / sharpe_ratios.len() as f64;
+        let variance: f64 = sharpe_ratios.iter()
+            .map(|s| (s - mean_sharpe).powi(2))
+            .sum::<f64>() / (sharpe_ratios.len() - 1).max(1) as f64;
+        let std_sharpe = variance.sqrt();
+        
+        (mean_sharpe, std_sharpe)
     }
     
     /// Calculate population diversity as average pairwise distance
@@ -240,7 +354,8 @@ mod tests {
             // For now, return a simple fitness score
             // In a real implementation, this would run a full backtest
             let score = chromo.risk_aversion * 10.0 + chromo.inventory_target * 5.0;
-            Box::pin(async move { score }) as Pin<Box<dyn Future<Output = f64> + Send + 'static>>
+            let equity_curve = vec![100.0, 101.0, 102.0, 101.5, 103.0]; // Mock equity curve
+            Box::pin(async move { FitnessResult::new(score, equity_curve) }) as Pin<Box<dyn Future<Output = FitnessResult> + Send + 'static>>
         });
         
         let optimizer = GeneticOptimizer {

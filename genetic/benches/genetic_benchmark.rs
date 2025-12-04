@@ -1,6 +1,6 @@
 //! Benchmarks for the genetic algorithm module
 
-use genetic::{GeneticOptimizer, Chromosome, AsyncFitnessFn};
+use genetic::{GeneticOptimizer, Chromosome, AsyncFitnessFn, FitnessResult};
 use config::GeneticConfig;
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
 use rand::prelude::*;
@@ -53,7 +53,9 @@ fn create_fast_fitness_fn() -> AsyncFitnessFn<BenchChromosome> {
     Arc::new(|chromosome: &BenchChromosome| {
         let values = chromosome.values.clone();
         Box::pin(async move {
-            -values.iter().map(|x| x * x).sum::<f64>()
+            let fitness = -values.iter().map(|x| x * x).sum::<f64>();
+            let equity_curve = vec![100.0, 101.0, 102.0];
+            FitnessResult::new(fitness, equity_curve)
         })
     })
 }
@@ -64,7 +66,9 @@ fn create_slow_fitness_fn() -> AsyncFitnessFn<BenchChromosome> {
         let values = chromosome.values.clone();
         Box::pin(async move {
             tokio::time::sleep(tokio::time::Duration::from_micros(100)).await;
-            -values.iter().map(|x| x * x).sum::<f64>()
+            let fitness = -values.iter().map(|x| x * x).sum::<f64>();
+            let equity_curve = vec![100.0, 101.0, 102.0];
+            FitnessResult::new(fitness, equity_curve)
         })
     })
 }

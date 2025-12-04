@@ -687,7 +687,7 @@ impl Worker {
         let initial_capital = params.initial_capital;
         let commission_rate = params.commission_rate;
         
-        // Create fitness function that evaluates chromosomes
+        // Create fitness function that evaluates chromosomes and returns equity curve for robustness analysis
         // THREAD SAFETY: We clone Arc references and create fresh state inside each async block
         let fitness_fn: genetic::AsyncFitnessFn<AvellanedaStoikovChromosome> = Arc::new(move |chromosome: &AvellanedaStoikovChromosome| {
             let data = Arc::clone(&data_arc);
@@ -740,7 +740,7 @@ impl Worker {
                 let strategy = AvellanedaStoikovStrategy::new(strategy_params);
                 let mut strategy_manager = StrategyManager::new();
                 if strategy_manager.register_strategy(strategy_config, strategy).is_err() {
-                    return 0.0;
+                    return genetic::FitnessResult::failure();
                 }
                 
                 // Run ONLY core simulation (no Monte Carlo, no Walk-Forward)
@@ -756,21 +756,24 @@ impl Worker {
                         // Fitness = Sharpe ratio (primary) + PnL bonus
                         let sharpe = result.sharpe_ratio.unwrap_or(0.0);
                         let pnl = result.total_pnl.to_string().parse::<f64>().unwrap_or(0.0);
-                        sharpe + (pnl / initial_capital) * 0.1
+                        let fitness = sharpe + (pnl / initial_capital) * 0.1;
+                        
+                        // Return fitness AND equity curve for robustness analysis
+                        genetic::FitnessResult::new(fitness, result.equity_curve)
                     }
-                    Err(_) => 0.0,
+                    Err(_) => genetic::FitnessResult::failure(),
                 }
             })
         });
         
-        // Run genetic optimization
+        // Run genetic optimization with robustness-weighted fitness
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn,
             progress_callback: Some(generation_callback),
         };
         
-        log_info!(GENETIC_LOGGER, "Job {} starting genetic algorithm run", job.id);
+        log_info!(GENETIC_LOGGER, "Job {} starting genetic algorithm with robustness-weighted fitness", job.id);
         let (best_chromosome, best_fitness) = optimizer.run().await;
         
         // Flush progress after optimization completes
@@ -836,6 +839,7 @@ impl Worker {
     ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
         use genetic::GeneticOptimizer;
         use genetic::chromosome::AvellanedaStoikovChromosome;
+        use genetic::FitnessResult;
         use config::GeneticConfig;
         
         let params = &job.params;
@@ -1014,7 +1018,7 @@ impl Worker {
                         let strategy = AvellanedaStoikovStrategy::new(strategy_params);
                         let mut strategy_manager = StrategyManager::new();
                         if strategy_manager.register_strategy(strategy_config, strategy).is_err() {
-                            return 0.0;
+                            return FitnessResult::new(0.0, Vec::new());
                         }
                         
                         match engine.run_core_simulation_direct(
@@ -1027,9 +1031,10 @@ impl Worker {
                             Ok(result) => {
                                 let sharpe = result.sharpe_ratio.unwrap_or(0.0);
                                 let pnl = result.total_pnl.to_string().parse::<f64>().unwrap_or(0.0);
-                                sharpe + (pnl / initial_capital) * 0.1
+                                let fitness = sharpe + (pnl / initial_capital) * 0.1;
+                                FitnessResult::new(fitness, result.equity_curve.clone())
                             }
-                            Err(_) => 0.0,
+                            Err(_) => FitnessResult::new(0.0, Vec::new()),
                         }
                     })
                 })

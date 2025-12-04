@@ -119,7 +119,7 @@ fn in_range(d: &MarketData, start: NaiveDate, end: NaiveDate) -> bool {
     ts >= start && ts < end
 }
 use genetic::chromosome::AvellanedaStoikovChromosome;
-use genetic::GeneticOptimizer;
+use genetic::{GeneticOptimizer, FitnessResult};
 use config::GeneticConfig;
 use std::sync::Arc;
 use std::pin::Pin;
@@ -139,7 +139,7 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
     let fitness_fn = Arc::new(|chromo: &AvellanedaStoikovChromosome| {
         // Simple fitness based on parameter values since full backtesting is complex
         let score = chromo.risk_aversion * 10.0 + chromo.inventory_target * 5.0;
-        Box::pin(async move { score }) as Pin<Box<dyn Future<Output = f64> + Send + 'static>>
+        Box::pin(async move { FitnessResult::new(score, Vec::new()) }) as Pin<Box<dyn Future<Output = FitnessResult> + Send + 'static>>
     });
     let optimizer = GeneticOptimizer {
         config,
