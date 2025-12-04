@@ -667,6 +667,19 @@ impl Worker {
         
         log_info!(GENETIC_LOGGER, "Job {} loaded {} market data points", job.id, data.len());
         
+        // For genetic optimization, use a subsample to speed up fitness evaluation
+        // We'll run the full backtest on the winning chromosome after optimization
+        const MAX_OPTIMIZATION_SAMPLES: usize = 5000;
+        let optimization_data: Vec<MarketData> = if data.len() > MAX_OPTIMIZATION_SAMPLES {
+            // Take evenly spaced samples to maintain temporal diversity
+            let step = data.len() / MAX_OPTIMIZATION_SAMPLES;
+            data.iter().step_by(step).take(MAX_OPTIMIZATION_SAMPLES).cloned().collect()
+        } else {
+            data.clone()
+        };
+        log_info!(GENETIC_LOGGER, "Job {} using {} samples for optimization (from {} total)", 
+            job.id, optimization_data.len(), data.len());
+        
         // Create genetic config
         let config = GeneticConfig {
             population_size: params.population_size,
@@ -680,8 +693,9 @@ impl Worker {
         let generation_callback = progress_tracker.generation_callback();
         
         // Prepare data for fitness function (as Arc for sharing)
-        let data_arc = Arc::new(data);
-        let data_for_final = Arc::clone(&data_arc); // Clone for use after optimization
+        // Use subsampled data for faster optimization
+        let data_arc = Arc::new(optimization_data);
+        let data_for_final = Arc::new(data); // Full data for final backtest
         let symbol = params.symbol.clone();
         let exchange = params.exchange.clone();
         let initial_capital = params.initial_capital;

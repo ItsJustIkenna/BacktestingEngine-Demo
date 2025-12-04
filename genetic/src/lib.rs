@@ -105,8 +105,9 @@ impl<C: Chromosome> GeneticOptimizer<C> {
             let mut fitnesses: Vec<f64> = fitness_results.iter().map(|r| r.fitness).collect();
             
             // ROBUSTNESS-WEIGHTED FITNESS: Apply Monte Carlo consistency check
-            // to top N% performers to validate stability and prevent overfitting
-            if self.config.use_monte_carlo_fitness && generation > 0 {
+            // Only apply in later generations to speed up initial exploration
+            // This validates stability and prevents overfitting of top performers
+            if self.config.use_monte_carlo_fitness && generation >= self.config.generations / 2 {
                 self.apply_robustness_penalty(&mut fitnesses, &fitness_results);
             }
             
@@ -229,12 +230,16 @@ impl<C: Chromosome> GeneticOptimizer<C> {
         let threshold_idx = ((1.0 - self.config.top_percentile_threshold) * sorted.len() as f64) as usize;
         let fitness_threshold = sorted[threshold_idx.min(sorted.len().saturating_sub(1))];
         
+        // Use a smaller sample size for per-generation checks (faster)
+        // Final robustness check uses the full mc_sample_size
+        let quick_sample_size = 10.min(self.config.mc_sample_size);
+        
         // Apply MC consistency check only to top performers
         for (i, result) in results.iter().enumerate() {
             if fitnesses[i] >= fitness_threshold && !result.equity_curve.is_empty() {
                 let (mean_sharpe, std_sharpe) = Self::run_lightweight_monte_carlo(
                     &result.equity_curve, 
-                    self.config.mc_sample_size
+                    quick_sample_size
                 );
                 
                 // Calculate robustness penalty based on coefficient of variation
