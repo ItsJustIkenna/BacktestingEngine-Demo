@@ -9,6 +9,11 @@ interface BacktestFormData {
   // Genetic algorithm parameters
   population_size: number;
   generations: number;
+  // Monte Carlo configuration
+  monte_carlo_enabled: boolean;
+  monte_carlo_runs: number;
+  // Walk-Forward configuration
+  walk_forward_enabled: boolean;
   // Manual parameters (14 total for Avellaneda-Stoikov)
   risk_aversion: number;
   inventory_target: number;
@@ -41,6 +46,11 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     // Genetic algorithm defaults
     population_size: 50,
     generations: 20,
+    // Monte Carlo defaults
+    monte_carlo_enabled: true,
+    monte_carlo_runs: 500,
+    // Walk-Forward defaults
+    walk_forward_enabled: true,
     // Manual parameter defaults
     risk_aversion: 0.5,
     inventory_target: 0.5,
@@ -125,6 +135,10 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
         strategy_type: formData.strategy_type,
         initial_capital: formData.initial_capital,
         optimization_method: formData.optimization_method,
+        // Monte Carlo and Walk-Forward settings
+        monte_carlo_enabled: formData.monte_carlo_enabled,
+        monte_carlo_runs: formData.monte_carlo_runs,
+        walk_forward_enabled: formData.walk_forward_enabled,
       };
 
       if (formData.optimization_method === 'genetic') {
@@ -367,6 +381,84 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
               </div>
             </div>
           )}
+
+          {/* Advanced Analysis Settings */}
+          <div style={{ 
+            marginTop: '15px', 
+            paddingTop: '15px', 
+            borderTop: '1px solid #dee2e6'
+          }}>
+            <h4 style={{ margin: '0 0 10px 0', fontSize: '14px' }}>🔬 Advanced Analysis</h4>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+              {/* Monte Carlo Settings */}
+              <div style={{ 
+                padding: '10px', 
+                backgroundColor: '#f8f9fa', 
+                borderRadius: '4px',
+                border: '1px solid #dee2e6'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
+                  <input
+                    type="checkbox"
+                    id="monte_carlo_enabled"
+                    name="monte_carlo_enabled"
+                    checked={formData.monte_carlo_enabled}
+                    onChange={(e) => setFormData({...formData, monte_carlo_enabled: e.target.checked})}
+                    style={{ marginRight: '8px' }}
+                  />
+                  <label htmlFor="monte_carlo_enabled" style={{ fontSize: '13px', fontWeight: 500 }}>
+                    🎲 Monte Carlo Simulation
+                  </label>
+                </div>
+                {formData.monte_carlo_enabled && (
+                  <div>
+                    <label htmlFor="monte_carlo_runs" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
+                      Number of Runs
+                    </label>
+                    <input
+                      type="number"
+                      id="monte_carlo_runs"
+                      name="monte_carlo_runs"
+                      value={formData.monte_carlo_runs}
+                      onChange={handleChange}
+                      min="100"
+                      max="5000"
+                      step="100"
+                      style={{ width: '100%', padding: '4px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }}
+                    />
+                    <div style={{ fontSize: '10px', color: '#6c757d', marginTop: '2px' }}>
+                      Validates strategy robustness (default: 500)
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Walk-Forward Settings */}
+              <div style={{ 
+                padding: '10px', 
+                backgroundColor: '#f8f9fa', 
+                borderRadius: '4px',
+                border: '1px solid #dee2e6'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center' }}>
+                  <input
+                    type="checkbox"
+                    id="walk_forward_enabled"
+                    name="walk_forward_enabled"
+                    checked={formData.walk_forward_enabled}
+                    onChange={(e) => setFormData({...formData, walk_forward_enabled: e.target.checked})}
+                    style={{ marginRight: '8px' }}
+                  />
+                  <label htmlFor="walk_forward_enabled" style={{ fontSize: '13px', fontWeight: 500 }}>
+                    🔄 Walk-Forward Analysis
+                  </label>
+                </div>
+                <div style={{ fontSize: '10px', color: '#6c757d', marginTop: '5px' }}>
+                  Tests out-of-sample performance over rolling windows
+                </div>
+              </div>
+            </div>
+          </div>
 
           {/* Manual Parameters */}
           {formData.optimization_method === 'manual' && (

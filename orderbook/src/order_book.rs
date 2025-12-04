@@ -716,6 +716,69 @@ impl OrderBook {
         }
     }
 
+    /// Execute a trade against the book and return fills
+    /// This is used when processing incoming market trades that may fill our resting orders
+    pub fn execute_trade_with_fills(
+        &mut self,
+        side: BookSide,
+        price: BigDecimal,
+        quantity: BigDecimal,
+        timestamp: DateTime<Utc>,
+    ) -> Vec<Fill> {
+        let mut fills = Vec::new();
+        
+        let price_f64 = match price.to_string().parse::<f64>() {
+            Ok(p) => p,
+            Err(e) => {
+                log_warn!(ORDERBOOK_LOGGER, "Failed to convert price to f64: {}", e);
+                return fills;
+            }
+        };
+        let price_key = OrderedFloat(price_f64);
+
+        // Collect executed orders first to avoid borrow issues
+        let executed_orders: Vec<OrderInfo> = {
+            let levels = match side {
+                BookSide::Bid => &mut self.bids,
+                BookSide::Ask => &mut self.asks,
+            };
+
+            if let Some(level) = levels.get_mut(&price_key) {
+                let orders = level.execute_trade(&quantity, timestamp).unwrap_or_default();
+                self.last_updated = timestamp;
+                
+                // Remove level if empty
+                if level.is_empty() {
+                    levels.remove(&price_key);
+                }
+                orders
+            } else {
+                Vec::new()
+            }
+        };
+
+        // Now create fills from executed orders
+        for order in executed_orders {
+            let fill_quantity = &order.original_quantity - &order.remaining_quantity;
+            if fill_quantity > BigDecimal::from(0) {
+                let fill = self.create_fill(&order, &fill_quantity, LiquidityType::Maker, timestamp);
+                fills.push(fill);
+            }
+        }
+
+        // Track volume for fee tier calculation
+        let total_volume_usd: f64 = fills
+            .iter()
+            .map(|fill| (&fill.price * &fill.quantity).to_f64().unwrap_or(0.0))
+            .sum();
+            
+        if total_volume_usd > 0.0 {
+            self.add_volume(total_volume_usd, timestamp);
+        }
+
+        fills
+    }
+
     /// Apply a complete snapshot to rebuild the book
     pub fn apply_snapshot(
         &mut self,

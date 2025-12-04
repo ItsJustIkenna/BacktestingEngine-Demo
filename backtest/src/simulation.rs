@@ -5,7 +5,6 @@
 use strategy::{StrategyManager, StrategyContext};
 use strategy::traits::{MarketSession, SessionType};
 use orderbook::OrderBook;
-#[cfg(feature = "postgres")]
 use orderbook::{OrderBookEvent, BookSide};
 #[cfg(feature = "postgres")]
 use databaseschema::models::historical_order::HistoricalOrder;
@@ -180,9 +179,31 @@ impl SimulationLoop {
                         let _ = orderbook.apply_event(event);
                     }
                 }
-                MarketData::Trade(_trade) => {
-                    // Convert trade to OrderBookEvent::Trade and apply
-                    // orderbook.apply_event(OrderBookEvent::Trade { ... })
+                MarketData::Trade(trade) => {
+                    // Convert TradeData side string to BookSide
+                    // Incoming trade side indicates the aggressor:
+                    // - "buy" means aggressor bought from asks (our ask orders get filled)
+                    // - "sell" means aggressor sold to bids (our bid orders get filled)
+                    let book_side = match trade.side.to_lowercase().as_str() {
+                        "buy" | "b" => BookSide::Ask,   // Aggressor bought, fills ask side
+                        "sell" | "s" => BookSide::Bid, // Aggressor sold, fills bid side
+                        _ => continue, // Skip unknown side
+                    };
+                    
+                    // Execute the trade against our resting orders and get fills
+                    let trade_fills = orderbook.execute_trade_with_fills(
+                        book_side,
+                        trade.price.clone(),
+                        trade.quantity.clone(),
+                        trade.timestamp,
+                    );
+                    
+                    // Apply fills from incoming trades to portfolio
+                    if !trade_fills.is_empty() {
+                        if let Err(e) = portfolio.apply_fills(&trade_fills) {
+                            log_error!(BACKTEST_LOGGER, "Error applying trade fills: {}", e);
+                        }
+                    }
                 }
                 MarketData::Candle(_) => {
                     // Candles don't directly update orderbook
@@ -191,9 +212,31 @@ impl SimulationLoop {
             
             #[cfg(not(feature = "postgres"))]
             match &data {
-                MarketData::Trade(_trade) => {
-                    // Convert trade to OrderBookEvent::Trade and apply
-                    // orderbook.apply_event(OrderBookEvent::Trade { ... })
+                MarketData::Trade(trade) => {
+                    // Convert TradeData side string to BookSide
+                    // Incoming trade side indicates the aggressor:
+                    // - "buy" means aggressor bought from asks (our ask orders get filled)
+                    // - "sell" means aggressor sold to bids (our bid orders get filled)
+                    let book_side = match trade.side.to_lowercase().as_str() {
+                        "buy" | "b" => BookSide::Ask,   // Aggressor bought, fills ask side
+                        "sell" | "s" => BookSide::Bid, // Aggressor sold, fills bid side
+                        _ => continue, // Skip unknown side
+                    };
+                    
+                    // Execute the trade against our resting orders and get fills
+                    let trade_fills = orderbook.execute_trade_with_fills(
+                        book_side,
+                        trade.price.clone(),
+                        trade.quantity.clone(),
+                        trade.timestamp,
+                    );
+                    
+                    // Apply fills from incoming trades to portfolio
+                    if !trade_fills.is_empty() {
+                        if let Err(e) = portfolio.apply_fills(&trade_fills) {
+                            log_error!(BACKTEST_LOGGER, "Error applying trade fills: {}", e);
+                        }
+                    }
                 }
                 MarketData::Candle(_) => {
                     // Candles don't directly update orderbook

@@ -77,6 +77,16 @@ pub struct BacktestJobParams {
     #[serde(default = "default_flow_sensitivity")]
     pub flow_sensitivity: f64,
     
+    // Monte Carlo configuration
+    #[serde(default = "default_monte_carlo_enabled")]
+    pub monte_carlo_enabled: bool,
+    #[serde(default = "default_monte_carlo_runs")]
+    pub monte_carlo_runs: usize,
+    
+    // Walk-Forward configuration
+    #[serde(default = "default_walk_forward_enabled")]
+    pub walk_forward_enabled: bool,
+    
     // Auto-populated fields
     #[serde(default)]
     pub commission_rate: f64, // Auto-populated from exchange
@@ -103,6 +113,9 @@ fn default_volatility_adjustment() -> f64 { 0.5 }
 fn default_inventory_penalty() -> f64 { 0.3 }
 fn default_trend_sensitivity() -> f64 { 0.2 }
 fn default_flow_sensitivity() -> f64 { -0.1 }
+fn default_monte_carlo_enabled() -> bool { true }
+fn default_monte_carlo_runs() -> usize { 500 }
+fn default_walk_forward_enabled() -> bool { true }
 
 /// Backtest job
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,6 +134,27 @@ pub struct BacktestJob {
     pub error_message: Option<String>,
 }
 
+/// Monte Carlo results summary
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MonteCarloSummary {
+    pub num_runs: usize,
+    pub mean_sharpe: f64,
+    pub stddev_sharpe: f64,
+    pub var_95: f64,       // Value at Risk (95th percentile loss)
+    pub cvar_95: f64,      // Conditional VaR (expected loss beyond VaR)
+    pub confidence_lower: f64,  // 5th percentile Sharpe
+    pub confidence_upper: f64,  // 95th percentile Sharpe
+}
+
+/// Walk-Forward results summary
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalkForwardSummary {
+    pub periods_tested: usize,
+    pub average_performance: f64,
+    pub consistency_score: f64,
+    pub out_of_sample_degradation: f64,
+}
+
 /// Backtest results
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BacktestResult {
@@ -133,6 +167,11 @@ pub struct BacktestResult {
     pub profit_factor: f64,
     pub equity_curve: Vec<f64>,
     pub completed_at: DateTime<Utc>,
+    // Advanced analysis results
+    #[serde(default)]
+    pub monte_carlo: Option<MonteCarloSummary>,
+    #[serde(default)]
+    pub walk_forward: Option<WalkForwardSummary>,
 }
 
 /// Job queue interface

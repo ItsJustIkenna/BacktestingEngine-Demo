@@ -5,7 +5,7 @@ edition = "2021"
 
 [features]
 default = []
-postgres = ["dataloader/postgres", "strategy/postgres", "databaseschema"]
+postgres = ["dataloader/postgres", "strategy/postgres", "walkforward/postgres", "databaseschema"]
 
 [dependencies]
 # External dependencies

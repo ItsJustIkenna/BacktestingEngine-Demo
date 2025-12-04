@@ -10,7 +10,7 @@ use tokio::sync::RwLock;
 use chrono::Utc;
 use bigdecimal::{BigDecimal, FromPrimitive};
 
-use crate::job_queue::{BacktestJob, BacktestResult, JobQueue, JobStatus};
+use crate::job_queue::{BacktestJob, BacktestResult, JobQueue, JobStatus, MonteCarloSummary, WalkForwardSummary};
 
 // Logging infrastructure from the library crate
 use crate::logging_facade::{MAIN_LOGGER, GENETIC_LOGGER, WALKFORWARD_LOGGER, BACKTEST_LOGGER};
@@ -546,6 +546,25 @@ impl Worker {
         let max_drawdown = result.core.max_drawdown.to_string().parse::<f64>()
             .map_err(|e| format!("Failed to parse max_drawdown: {}", e))?;
         
+        // Convert Monte Carlo results if available
+        let monte_carlo = result.monte_carlo.as_ref().map(|mc| MonteCarloSummary {
+            num_runs: mc.num_runs,
+            mean_sharpe: mc.mean_metrics.sharpe_ratio,
+            stddev_sharpe: mc.stddev_metrics.sharpe_ratio,
+            var_95: mc.var_95,
+            cvar_95: mc.cvar_95,
+            confidence_lower: mc.percentile_metrics.get(&5).map(|m| m.sharpe_ratio).unwrap_or(0.0),
+            confidence_upper: mc.percentile_metrics.get(&95).map(|m| m.sharpe_ratio).unwrap_or(0.0),
+        });
+        
+        // Convert Walk-Forward results if available
+        let walk_forward = result.walk_forward.as_ref().map(|wf| WalkForwardSummary {
+            periods_tested: wf.periods_tested,
+            average_performance: wf.average_performance,
+            consistency_score: wf.consistency_score,
+            out_of_sample_degradation: wf.out_of_sample_degradation,
+        });
+        
         let backtest_result = BacktestResult {
             job_id: job.id.clone(),
             total_pnl,
@@ -556,6 +575,8 @@ impl Worker {
             profit_factor: result.core.profit_factor.unwrap_or(1.0),
             equity_curve: result.core.equity_curve,
             completed_at: Utc::now(),
+            monte_carlo,
+            walk_forward,
         };
         
         log_info!(BACKTEST_LOGGER, "Job {} backtest complete | pnl={:.2} sharpe={:.3} trades={}", 
@@ -757,6 +778,9 @@ impl Worker {
             params.commission_rate,
             &best_chromosome,
             &data_for_final,
+            params.monte_carlo_enabled,
+            params.monte_carlo_runs,
+            params.walk_forward_enabled,
         ).await?;
         
         // Final flush
@@ -1139,6 +1163,8 @@ impl Worker {
             profit_factor,
             equity_curve: aggregated_equity_curve,
             completed_at: Utc::now(),
+            monte_carlo: None, // Walk-forward uses aggregated OOS results
+            walk_forward: None, // This IS the walk-forward result
         })
     }
     
@@ -1250,17 +1276,27 @@ impl Worker {
         commission_rate: f64,
         chromosome: &genetic::chromosome::AvellanedaStoikovChromosome,
         data: &[MarketData],
+        monte_carlo_enabled: bool,
+        monte_carlo_runs: usize,
+        walk_forward_enabled: bool,
     ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
         let mut backtest_config = BacktestConfig::default();
         backtest_config.trading.initial_capital = initial_capital;
         backtest_config.trading.commission_rate = commission_rate;
         backtest_config.analysis.skip_genetic_optimization = true; // Already done by worker
-        backtest_config.analysis.auto_monte_carlo = true; // Enable Monte Carlo for robustness testing
-        backtest_config.analysis.auto_walk_forward = true; // Enable Walk-Forward for temporal robustness
-        backtest_config.analysis.mode = config::AnalysisMode::Production; // Full analysis mode
+        backtest_config.analysis.auto_monte_carlo = monte_carlo_enabled;
+        backtest_config.analysis.monte_carlo_runs = monte_carlo_runs;
+        backtest_config.analysis.auto_walk_forward = walk_forward_enabled;
+        backtest_config.analysis.mode = if monte_carlo_enabled || walk_forward_enabled {
+            config::AnalysisMode::Production
+        } else {
+            config::AnalysisMode::Development
+        };
         backtest_config.data.gap_detection.enabled = false;
         
-        log_debug!(MAIN_LOGGER, "📊 Running full analysis pipeline: Backtest → Monte Carlo → Walk-Forward");
+        log_debug!(MAIN_LOGGER, "📊 Running full analysis pipeline: Backtest{}{}", 
+            if monte_carlo_enabled { " → Monte Carlo" } else { "" },
+            if walk_forward_enabled { " → Walk-Forward" } else { "" });
         
         let engine = BacktestEngine::new(backtest_config);
         let mut portfolio = PortfolioState::default();
@@ -1324,6 +1360,25 @@ impl Worker {
         let max_drawdown = result.core.max_drawdown.to_string().parse::<f64>()
             .map_err(|e| format!("Failed to parse max_drawdown: {}", e))?;
         
+        // Convert Monte Carlo results if available
+        let monte_carlo_summary = result.monte_carlo.as_ref().map(|mc| MonteCarloSummary {
+            num_runs: mc.num_runs,
+            mean_sharpe: mc.mean_metrics.sharpe_ratio,
+            stddev_sharpe: mc.stddev_metrics.sharpe_ratio,
+            var_95: mc.var_95,
+            cvar_95: mc.cvar_95,
+            confidence_lower: mc.percentile_metrics.get(&5).map(|m| m.sharpe_ratio).unwrap_or(0.0),
+            confidence_upper: mc.percentile_metrics.get(&95).map(|m| m.sharpe_ratio).unwrap_or(0.0),
+        });
+        
+        // Convert Walk-Forward results if available
+        let walk_forward_summary = result.walk_forward.as_ref().map(|wf| WalkForwardSummary {
+            periods_tested: wf.periods_tested,
+            average_performance: wf.average_performance,
+            consistency_score: wf.consistency_score,
+            out_of_sample_degradation: wf.out_of_sample_degradation,
+        });
+        
         Ok(BacktestResult {
             job_id: job_id.to_string(),
             total_pnl,
@@ -1334,10 +1389,10 @@ impl Worker {
             profit_factor: result.core.profit_factor.unwrap_or(1.0),
             equity_curve: result.core.equity_curve,
             completed_at: Utc::now(),
+            monte_carlo: monte_carlo_summary,
+            walk_forward: walk_forward_summary,
         })
     }
-    
-    /// Helper: Run backtest with specific chromosome parameters (no Monte Carlo/Walk-Forward)
     /// Used for fitness evaluation and walk-forward window testing
     async fn run_backtest_with_chromosome(
         &self,
@@ -1423,6 +1478,8 @@ impl Worker {
             profit_factor: result.core.profit_factor.unwrap_or(1.0),
             equity_curve: result.core.equity_curve,
             completed_at: Utc::now(),
+            monte_carlo: None, // Chromosome evaluation doesn't run MC
+            walk_forward: None, // Chromosome evaluation doesn't run WF
         })
     }
     

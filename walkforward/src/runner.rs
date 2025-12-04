@@ -102,8 +102,8 @@ fn extract_data(data: &[MarketData], start: NaiveDate, end: NaiveDate) -> Vec<Ma
 #[cfg(feature = "postgres")]
 fn in_range(d: &MarketData, start: NaiveDate, end: NaiveDate) -> bool {
     let ts = match d {
-        MarketData::Order(o) => o.get_timestamp().naive_utc().date(),
-        MarketData::Snapshot(s) => s.get_timestamp().naive_utc().date(),
+        MarketData::Order(o) => o.timestamp.naive_utc().date(),
+        MarketData::Snapshot(s) => s.timestamp.naive_utc().date(),
         MarketData::Candle(c) => c.timestamp.naive_utc().date(),
         MarketData::Trade(t) => t.timestamp.naive_utc().date(),
     };

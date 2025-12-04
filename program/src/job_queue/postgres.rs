@@ -410,6 +410,10 @@ impl PostgresQueue {
                 walkforward_optimization_days: None,
                 walkforward_test_days: None,
                 walkforward_step_days: None,
+                // Monte Carlo and Walk-Forward settings - default to enabled
+                monte_carlo_enabled: true,
+                monte_carlo_runs: 500,
+                walk_forward_enabled: true,
                 risk_aversion: f64::from_str(&record.risk_aversion.to_string())?,
                 inventory_target: f64::from_str(&record.inventory_target.to_string())?,
                 order_size: f64::from_str(&record.order_size.to_string())?,
@@ -777,7 +781,22 @@ impl JobQueue for PostgresQueue {
                 "risk_aversion": job.risk_aversion.to_string(),
                 "inventory_target": job.inventory_target.to_string(),
                 "order_size": job.order_size.to_string(),
-                "equity_curve": equity_curve_downsampled
+                "equity_curve": equity_curve_downsampled,
+                "monte_carlo": result.monte_carlo.as_ref().map(|mc| serde_json::json!({
+                    "num_runs": mc.num_runs,
+                    "mean_sharpe": mc.mean_sharpe,
+                    "stddev_sharpe": mc.stddev_sharpe,
+                    "var_95": mc.var_95,
+                    "cvar_95": mc.cvar_95,
+                    "confidence_lower": mc.confidence_lower,
+                    "confidence_upper": mc.confidence_upper
+                })),
+                "walk_forward": result.walk_forward.as_ref().map(|wf| serde_json::json!({
+                    "periods_tested": wf.periods_tested,
+                    "average_performance": wf.average_performance,
+                    "consistency_score": wf.consistency_score,
+                    "out_of_sample_degradation": wf.out_of_sample_degradation
+                }))
             })),
         };
         
@@ -835,12 +854,41 @@ impl JobQueue for PostgresQueue {
             Some((total_return, sharpe_ratio, max_drawdown, win_rate, 
                   total_trades, profit_factor, strategy_metrics, created_at)) => {
                 // Extract equity curve from strategy_metrics JSON
-                let equity_curve = if let Some(metrics) = strategy_metrics {
-                    metrics.get("equity_curve")
+                let (equity_curve, monte_carlo, walk_forward) = if let Some(ref metrics) = strategy_metrics {
+                    let equity = metrics.get("equity_curve")
                         .and_then(|v| serde_json::from_value(v.clone()).ok())
-                        .unwrap_or_else(Vec::new)
+                        .unwrap_or_else(Vec::new);
+                    
+                    // Extract Monte Carlo results
+                    let mc = metrics.get("monte_carlo")
+                        .and_then(|v| {
+                            if v.is_null() { return None; }
+                            Some(MonteCarloSummary {
+                                num_runs: v.get("num_runs")?.as_u64()? as usize,
+                                mean_sharpe: v.get("mean_sharpe")?.as_f64()?,
+                                stddev_sharpe: v.get("stddev_sharpe")?.as_f64().unwrap_or(0.0),
+                                var_95: v.get("var_95")?.as_f64()?,
+                                cvar_95: v.get("cvar_95")?.as_f64()?,
+                                confidence_lower: v.get("confidence_lower")?.as_f64().unwrap_or(0.0),
+                                confidence_upper: v.get("confidence_upper")?.as_f64().unwrap_or(0.0),
+                            })
+                        });
+                    
+                    // Extract Walk-Forward results
+                    let wf = metrics.get("walk_forward")
+                        .and_then(|v| {
+                            if v.is_null() { return None; }
+                            Some(WalkForwardSummary {
+                                periods_tested: v.get("periods_tested")?.as_u64()? as usize,
+                                average_performance: v.get("average_performance")?.as_f64()?,
+                                consistency_score: v.get("consistency_score")?.as_f64()?,
+                                out_of_sample_degradation: v.get("out_of_sample_degradation")?.as_f64()?,
+                            })
+                        });
+                    
+                    (equity, mc, wf)
                 } else {
-                    Vec::new()
+                    (Vec::new(), None, None)
                 };
                 
                 Ok(Some(BacktestResult {
@@ -853,6 +901,8 @@ impl JobQueue for PostgresQueue {
                     profit_factor: profit_factor.to_string().parse().unwrap_or(1.0),
                     equity_curve,
                     completed_at: created_at,
+                    monte_carlo,
+                    walk_forward,
                 }))
             }
             None => Ok(None),
@@ -1035,6 +1085,9 @@ mod tests {
             inventory_penalty_factor: 0.3,
             trend_sensitivity: 0.2,
             flow_sensitivity: -0.1,
+            monte_carlo_enabled: true,
+            monte_carlo_runs: 500,
+            walk_forward_enabled: true,
         };
         
         let job_id = queue.submit_job(params).await.unwrap();

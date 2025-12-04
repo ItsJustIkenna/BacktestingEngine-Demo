@@ -1,5 +1,22 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
+interface MonteCarloSummary {
+  num_runs: number;
+  mean_sharpe: number;
+  stddev_sharpe: number;
+  var_95: number;
+  cvar_95: number;
+  confidence_lower: number;
+  confidence_upper: number;
+}
+
+interface WalkForwardSummary {
+  periods_tested: number;
+  average_performance: number;
+  consistency_score: number;
+  out_of_sample_degradation: number;
+}
+
 interface BacktestResult {
   job_id: string;
   symbol: string;
@@ -13,6 +30,8 @@ interface BacktestResult {
   avg_trade_duration: number;
   equity_curve: Array<{ timestamp: string; value: number }>;
   strategy_metrics?: any;
+  monte_carlo?: MonteCarloSummary;
+  walk_forward?: WalkForwardSummary;
 }
 
 interface JobStatus {
@@ -739,6 +758,84 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
           color="#007bff"
         />
       </div>
+
+      {/* Monte Carlo Analysis Results */}
+      {result.monte_carlo && (
+        <div style={{
+          backgroundColor: 'white',
+          padding: '20px',
+          borderRadius: '8px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          marginBottom: '20px',
+        }}>
+          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>🎲 Monte Carlo Analysis ({result.monte_carlo.num_runs} runs)</h3>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: '15px',
+          }}>
+            <MetricCard
+              title="Mean Sharpe"
+              value={safeToFixed(result.monte_carlo.mean_sharpe, 3)}
+              color={result.monte_carlo.mean_sharpe > 1 ? '#28a745' : result.monte_carlo.mean_sharpe > 0 ? '#ffc107' : '#dc3545'}
+            />
+            <MetricCard
+              title="Sharpe Std Dev"
+              value={safeToFixed(result.monte_carlo.stddev_sharpe, 3)}
+              color={result.monte_carlo.stddev_sharpe < 0.5 ? '#28a745' : '#ffc107'}
+            />
+            <MetricCard
+              title="VaR (95%)"
+              value={`${safeToFixed(result.monte_carlo.var_95 * 100, 2)}%`}
+              color={result.monte_carlo.var_95 < 0.1 ? '#28a745' : result.monte_carlo.var_95 < 0.2 ? '#ffc107' : '#dc3545'}
+            />
+            <MetricCard
+              title="CVaR (95%)"
+              value={`${safeToFixed(result.monte_carlo.cvar_95 * 100, 2)}%`}
+              color={result.monte_carlo.cvar_95 < 0.15 ? '#28a745' : result.monte_carlo.cvar_95 < 0.25 ? '#ffc107' : '#dc3545'}
+            />
+            <MetricCard
+              title="95% Confidence"
+              value={`[${safeToFixed(result.monte_carlo.confidence_lower, 2)}, ${safeToFixed(result.monte_carlo.confidence_upper, 2)}]`}
+              color="#007bff"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Walk-Forward Analysis Results */}
+      {result.walk_forward && (
+        <div style={{
+          backgroundColor: 'white',
+          padding: '20px',
+          borderRadius: '8px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          marginBottom: '20px',
+        }}>
+          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>🔄 Walk-Forward Analysis ({result.walk_forward.periods_tested} periods)</h3>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: '15px',
+          }}>
+            <MetricCard
+              title="Avg Performance"
+              value={`${safeToFixed(result.walk_forward.average_performance * 100, 2)}%`}
+              color={result.walk_forward.average_performance > 0 ? '#28a745' : '#dc3545'}
+            />
+            <MetricCard
+              title="Consistency"
+              value={`${safeToFixed(result.walk_forward.consistency_score * 100, 1)}%`}
+              color={result.walk_forward.consistency_score > 0.7 ? '#28a745' : result.walk_forward.consistency_score > 0.5 ? '#ffc107' : '#dc3545'}
+            />
+            <MetricCard
+              title="OOS Degradation"
+              value={`${safeToFixed(result.walk_forward.out_of_sample_degradation * 100, 1)}%`}
+              color={result.walk_forward.out_of_sample_degradation < 0.2 ? '#28a745' : result.walk_forward.out_of_sample_degradation < 0.4 ? '#ffc107' : '#dc3545'}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Equity Curve Chart */}
       <div style={{
