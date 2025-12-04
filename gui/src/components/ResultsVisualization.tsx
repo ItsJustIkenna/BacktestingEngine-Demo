@@ -32,6 +32,33 @@ interface BacktestResult {
   strategy_metrics?: any;
   monte_carlo?: MonteCarloSummary;
   walk_forward?: WalkForwardSummary;
+  
+  // Additional performance metrics
+  annualized_return?: number;
+  volatility?: number;
+  sortino_ratio?: number;
+  calmar_ratio?: number;
+  avg_trade_return?: number;
+  best_trade?: number;
+  worst_trade?: number;
+  avg_time_in_trade?: number;
+  
+  // Risk metrics
+  value_at_risk_95?: number;
+  expected_shortfall_95?: number;
+  max_drawdown_duration_days?: number;
+  current_drawdown?: number;
+  avg_drawdown?: number;
+  
+  // Execution metrics
+  total_orders?: number;
+  filled_orders?: number;
+  cancelled_orders?: number;
+  avg_slippage?: number;
+  total_commission_paid?: number;
+  
+  // Strategy parameters
+  strategy_params?: any;
 }
 
 interface JobStatus {
@@ -833,6 +860,229 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
               value={`${safeToFixed(result.walk_forward.out_of_sample_degradation * 100, 1)}%`}
               color={result.walk_forward.out_of_sample_degradation < 0.2 ? '#28a745' : result.walk_forward.out_of_sample_degradation < 0.4 ? '#ffc107' : '#dc3545'}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Trade Analysis */}
+      {(result.avg_trade_return !== undefined || result.best_trade !== undefined || result.avg_time_in_trade !== undefined) && (
+        <div style={{
+          backgroundColor: 'white',
+          padding: '20px',
+          borderRadius: '8px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          marginBottom: '20px',
+        }}>
+          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>📊 Trade Analysis</h3>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: '15px',
+          }}>
+            {result.avg_trade_return !== undefined && (
+              <MetricCard
+                title="Avg Trade Return"
+                value={`${safeToFixed(result.avg_trade_return, 2)}%`}
+                color={result.avg_trade_return > 0 ? '#28a745' : '#dc3545'}
+              />
+            )}
+            {result.best_trade !== undefined && (
+              <MetricCard
+                title="Best Trade"
+                value={safeToFixed(result.best_trade, 2)}
+                color="#28a745"
+              />
+            )}
+            {result.worst_trade !== undefined && (
+              <MetricCard
+                title="Worst Trade"
+                value={safeToFixed(result.worst_trade, 2)}
+                color="#dc3545"
+              />
+            )}
+            {result.avg_time_in_trade !== undefined && (
+              <MetricCard
+                title="Avg Time in Trade"
+                value={`${safeToFixed(result.avg_time_in_trade, 1)}h`}
+                color="#007bff"
+              />
+            )}
+            {result.volatility !== undefined && (
+              <MetricCard
+                title="Volatility"
+                value={`${safeToFixed(result.volatility, 2)}%`}
+                color={result.volatility < 20 ? '#28a745' : result.volatility < 40 ? '#ffc107' : '#dc3545'}
+              />
+            )}
+            {result.sortino_ratio !== undefined && (
+              <MetricCard
+                title="Sortino Ratio"
+                value={safeToFixed(result.sortino_ratio, 2)}
+                color={result.sortino_ratio > 1.5 ? '#28a745' : result.sortino_ratio > 1 ? '#ffc107' : '#dc3545'}
+              />
+            )}
+            {result.calmar_ratio !== undefined && (
+              <MetricCard
+                title="Calmar Ratio"
+                value={safeToFixed(result.calmar_ratio, 2)}
+                color={result.calmar_ratio > 1 ? '#28a745' : result.calmar_ratio > 0.5 ? '#ffc107' : '#dc3545'}
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Risk Metrics */}
+      {(result.value_at_risk_95 !== undefined || result.current_drawdown !== undefined || result.max_drawdown_duration_days !== undefined) && (
+        <div style={{
+          backgroundColor: 'white',
+          padding: '20px',
+          borderRadius: '8px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          marginBottom: '20px',
+        }}>
+          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>⚠️ Risk Metrics</h3>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: '15px',
+          }}>
+            {result.value_at_risk_95 !== undefined && (
+              <MetricCard
+                title="VaR (95%)"
+                value={`${safeToFixed(result.value_at_risk_95 * 100, 2)}%`}
+                color={result.value_at_risk_95 < 0.1 ? '#28a745' : result.value_at_risk_95 < 0.2 ? '#ffc107' : '#dc3545'}
+              />
+            )}
+            {result.expected_shortfall_95 !== undefined && (
+              <MetricCard
+                title="Expected Shortfall"
+                value={`${safeToFixed(result.expected_shortfall_95 * 100, 2)}%`}
+                color={result.expected_shortfall_95 < 0.15 ? '#28a745' : result.expected_shortfall_95 < 0.25 ? '#ffc107' : '#dc3545'}
+              />
+            )}
+            {result.current_drawdown !== undefined && (
+              <MetricCard
+                title="Current Drawdown"
+                value={`${safeToFixed(result.current_drawdown, 2)}%`}
+                color={result.current_drawdown < 5 ? '#28a745' : result.current_drawdown < 15 ? '#ffc107' : '#dc3545'}
+              />
+            )}
+            {result.avg_drawdown !== undefined && (
+              <MetricCard
+                title="Avg Drawdown"
+                value={`${safeToFixed(result.avg_drawdown, 2)}%`}
+                color={result.avg_drawdown < 5 ? '#28a745' : result.avg_drawdown < 10 ? '#ffc107' : '#dc3545'}
+              />
+            )}
+            {result.max_drawdown_duration_days !== undefined && (
+              <MetricCard
+                title="Max DD Duration"
+                value={`${result.max_drawdown_duration_days} days`}
+                color={result.max_drawdown_duration_days < 30 ? '#28a745' : result.max_drawdown_duration_days < 90 ? '#ffc107' : '#dc3545'}
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Execution Metrics */}
+      {(result.total_orders !== undefined || result.avg_slippage !== undefined || result.total_commission_paid !== undefined) && (
+        <div style={{
+          backgroundColor: 'white',
+          padding: '20px',
+          borderRadius: '8px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          marginBottom: '20px',
+        }}>
+          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>⚙️ Execution Metrics</h3>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: '15px',
+          }}>
+            {result.total_orders !== undefined && (
+              <MetricCard
+                title="Total Orders"
+                value={result.total_orders.toString()}
+                color="#007bff"
+              />
+            )}
+            {result.filled_orders !== undefined && (
+              <MetricCard
+                title="Filled Orders"
+                value={result.filled_orders.toString()}
+                color="#28a745"
+              />
+            )}
+            {result.cancelled_orders !== undefined && (
+              <MetricCard
+                title="Cancelled"
+                value={result.cancelled_orders.toString()}
+                color={result.cancelled_orders === 0 ? '#28a745' : '#ffc107'}
+              />
+            )}
+            {result.avg_slippage !== undefined && (
+              <MetricCard
+                title="Avg Slippage"
+                value={`${safeToFixed(result.avg_slippage * 100, 3)}%`}
+                color={result.avg_slippage < 0.001 ? '#28a745' : result.avg_slippage < 0.005 ? '#ffc107' : '#dc3545'}
+              />
+            )}
+            {result.total_commission_paid !== undefined && (
+              <MetricCard
+                title="Total Commission"
+                value={`$${safeToFixed(result.total_commission_paid, 2)}`}
+                color="#6c757d"
+              />
+            )}
+            {result.filled_orders !== undefined && result.total_orders !== undefined && result.total_orders > 0 && (
+              <MetricCard
+                title="Fill Rate"
+                value={`${safeToFixed((result.filled_orders / result.total_orders) * 100, 1)}%`}
+                color={result.filled_orders / result.total_orders > 0.95 ? '#28a745' : result.filled_orders / result.total_orders > 0.8 ? '#ffc107' : '#dc3545'}
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Strategy Parameters */}
+      {result.strategy_params && (
+        <div style={{
+          backgroundColor: 'white',
+          padding: '20px',
+          borderRadius: '8px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          marginBottom: '20px',
+        }}>
+          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>🎯 Optimized Strategy Parameters</h3>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+            gap: '15px',
+          }}>
+            {result.strategy_params.risk_aversion !== undefined && (
+              <MetricCard
+                title="Risk Aversion (γ)"
+                value={safeToFixed(parseFloat(result.strategy_params.risk_aversion), 4)}
+                color="#6f42c1"
+              />
+            )}
+            {result.strategy_params.inventory_target !== undefined && (
+              <MetricCard
+                title="Inventory Target"
+                value={safeToFixed(parseFloat(result.strategy_params.inventory_target), 4)}
+                color="#6f42c1"
+              />
+            )}
+            {result.strategy_params.order_size !== undefined && (
+              <MetricCard
+                title="Order Size"
+                value={safeToFixed(parseFloat(result.strategy_params.order_size), 4)}
+                color="#6f42c1"
+              />
+            )}
           </div>
         </div>
       )}

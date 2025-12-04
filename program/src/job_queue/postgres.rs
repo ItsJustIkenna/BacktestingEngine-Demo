@@ -830,10 +830,36 @@ impl JobQueue for PostgresQueue {
             Err(_) => return Ok(None),
         };
         
-        // Query backtest_results by backtest_id
-        let result: Option<(bigdecimal::BigDecimal, Option<bigdecimal::BigDecimal>, bigdecimal::BigDecimal, 
-                            bigdecimal::BigDecimal, i32, bigdecimal::BigDecimal, 
-                            Option<serde_json::Value>, chrono::DateTime<chrono::Utc>)> = 
+        // Query backtest_results by backtest_id - fetch all relevant fields
+        #[allow(clippy::type_complexity)]
+        let result: Option<(
+            bigdecimal::BigDecimal,                     // total_return
+            Option<bigdecimal::BigDecimal>,             // sharpe_ratio
+            bigdecimal::BigDecimal,                     // max_drawdown
+            bigdecimal::BigDecimal,                     // win_rate
+            i32,                                         // total_trades
+            bigdecimal::BigDecimal,                     // profit_factor
+            Option<serde_json::Value>,                  // strategy_metrics
+            chrono::DateTime<chrono::Utc>,              // created_at
+            bigdecimal::BigDecimal,                     // annualized_return
+            bigdecimal::BigDecimal,                     // volatility
+            Option<bigdecimal::BigDecimal>,             // sortino_ratio
+            Option<bigdecimal::BigDecimal>,             // calmar_ratio
+            bigdecimal::BigDecimal,                     // avg_trade_return
+            Option<bigdecimal::BigDecimal>,             // best_trade
+            Option<bigdecimal::BigDecimal>,             // worst_trade
+            Option<bigdecimal::BigDecimal>,             // avg_time_in_trade
+            Option<bigdecimal::BigDecimal>,             // value_at_risk_95
+            Option<bigdecimal::BigDecimal>,             // expected_shortfall_95
+            Option<i32>,                                // max_drawdown_duration_days
+            bigdecimal::BigDecimal,                     // current_drawdown
+            Option<bigdecimal::BigDecimal>,             // avg_drawdown
+            i32,                                         // total_orders
+            i32,                                         // filled_orders
+            i32,                                         // cancelled_orders
+            bigdecimal::BigDecimal,                     // avg_slippage
+            bigdecimal::BigDecimal,                     // total_commission_paid
+        )> = 
             backtest_results::table
                 .filter(backtest_results::backtest_id.eq(backtest_uuid))
                 .select((
@@ -845,6 +871,24 @@ impl JobQueue for PostgresQueue {
                     backtest_results::profit_factor,
                     backtest_results::strategy_metrics,
                     backtest_results::created_at,
+                    backtest_results::annualized_return,
+                    backtest_results::volatility,
+                    backtest_results::sortino_ratio,
+                    backtest_results::calmar_ratio,
+                    backtest_results::avg_trade_return,
+                    backtest_results::best_trade,
+                    backtest_results::worst_trade,
+                    backtest_results::avg_time_in_trade,
+                    backtest_results::value_at_risk_95,
+                    backtest_results::expected_shortfall_95,
+                    backtest_results::max_drawdown_duration_days,
+                    backtest_results::current_drawdown,
+                    backtest_results::avg_drawdown,
+                    backtest_results::total_orders,
+                    backtest_results::filled_orders,
+                    backtest_results::cancelled_orders,
+                    backtest_results::avg_slippage,
+                    backtest_results::total_commission_paid,
                 ))
                 .first(&mut conn)
                 .await
@@ -852,9 +896,15 @@ impl JobQueue for PostgresQueue {
         
         match result {
             Some((total_return, sharpe_ratio, max_drawdown, win_rate, 
-                  total_trades, profit_factor, strategy_metrics, created_at)) => {
-                // Extract equity curve from strategy_metrics JSON
-                let (equity_curve, monte_carlo, walk_forward) = if let Some(ref metrics) = strategy_metrics {
+                  total_trades, profit_factor, strategy_metrics, created_at,
+                  annualized_return, volatility, sortino_ratio, calmar_ratio,
+                  avg_trade_return, best_trade, worst_trade, avg_time_in_trade,
+                  value_at_risk_95, expected_shortfall_95, max_drawdown_duration_days,
+                  current_drawdown, avg_drawdown, total_orders, filled_orders,
+                  cancelled_orders, avg_slippage, total_commission_paid)) => {
+                
+                // Extract equity curve and advanced analysis from strategy_metrics JSON
+                let (equity_curve, monte_carlo, walk_forward, strategy_params) = if let Some(ref metrics) = strategy_metrics {
                     let equity = metrics.get("equity_curve")
                         .and_then(|v| serde_json::from_value(v.clone()).ok())
                         .unwrap_or_else(Vec::new);
@@ -886,21 +936,55 @@ impl JobQueue for PostgresQueue {
                             })
                         });
                     
-                    (equity, mc, wf)
+                    // Extract strategy parameters
+                    let params = serde_json::json!({
+                        "risk_aversion": metrics.get("risk_aversion"),
+                        "inventory_target": metrics.get("inventory_target"),
+                        "order_size": metrics.get("order_size")
+                    });
+                    
+                    (equity, mc, wf, Some(params))
                 } else {
-                    (Vec::new(), None, None)
+                    (Vec::new(), None, None, None)
+                };
+                
+                // Helper to convert BigDecimal to f64
+                let bd_to_f64 = |bd: &bigdecimal::BigDecimal| -> f64 {
+                    bd.to_string().parse().unwrap_or(0.0)
+                };
+                let opt_bd_to_f64 = |opt: &Option<bigdecimal::BigDecimal>| -> Option<f64> {
+                    opt.as_ref().map(|bd| bd.to_string().parse().unwrap_or(0.0))
                 };
                 
                 Ok(Some(BacktestResult {
                     job_id: job_id.to_string(),
-                    total_pnl: total_return.to_string().parse().unwrap_or(0.0),
-                    sharpe_ratio: sharpe_ratio.map(|s| s.to_string().parse().unwrap_or(0.0)).unwrap_or(0.0),
-                    max_drawdown: max_drawdown.to_string().parse().unwrap_or(0.0),
-                    win_rate: win_rate.to_string().parse().unwrap_or(0.0),
+                    total_pnl: bd_to_f64(&total_return),
+                    sharpe_ratio: opt_bd_to_f64(&sharpe_ratio).unwrap_or(0.0),
+                    max_drawdown: bd_to_f64(&max_drawdown),
+                    win_rate: bd_to_f64(&win_rate),
                     total_trades: total_trades as usize,
-                    profit_factor: profit_factor.to_string().parse().unwrap_or(1.0),
+                    profit_factor: bd_to_f64(&profit_factor),
                     equity_curve,
                     completed_at: created_at,
+                    annualized_return: Some(bd_to_f64(&annualized_return)),
+                    volatility: Some(bd_to_f64(&volatility)),
+                    sortino_ratio: opt_bd_to_f64(&sortino_ratio),
+                    calmar_ratio: opt_bd_to_f64(&calmar_ratio),
+                    avg_trade_return: Some(bd_to_f64(&avg_trade_return)),
+                    best_trade: opt_bd_to_f64(&best_trade),
+                    worst_trade: opt_bd_to_f64(&worst_trade),
+                    avg_time_in_trade: opt_bd_to_f64(&avg_time_in_trade),
+                    value_at_risk_95: opt_bd_to_f64(&value_at_risk_95),
+                    expected_shortfall_95: opt_bd_to_f64(&expected_shortfall_95),
+                    max_drawdown_duration_days,
+                    current_drawdown: Some(bd_to_f64(&current_drawdown)),
+                    avg_drawdown: opt_bd_to_f64(&avg_drawdown),
+                    total_orders: Some(total_orders),
+                    filled_orders: Some(filled_orders),
+                    cancelled_orders: Some(cancelled_orders),
+                    avg_slippage: Some(bd_to_f64(&avg_slippage)),
+                    total_commission_paid: Some(bd_to_f64(&total_commission_paid)),
+                    strategy_params,
                     monte_carlo,
                     walk_forward,
                 }))

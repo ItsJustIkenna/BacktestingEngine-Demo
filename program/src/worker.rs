@@ -575,6 +575,32 @@ impl Worker {
             profit_factor: result.core.profit_factor.unwrap_or(1.0),
             equity_curve: result.core.equity_curve,
             completed_at: Utc::now(),
+            // Additional metrics
+            annualized_return: None, // Calculated from equity curve
+            volatility: result.core.volatility,
+            sortino_ratio: None, // TODO: Add to core metrics
+            calmar_ratio: None, // TODO: Add to core metrics
+            avg_trade_return: result.core.avg_trade_return,
+            best_trade: result.core.gross_profit, // Approximate
+            worst_trade: result.core.gross_loss, // Approximate
+            avg_time_in_trade: result.core.avg_trade_duration,
+            // Risk metrics from Monte Carlo if available
+            value_at_risk_95: monte_carlo.as_ref().map(|mc| mc.var_95),
+            expected_shortfall_95: monte_carlo.as_ref().map(|mc| mc.cvar_95),
+            max_drawdown_duration_days: None,
+            current_drawdown: None,
+            avg_drawdown: None,
+            // Execution metrics from transaction costs
+            total_orders: result.core.transaction_costs.as_ref().map(|_| result.core.num_trades as i32),
+            filled_orders: Some(result.core.num_trades as i32),
+            cancelled_orders: Some(0),
+            avg_slippage: result.core.transaction_costs.as_ref().map(|tc| tc.total_slippage / result.core.num_trades.max(1) as f64),
+            total_commission_paid: result.core.transaction_costs.as_ref().map(|tc| tc.total_commission),
+            strategy_params: Some(serde_json::json!({
+                "risk_aversion": job.params.risk_aversion,
+                "inventory_target": job.params.inventory_target,
+                "order_size": job.params.order_size
+            })),
             monte_carlo,
             walk_forward,
         };
@@ -1163,6 +1189,25 @@ impl Worker {
             profit_factor,
             equity_curve: aggregated_equity_curve,
             completed_at: Utc::now(),
+            annualized_return: None,
+            volatility: None,
+            sortino_ratio: None,
+            calmar_ratio: None,
+            avg_trade_return: None,
+            best_trade: None,
+            worst_trade: None,
+            avg_time_in_trade: None,
+            value_at_risk_95: None,
+            expected_shortfall_95: None,
+            max_drawdown_duration_days: None,
+            current_drawdown: None,
+            avg_drawdown: None,
+            total_orders: Some(total_oos_trades as i32),
+            filled_orders: Some(total_oos_trades as i32),
+            cancelled_orders: Some(0),
+            avg_slippage: None,
+            total_commission_paid: None,
+            strategy_params: None,
             monte_carlo: None, // Walk-forward uses aggregated OOS results
             walk_forward: None, // This IS the walk-forward result
         })
@@ -1389,6 +1434,25 @@ impl Worker {
             profit_factor: result.core.profit_factor.unwrap_or(1.0),
             equity_curve: result.core.equity_curve,
             completed_at: Utc::now(),
+            annualized_return: None,
+            volatility: result.core.volatility,
+            sortino_ratio: None,
+            calmar_ratio: None,
+            avg_trade_return: result.core.avg_trade_return,
+            best_trade: result.core.gross_profit,
+            worst_trade: result.core.gross_loss,
+            avg_time_in_trade: result.core.avg_trade_duration,
+            value_at_risk_95: monte_carlo_summary.as_ref().map(|mc| mc.var_95),
+            expected_shortfall_95: monte_carlo_summary.as_ref().map(|mc| mc.cvar_95),
+            max_drawdown_duration_days: None,
+            current_drawdown: None,
+            avg_drawdown: None,
+            total_orders: result.core.transaction_costs.as_ref().map(|_| result.core.num_trades as i32),
+            filled_orders: Some(result.core.num_trades as i32),
+            cancelled_orders: Some(0),
+            avg_slippage: result.core.transaction_costs.as_ref().map(|tc| tc.total_slippage / result.core.num_trades.max(1) as f64),
+            total_commission_paid: result.core.transaction_costs.as_ref().map(|tc| tc.total_commission),
+            strategy_params: None,
             monte_carlo: monte_carlo_summary,
             walk_forward: walk_forward_summary,
         })
@@ -1478,6 +1542,29 @@ impl Worker {
             profit_factor: result.core.profit_factor.unwrap_or(1.0),
             equity_curve: result.core.equity_curve,
             completed_at: Utc::now(),
+            annualized_return: None,
+            volatility: result.core.volatility,
+            sortino_ratio: None,
+            calmar_ratio: None,
+            avg_trade_return: result.core.avg_trade_return,
+            best_trade: result.core.gross_profit,
+            worst_trade: result.core.gross_loss,
+            avg_time_in_trade: result.core.avg_trade_duration,
+            value_at_risk_95: None,
+            expected_shortfall_95: None,
+            max_drawdown_duration_days: None,
+            current_drawdown: None,
+            avg_drawdown: None,
+            total_orders: Some(result.core.num_trades as i32),
+            filled_orders: Some(result.core.num_trades as i32),
+            cancelled_orders: Some(0),
+            avg_slippage: result.core.transaction_costs.as_ref().map(|tc| tc.total_slippage / result.core.num_trades.max(1) as f64),
+            total_commission_paid: result.core.transaction_costs.as_ref().map(|tc| tc.total_commission),
+            strategy_params: Some(serde_json::json!({
+                "risk_aversion": chromosome.risk_aversion,
+                "inventory_target": chromosome.inventory_target,
+                "order_size": chromosome.order_size
+            })),
             monte_carlo: None, // Chromosome evaluation doesn't run MC
             walk_forward: None, // Chromosome evaluation doesn't run WF
         })

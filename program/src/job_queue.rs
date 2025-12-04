@@ -167,6 +167,53 @@ pub struct BacktestResult {
     pub profit_factor: f64,
     pub equity_curve: Vec<f64>,
     pub completed_at: DateTime<Utc>,
+    
+    // Additional performance metrics
+    #[serde(default)]
+    pub annualized_return: Option<f64>,
+    #[serde(default)]
+    pub volatility: Option<f64>,
+    #[serde(default)]
+    pub sortino_ratio: Option<f64>,
+    #[serde(default)]
+    pub calmar_ratio: Option<f64>,
+    #[serde(default)]
+    pub avg_trade_return: Option<f64>,
+    #[serde(default)]
+    pub best_trade: Option<f64>,
+    #[serde(default)]
+    pub worst_trade: Option<f64>,
+    #[serde(default)]
+    pub avg_time_in_trade: Option<f64>,
+    
+    // Risk metrics
+    #[serde(default)]
+    pub value_at_risk_95: Option<f64>,
+    #[serde(default)]
+    pub expected_shortfall_95: Option<f64>,
+    #[serde(default)]
+    pub max_drawdown_duration_days: Option<i32>,
+    #[serde(default)]
+    pub current_drawdown: Option<f64>,
+    #[serde(default)]
+    pub avg_drawdown: Option<f64>,
+    
+    // Execution metrics
+    #[serde(default)]
+    pub total_orders: Option<i32>,
+    #[serde(default)]
+    pub filled_orders: Option<i32>,
+    #[serde(default)]
+    pub cancelled_orders: Option<i32>,
+    #[serde(default)]
+    pub avg_slippage: Option<f64>,
+    #[serde(default)]
+    pub total_commission_paid: Option<f64>,
+    
+    // Strategy parameters used
+    #[serde(default)]
+    pub strategy_params: Option<serde_json::Value>,
+    
     // Advanced analysis results
     #[serde(default)]
     pub monte_carlo: Option<MonteCarloSummary>,
