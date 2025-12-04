@@ -416,7 +416,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
             )}
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
               <strong>Progress:</strong>
-              <span>{displayProgress.toFixed(1)}%</span>
+              <span>{safeToFixed(displayProgress, 1)}%</span>
             </div>
             {jobStatus.current_generation !== null && jobStatus.total_generations !== null && jobStatus.total_generations > 0 && (
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
@@ -463,7 +463,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
               color: 'white',
               fontWeight: 'bold',
             }}>
-              {displayProgress.toFixed(1)}%
+              {safeToFixed(displayProgress, 1)}%
             </div>
           </div>
 
@@ -845,7 +845,7 @@ const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
             <g key={ratio}>
               <line x1={padding} y1={y} x2={width - padding} y2={y} stroke="#e9ecef" strokeWidth={1} />
               <text x={padding - 10} y={y + 4} textAnchor="end" fontSize="12" fill="#666">
-                {value.toFixed(2)}
+                {safeToFixed(value, 2)}
               </text>
             </g>
           );
@@ -863,7 +863,7 @@ const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
             r={3}
             fill="#007bff"
           >
-            <title>{`${new Date(point.timestamp).toLocaleString()}: ${point.value.toFixed(2)}`}</title>
+            <title>{`${new Date(point.timestamp).toLocaleString()}: ${safeToFixed(point.value, 2)}`}</title>
           </circle>
         ))}
         
