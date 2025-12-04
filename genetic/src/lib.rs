@@ -68,12 +68,15 @@ pub struct GeneticOptimizer<C: Chromosome> {
     pub config: GeneticConfig,
     pub fitness_fn: AsyncFitnessFn<C>,
     pub progress_callback: Option<ProgressCallback>,
+    /// Optional job ID for logging correlation
+    pub job_id: Option<String>,
 }
 
 impl<C: Chromosome + 'static> GeneticOptimizer<C> {
     pub async fn run(&self) -> (C, f64) {
-        log_info!("Starting genetic optimization: pop={} gen={}", 
-            self.config.population_size, self.config.generations);
+        let job_tag = self.job_id.as_ref().map(|id| format!("[Job {}] ", id)).unwrap_or_default();
+        log_info!("{}Starting genetic optimization: pop={} gen={}", 
+            job_tag, self.config.population_size, self.config.generations);
         
         let mut rng = rand::rngs::StdRng::from_entropy();
         
@@ -151,8 +154,8 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
             
             // Early stopping if converged OR if diversity is too low
             if generations_without_improvement >= CONVERGENCE_THRESHOLD {
-                log_info!("Converged after {} generations (no improvement for {} generations)", 
-                    generation + 1, CONVERGENCE_THRESHOLD);
+                log_info!("{}Converged after {} generations (no improvement for {} generations)", 
+                    job_tag, generation + 1, CONVERGENCE_THRESHOLD);
                 break;
             }
             
@@ -209,15 +212,15 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
             
             // Progress logging every 5 generations for better visibility
             if (generation + 1) % 5 == 0 || generation == 0 {
-                log_info!("Generation {}/{}: Best fitness = {:.4}, Diversity = {:.4}, Mutation rate = {:.4}", 
-                    generation + 1, self.config.generations, best_fitness, diversity, adaptive_mutation_rate);
+                log_info!("{}Generation {}/{}: Best fitness = {:.4}, Diversity = {:.4}, Mutation rate = {:.4}", 
+                    job_tag, generation + 1, self.config.generations, best_fitness, diversity, adaptive_mutation_rate);
             }
         }
         
         // Run final robustness check on the best chromosome
         if self.config.use_monte_carlo_fitness && !best_equity_curve.is_empty() {
             let (mean_sharpe, std_sharpe) = Self::run_lightweight_monte_carlo(&best_equity_curve, self.config.mc_sample_size);
-            log_info!("Best chromosome robustness: mean_sharpe={:.3}, std_sharpe={:.3}", mean_sharpe, std_sharpe);
+            log_info!("{}Best chromosome robustness: mean_sharpe={:.3}, std_sharpe={:.3}", job_tag, mean_sharpe, std_sharpe);
         }
         
         (best, best_fitness)
@@ -371,6 +374,7 @@ mod tests {
             config,
             fitness_fn,
             progress_callback: None,
+            job_id: Some("test-job".to_string()),
         };
         let (_best, _score) = optimizer.run().await;
         // assert!(_score > 0.0); // Example assertion

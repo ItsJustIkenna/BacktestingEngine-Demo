@@ -147,6 +147,7 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
         config,
         fitness_fn,
         progress_callback: None,
+        job_id: None, // Standalone optimization without job tracking
     };
     let (best_chromo, _score) = optimizer.run().await;
     // Convert chromosome to params - using all 14 parameters (Phase 2)

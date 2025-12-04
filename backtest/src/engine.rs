@@ -445,6 +445,7 @@ impl BacktestEngine {
             config,
             fitness_fn,
             progress_callback: None,
+            job_id: None,
         };
         
         let (best_chromo, best_fitness) = optimizer.run().await;

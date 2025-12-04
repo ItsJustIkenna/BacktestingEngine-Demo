@@ -764,6 +764,7 @@ impl Worker {
             config,
             fitness_fn,
             progress_callback: Some(generation_callback),
+            job_id: Some(job.id.clone()),
         };
         
         log_info!(GENETIC_LOGGER, "Job {} starting genetic algorithm with robustness-weighted fitness", job.id);
@@ -1038,6 +1039,7 @@ impl Worker {
                 config: config.clone(),
                 fitness_fn,
                 progress_callback: None, // Don't update DB for each window's generations
+                job_id: Some(format!("{}-window-{}", job.id, window_num)),
             };
             
             log_debug!(WALKFORWARD_LOGGER, "Job {} window {} starting genetic optimization", job.id, window_num);
