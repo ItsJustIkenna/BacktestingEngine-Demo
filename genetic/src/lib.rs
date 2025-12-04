@@ -98,7 +98,9 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
         for generation in 0..self.config.generations {
             // Progress callback
             if let Some(ref callback) = self.progress_callback {
+                log_info!("{}Gen {}: Calling progress callback...", job_tag, generation + 1);
                 callback(generation + 1, self.config.generations).await;
+                log_info!("{}Gen {}: Progress callback returned", job_tag, generation + 1);
             }
             
             log_info!("{}Gen {}: Starting fitness evaluation for {} chromosomes", 
