@@ -47,6 +47,14 @@ interface ResultsVisualizationProps {
   onBack?: () => void;
 }
 
+// Helper function to safely format numbers that might be undefined
+const safeToFixed = (value: number | undefined | null, decimals: number = 2): string => {
+  if (value === undefined || value === null || isNaN(value)) {
+    return 'N/A';
+  }
+  return value.toFixed(decimals);
+};
+
 export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({ 
   jobId, 
   onBack 
@@ -247,13 +255,13 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         result.job_id,
         result.symbol,
         result.exchange,
-        result.sharpe_ratio.toFixed(4),
-        result.max_drawdown.toFixed(2),
-        result.total_pnl.toFixed(2),
-        result.win_rate.toFixed(2),
-        result.profit_factor.toFixed(2),
-        result.total_trades.toString(),
-        result.avg_trade_duration.toFixed(2),
+        safeToFixed(result.sharpe_ratio, 4),
+        safeToFixed(result.max_drawdown, 2),
+        safeToFixed(result.total_pnl, 2),
+        safeToFixed(result.win_rate, 2),
+        safeToFixed(result.profit_factor, 2),
+        (result.total_trades ?? 0).toString(),
+        safeToFixed(result.avg_trade_duration, 2),
       ];
       
       content = headers.join(',') + '\n' + row.join(',');
@@ -702,28 +710,28 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
       }}>
         <MetricCard
           title="Sharpe Ratio"
-          value={result.sharpe_ratio.toFixed(4)}
-          color={result.sharpe_ratio > 1 ? '#28a745' : result.sharpe_ratio > 0 ? '#ffc107' : '#dc3545'}
+          value={safeToFixed(result.sharpe_ratio, 4)}
+          color={(result.sharpe_ratio ?? 0) > 1 ? '#28a745' : (result.sharpe_ratio ?? 0) > 0 ? '#ffc107' : '#dc3545'}
         />
         <MetricCard
           title="Max Drawdown"
-          value={`${result.max_drawdown.toFixed(2)}%`}
-          color={result.max_drawdown < 10 ? '#28a745' : result.max_drawdown < 20 ? '#ffc107' : '#dc3545'}
+          value={`${safeToFixed(result.max_drawdown, 2)}%`}
+          color={(result.max_drawdown ?? 0) < 10 ? '#28a745' : (result.max_drawdown ?? 0) < 20 ? '#ffc107' : '#dc3545'}
         />
         <MetricCard
           title="Total P&L"
-          value={result.total_pnl.toFixed(2)}
-          color={result.total_pnl >= 0 ? '#28a745' : '#dc3545'}
+          value={safeToFixed(result.total_pnl, 2)}
+          color={(result.total_pnl ?? 0) >= 0 ? '#28a745' : '#dc3545'}
         />
         <MetricCard
           title="Win Rate"
-          value={`${result.win_rate.toFixed(2)}%`}
-          color={result.win_rate > 50 ? '#28a745' : '#ffc107'}
+          value={`${safeToFixed(result.win_rate, 2)}%`}
+          color={(result.win_rate ?? 0) > 50 ? '#28a745' : '#ffc107'}
         />
         <MetricCard
           title="Profit Factor"
-          value={result.profit_factor.toFixed(2)}
-          color={result.profit_factor > 1.5 ? '#28a745' : result.profit_factor > 1 ? '#ffc107' : '#dc3545'}
+          value={safeToFixed(result.profit_factor, 2)}
+          color={(result.profit_factor ?? 0) > 1.5 ? '#28a745' : (result.profit_factor ?? 0) > 1 ? '#ffc107' : '#dc3545'}
         />
         <MetricCard
           title="Total Trades"
