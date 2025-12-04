@@ -130,7 +130,7 @@ table! {
         avg_slippage -> Numeric,
         total_commission_paid -> Numeric,
         avg_fill_time_seconds -> Nullable<Numeric>,
-        strategy_metrics -> Nullable<Text>,
+        strategy_metrics -> Nullable<Jsonb>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
     }
@@ -191,7 +191,7 @@ pub struct NewBacktestResult {
     pub avg_slippage: bigdecimal::BigDecimal,
     pub total_commission_paid: bigdecimal::BigDecimal,
     pub avg_fill_time_seconds: Option<bigdecimal::BigDecimal>,
-    pub strategy_metrics: Option<String>,
+    pub strategy_metrics: Option<serde_json::Value>,
 }
 
 #[derive(Queryable, Selectable, Clone, Debug)]
@@ -773,12 +773,12 @@ impl JobQueue for PostgresQueue {
             avg_slippage: BigDecimal::from(0),
             total_commission_paid: BigDecimal::from(0),
             avg_fill_time_seconds: None,
-            strategy_metrics: Some(serde_json::to_string(&serde_json::json!({
+            strategy_metrics: Some(serde_json::json!({
                 "risk_aversion": job.risk_aversion.to_string(),
                 "inventory_target": job.inventory_target.to_string(),
                 "order_size": job.order_size.to_string(),
                 "equity_curve": equity_curve_downsampled
-            }))?),
+            })),
         };
         
         // Insert result into database
