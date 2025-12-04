@@ -33,7 +33,9 @@ pub fn create_report_config(output_config: &OutputConfig) -> Result<ReportConfig
             "csv" => formats.push(ReportFormat::Csv),
             "pdf" => formats.push(ReportFormat::Pdf),
             _ => {
-                eprintln!("Warning: Unknown export format '{}' ignored", format_str);
+                logging_facade::BACKTEST_LOGGER.warn_sync(
+                    format!("Unknown export format '{}' ignored", format_str)
+                );
             }
         }
     }

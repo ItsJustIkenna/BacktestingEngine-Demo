@@ -9,10 +9,24 @@
 use std::sync::Arc;
 use config::GeneticConfig;
 use rand::prelude::*;
+use ultra_logger::UltraLogger;
+use once_cell::sync::Lazy;
 
 pub mod chromosome;
 // Fitness functions moved to backtest crate to avoid circular dependency
 // pub mod fitness;
+
+/// Logger for genetic algorithm operations
+static GENETIC_LOGGER: Lazy<Arc<UltraLogger>> = Lazy::new(|| {
+    Arc::new(UltraLogger::new("BacktestingEngine-genetic".to_string()))
+});
+
+/// Log info message (synchronous - for use in genetic algorithm hot path)
+macro_rules! log_info {
+    ($($arg:tt)*) => {
+        GENETIC_LOGGER.info_sync(format!($($arg)*))
+    };
+}
 
 /// Represents a set of strategy parameters (chromosome)
 pub trait Chromosome: Clone + Send + Sync {
@@ -58,60 +72,38 @@ pub struct GeneticOptimizer<C: Chromosome> {
 
 impl<C: Chromosome + 'static> GeneticOptimizer<C> {
     pub async fn run(&self) -> (C, f64) {
-        eprintln!("[genetic] GeneticOptimizer::run() started");
+        log_info!("Starting genetic optimization: pop={} gen={}", 
+            self.config.population_size, self.config.generations);
         
-        // Use StdRng which is Send-safe (unlike thread_rng which uses Rc)
         let mut rng = rand::rngs::StdRng::from_entropy();
         
-        // 1. Initialize population
-        eprintln!("[genetic] Initializing population of {} chromosomes", self.config.population_size);
+        // Initialize population
         let mut population: Vec<C> = (0..self.config.population_size)
             .map(|_| C::random(&mut rng))
             .collect();
-        eprintln!("[genetic] Population initialized");
         
+        // Evaluate initial best
         let mut best = population[0].clone();
-        eprintln!("[genetic] Evaluating initial chromosome...");
         let initial_result = (self.fitness_fn)(&best).await;
-        eprintln!("[genetic] Initial chromosome evaluated, fitness={}", initial_result.fitness);
         let mut best_fitness = initial_result.fitness;
         let mut best_equity_curve = initial_result.equity_curve;
         let mut generations_without_improvement = 0;
         const CONVERGENCE_THRESHOLD: usize = 10;
         
-        // Elite size (top 5% of population)
         let elite_size = (self.config.population_size as f64 * 0.05).ceil() as usize;
 
         for generation in 0..self.config.generations {
-            eprintln!("[genetic] Starting generation {}/{}", generation + 1, self.config.generations);
-            // Call progress callback if provided
+            // Progress callback
             if let Some(ref callback) = self.progress_callback {
                 callback(generation + 1, self.config.generations).await;
             }
             
-            // 2. Evaluate fitness in parallel using spawn_blocking for CPU-bound work
-            // Each spawn_blocking task runs on tokio's blocking thread pool
-            use futures::future::join_all;
-            
-            let fitness_futures: Vec<_> = population.iter().map(|chromo| {
-                let chromo = chromo.clone();
-                let fitness_fn = Arc::clone(&self.fitness_fn);
-                
-                async move {
-                    // Run the CPU-bound fitness evaluation on a blocking thread
-                    let handle = tokio::task::spawn_blocking(move || {
-                        // Create a lightweight runtime just for this evaluation
-                        let rt = tokio::runtime::Builder::new_current_thread()
-                            .build()
-                            .expect("Failed to create runtime");
-                        rt.block_on(fitness_fn(&chromo))
-                    });
-                    
-                    handle.await.unwrap_or_else(|_| FitnessResult::failure())
-                }
-            }).collect();
-            
-            let fitness_results: Vec<FitnessResult> = join_all(fitness_futures).await;
+            // Evaluate all chromosomes sequentially
+            // (CPU-bound work - async overhead would hurt performance)
+            let mut fitness_results = Vec::with_capacity(population.len());
+            for chromo in population.iter() {
+                fitness_results.push((self.fitness_fn)(chromo).await);
+            }
             
             // Extract raw fitness values
             let mut fitnesses: Vec<f64> = fitness_results.iter().map(|r| r.fitness).collect();
@@ -159,7 +151,7 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
             
             // Early stopping if converged OR if diversity is too low
             if generations_without_improvement >= CONVERGENCE_THRESHOLD {
-                eprintln!("✅ Converged after {} generations (no improvement for {} generations)", 
+                log_info!("Converged after {} generations (no improvement for {} generations)", 
                     generation + 1, CONVERGENCE_THRESHOLD);
                 break;
             }
@@ -217,7 +209,7 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
             
             // Progress logging every 5 generations for better visibility
             if (generation + 1) % 5 == 0 || generation == 0 {
-                eprintln!("🧬 Generation {}/{}: Best fitness = {:.4}, Diversity = {:.4}, Mutation rate = {:.4}", 
+                log_info!("Generation {}/{}: Best fitness = {:.4}, Diversity = {:.4}, Mutation rate = {:.4}", 
                     generation + 1, self.config.generations, best_fitness, diversity, adaptive_mutation_rate);
             }
         }
@@ -225,7 +217,7 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
         // Run final robustness check on the best chromosome
         if self.config.use_monte_carlo_fitness && !best_equity_curve.is_empty() {
             let (mean_sharpe, std_sharpe) = Self::run_lightweight_monte_carlo(&best_equity_curve, self.config.mc_sample_size);
-            eprintln!("🎲 Best chromosome robustness: mean_sharpe={:.3}, std_sharpe={:.3}", mean_sharpe, std_sharpe);
+            log_info!("Best chromosome robustness: mean_sharpe={:.3}, std_sharpe={:.3}", mean_sharpe, std_sharpe);
         }
         
         (best, best_fitness)

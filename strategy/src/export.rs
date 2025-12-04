@@ -2,6 +2,8 @@
 //!
 //! Exports successful strategies for live trading with minimal configuration.
 
+use crate::logging_facade::STRATEGY_LOGGER;
+use crate::{log_info, log_error};
 use anyhow::Result;
 use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
@@ -170,11 +172,9 @@ impl StrategyExporter {
         let json = serde_json::to_string_pretty(&exportable)?;
         fs::write(&filepath, json).await?;
 
-        println!(
-            "✅ Strategy exported: {} (Sharpe: {:.2}, PF: {:.2}, Win Rate: {:.1}%)",
+        log_info!(STRATEGY_LOGGER, "Strategy exported: {} (Sharpe: {:.2}, PF: {:.2}, Win Rate: {:.1}%)",
             filename, exportable.performance.sharpe_ratio,
-            exportable.performance.profit_factor, exportable.performance.win_rate
-        );
+            exportable.performance.profit_factor, exportable.performance.win_rate);
 
         Ok(Some(filepath.to_string_lossy().to_string()))
     }
@@ -214,7 +214,7 @@ impl StrategyExporter {
         let json = serde_json::to_string_pretty(&exportable)?;
         fs::write(&filepath, json).await?;
 
-        println!("📤 Strategy force exported: {}", filename);
+        log_info!(STRATEGY_LOGGER, "Strategy force exported: {}", filename);
 
         Ok(filepath.to_string_lossy().to_string())
     }

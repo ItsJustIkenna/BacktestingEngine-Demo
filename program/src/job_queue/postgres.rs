@@ -276,11 +276,11 @@ impl PostgresQueue {
         match timeout(Duration::from_secs(CONNECTION_TIMEOUT_SECS), self.pool.get()).await {
             Ok(Ok(conn)) => Ok(conn),
             Ok(Err(e)) => {
-                eprintln!("[DEADLOCK WARNING] Pool error - possible pool exhaustion: {}", e);
+                log_warn!(crate::MAIN_LOGGER, "DEADLOCK WARNING: Pool error - possible pool exhaustion: {}", e);
                 Err(format!("Database pool error: {}", e).into())
             }
             Err(_) => {
-                eprintln!("[DEADLOCK WARNING] Connection acquisition timeout after {}s - pool may be exhausted or deadlocked", CONNECTION_TIMEOUT_SECS);
+                log_warn!(crate::MAIN_LOGGER, "DEADLOCK WARNING: Connection acquisition timeout after {}s - pool may be exhausted or deadlocked", CONNECTION_TIMEOUT_SECS);
                 Err(format!("Connection pool timeout after {}s - possible deadlock or pool exhaustion", CONNECTION_TIMEOUT_SECS).into())
             }
         }
@@ -843,7 +843,7 @@ impl JobQueue for PostgresQueue {
         
         let elapsed = start.elapsed();
         if elapsed.as_millis() > 1000 {
-            eprintln!("[PERF] store_result took {}ms for job {}", elapsed.as_millis(), result.job_id);
+            log_warn!(crate::MAIN_LOGGER, "PERF: store_result took {}ms for job {}", elapsed.as_millis(), result.job_id);
         }
         
         Ok(())

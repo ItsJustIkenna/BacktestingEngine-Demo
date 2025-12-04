@@ -97,24 +97,21 @@ impl OrderBookStreamIterator {
         }
 
         // Use timeout to prevent indefinite blocking on pool exhaustion
-        println!("[SYNC] Getting database connection for chunk load (offset={})", self.offset);
         log_debug!(MAIN_LOGGER, "Getting database connection for chunk load (offset={})", self.offset);
         let mut conn = tokio::time::timeout(
             std::time::Duration::from_secs(10),
             self.pool.get()
         ).await
             .map_err(|_| {
-                println!("[SYNC] ERROR: Connection pool timeout at offset {}", self.offset);
                 log_error!(MAIN_LOGGER, "Connection pool timeout at offset {}", self.offset);
                 "Connection pool timeout - possible deadlock or pool exhaustion"
             })?
             .map_err(|e| {
-                println!("[SYNC] ERROR: Failed to get database connection: {}", e);
                 log_error!(MAIN_LOGGER, "Failed to get database connection: {}", e);
                 format!("Failed to get database connection: {}", e)
             })?;
         
-        println!("[SYNC] Got database connection, executing query (offset={})", self.offset);
+        log_debug!(MAIN_LOGGER, "Got database connection, executing query (offset={})", self.offset);
 
         // Query order book events with LIMIT/OFFSET for chunking
         let query = format!(
@@ -127,7 +124,6 @@ impl OrderBookStreamIterator {
             self.symbol, self.exchange, self.chunk_size, self.offset
         );
 
-        println!("[SYNC] Query: LIMIT {} OFFSET {} for {} {}", self.chunk_size, self.offset, self.symbol, self.exchange);
         log_debug!(MAIN_LOGGER, "Executing query for {} {} (limit={}, offset={})", 
             self.symbol, self.exchange, self.chunk_size, self.offset);
 
@@ -136,20 +132,19 @@ impl OrderBookStreamIterator {
             diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn)
         ).await
             .map_err(|_| {
-                println!("[SYNC] ERROR: Query timeout at offset {} (30s limit)", self.offset);
                 log_error!(MAIN_LOGGER, "Query timeout loading order events for {} {} at offset {} (30s limit)", 
                     self.symbol, self.exchange, self.offset);
                 "Query execution timeout - database may be overloaded"
             })?
             .map_err(|e| {
-                println!("[SYNC] ERROR: Query failed: {}", e);
+                log_error!(MAIN_LOGGER, "Query failed: {}", e);
                 format!("Failed to load order events chunk: {}", e)
             })?;
 
-        println!("[SYNC] Query returned {} rows at offset {}", results.len(), self.offset);
+        log_debug!(MAIN_LOGGER, "Query returned {} rows at offset {}", results.len(), self.offset);
 
         if results.is_empty() {
-            println!("[SYNC] No more results, finished loading");
+            log_debug!(MAIN_LOGGER, "No more results, finished loading");
             self.finished = true;
             return Ok(());
         }
@@ -264,7 +259,7 @@ impl OrderBookBatchLoader {
             .map(|(_, event)| event)
             .collect();
 
-        println!("📊 Sampled {} events from {} total (rate: {:.1}%)", 
+        log_info!(MAIN_LOGGER, "Sampled {} events from {} total (rate: {:.1}%)", 
                  sampled_data.len(), total, sample_rate * 100.0);
 
         Ok(sampled_data)
@@ -287,7 +282,7 @@ impl OrderBookBatchLoader {
         // Load trades
         let trades = self.load_trades(max_events / 2).await?;
         
-        println!("📊 Loaded {} order events and {} trades", order_events.len(), trades.len());
+        log_info!(MAIN_LOGGER, "Loaded {} order events and {} trades", order_events.len(), trades.len());
         
         // Merge by timestamp
         let mut merged = Vec::with_capacity(order_events.len() + trades.len());
@@ -318,7 +313,7 @@ impl OrderBookBatchLoader {
             merged.truncate(max_events);
         }
         
-        println!("📊 Total merged events: {} (limit: {})", merged.len(), max_events);
+        log_info!(MAIN_LOGGER, "Total merged events: {} (limit: {})", merged.len(), max_events);
 
         Ok(merged)
     }

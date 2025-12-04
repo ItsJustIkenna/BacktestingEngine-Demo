@@ -15,6 +15,8 @@
 use crate::window::{generate_windows};
 use crate::result::{WalkForwardWindowResult, WalkForwardSummary};
 use crate::auto_export::{AutoExporter, ExportThresholds};
+use crate::logging_facade::WALKFORWARD_LOGGER;
+use crate::{log_error, log_warn};
 use chrono::NaiveDate;
 use metrics::PerformanceMetrics;
 use dataloader::MarketData;
@@ -82,7 +84,7 @@ pub async fn run_walkforward_analysis(
         match task.await {
             Ok(result) => window_results.push(result),
             Err(e) => {
-                eprintln!("Walk-forward window task failed: {}", e);
+                log_error!(WALKFORWARD_LOGGER, "Walk-forward window task failed: {}", e);
                 // Continue with other windows
             }
         }
@@ -239,7 +241,7 @@ pub async fn run_walkforward_with_auto_export(
         Ok(exported) => Ok((wf_summary, exported)),
         Err(e) => {
             // Log the error but don't fail the entire analysis
-            println!("Auto-export failed: {}, continuing with analysis results", e);
+            log_warn!(WALKFORWARD_LOGGER, "Auto-export failed: {}, continuing with analysis results", e);
             Ok((wf_summary, false))
         }
     }

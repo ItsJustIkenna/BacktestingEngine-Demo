@@ -4,6 +4,8 @@
 //! HTML, CSV, JSON, and PDF for backtesting analysis and visualization.
 
 use crate::PerformanceMetrics;
+use crate::logging_facade::METRICS_LOGGER;
+use crate::{log_info, log_warn, log_error};
 use config::{ReportConfig, ReportFormat};
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc, NaiveDate};
@@ -215,7 +217,7 @@ impl ReportGenerator {
         #[cfg(feature = "persistence")]
         if self.config.persist_to_database {
             if let Err(e) = self.persist_report_metadata(report, &file_paths_map) {
-                eprintln!("Warning: Failed to persist report to database: {}", e);
+                log_warn!(METRICS_LOGGER, "Failed to persist report to database: {}", e);
                 // Don't fail the entire operation, just log the warning
             }
         }
@@ -233,14 +235,12 @@ impl ReportGenerator {
         use crate::persistence::NewBacktestReportRecord;
         use uuid::Uuid;
         
-        println!("📄 Persisting report metadata to database:");
-        println!("   Report ID: {}", report.metadata.report_id);
-        println!("   Strategy: {}", report.metadata.strategy_name);
+        log_info!(METRICS_LOGGER, "Persisting report metadata - Report ID: {}, Strategy: {}", 
+            report.metadata.report_id, report.metadata.strategy_name);
         
         // Check if database URL is configured
         if self.config.database_url.is_none() {
-            println!("⚠️  Warning: DATABASE_URL not configured, skipping persistence");
-            println!("   Set DATABASE_URL environment variable to enable persistence");
+            log_warn!(METRICS_LOGGER, "DATABASE_URL not configured, skipping persistence");
             return Ok(());
         }
         
@@ -258,7 +258,7 @@ impl ReportGenerator {
         );
         
         // Save to database using async runtime
-        println!("   💾 Saving to backtest_reports table...");
+        log_info!(METRICS_LOGGER, "Saving report to backtest_reports table");
         
         let database_url = self.config.database_url.as_ref().unwrap();
         let save_result = tokio::task::block_in_place(|| {
@@ -282,18 +282,12 @@ impl ReportGenerator {
         
         match save_result {
             Ok(()) => {
-                println!("   ✓ Saved successfully!");
-                println!("     - backtest_result_id: {}", backtest_result_id);
-                println!("     - report_id: {}", new_record.report_id);
-                println!("     - strategy: {}", new_record.strategy_name);
-                println!("     - symbol: {}", new_record.symbol);
-                println!("     - period: {} to {}", new_record.start_date, new_record.end_date);
-                println!("     - sharpe: {:?}", report.performance.sharpe_ratio);
-                println!("     - total_trades: {}", report.performance.number_of_trades);
+                log_info!(METRICS_LOGGER, "Report saved successfully - backtest_result_id: {}, report_id: {}, strategy: {}, symbol: {}, period: {} to {}, sharpe: {:?}, total_trades: {}",
+                    backtest_result_id, new_record.report_id, new_record.strategy_name, new_record.symbol,
+                    new_record.start_date, new_record.end_date, report.performance.sharpe_ratio, report.performance.number_of_trades);
             }
             Err(e) => {
-                eprintln!("   ✗ Failed to save: {}", e);
-                eprintln!("   Continuing without database persistence...");
+                log_error!(METRICS_LOGGER, "Failed to save report: {} - continuing without database persistence", e);
             }
         }
         // let repo = BacktestReportRepository::new(pool);

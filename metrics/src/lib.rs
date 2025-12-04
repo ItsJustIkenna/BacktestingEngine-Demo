@@ -2,6 +2,10 @@
 //
 // Provides functions to calculate performance, risk, and trade statistics metrics for trading strategies.
 
+// Include logging macros first
+#[macro_use]
+pub mod logging_facade;
+
 /// Performance-related metrics (e.g., Sharpe ratio, profit factor, net/gross profit, average/median trade return, number of trades)
 pub mod performance;
 

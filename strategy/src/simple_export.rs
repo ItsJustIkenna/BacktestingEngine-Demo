@@ -2,6 +2,8 @@
 //!
 //! Exports successful strategies for live trading with minimal configuration.
 
+use crate::logging_facade::STRATEGY_LOGGER;
+use crate::{log_info, log_error, log_warn};
 use anyhow::Result;
 use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
@@ -367,11 +369,9 @@ impl StrategyExporter {
         let json = serde_json::to_string_pretty(&exportable)?;
         fs::write(&filepath, json).await?;
 
-        println!(
-            "✅ Strategy exported to SignalEngine: {} (Sharpe: {:.2}, PF: {:.2}, Win Rate: {:.1}%)",
+        log_info!(STRATEGY_LOGGER, "Strategy exported to SignalEngine: {} (Sharpe: {:.2}, PF: {:.2}, Win Rate: {:.1}%)",
             filename, exportable.performance.sharpe_ratio,
-            exportable.performance.profit_factor, exportable.performance.win_rate * 100.0
-        );
+            exportable.performance.profit_factor, exportable.performance.win_rate * 100.0);
 
         Ok(Some(filepath.to_string_lossy().to_string()))
     }
@@ -441,7 +441,7 @@ impl StrategyExporter {
         let json = serde_json::to_string_pretty(&exportable)?;
         fs::write(&filepath, json).await?;
 
-        println!("📤 Strategy force exported to SignalEngine: {}", filename);
+        log_info!(STRATEGY_LOGGER, "Strategy force exported to SignalEngine: {}", filename);
 
         Ok(filepath.to_string_lossy().to_string())
     }
@@ -475,7 +475,7 @@ impl StrategyExporter {
         let mut successful = Vec::new();
         let mut failed = Vec::new();
         
-        println!("🔄 Starting batch export of {} strategies...", strategies.len());
+        log_info!(STRATEGY_LOGGER, "Starting batch export of {} strategies", strategies.len());
         
         for (strategy, backtest_results) in strategies {
             let strategy_name = strategy.config.name.clone();
@@ -560,24 +560,22 @@ pub struct BatchExportResult {
 
 impl BatchExportResult {
     pub fn print_summary(&self) {
-        println!("\n📊 Batch Export Summary:");
-        println!("   ✅ Successful: {}", self.successful.len());
-        println!("   ❌ Failed: {}", self.failed.len());
+        use crate::logging_facade::STRATEGY_LOGGER;
+        
+        STRATEGY_LOGGER.info_sync(format!("Batch Export Summary: Successful: {}, Failed: {}", 
+            self.successful.len(), self.failed.len()));
         
         if !self.successful.is_empty() {
-            println!("   Exported Strategies:");
-            for (name, _) in &self.successful {
-                println!("     • {}", name);
-            }
+            let names: Vec<_> = self.successful.iter().map(|(name, _)| name.as_str()).collect();
+            STRATEGY_LOGGER.info_sync(format!("Exported Strategies: {}", names.join(", ")));
         }
         
         if !self.failed.is_empty() {
-            println!("   Failed Exports:");
             for (name, reason) in self.failed.iter().take(5) {
-                println!("     • {}: {}", name, reason);
+                STRATEGY_LOGGER.warn_sync(format!("Failed Export - {}: {}", name, reason));
             }
             if self.failed.len() > 5 {
-                println!("     ... and {} more", self.failed.len() - 5);
+                STRATEGY_LOGGER.warn_sync(format!("... and {} more failures", self.failed.len() - 5));
             }
         }
     }
@@ -594,18 +592,17 @@ pub struct ExportStatistics {
 
 impl ExportStatistics {
     pub fn print_summary(&self) {
-        println!("\n📊 Export Statistics:");
-        println!("   Total Evaluated: {}", self.total_evaluated);
-        println!("   Qualified: {}", self.qualified_for_export);
-        println!("   Rejection Rate: {:.1}%", self.rejection_rate * 100.0);
+        use crate::logging_facade::STRATEGY_LOGGER;
+        
+        STRATEGY_LOGGER.info_sync(format!("Export Statistics: Total Evaluated: {}, Qualified: {}, Rejection Rate: {:.1}%",
+            self.total_evaluated, self.qualified_for_export, self.rejection_rate * 100.0));
         
         if !self.rejection_reasons.is_empty() {
-            println!("   Top Rejection Reasons:");
             let mut sorted_reasons: Vec<_> = self.rejection_reasons.iter().collect();
             sorted_reasons.sort_by(|a, b| b.1.cmp(a.1));
             
             for (reason, count) in sorted_reasons.iter().take(3) {
-                println!("     • {} ({})", reason, count);
+                STRATEGY_LOGGER.info_sync(format!("Top Rejection Reason: {} ({})", reason, count));
             }
         }
     }

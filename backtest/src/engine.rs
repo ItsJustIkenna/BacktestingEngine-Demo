@@ -7,7 +7,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::{BacktestResult, monte_carlo, simulation::SimulationLoop};
 use crate::logging_facade::BACKTEST_LOGGER;
-use crate::{log_info, log_debug};
+use crate::{log_info, log_debug, log_warn, log_error};
 use config::{BacktestConfig, AnalysisMode, AnalysisConfig};
 use strategy::{StrategyManager, simple_export::ExportConfig};
 use orderbook::OrderBook;
@@ -777,7 +777,7 @@ impl BacktestEngine {
                     
                     // Log warnings for significant gaps
                     if gap_duration > gap_config.warning_threshold_seconds {
-                        println!("⚠️  Data gap detected: {:.1} minutes ({:?})", 
+                        log_warn!(BACKTEST_LOGGER, "Data gap detected: {:.1} minutes ({:?})", 
                             gap_duration as f64 / 60.0, &severity);
                     }
                     
@@ -798,7 +798,7 @@ impl BacktestEngine {
                 .collect();
             
             if !critical_gaps.is_empty() {
-                println!("❌ CRITICAL: {} gap(s) exceed {}s threshold", 
+                log_error!(BACKTEST_LOGGER, "CRITICAL: {} gap(s) exceed {}s threshold", 
                     critical_gaps.len(), critical_threshold);
             }
         }
@@ -949,7 +949,7 @@ impl BacktestEngine {
                 Ok(market_data.to_vec())
             }
             GapFillStrategy::ForwardFill => {
-                println!("   🔄 Applying forward fill strategy...");
+                log_info!(BACKTEST_LOGGER, "Applying forward fill strategy");
                 let mut filled_data = Vec::new();
                 
                 for (i, data) in market_data.iter().enumerate() {
@@ -981,7 +981,7 @@ impl BacktestEngine {
                 Ok(filled_data)
             }
             GapFillStrategy::LinearInterpolation => {
-                println!("   🔄 Applying linear interpolation strategy...");
+                log_info!(BACKTEST_LOGGER, "Applying linear interpolation strategy");
                 let mut filled_data = Vec::new();
                 
                 for (i, data) in market_data.iter().enumerate() {
@@ -1013,7 +1013,7 @@ impl BacktestEngine {
                 Ok(filled_data)
             }
             GapFillStrategy::ExcludeGaps => {
-                println!("   ✂️  Excluding data around gaps...");
+                log_info!(BACKTEST_LOGGER, "Excluding data around gaps");
                 let gaps = self.detect_data_gaps(market_data);
                 let mut filtered_data = Vec::new();
                 
@@ -1148,97 +1148,80 @@ impl BacktestEngine {
 impl BacktestResults {
     /// Print comprehensive summary of backtest results
     pub fn print_summary(&self) {
-        println!("\n{}", "=".repeat(60));
-        println!("📊 BACKTEST RESULTS SUMMARY");
-        println!("{}", "=".repeat(60));
+        use crate::logging_facade::BACKTEST_LOGGER;
+        
+        BACKTEST_LOGGER.info_sync("=== BACKTEST RESULTS SUMMARY ===".to_string());
         
         // Core results
-        println!("\n🎯 CORE METRICS:");
+        let mut core_msg = String::from("CORE METRICS: ");
         if let Some(sharpe) = self.core.sharpe_ratio {
-            println!("   Sharpe Ratio: {:.2}", sharpe);
+            core_msg.push_str(&format!("Sharpe: {:.2}, ", sharpe));
         }
         if let Some(pf) = self.core.profit_factor {
-            println!("   Profit Factor: {:.2}", pf);
+            core_msg.push_str(&format!("PF: {:.2}, ", pf));
         }
         if let Some(wr) = self.core.win_rate {
-            println!("   Win Rate: {:.1}%", wr * 100.0);
+            core_msg.push_str(&format!("Win Rate: {:.1}%", wr * 100.0));
         }
+        BACKTEST_LOGGER.info_sync(core_msg);
         
         // Monte Carlo results
         if let Some(mc) = &self.monte_carlo {
-            println!("\n🎲 MONTE CARLO ANALYSIS ({} simulations):", mc.num_runs);
-            println!("   Mean Sharpe: {:.2}", mc.mean_metrics.sharpe_ratio);
+            BACKTEST_LOGGER.info_sync(format!("MONTE CARLO ({} simulations): Mean Sharpe: {:.2}", 
+                mc.num_runs, mc.mean_metrics.sharpe_ratio));
         }
         
         // Walk-forward results
         if let Some(wf) = &self.walk_forward {
-            println!("\n🔄 WALK-FORWARD ANALYSIS:");
-            println!("   Periods Tested: {}", wf.periods_tested);
-            println!("   Average Performance: {:.1}%", wf.average_performance * 100.0);
-            println!("   Consistency Score: {:.1}/10", wf.consistency_score * 10.0);
+            BACKTEST_LOGGER.info_sync(format!("WALK-FORWARD: Periods: {}, Avg Perf: {:.1}%, Consistency: {:.1}/10",
+                wf.periods_tested, wf.average_performance * 100.0, wf.consistency_score * 10.0));
         }
         
         // Metadata
-        println!("\n📋 ANALYSIS METADATA:");
-        println!("   Mode: {:?}", self.metadata.analysis_mode);
-        println!("   Mode Escalated: {}", self.metadata.mode_escalated);
-        println!("   Runtime: {:.1}s", self.metadata.total_runtime_seconds);
-        println!("   Data Quality: {:.1}/10", self.metadata.data_quality_score);
+        BACKTEST_LOGGER.info_sync(format!("METADATA: Mode: {:?}, Escalated: {}, Runtime: {:.1}s, Data Quality: {:.1}/10",
+            self.metadata.analysis_mode, self.metadata.mode_escalated, 
+            self.metadata.total_runtime_seconds, self.metadata.data_quality_score));
         
         // Data Quality Report
         if let Some(dq) = &self.core.data_quality {
-            println!("\n📊 DATA QUALITY REPORT:");
-            println!("   Overall Score: {:.1}/10", dq.overall_score);
-            println!("   Total Data Points: {}", dq.total_data_points);
-            println!("   Time Span: {:.1} hours", dq.time_span_seconds as f64 / 3600.0);
-            println!("   Gaps Detected: {}", dq.gaps_detected.len());
+            let mut dq_msg = format!("DATA QUALITY: Score: {:.1}/10, Points: {}, Time Span: {:.1}h, Gaps: {}",
+                dq.overall_score, dq.total_data_points, 
+                dq.time_span_seconds as f64 / 3600.0, dq.gaps_detected.len());
             if dq.max_gap_seconds > 0 {
-                println!("   Max Gap: {:.1} minutes", dq.max_gap_seconds as f64 / 60.0);
-                println!("   Gap Ratio: {:.1}%", dq.gap_ratio * 100.0);
+                dq_msg.push_str(&format!(", Max Gap: {:.1}m, Gap Ratio: {:.1}%", 
+                    dq.max_gap_seconds as f64 / 60.0, dq.gap_ratio * 100.0));
             }
-            println!("   Data Completeness: {:.1}/10", dq.data_completeness_score);
+            BACKTEST_LOGGER.info_sync(dq_msg);
         }
         
         // Transaction Cost Analysis
         if let Some(tc) = &self.core.transaction_costs {
-            println!("\n💰 TRANSACTION COST ANALYSIS:");
-            println!("   Total Commission: ${:.2}", tc.total_commission);
-            println!("   Total Slippage: ${:.2}", tc.total_slippage);
-            println!("   Total Market Impact: ${:.2}", tc.total_market_impact);
-            println!("   Total Transaction Costs: ${:.2}", tc.total_transaction_costs);
-            println!("   Costs as % of P&L: {:.1}%", tc.costs_as_percentage_of_pnl);
-            println!("   Avg Cost per Trade: ${:.2}", tc.avg_cost_per_trade);
+            BACKTEST_LOGGER.info_sync(format!("TRANSACTION COSTS: Total: ${:.2}, Commission: ${:.2}, Slippage: ${:.2}, Impact: ${:.2}, Costs/PnL: {:.1}%",
+                tc.total_transaction_costs, tc.total_commission, tc.total_slippage, 
+                tc.total_market_impact, tc.costs_as_percentage_of_pnl));
         }
         
         // Market Impact Analysis
         if let Some(mi) = &self.core.market_impact {
             if mi.trades_with_impact > 0 {
-                println!("\n📉 MARKET IMPACT ANALYSIS:");
-                println!("   Trades with Impact: {}", mi.trades_with_impact);
-                println!("   Avg Impact: {:.2} bps", mi.avg_impact_bps);
-                println!("   Max Impact: {:.2} bps", mi.max_impact_bps);
-                println!("   Total Impact Cost: ${:.2}", mi.total_impact_cost);
+                let mut mi_msg = format!("MARKET IMPACT: Trades: {}, Avg: {:.2}bps, Max: {:.2}bps, Total Cost: ${:.2}",
+                    mi.trades_with_impact, mi.avg_impact_bps, mi.max_impact_bps, mi.total_impact_cost);
                 if !mi.liquidity_warnings.is_empty() {
-                    println!("   ⚠️  Liquidity Warnings: {}", mi.liquidity_warnings.len());
+                    mi_msg.push_str(&format!(", Liquidity Warnings: {}", mi.liquidity_warnings.len()));
                 }
+                BACKTEST_LOGGER.info_sync(mi_msg);
             }
         }
         
         if !self.metadata.triggers_fired.is_empty() {
-            println!("\n🔔 TRIGGERS FIRED:");
-            for trigger in &self.metadata.triggers_fired {
-                println!("   • {}", trigger);
-            }
+            BACKTEST_LOGGER.info_sync(format!("TRIGGERS FIRED: {}", self.metadata.triggers_fired.join(", ")));
         }
         
         if !self.metadata.recommendations.is_empty() {
-            println!("\n💡 RECOMMENDATIONS:");
-            for rec in &self.metadata.recommendations {
-                println!("   • {}", rec);
-            }
+            BACKTEST_LOGGER.info_sync(format!("RECOMMENDATIONS: {}", self.metadata.recommendations.join("; ")));
         }
         
-        println!("\n{}", "=".repeat(60));
+        BACKTEST_LOGGER.info_sync("=== END RESULTS SUMMARY ===".to_string());
     }
     
     /// Check if results meet export criteria

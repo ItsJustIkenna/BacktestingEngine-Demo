@@ -26,6 +26,8 @@
 //! ```
 
 use crate::simple_export::{StrategyExporter, ExportConfig, StrategyMetrics, BacktestResults};
+use crate::logging_facade::STRATEGY_LOGGER;
+use crate::{log_info};
 use config::{StrategyConfig, ParameterValue};
 use bigdecimal::BigDecimal;
 use chrono::{Utc, Duration};
@@ -104,7 +106,7 @@ impl BacktestIntegration {
         ).await?;
 
         if let Some(path) = &export_path {
-            println!("✅ Strategy auto-exported to: {}", path);
+            log_info!(STRATEGY_LOGGER, "Strategy auto-exported to: {}", path);
         }
 
         Ok(export_path)
@@ -141,7 +143,7 @@ impl BacktestIntegration {
             backtest_result,
         ).await?;
 
-        println!("📤 Strategy force exported to: {}", export_path);
+        log_info!(STRATEGY_LOGGER, "Strategy force exported to: {}", export_path);
         Ok(export_path)
     }
 
@@ -278,17 +280,17 @@ pub async fn simple_integration_example() -> Result<()> {
     ).await?;
 
     if let Some(path) = export_path {
-        println!("Strategy automatically exported to: {}", path);
+        log_info!(STRATEGY_LOGGER, "Strategy automatically exported to: {}", path);
         
         // Get export statistics
         let stats = integration.get_export_statistics().await?;
-        println!("Export Statistics: {:#?}", stats);
+        log_info!(STRATEGY_LOGGER, "Export Statistics: {:?}", stats);
         
         // List exported strategies
         let exported = integration.get_exported_strategies().await?;
-        println!("Exported strategies: {:?}", exported);
+        log_info!(STRATEGY_LOGGER, "Exported strategies: {:?}", exported);
     } else {
-        println!("Strategy did not meet export criteria");
+        log_info!(STRATEGY_LOGGER, "Strategy did not meet export criteria");
     }
 
     Ok(())

@@ -630,8 +630,8 @@ impl Worker {
         
         let params = &job.params;
         
-        log_info!(GENETIC_LOGGER, "Job {} genetic optimization starting | pop={} gen={} symbol={}", 
-            job.id, params.population_size, params.generations, params.symbol);
+        log_info!(GENETIC_LOGGER, "Job {} genetic optimization starting | pop={} gen={} symbol={} strategy={}", 
+            job.id, params.population_size, params.generations, params.symbol, params.strategy_type);
         
         // Create efficient progress tracker (batches DB writes)
         let progress_tracker = Arc::new(ProgressTracker::new(job.id.clone(), Arc::clone(&self.job_queue)));
@@ -640,25 +640,9 @@ impl Worker {
             "generations": params.generations,
         })).await;
         
-        // Load market data once and share it
-        log_info!(GENETIC_LOGGER, "Job {} loading market data for {} on {}", job.id, params.symbol, params.exchange);
-        log_info!(GENETIC_LOGGER, "Job {} BEFORE calling load_market_data_for_strategy", job.id);
+        // Load market data
         
-        // SYNC println to bypass async logging
-        println!("[SYNC] Job {} about to call load_market_data_for_strategy with strategy_type={}", job.id, params.strategy_type);
-        
-        let data = match self.load_market_data_for_strategy(&params.symbol, &params.exchange, &params.strategy_type).await {
-            Ok(d) => {
-                println!("[SYNC] Job {} load_market_data_for_strategy returned {} records", job.id, d.len());
-                log_info!(GENETIC_LOGGER, "Job {} load_market_data_for_strategy returned {} records", job.id, d.len());
-                d
-            }
-            Err(e) => {
-                println!("[SYNC] Job {} load_market_data_for_strategy FAILED: {}", job.id, e);
-                log_error!(GENETIC_LOGGER, "Job {} load_market_data_for_strategy FAILED: {}", job.id, e);
-                return Err(e);
-            }
-        };
+        let data = self.load_market_data_for_strategy(&params.symbol, &params.exchange, &params.strategy_type).await?;
         
         if data.is_empty() {
             log_error!(GENETIC_LOGGER, "Job {} no market data available", job.id);
@@ -667,26 +651,18 @@ impl Worker {
         
         log_info!(GENETIC_LOGGER, "Job {} loaded {} market data points", job.id, data.len());
         
-        // For genetic optimization, use a subsample to speed up fitness evaluation
-        // With true parallelism (spawn_blocking), we can use more samples
-        // We'll run the full backtest on the winning chromosome after optimization
+        // Subsample data for faster optimization (full data used for final backtest)
         const MAX_OPTIMIZATION_SAMPLES: usize = 5000;
-        log_debug!(GENETIC_LOGGER, "Job {} starting subsampling of {} points", job.id, data.len());
         let optimization_data: Vec<MarketData> = if data.len() > MAX_OPTIMIZATION_SAMPLES {
-            // Take evenly spaced samples to maintain temporal diversity
             let step = data.len() / MAX_OPTIMIZATION_SAMPLES;
-            log_debug!(GENETIC_LOGGER, "Job {} subsampling with step={}", job.id, step);
             data.iter().step_by(step).take(MAX_OPTIMIZATION_SAMPLES).cloned().collect()
         } else {
-            log_debug!(GENETIC_LOGGER, "Job {} using all data (no subsampling needed)", job.id);
             data.clone()
         };
         
-        log_info!(GENETIC_LOGGER, "Job {} using {} samples for optimization (from {} total)", 
-            job.id, optimization_data.len(), data.len());
+        log_info!(GENETIC_LOGGER, "Job {} using {} samples for optimization", job.id, optimization_data.len());
         
         // Create genetic config
-        log_debug!(GENETIC_LOGGER, "Job {} creating genetic config", job.id);
         let config = GeneticConfig {
             population_size: params.population_size,
             generations: params.generations,
@@ -783,7 +759,7 @@ impl Worker {
         });
         
         // Run genetic optimization with robustness-weighted fitness
-        log_debug!(GENETIC_LOGGER, "Job {} creating GeneticOptimizer", job.id);
+        log_info!(GENETIC_LOGGER, "Job {} creating GeneticOptimizer", job.id);
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn,
@@ -792,7 +768,7 @@ impl Worker {
         
         log_info!(GENETIC_LOGGER, "Job {} starting genetic algorithm with robustness-weighted fitness", job.id);
         let (best_chromosome, best_fitness) = optimizer.run().await;
-        log_debug!(GENETIC_LOGGER, "Job {} optimizer.run() completed", job.id);
+        log_info!(GENETIC_LOGGER, "Job {} optimizer.run() completed", job.id);
         
         // Flush progress after optimization completes
         progress_tracker.set_phase("post_optimization", serde_json::json!({
@@ -1600,11 +1576,6 @@ impl Worker {
         exchange: &str,
         strategy_type: &str,
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
-        // SYNC println to bypass async logging - appears immediately in container logs
-        println!("[SYNC] ENTER load_market_data_for_strategy | type='{}' sym={} ex={}", 
-            strategy_type, symbol, exchange);
-        
-        // Also log via async logger for Elasticsearch
         log_info!(GENETIC_LOGGER, "ENTER load_market_data_for_strategy | type='{}' sym={} ex={}", 
             strategy_type, symbol, exchange);
         

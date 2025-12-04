@@ -1,6 +1,7 @@
 //! Fitness function for Avellaneda-Stoikov strategy chromosome
 
 use crate::chromosome::AvellanedaStoikovChromosome;
+use crate::GENETIC_LOGGER;
 use strategy::strategies::avellaneda_stoikov::{AvellanedaStoikovStrategy, AvellanedaStoikovParams};
 use backtest::simulation::SimulationLoop;
 use orderbook::OrderBook;
@@ -52,7 +53,7 @@ pub async fn avellaneda_stoikov_fitness(
     };
     
     if let Err(e) = strategy_manager.register_strategy(strategy_config, strategy) {
-        eprintln!("Failed to register strategy: {}", e);
+        GENETIC_LOGGER.error_sync(format!("Failed to register strategy: {}", e));
         return 0.0; // Return worst fitness on error
     }
     
