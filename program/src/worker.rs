@@ -1428,17 +1428,18 @@ impl Worker {
         exchange: &str,
         strategy_type: &str,
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
-        log_info!(MAIN_LOGGER, "ENTER load_market_data_for_strategy | strategy_type='{}' symbol={} exchange={}", 
+        // Use GENETIC_LOGGER to ensure visibility (MAIN_LOGGER logs might be filtered)
+        log_info!(GENETIC_LOGGER, "ENTER load_market_data_for_strategy | type='{}' sym={} ex={}", 
             strategy_type, symbol, exchange);
         
         match strategy_type {
             "market_making" => {
-                log_info!(MAIN_LOGGER, "Using order events loader for market_making strategy");
+                log_info!(GENETIC_LOGGER, "Using order events loader for market_making strategy");
                 // For market making, load order events to reconstruct order book
                 self.load_order_events(symbol, exchange).await
             }
             _ => {
-                log_info!(MAIN_LOGGER, "Using candle loader for '{}' strategy", strategy_type);
+                log_info!(GENETIC_LOGGER, "Using candle loader for '{}' strategy", strategy_type);
                 // Default to candles for other strategies
                 self.load_market_data(symbol, exchange).await
             }
@@ -1500,7 +1501,7 @@ impl Worker {
             use diesel_async::RunQueryDsl;
             use dataloader::Candle;
             
-            log_info!(MAIN_LOGGER, "Loading candle data for {} on {}", symbol, exchange);
+            log_info!(GENETIC_LOGGER, "ENTER load_market_data for {} on {}", symbol, exchange);
             
             #[derive(QueryableByName)]
             struct CandleRow {
@@ -1525,9 +1526,10 @@ impl Worker {
             }
             
             // Get database pool from job queue
+            log_info!(GENETIC_LOGGER, "Getting database pool for {} on {}", symbol, exchange);
             let pool = self.job_queue.get_pool()
                 .ok_or_else(|| {
-                    log_error!(MAIN_LOGGER, "Database pool not available for {} on {}", symbol, exchange);
+                    log_error!(GENETIC_LOGGER, "Database pool not available for {} on {}", symbol, exchange);
                     "Database pool not available"
                 })?;
             
@@ -1535,17 +1537,17 @@ impl Worker {
             let exchange = exchange.to_string();
             
             // Get async connection with timeout
-            log_debug!(MAIN_LOGGER, "Acquiring database connection for candle load");
+            log_info!(GENETIC_LOGGER, "Acquiring database connection for {} on {}", symbol, exchange);
             let mut conn = tokio::time::timeout(
                 std::time::Duration::from_secs(10),
                 pool.get()
             ).await
                 .map_err(|_| {
-                    log_error!(MAIN_LOGGER, "Connection pool timeout loading candles for {} on {}", symbol, exchange);
+                    log_error!(GENETIC_LOGGER, "Connection pool timeout loading candles for {} on {}", symbol, exchange);
                     "Connection pool timeout - possible deadlock or pool exhaustion"
                 })?
                 .map_err(|e| {
-                    log_error!(MAIN_LOGGER, "Failed to get database connection: {}", e);
+                    log_error!(GENETIC_LOGGER, "Failed to get database connection: {}", e);
                     format!("Failed to get database connection: {}", e)
                 })?;
             
@@ -1559,7 +1561,7 @@ impl Worker {
                 symbol, exchange
             );
             
-            log_debug!(MAIN_LOGGER, "Executing candle query for {} on {}", symbol, exchange);
+            log_info!(GENETIC_LOGGER, "Executing candle query for {} on {}", symbol, exchange);
             
             // Execute query with timeout to prevent hanging on slow queries
             let results: Vec<CandleRow> = tokio::time::timeout(
@@ -1567,15 +1569,15 @@ impl Worker {
                 diesel::sql_query(&query).load(&mut conn)
             ).await
                 .map_err(|_| {
-                    log_error!(MAIN_LOGGER, "Query timeout loading candles for {} on {} (30s limit)", symbol, exchange);
+                    log_error!(GENETIC_LOGGER, "Query timeout loading candles for {} on {} (30s limit)", symbol, exchange);
                     "Query execution timeout - database may be overloaded"
                 })?
                 .map_err(|e| {
-                    log_error!(MAIN_LOGGER, "Failed to load candles for {} on {}: {}", symbol, exchange, e);
+                    log_error!(GENETIC_LOGGER, "Failed to load candles for {} on {}: {}", symbol, exchange, e);
                     format!("Failed to load candles: {}", e)
                 })?;
             
-            log_info!(MAIN_LOGGER, "Loaded {} candle rows for {} on {}", results.len(), symbol, exchange);
+            log_info!(GENETIC_LOGGER, "Loaded {} candle rows for {} on {}", results.len(), symbol, exchange);
             
             let candles: Vec<MarketData> = results
                 .into_iter()
