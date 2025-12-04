@@ -671,17 +671,22 @@ impl Worker {
         // With true parallelism (spawn_blocking), we can use more samples
         // We'll run the full backtest on the winning chromosome after optimization
         const MAX_OPTIMIZATION_SAMPLES: usize = 5000;
+        log_debug!(GENETIC_LOGGER, "Job {} starting subsampling of {} points", job.id, data.len());
         let optimization_data: Vec<MarketData> = if data.len() > MAX_OPTIMIZATION_SAMPLES {
             // Take evenly spaced samples to maintain temporal diversity
             let step = data.len() / MAX_OPTIMIZATION_SAMPLES;
+            log_debug!(GENETIC_LOGGER, "Job {} subsampling with step={}", job.id, step);
             data.iter().step_by(step).take(MAX_OPTIMIZATION_SAMPLES).cloned().collect()
         } else {
+            log_debug!(GENETIC_LOGGER, "Job {} using all data (no subsampling needed)", job.id);
             data.clone()
         };
+        
         log_info!(GENETIC_LOGGER, "Job {} using {} samples for optimization (from {} total)", 
             job.id, optimization_data.len(), data.len());
         
         // Create genetic config
+        log_debug!(GENETIC_LOGGER, "Job {} creating genetic config", job.id);
         let config = GeneticConfig {
             population_size: params.population_size,
             generations: params.generations,
@@ -778,6 +783,7 @@ impl Worker {
         });
         
         // Run genetic optimization with robustness-weighted fitness
+        log_debug!(GENETIC_LOGGER, "Job {} creating GeneticOptimizer", job.id);
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn,
@@ -786,6 +792,7 @@ impl Worker {
         
         log_info!(GENETIC_LOGGER, "Job {} starting genetic algorithm with robustness-weighted fitness", job.id);
         let (best_chromosome, best_fitness) = optimizer.run().await;
+        log_debug!(GENETIC_LOGGER, "Job {} optimizer.run() completed", job.id);
         
         // Flush progress after optimization completes
         progress_tracker.set_phase("post_optimization", serde_json::json!({

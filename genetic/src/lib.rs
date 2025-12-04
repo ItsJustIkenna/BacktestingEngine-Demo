@@ -58,16 +58,22 @@ pub struct GeneticOptimizer<C: Chromosome> {
 
 impl<C: Chromosome + 'static> GeneticOptimizer<C> {
     pub async fn run(&self) -> (C, f64) {
+        eprintln!("[genetic] GeneticOptimizer::run() started");
+        
         // Use StdRng which is Send-safe (unlike thread_rng which uses Rc)
         let mut rng = rand::rngs::StdRng::from_entropy();
         
         // 1. Initialize population
+        eprintln!("[genetic] Initializing population of {} chromosomes", self.config.population_size);
         let mut population: Vec<C> = (0..self.config.population_size)
             .map(|_| C::random(&mut rng))
             .collect();
+        eprintln!("[genetic] Population initialized");
         
         let mut best = population[0].clone();
+        eprintln!("[genetic] Evaluating initial chromosome...");
         let initial_result = (self.fitness_fn)(&best).await;
+        eprintln!("[genetic] Initial chromosome evaluated, fitness={}", initial_result.fitness);
         let mut best_fitness = initial_result.fitness;
         let mut best_equity_curve = initial_result.equity_curve;
         let mut generations_without_improvement = 0;
@@ -77,6 +83,7 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
         let elite_size = (self.config.population_size as f64 * 0.05).ceil() as usize;
 
         for generation in 0..self.config.generations {
+            eprintln!("[genetic] Starting generation {}/{}", generation + 1, self.config.generations);
             // Call progress callback if provided
             if let Some(ref callback) = self.progress_callback {
                 callback(generation + 1, self.config.generations).await;
