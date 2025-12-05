@@ -49,12 +49,19 @@ jobs:
           path: databaseschema
           ref: main
 
-      - name: Checkout SignalEngine
+      - name: Checkout LoggingEngine
         uses: actions/checkout@v4
         with:
           repository: Nwagbara-Group-LLC/LoggingEngine
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           path: LoggingEngine
+
+      - name: Checkout MessageBrokerEngine
+        uses: actions/checkout@v4
+        with:
+          repository: Nwagbara-Group-LLC/MessageBrokerEngine
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          path: MessageBrokerEngine
 
       - name: Verify Rust
         shell: powershell
@@ -241,6 +248,14 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Checkout MessageBrokerEngine
+        uses: actions/checkout@v4
+        with:
+          repository: Nwagbara-Group-LLC/MessageBrokerEngine
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          path: MessageBrokerEngine
+          fetch-depth: 0
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -264,7 +279,7 @@ jobs:
           Write-Host "Building Docker image..."
           $startTime = Get-Date
           
-          $requiredDeps = @("databaseschema", "LoggingEngine")
+          $requiredDeps = @("databaseschema", "LoggingEngine", "MessageBrokerEngine")
           foreach ($dep in $requiredDeps) {
             if (Test-Path $dep) {
               Write-Host "[OK] Dependency found: $dep"
