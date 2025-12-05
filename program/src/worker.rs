@@ -5,8 +5,7 @@
 
 use std::sync::Arc;
 use std::collections::HashMap;
-use tokio::time::{sleep, Duration, Instant};
-use tokio::sync::RwLock;
+use tokio::time::{sleep, Duration};
 use chrono::Utc;
 use bigdecimal::{BigDecimal, FromPrimitive};
 
@@ -26,63 +25,35 @@ use portfoliomanager::PortfolioState;
 use config::BacktestConfig;
 use dataloader::MarketData;
 
-/// Minimum interval between DB flushes (milliseconds)
-const PROGRESS_FLUSH_INTERVAL_MS: u64 = 500;
-
 // ============================================================================
 // EFFICIENT PROGRESS TRACKING
 // ============================================================================
 
-/// In-memory progress state that gets periodically flushed to database
+// Import the progress broadcaster
+use crate::progress_broadcaster::{get_progress_broadcaster, ProgressUpdate};
+
+/// Efficient progress tracker using broadcast channels for real-time updates
 /// 
-/// # Optimization Strategy
-/// 1. All updates write to in-memory state (instant, no I/O)
-/// 2. Background task flushes to DB at most every 500ms
-/// 3. Coalesces multiple updates into single DB write
-/// 4. Final state always flushed on completion
-#[derive(Debug)]
-struct ProgressState {
-    progress: f64,
-    current_generation: i32,
-    total_generations: i32,
-    phase: String,
-    phase_details: serde_json::Value,
-    dirty: bool,  // True if state has changed since last flush
-}
-
-impl Default for ProgressState {
-    fn default() -> Self {
-        Self {
-            progress: 0.0,
-            current_generation: 0,
-            total_generations: 0,
-            phase: "initializing".to_string(),
-            phase_details: serde_json::json!({}),
-            dirty: false,
-        }
-    }
-}
-
-/// Efficient progress tracker with batched database updates
+/// # Architecture
+/// - Real-time updates go to broadcast channel (non-blocking, ~176ns)
+/// - DB writes only on phase changes (start, complete, fail)
+/// - No RwLock contention in hot path
+/// - No deadlock possible
 /// 
 /// # Usage
 /// ```ignore
 /// let tracker = ProgressTracker::new(job_id, job_queue);
-/// tracker.start_background_flush(); // Spawns flush task
 /// 
-/// // Fast in-memory updates (no DB I/O)
-/// tracker.set_progress(25.0).await;
-/// tracker.set_generation(5, 20).await;
-/// tracker.set_phase("genetic_optimization", json!({"best_fitness": 0.95})).await;
+/// // Fast broadcast updates (never blocks)
+/// tracker.broadcast_generation(5, 20);
+/// tracker.broadcast_phase("genetic_optimization", json!({...}));
 /// 
-/// // Final flush on completion
-/// tracker.flush_final().await;
+/// // DB writes only on lifecycle events
+/// tracker.persist_phase_change("completed").await;
 /// ```
 pub struct ProgressTracker {
     job_id: String,
     job_queue: Arc<dyn JobQueue>,
-    state: Arc<RwLock<ProgressState>>,
-    last_flush: Arc<RwLock<Instant>>,
 }
 
 impl ProgressTracker {
@@ -90,110 +61,66 @@ impl ProgressTracker {
         Self {
             job_id,
             job_queue,
-            state: Arc::new(RwLock::new(ProgressState::default())),
-            last_flush: Arc::new(RwLock::new(Instant::now())),
         }
     }
     
-    /// Set progress percentage (0-100) - in-memory only
-    pub async fn set_progress(&self, progress: f64) {
-        let mut state = self.state.write().await;
-        if (state.progress - progress).abs() >= 0.1 {
-            state.progress = progress;
-            state.dirty = true;
-        }
-    }
-    
-    /// Set generation progress - in-memory only
-    pub async fn set_generation(&self, current: i32, total: i32) {
-        let mut state = self.state.write().await;
-        if state.current_generation != current || state.total_generations != total {
-            state.current_generation = current;
-            state.total_generations = total;
-            // Calculate progress from generation (0-85% for genetic phase)
-            if total > 0 {
-                state.progress = (current as f64 / total as f64) * 85.0;
-            }
-            state.dirty = true;
-        }
-    }
-    
-    /// Set current phase with details - in-memory only
-    pub async fn set_phase(&self, phase: &str, details: serde_json::Value) {
-        let mut state = self.state.write().await;
-        state.phase = phase.to_string();
-        state.phase_details = details;
-        state.dirty = true;
-    }
-    
-    /// Check if enough time has passed and state is dirty, then flush
-    pub async fn maybe_flush(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let should_flush = {
-            let last = self.last_flush.read().await;
-            let state = self.state.read().await;
-            state.dirty && last.elapsed() >= Duration::from_millis(PROGRESS_FLUSH_INTERVAL_MS)
-        };
-        
-        if should_flush {
-            self.flush().await?;
-        }
-        Ok(())
-    }
-    
-    /// Force flush current state to database
-    pub async fn flush(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let (progress, gen, total_gen, phase, details) = {
-            let mut state = self.state.write().await;
-            if !state.dirty {
-                return Ok(());
-            }
-            state.dirty = false;
-            (state.progress, state.current_generation, state.total_generations, 
-             state.phase.clone(), state.phase_details.clone())
-        };
-        
-        // Update last flush time
-        {
-            let mut last = self.last_flush.write().await;
-            *last = Instant::now();
-        }
-        
-        // Single combined update - more efficient than 3 separate calls
-        // Using update_phase which includes all the info we need
-        let combined_details = serde_json::json!({
-            "progress": progress,
-            "current_generation": gen,
-            "total_generations": total_gen,
-            "phase_info": details,
+    /// Broadcast progress update (fire-and-forget, never blocks)
+    /// This is safe to call from the genetic optimizer's hot loop
+    #[inline]
+    pub fn broadcast_progress(&self, progress: f64) {
+        get_progress_broadcaster().publish(ProgressUpdate {
+            job_id: self.job_id.clone(),
+            progress,
+            current_generation: 0,
+            total_generations: 0,
+            phase: "running".to_string(),
+            phase_details: serde_json::json!({}),
+            timestamp_ns: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos() as u64,
         });
-        
-        self.job_queue.update_phase(&self.job_id, &phase, combined_details).await?;
-        self.job_queue.update_progress(&self.job_id, progress).await?;
-        
-        if gen > 0 {
-            self.job_queue.update_generation(&self.job_id, gen, total_gen).await?;
-        }
-        
-        Ok(())
     }
     
-    /// Final flush - always writes to DB regardless of timing
-    pub async fn flush_final(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // Mark dirty to force flush
-        {
-            let mut state = self.state.write().await;
-            state.dirty = true;
-        }
-        self.flush().await
+    /// Broadcast generation progress (fire-and-forget, never blocks)
+    #[inline]
+    pub fn broadcast_generation(&self, current: i32, total: i32) {
+        get_progress_broadcaster().publish_generation(&self.job_id, current as usize, total as usize);
+    }
+    
+    /// Broadcast phase change (fire-and-forget, never blocks)
+    #[inline]
+    pub fn broadcast_phase(&self, phase: &str, details: serde_json::Value) {
+        get_progress_broadcaster().publish_phase(&self.job_id, phase, details);
+    }
+    
+    /// Persist phase change to database (only for lifecycle events)
+    /// Call this for: job start, phase transitions, job complete, job failed
+    pub async fn persist_phase_change(&self, phase: &str, details: serde_json::Value) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.job_queue.update_phase(&self.job_id, phase, details).await
+    }
+    
+    /// Persist progress to database (sparingly - only for major milestones)
+    pub async fn persist_progress(&self, progress: f64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.job_queue.update_progress(&self.job_id, progress).await
+    }
+    
+    /// Persist generation to database (only at completion)
+    pub async fn persist_generation(&self, current: i32, total: i32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.job_queue.update_generation(&self.job_id, current, total).await
     }
     
     /// Create a generation callback for genetic optimizer
-    /// Returns a callback that updates in-memory state (fast)
+    /// Returns a callback that broadcasts updates via channel (never blocks)
+    /// 
+    /// CRITICAL: This callback is completely non-blocking. It:
+    /// - Does NOT hold any locks
+    /// - Does NOT write to database
+    /// - Does NOT await anything
+    /// - Uses fire-and-forget broadcast (~176ns latency)
     pub fn generation_callback(self: &Arc<Self>) -> Arc<dyn Fn(usize, usize) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync> {
-        let tracker = Arc::clone(self);
         let job_id = self.job_id.clone();
         Arc::new(move |current: usize, total: usize| {
-            let tracker = Arc::clone(&tracker);
             let job_id = job_id.clone();
             Box::pin(async move {
                 // Log progress every 5 generations or on first/last
@@ -201,11 +128,42 @@ impl ProgressTracker {
                     log_info!(GENETIC_LOGGER, "Job {} generation {}/{} ({:.1}%)", 
                         job_id, current, total, (current as f64 / total as f64) * 100.0);
                 }
-                tracker.set_generation(current as i32, total as i32).await;
-                // Try to flush if enough time has passed (non-blocking check)
-                let _ = tracker.maybe_flush().await;
+                
+                // Broadcast to WebSocket clients (fire-and-forget, ~176ns)
+                get_progress_broadcaster().publish_generation(&job_id, current, total);
             })
         })
+    }
+    
+    // Legacy methods for backward compatibility - these now just broadcast
+    #[deprecated(note = "Use broadcast_progress instead")]
+    pub async fn set_progress(&self, progress: f64) {
+        self.broadcast_progress(progress);
+    }
+    
+    #[deprecated(note = "Use broadcast_generation instead")]
+    pub async fn set_generation(&self, current: i32, total: i32) {
+        self.broadcast_generation(current, total);
+    }
+    
+    #[deprecated(note = "Use broadcast_phase instead")]
+    pub async fn set_phase(&self, phase: &str, details: serde_json::Value) {
+        self.broadcast_phase(phase, details);
+    }
+    
+    #[deprecated(note = "No longer needed - broadcasts are instant")]
+    pub async fn maybe_flush(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(())
+    }
+    
+    #[deprecated(note = "No longer needed - broadcasts are instant")]
+    pub async fn flush(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(())
+    }
+    
+    #[deprecated(note = "Use persist_phase_change for final state")]
+    pub async fn flush_final(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        Ok(())
     }
 }
 
@@ -633,9 +591,15 @@ impl Worker {
         log_info!(GENETIC_LOGGER, "Job {} genetic optimization starting | pop={} gen={} symbol={} strategy={}", 
             job.id, params.population_size, params.generations, params.symbol, params.strategy_type);
         
-        // Create efficient progress tracker (batches DB writes)
+        // Create efficient progress tracker (broadcasts via channel, no DB in hot path)
         let progress_tracker = Arc::new(ProgressTracker::new(job.id.clone(), Arc::clone(&self.job_queue)));
-        progress_tracker.set_phase("genetic_optimization", serde_json::json!({
+        
+        // Persist phase change to DB (lifecycle event) + broadcast
+        progress_tracker.broadcast_phase("genetic_optimization", serde_json::json!({
+            "population_size": params.population_size,
+            "generations": params.generations,
+        }));
+        let _ = progress_tracker.persist_phase_change("genetic_optimization", serde_json::json!({
             "population_size": params.population_size,
             "generations": params.generations,
         })).await;
@@ -772,23 +736,31 @@ impl Worker {
         let (best_chromosome, best_fitness) = optimizer.run().await;
         log_info!(GENETIC_LOGGER, "Job {} optimizer.run() completed", job.id);
         
-        // Flush progress after optimization completes
-        progress_tracker.set_phase("post_optimization", serde_json::json!({
+        // Broadcast + persist phase change after optimization completes
+        progress_tracker.broadcast_phase("post_optimization", serde_json::json!({
+            "best_fitness": best_fitness,
+            "risk_aversion": best_chromosome.risk_aversion,
+            "inventory_target": best_chromosome.inventory_target,
+        }));
+        let _ = progress_tracker.persist_phase_change("post_optimization", serde_json::json!({
             "best_fitness": best_fitness,
             "risk_aversion": best_chromosome.risk_aversion,
             "inventory_target": best_chromosome.inventory_target,
         })).await;
-        let _ = progress_tracker.flush().await;
         
         log_info!(GENETIC_LOGGER, "Job {} genetic optimization complete | best_fitness={:.4} risk_aversion={:.3} inventory_target={:.3} order_size={:.4}", 
             job.id, best_fitness, best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size);
         
         // Update phase for final analysis
-        progress_tracker.set_phase("final_analysis", serde_json::json!({
+        progress_tracker.broadcast_phase("final_analysis", serde_json::json!({
             "stage": "monte_carlo_walkforward"
+        }));
+        progress_tracker.broadcast_progress(90.0);
+        let _ = progress_tracker.persist_phase_change("final_analysis", serde_json::json!({
+            "stage": "monte_carlo_walkforward",
+            "progress": 90.0
         })).await;
-        progress_tracker.set_progress(90.0).await;
-        let _ = progress_tracker.flush().await;
+        let _ = progress_tracker.persist_progress(90.0).await;
         
         // Run final backtest with best parameters to get full results
         // This includes Monte Carlo and Walk-Forward analysis automatically
@@ -808,13 +780,17 @@ impl Worker {
             params.walk_forward_enabled,
         ).await?;
         
-        // Final flush
-        progress_tracker.set_progress(100.0).await;
-        progress_tracker.set_phase("completed", serde_json::json!({
+        // Final broadcast + persist (lifecycle event)
+        progress_tracker.broadcast_progress(100.0);
+        progress_tracker.broadcast_phase("completed", serde_json::json!({
+            "total_pnl": final_result.total_pnl,
+            "sharpe_ratio": final_result.sharpe_ratio,
+        }));
+        let _ = progress_tracker.persist_progress(100.0).await;
+        let _ = progress_tracker.persist_phase_change("completed", serde_json::json!({
             "total_pnl": final_result.total_pnl,
             "sharpe_ratio": final_result.sharpe_ratio,
         })).await;
-        let _ = progress_tracker.flush_final().await;
         
         log_info!(GENETIC_LOGGER, "Job {} full analysis complete | pnl={:.2} sharpe={:.3}", 
             job.id, final_result.total_pnl, final_result.sharpe_ratio);
@@ -1590,8 +1566,23 @@ impl Worker {
             }
             _ => {
                 log_info!(GENETIC_LOGGER, "Using candle loader for '{}' strategy", strategy_type);
-                // Default to candles for other strategies
-                self.load_market_data(symbol, exchange).await
+                // Try to load candles first
+                match self.load_market_data(symbol, exchange).await {
+                    Ok(data) if !data.is_empty() => {
+                        log_info!(GENETIC_LOGGER, "Successfully loaded {} candles", data.len());
+                        Ok(data)
+                    }
+                    Ok(_) => {
+                        log_warn!(GENETIC_LOGGER, "No candle data found, falling back to order events for {} on {}", symbol, exchange);
+                        // Fall back to order events if no candles
+                        self.load_order_events(symbol, exchange).await
+                    }
+                    Err(e) => {
+                        log_warn!(GENETIC_LOGGER, "Failed to load candles ({}), falling back to order events", e);
+                        // Fall back to order events if candle query fails (e.g., view doesn't exist)
+                        self.load_order_events(symbol, exchange).await
+                    }
+                }
             }
         }
     }

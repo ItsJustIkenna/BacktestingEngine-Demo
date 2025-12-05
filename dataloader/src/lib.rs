@@ -103,7 +103,7 @@ pub struct QueryParams {
     pub exchange: String,
     pub start_time: Option<DateTime<Utc>>,
     pub end_time: Option<DateTime<Utc>>,
-    pub limit: Option<usize>,
+    pub limit: Option<i64>,
 }
 
 /// Monte Carlo simulation parameters

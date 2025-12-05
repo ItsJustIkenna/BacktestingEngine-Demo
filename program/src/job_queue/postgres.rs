@@ -1,5 +1,13 @@
 //! PostgreSQL-backed job queue implementation with async support
 //!
+//! # Refactored to use databaseschema
+//!
+//! This module now imports schema and models from the shared `databaseschema` crate
+//! instead of duplicating definitions. This ensures:
+//! - Single source of truth for database schema
+//! - Consistent model definitions across all engines
+//! - Easier maintenance when schema changes
+//!
 //! # Thread Safety & Deadlock Prevention
 //!
 //! This module is designed to prevent deadlocks and data races through several mechanisms:
@@ -31,6 +39,9 @@ use diesel_async::pooled_connection::{AsyncDieselConnectionManager, deadpool};
 use std::sync::Arc;
 use tokio::time::{timeout, Duration};
 
+// Import schema from databaseschema crate - single source of truth
+use databaseschema::schema::{backtest_jobs, backtest_results};
+
 /// Default timeout for acquiring database connections (10 seconds)
 /// This prevents indefinite blocking if the pool is exhausted
 const CONNECTION_TIMEOUT_SECS: u64 = 10;
@@ -40,160 +51,13 @@ const CONNECTION_TIMEOUT_SECS: u64 = 10;
 #[allow(dead_code)]
 const TRANSACTION_TIMEOUT_SECS: u64 = 300;
 
-// Define the diesel table schema
-table! {
-    backtest_jobs (id) {
-        id -> Uuid,
-        job_id -> Varchar,
-        symbol -> Varchar,
-        exchange -> Varchar,
-        strategy_type -> Varchar,
-        optimization_method -> Varchar,
-        population_size -> Nullable<Int4>,
-        generations -> Nullable<Int4>,
-        risk_aversion -> Numeric,
-        inventory_target -> Numeric,
-        order_size -> Numeric,
-        initial_capital -> Numeric,
-        commission_rate -> Numeric,
-        start_date -> Nullable<Timestamptz>,
-        end_date -> Nullable<Timestamptz>,
-        status -> Varchar,
-        progress -> Numeric,
-        created_at -> Timestamptz,
-        started_at -> Nullable<Timestamptz>,
-        completed_at -> Nullable<Timestamptz>,
-        error_message -> Nullable<Text>,
-        result_id -> Nullable<Uuid>,
-        last_heartbeat -> Nullable<Timestamptz>,
-        current_generation -> Nullable<Int4>,
-        total_generations -> Nullable<Int4>,
-        current_phase -> Varchar,
-        phase_details -> Jsonb,
-    }
-}
+// Re-export NewBacktestResult from databaseschema for result storage
+pub use databaseschema::models::backtest_result::NewBacktestResult;
 
-allow_tables_to_appear_in_same_query!(backtest_jobs, backtest_results);
-
-table! {
-    backtest_results (id) {
-        id -> Uuid,
-        backtest_id -> Uuid,
-        strategy_name -> Varchar,
-        symbol -> Varchar,
-        start_date -> Timestamptz,
-        end_date -> Timestamptz,
-        initial_capital -> Numeric,
-        commission_rate -> Numeric,
-        slippage_model_type -> Varchar,
-        slippage_fixed_rate -> Nullable<Numeric>,
-        slippage_sqrt_rate -> Nullable<Numeric>,
-        slippage_linear_rate -> Nullable<Numeric>,
-        temporary_impact -> Numeric,
-        permanent_impact -> Numeric,
-        participation_rate_limit -> Numeric,
-        benchmark -> Nullable<Varchar>,
-        rebalancing_frequency -> Varchar,
-        point_in_time -> Bool,
-        warmup_period_days -> Integer,
-        total_return -> Numeric,
-        annualized_return -> Numeric,
-        volatility -> Numeric,
-        sharpe_ratio -> Nullable<Numeric>,
-        sortino_ratio -> Nullable<Numeric>,
-        max_drawdown -> Numeric,
-        calmar_ratio -> Nullable<Numeric>,
-        win_rate -> Numeric,
-        profit_factor -> Numeric,
-        avg_trade_return -> Numeric,
-        total_trades -> Integer,
-        best_trade -> Nullable<Numeric>,
-        worst_trade -> Nullable<Numeric>,
-        avg_time_in_trade -> Nullable<Numeric>,
-        value_at_risk_95 -> Nullable<Numeric>,
-        expected_shortfall_95 -> Nullable<Numeric>,
-        beta -> Nullable<Numeric>,
-        correlation_with_benchmark -> Nullable<Numeric>,
-        tracking_error -> Nullable<Numeric>,
-        information_ratio -> Nullable<Numeric>,
-        jensen_alpha -> Nullable<Numeric>,
-        max_drawdown_duration_days -> Nullable<Integer>,
-        current_drawdown -> Numeric,
-        avg_drawdown -> Nullable<Numeric>,
-        benchmark_return -> Nullable<Numeric>,
-        excess_return -> Nullable<Numeric>,
-        outperformance_periods -> Nullable<Integer>,
-        underperformance_periods -> Nullable<Integer>,
-        total_orders -> Integer,
-        filled_orders -> Integer,
-        cancelled_orders -> Integer,
-        avg_slippage -> Numeric,
-        total_commission_paid -> Numeric,
-        avg_fill_time_seconds -> Nullable<Numeric>,
-        strategy_metrics -> Nullable<Jsonb>,
-        created_at -> Timestamptz,
-        updated_at -> Timestamptz,
-    }
-}
-
-#[derive(Insertable)]
-#[diesel(table_name = backtest_results)]
-pub struct NewBacktestResult {
-    pub backtest_id: uuid::Uuid,
-    pub strategy_name: String,
-    pub symbol: String,
-    pub start_date: chrono::DateTime<chrono::Utc>,
-    pub end_date: chrono::DateTime<chrono::Utc>,
-    pub initial_capital: bigdecimal::BigDecimal,
-    pub commission_rate: bigdecimal::BigDecimal,
-    pub slippage_model_type: String,
-    pub slippage_fixed_rate: Option<bigdecimal::BigDecimal>,
-    pub slippage_sqrt_rate: Option<bigdecimal::BigDecimal>,
-    pub slippage_linear_rate: Option<bigdecimal::BigDecimal>,
-    pub temporary_impact: bigdecimal::BigDecimal,
-    pub permanent_impact: bigdecimal::BigDecimal,
-    pub participation_rate_limit: bigdecimal::BigDecimal,
-    pub benchmark: Option<String>,
-    pub rebalancing_frequency: String,
-    pub point_in_time: bool,
-    pub warmup_period_days: i32,
-    pub total_return: bigdecimal::BigDecimal,
-    pub annualized_return: bigdecimal::BigDecimal,
-    pub volatility: bigdecimal::BigDecimal,
-    pub sharpe_ratio: Option<bigdecimal::BigDecimal>,
-    pub sortino_ratio: Option<bigdecimal::BigDecimal>,
-    pub max_drawdown: bigdecimal::BigDecimal,
-    pub calmar_ratio: Option<bigdecimal::BigDecimal>,
-    pub win_rate: bigdecimal::BigDecimal,
-    pub profit_factor: bigdecimal::BigDecimal,
-    pub avg_trade_return: bigdecimal::BigDecimal,
-    pub total_trades: i32,
-    pub best_trade: Option<bigdecimal::BigDecimal>,
-    pub worst_trade: Option<bigdecimal::BigDecimal>,
-    pub avg_time_in_trade: Option<bigdecimal::BigDecimal>,
-    pub value_at_risk_95: Option<bigdecimal::BigDecimal>,
-    pub expected_shortfall_95: Option<bigdecimal::BigDecimal>,
-    pub beta: Option<bigdecimal::BigDecimal>,
-    pub correlation_with_benchmark: Option<bigdecimal::BigDecimal>,
-    pub tracking_error: Option<bigdecimal::BigDecimal>,
-    pub information_ratio: Option<bigdecimal::BigDecimal>,
-    pub jensen_alpha: Option<bigdecimal::BigDecimal>,
-    pub max_drawdown_duration_days: Option<i32>,
-    pub current_drawdown: bigdecimal::BigDecimal,
-    pub avg_drawdown: Option<bigdecimal::BigDecimal>,
-    pub benchmark_return: Option<bigdecimal::BigDecimal>,
-    pub excess_return: Option<bigdecimal::BigDecimal>,
-    pub outperformance_periods: Option<i32>,
-    pub underperformance_periods: Option<i32>,
-    pub total_orders: i32,
-    pub filled_orders: i32,
-    pub cancelled_orders: i32,
-    pub avg_slippage: bigdecimal::BigDecimal,
-    pub total_commission_paid: bigdecimal::BigDecimal,
-    pub avg_fill_time_seconds: Option<bigdecimal::BigDecimal>,
-    pub strategy_metrics: Option<serde_json::Value>,
-}
-
+/// Queryable record for backtest_jobs table
+/// 
+/// Note: We define this locally rather than using databaseschema because
+/// the field order must match the table! macro column order exactly.
 #[derive(Queryable, Selectable, Clone, Debug)]
 #[diesel(table_name = backtest_jobs)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
@@ -202,10 +66,6 @@ pub struct BacktestJobRecord {
     pub job_id: String,
     pub symbol: String,
     pub exchange: String,
-    pub strategy_type: String,
-    pub optimization_method: String,
-    pub population_size: Option<i32>,
-    pub generations: Option<i32>,
     pub risk_aversion: bigdecimal::BigDecimal,
     pub inventory_target: bigdecimal::BigDecimal,
     pub order_size: bigdecimal::BigDecimal,
@@ -220,13 +80,18 @@ pub struct BacktestJobRecord {
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub error_message: Option<String>,
     pub result_id: Option<uuid::Uuid>,
+    pub strategy_type: String,
     pub last_heartbeat: Option<chrono::DateTime<chrono::Utc>>,
     pub current_generation: Option<i32>,
     pub total_generations: Option<i32>,
-    pub current_phase: String,
-    pub phase_details: serde_json::Value,
+    pub optimization_method: String,
+    pub population_size: Option<i32>,
+    pub generations: Option<i32>,
+    pub current_phase: Option<String>,
+    pub phase_details: Option<serde_json::Value>,
 }
 
+/// Insertable record for new backtest jobs
 #[derive(Insertable)]
 #[diesel(table_name = backtest_jobs)]
 pub struct NewBacktestJob {
@@ -343,47 +208,6 @@ impl PostgresQueue {
         Some(Arc::clone(&self.pool))
     }
     
-    /// Convert BacktestJob to database record
-    #[allow(dead_code)]
-    fn job_to_record(job: &BacktestJob) -> Result<BacktestJobRecord, Box<dyn std::error::Error + Send + Sync>> {
-        use bigdecimal::{BigDecimal, FromPrimitive};
-        
-        Ok(BacktestJobRecord {
-            id: uuid::Uuid::new_v4(),
-            job_id: job.id.clone(),
-            symbol: job.params.symbol.clone(),
-            exchange: job.params.exchange.clone(),
-            strategy_type: job.params.strategy_type.clone(),
-            optimization_method: job.params.optimization_method.clone(),
-            population_size: if job.params.population_size > 0 { Some(job.params.population_size as i32) } else { None },
-            generations: if job.params.generations > 0 { Some(job.params.generations as i32) } else { None },
-            risk_aversion: BigDecimal::from_f64(job.params.risk_aversion).ok_or("Invalid risk_aversion")?,
-            inventory_target: BigDecimal::from_f64(job.params.inventory_target).ok_or("Invalid inventory_target")?,
-            order_size: BigDecimal::from_f64(job.params.order_size).ok_or("Invalid order_size")?,
-            initial_capital: BigDecimal::from_f64(job.params.initial_capital).ok_or("Invalid initial_capital")?,
-            commission_rate: BigDecimal::from_f64(job.params.commission_rate).ok_or("Invalid commission_rate")?,
-            start_date: job.params.start_date.as_ref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc))),
-            end_date: job.params.end_date.as_ref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc))),
-            status: match &job.status {
-                JobStatus::Queued => "queued",
-                JobStatus::Running => "running",
-                JobStatus::Completed => "completed",
-                JobStatus::Failed => "failed",
-            }.to_string(),
-            progress: BigDecimal::from_f64(job.progress).ok_or("Invalid progress")?,
-            created_at: job.created_at,
-            started_at: job.started_at,
-            completed_at: job.completed_at,
-            error_message: job.error_message.clone(),
-            result_id: None,
-            last_heartbeat: None,
-            current_generation: Some(job.current_generation),
-            total_generations: Some(job.total_generations),
-            current_phase: "initializing".to_string(),
-            phase_details: serde_json::json!({}),
-        })
-    }
-    
     /// Convert database record to BacktestJob
     fn record_to_job(record: BacktestJobRecord) -> Result<BacktestJob, Box<dyn std::error::Error + Send + Sync>> {
         use std::str::FromStr;
@@ -439,8 +263,8 @@ impl PostgresQueue {
             progress: f64::from_str(&record.progress.to_string())?,
             current_generation: record.current_generation.unwrap_or(0),
             total_generations: record.total_generations.unwrap_or(0),
-            current_phase: record.current_phase,
-            phase_details: record.phase_details,
+            current_phase: record.current_phase.unwrap_or_else(|| "initializing".to_string()),
+            phase_details: record.phase_details.unwrap_or_else(|| serde_json::json!({})),
             error_message: record.error_message,
         })
     }
@@ -453,8 +277,6 @@ impl JobQueue for PostgresQueue {
         use std::str::FromStr;
         
         let job_id = Uuid::new_v4().to_string();
-        
-        // crate::log_info!(...)
         
         let mut conn = self.get_conn_with_timeout().await?;
         
@@ -484,12 +306,9 @@ impl JobQueue for PostgresQueue {
     }
     
     async fn get_next_job(&self) -> Result<Option<BacktestJob>, Box<dyn std::error::Error + Send + Sync>> {
-        // crate::log_info!(...)
-        
         let mut conn = self.get_conn_with_timeout().await?;
         
         // Use FOR UPDATE SKIP LOCKED for atomic job claiming
-        // diesel-async supports transactions
         let result = conn.transaction::<_, Box<dyn std::error::Error + Send + Sync>, _>(|conn| {
             Box::pin(async move {
                 // Calculate thresholds for orphaned job detection
@@ -497,33 +316,6 @@ impl JobQueue for PostgresQueue {
                 // Heartbeat interval is 30s, so 10 minutes means ~20 missed heartbeats
                 let started_threshold = Utc::now() - chrono::Duration::minutes(30);
                 let heartbeat_threshold = Utc::now() - chrono::Duration::minutes(10);
-                
-                // crate::log_info!(...)
-                
-                // Check for running jobs
-                let running_count: i64 = backtest_jobs::table
-                    .filter(backtest_jobs::status.eq("running"))
-                    .count()
-                    .get_result(conn)
-                    .await?;
-                
-                if running_count > 0 {
-                    // crate::log_info!(...)
-                    
-                    let running_jobs: Vec<BacktestJobRecord> = backtest_jobs::table
-                        .filter(backtest_jobs::status.eq("running"))
-                        .select(BacktestJobRecord::as_select())
-                        .load(conn)
-                        .await?;
-                    
-                    for rj in &running_jobs {
-                        let heartbeat_stale = rj.last_heartbeat.map_or(true, |hb| hb < heartbeat_threshold);
-                        let started_old = rj.started_at.map_or(false, |st| st < started_threshold);
-                        let _should_recover = heartbeat_stale || (rj.last_heartbeat.is_none() && started_old);
-                        
-                        // Recovery logic can be added here if needed
-                    }
-                }
                 
                 // Find queued job or recover orphaned running jobs
                 let job: Option<BacktestJobRecord> = backtest_jobs::table
@@ -549,12 +341,6 @@ impl JobQueue for PostgresQueue {
                     .optional()?;
                 
                 if let Some(job_record) = job {
-                    if job_record.status == "running" {
-                        // crate::log_info!(...)
-                    } else {
-                        // crate::log_info!(...)
-                    }
-                    
                     let now = Utc::now();
                     diesel::update(backtest_jobs::table.find(job_record.id))
                         .set((
@@ -572,7 +358,6 @@ impl JobQueue for PostgresQueue {
                     
                     Ok(Some(Self::record_to_job(updated_record)?))
                 } else {
-                    // crate::log_info!(...)
                     Ok(None)
                 }
             })
@@ -582,8 +367,6 @@ impl JobQueue for PostgresQueue {
     }
     
     async fn get_job(&self, job_id: &str) -> Result<Option<BacktestJob>, Box<dyn std::error::Error + Send + Sync>> {
-        // crate::log_info!(...)
-        
         let mut conn = self.get_conn_with_timeout().await?;
         
         let record: Option<BacktestJobRecord> = backtest_jobs::table
@@ -720,6 +503,7 @@ impl JobQueue for PostgresQueue {
         // Downsample equity curve to 500 points max (reduced from 1000 for faster serialization)
         let equity_curve_downsampled = Self::downsample_equity_curve(&result.equity_curve, 500);
         
+        let now = chrono::Utc::now();
         let new_result = NewBacktestResult {
             backtest_id: backtest_uuid,
             strategy_name: "Avellaneda-Stoikov".to_string(),
@@ -826,6 +610,9 @@ impl JobQueue for PostgresQueue {
                     "out_of_sample_degradation": wf.out_of_sample_degradation
                 }))
             })),
+            created_at: now,
+            updated_at: now,
+            strategy_instance_id: None,
         };
         
         // Insert result into database
@@ -1108,54 +895,54 @@ impl PostgresQueue {
             &mut conn
         ).await?;
             
-            // Convert to summaries and fetch results if completed
-            let mut summaries = Vec::new();
-            for job in jobs {
-                let mut summary = crate::api::history::BacktestSummary {
-                    job_id: job.job_id.clone(),
-                    symbol: job.symbol,
-                    exchange: job.exchange,
-                    status: job.status,
-                    progress: job.progress.to_string().parse().unwrap_or(0.0),
-                    created_at: job.created_at.to_rfc3339(),
-                    started_at: job.started_at.map(|dt| dt.to_rfc3339()),
-                    completed_at: job.completed_at.map(|dt| dt.to_rfc3339()),
-                    total_pnl: None,
-                    sharpe_ratio: None,
-                    max_drawdown: None,
-                    win_rate: None,
-                    total_trades: None,
-                };
+        // Convert to summaries and fetch results if completed
+        let mut summaries = Vec::new();
+        for job in jobs {
+            let mut summary = crate::api::history::BacktestSummary {
+                job_id: job.job_id.clone(),
+                symbol: job.symbol,
+                exchange: job.exchange,
+                status: job.status,
+                progress: job.progress.to_string().parse().unwrap_or(0.0),
+                created_at: job.created_at.to_rfc3339(),
+                started_at: job.started_at.map(|dt| dt.to_rfc3339()),
+                completed_at: job.completed_at.map(|dt| dt.to_rfc3339()),
+                total_pnl: None,
+                sharpe_ratio: None,
+                max_drawdown: None,
+                win_rate: None,
+                total_trades: None,
+            };
+            
+            // If completed, fetch results
+            if let Some(result_uuid) = job.result_id {
+                let results: Vec<(bigdecimal::BigDecimal, Option<bigdecimal::BigDecimal>, bigdecimal::BigDecimal, bigdecimal::BigDecimal, i32)> = 
+                    diesel_async::RunQueryDsl::load(
+                        backtest_results::table
+                            .filter(backtest_results::id.eq(result_uuid))
+                            .select((
+                                backtest_results::total_return,
+                                backtest_results::sharpe_ratio,
+                                backtest_results::max_drawdown,
+                                backtest_results::win_rate,
+                                backtest_results::total_trades,
+                            )),
+                        &mut conn
+                    ).await?;
                 
-                // If completed, fetch results
-                if let Some(result_uuid) = job.result_id {
-                    let results: Vec<(bigdecimal::BigDecimal, Option<bigdecimal::BigDecimal>, bigdecimal::BigDecimal, bigdecimal::BigDecimal, i32)> = 
-                        diesel_async::RunQueryDsl::load(
-                            backtest_results::table
-                                .filter(backtest_results::id.eq(result_uuid))
-                                .select((
-                                    backtest_results::total_return,
-                                    backtest_results::sharpe_ratio,
-                                    backtest_results::max_drawdown,
-                                    backtest_results::win_rate,
-                                    backtest_results::total_trades,
-                                )),
-                            &mut conn
-                        ).await?;
-                    
-                    if let Some(result) = results.into_iter().next() {
-                        summary.total_pnl = Some(result.0.to_string().parse().unwrap_or(0.0));
-                        summary.sharpe_ratio = result.1.map(|v| v.to_string().parse().unwrap_or(0.0));
-                        summary.max_drawdown = Some(result.2.to_string().parse().unwrap_or(0.0));
-                        summary.win_rate = Some(result.3.to_string().parse().unwrap_or(0.0));
-                        summary.total_trades = Some(result.4 as usize);
-                    }
+                if let Some(result) = results.into_iter().next() {
+                    summary.total_pnl = Some(result.0.to_string().parse().unwrap_or(0.0));
+                    summary.sharpe_ratio = result.1.map(|v| v.to_string().parse().unwrap_or(0.0));
+                    summary.max_drawdown = Some(result.2.to_string().parse().unwrap_or(0.0));
+                    summary.win_rate = Some(result.3.to_string().parse().unwrap_or(0.0));
+                    summary.total_trades = Some(result.4 as usize);
                 }
-                
-                summaries.push(summary);
             }
             
-            Ok((summaries, total))
+            summaries.push(summary);
+        }
+        
+        Ok((summaries, total))
     }
 }
 

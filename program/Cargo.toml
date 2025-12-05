@@ -5,7 +5,7 @@ edition = "2021"
 
 [features]
 default = []
-postgres = ["databaseschema", "dataloader/postgres", "strategy/postgres", "orderbook/postgres", "walkforward/postgres", "backtest/postgres"]
+postgres = ["dataloader/postgres", "strategy/postgres", "orderbook/postgres", "walkforward/postgres", "backtest/postgres"]
 
 [dependencies]
 # CLI framework
@@ -45,6 +45,10 @@ bigdecimal = "0.4"
 indicatif = "0.17"
 rand = "0.8"
 
+# Message broker for real-time progress streaming
+publisher = { path = "../../MessageBrokerEngine/publisher" }
+bytes = "1.0"
+
 # Internal dependencies
 walkforward = { path = "../walkforward" }
 backtest = { path = "../backtest" }
@@ -56,7 +60,7 @@ config = { path = "../config" }
 metrics = { path = "../metrics" }
 dataloader = { path = "../dataloader" }
 genetic = { path = "../genetic" }
-databaseschema = { path = "../../databaseschema", optional = true }
+databaseschema = { path = "../../databaseschema" }
 
 # Logging
 ultra-logger = { path = "../../LoggingEngine/ultra-logger" }

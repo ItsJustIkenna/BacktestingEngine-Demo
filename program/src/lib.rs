@@ -11,9 +11,11 @@ pub mod config;
 
 // Service modules
 pub mod job_queue;
+pub mod job_broker; // Message broker-based job distribution
 pub mod api;
 pub mod worker;
 pub mod streaming; // Memory-efficient data loading
+pub mod progress_broadcaster; // Real-time progress streaming via broadcast channels
 
 // Re-export logging components for easy access
 pub use logging_facade::{
@@ -22,6 +24,12 @@ pub use logging_facade::{
     GENETIC_LOGGER, METRICS_LOGGER, MAIN_LOGGER,
     BacktestEngineLogger,
 };
+
+// Re-export progress broadcaster for WebSocket integration
+pub use progress_broadcaster::{ProgressBroadcaster, ProgressUpdate, get_progress_broadcaster};
+
+// Re-export job broker for job distribution
+pub use job_broker::{JobBroker, JobMessage, JobReceiver, JobPriority, get_job_broker};
 
 // Logging macros (log_info, log_warn, log_error, log_debug, log_trace) are automatically
 // exported at the crate root via #[macro_export] in logging_facade.rs
