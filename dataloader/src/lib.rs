@@ -554,7 +554,7 @@ impl DataLoader {
 
         // Apply limit
         if let Some(limit) = params.limit {
-            orders.truncate(limit);
+            orders.truncate(limit as usize);
         }
 
         orders
@@ -572,7 +572,7 @@ impl DataLoader {
 
         // Apply limit
         if let Some(limit) = params.limit {
-            snapshots.truncate(limit);
+            snapshots.truncate(limit as usize);
         }
 
         snapshots
@@ -590,7 +590,7 @@ impl DataLoader {
 
         // Apply limit
         if let Some(limit) = params.limit {
-            trades.truncate(limit);
+            trades.truncate(limit as usize);
         }
 
         trades
@@ -608,7 +608,7 @@ impl DataLoader {
 
         // Apply limit
         if let Some(limit) = params.limit {
-            candles.truncate(limit);
+            candles.truncate(limit as usize);
         }
 
         candles
