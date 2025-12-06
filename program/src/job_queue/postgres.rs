@@ -500,10 +500,19 @@ impl JobQueue for PostgresQueue {
         // This handles edge cases where simulation produces unrealistic values
         const MAX_VALUE: f64 = 999_999_999_999.0; // 12 digits max
         
+        // Helper to sanitize f64 values (handle NaN, Inf, and overflow)
+        let sanitize = |v: f64| -> f64 {
+            if v.is_nan() || v.is_infinite() {
+                0.0
+            } else {
+                v.clamp(-MAX_VALUE, MAX_VALUE)
+            }
+        };
+        
         // Helper to cap f64 values and convert to BigDecimal
         let cap_value = |v: f64| -> BigDecimal {
-            let capped = v.clamp(-MAX_VALUE, MAX_VALUE);
-            BigDecimal::from_str(&capped.to_string()).unwrap_or(BigDecimal::from(0))
+            let safe_val = sanitize(v);
+            BigDecimal::from_str(&safe_val.to_string()).unwrap_or(BigDecimal::from(0))
         };
         
         // Helper to cap optional f64 values
@@ -511,7 +520,7 @@ impl JobQueue for PostgresQueue {
             v.map(|x| cap_value(x))
         };
         
-        let capped_pnl = result.total_pnl.clamp(-MAX_VALUE, MAX_VALUE);
+        let capped_pnl = sanitize(result.total_pnl);
         
         // Calculate annualized metrics (simplified - using 252 trading days)
         let total_return_bd = cap_value(capped_pnl);
@@ -609,6 +618,18 @@ impl JobQueue for PostgresQueue {
             updated_at: now,
             strategy_instance_id: None,
         };
+        
+        // Debug log all numeric values before insert to diagnose overflow issues
+        log_info!(crate::MAIN_LOGGER, "Job {} storing result | total_return={} annualized={} volatility={} sharpe={} max_dd={} win_rate={} profit_factor={}",
+            result.job_id,
+            new_result.total_return,
+            new_result.annualized_return,
+            new_result.volatility,
+            new_result.sharpe_ratio.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+            new_result.max_drawdown,
+            new_result.win_rate,
+            new_result.profit_factor
+        );
         
         // Insert result into database
         let result_id: uuid::Uuid = diesel::insert_into(backtest_results::table)
