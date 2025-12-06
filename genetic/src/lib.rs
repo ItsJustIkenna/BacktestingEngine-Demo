@@ -104,11 +104,6 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
         for generation in 0..self.config.generations {
             let generation_start = std::time::Instant::now();
             
-            // Progress callback
-            if let Some(ref callback) = self.progress_callback {
-                callback(generation + 1, self.config.generations).await;
-            }
-            
             log_info!("{}Gen {}/{}: Starting fitness evaluation for {} chromosomes", 
                 job_tag, generation + 1, self.config.generations, population.len());
             
@@ -242,6 +237,12 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
             }
             
             population = new_population;
+            
+            // Progress callback - called AFTER generation work is complete
+            // Reports completed generations accurately (generation 1 complete = 1/total progress)
+            if let Some(ref callback) = self.progress_callback {
+                callback(generation + 1, self.config.generations).await;
+            }
             
             // Progress logging every 5 generations for better visibility
             if (generation + 1) % 5 == 0 || generation == 0 {
