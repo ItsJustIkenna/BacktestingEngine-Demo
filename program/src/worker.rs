@@ -120,17 +120,28 @@ impl ProgressTracker {
     /// - Uses fire-and-forget broadcast (~176ns latency)
     pub fn generation_callback(self: &Arc<Self>) -> Arc<dyn Fn(usize, usize) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync> {
         let job_id = self.job_id.clone();
+        let job_queue = Arc::clone(&self.job_queue);
         Arc::new(move |current: usize, total: usize| {
             let job_id = job_id.clone();
+            let job_queue = Arc::clone(&job_queue);
             Box::pin(async move {
-                // Log progress every 5 generations or on first/last
-                if current == 1 || current == total || current % 5 == 0 {
-                    log_info!(GENETIC_LOGGER, "Job {} generation {}/{} ({:.1}%)", 
-                        job_id, current, total, (current as f64 / total as f64) * 100.0);
-                }
+                let progress_pct = (current as f64 / total as f64) * 80.0 + 5.0; // 5% to 85% for genetic phase
+                
+                // Log every generation for complete visibility
+                log_info!(GENETIC_LOGGER, "Job {} generation {}/{} ({:.1}%)", 
+                    job_id, current, total, (current as f64 / total as f64) * 100.0);
                 
                 // Broadcast to WebSocket clients (fire-and-forget, ~176ns)
                 get_progress_broadcaster().publish_generation(&job_id, current, total);
+                
+                // Persist progress to database for UI polling
+                // The UI may poll the database, so we need to persist progress
+                if let Err(e) = job_queue.update_progress(&job_id, progress_pct).await {
+                    log_warn!(MAIN_LOGGER, "Job {} failed to persist generation progress: {}", job_id, e);
+                }
+                if let Err(e) = job_queue.update_generation(&job_id, current as i32, total as i32).await {
+                    log_warn!(MAIN_LOGGER, "Job {} failed to persist generation info: {}", job_id, e);
+                }
             })
         })
     }
@@ -1370,6 +1381,12 @@ impl Worker {
         strategy_manager.register_strategy(strategy_config, strategy)
             .map_err(|e| format!("Failed to register strategy: {}", e))?;
         
+        // Log the phases we're about to run
+        log_info!(MAIN_LOGGER, "Job {} starting final analysis pipeline: Backtest{}{}",
+            job_id,
+            if monte_carlo_enabled { format!(" → Monte Carlo ({} runs)", monte_carlo_runs) } else { "".to_string() },
+            if walk_forward_enabled { " → Walk-Forward" } else { "" });
+        
         // Run full analysis (includes Monte Carlo and Walk-Forward)
         let result = engine.run_backtest(
             &mut strategy_manager,
@@ -1381,14 +1398,14 @@ impl Worker {
         
         // Log Monte Carlo results if available
         if let Some(ref mc) = result.monte_carlo {
-            log_debug!(MAIN_LOGGER, "🎲 Monte Carlo ({} runs): mean_sharpe={:.3}, VaR95={:.2}%, CVaR95={:.2}%",
-                mc.num_runs, mc.mean_metrics.sharpe_ratio, mc.var_95 * 100.0, mc.cvar_95 * 100.0);
+            log_info!(MAIN_LOGGER, "Job {} Monte Carlo complete | runs={} mean_sharpe={:.3} VaR95={:.2}% CVaR95={:.2}%",
+                job_id, mc.num_runs, mc.mean_metrics.sharpe_ratio, mc.var_95 * 100.0, mc.cvar_95 * 100.0);
         }
         
         // Log Walk-Forward results if available
         if let Some(ref wf) = result.walk_forward {
-            log_debug!(MAIN_LOGGER, "🔄 Walk-Forward: periods={}, avg_perf={:.2}%, consistency={:.1}%, OOS_degradation={:.1}%",
-                wf.periods_tested, wf.average_performance * 100.0, wf.consistency_score * 100.0, wf.out_of_sample_degradation * 100.0);
+            log_info!(MAIN_LOGGER, "Job {} Walk-Forward complete | periods={} avg_perf={:.2}% consistency={:.1}% OOS_degradation={:.1}%",
+                job_id, wf.periods_tested, wf.average_performance * 100.0, wf.consistency_score * 100.0, wf.out_of_sample_degradation * 100.0);
         }
         
         let total_pnl = result.core.total_pnl.to_string().parse::<f64>()

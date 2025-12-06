@@ -496,31 +496,54 @@ impl JobQueue for PostgresQueue {
         // Create backtest result record
         let backtest_uuid = uuid::Uuid::parse_str(&result.job_id)?;
         
-        // Cap numeric values to prevent overflow in database (DECIMAL(20,8) = max 12 digits before decimal)
-        // This handles edge cases where simulation produces unrealistic values
-        const MAX_VALUE: f64 = 999_999_999_999.0; // 12 digits max
+        // Cap numeric values to prevent overflow in database
+        // DECIMAL(20,8) = max 12 digits before decimal = 999,999,999,999
+        // DECIMAL(10,8) = max 2 digits before decimal = 99.99999999
+        // DECIMAL(10,6) = max 4 digits before decimal = 9999.999999
+        // DECIMAL(10,2) = max 8 digits before decimal = 99999999.99
+        const MAX_VALUE_20_8: f64 = 999_999_999_999.0; // For DECIMAL(20,8)
+        const MAX_VALUE_10_8: f64 = 99.0;              // For DECIMAL(10,8) - slippage, rates
+        const MAX_VALUE_10_6: f64 = 9999.0;            // For DECIMAL(10,6) - beta, correlations
+        const MAX_VALUE_10_2: f64 = 99_999_999.0;      // For DECIMAL(10,2) - time in trade
         
         // Helper to sanitize f64 values (handle NaN, Inf, and overflow)
-        let sanitize = |v: f64| -> f64 {
+        let sanitize = |v: f64, max_val: f64| -> f64 {
             if v.is_nan() || v.is_infinite() {
                 0.0
             } else {
-                v.clamp(-MAX_VALUE, MAX_VALUE)
+                v.clamp(-max_val, max_val)
             }
         };
         
-        // Helper to cap f64 values and convert to BigDecimal
+        // Helper to cap f64 values for DECIMAL(20,8) and convert to BigDecimal
         let cap_value = |v: f64| -> BigDecimal {
-            let safe_val = sanitize(v);
+            let safe_val = sanitize(v, MAX_VALUE_20_8);
             BigDecimal::from_str(&safe_val.to_string()).unwrap_or(BigDecimal::from(0))
         };
         
-        // Helper to cap optional f64 values
+        // Helper for DECIMAL(10,8) fields (slippage, rates)
+        let cap_small = |v: f64| -> BigDecimal {
+            let safe_val = sanitize(v, MAX_VALUE_10_8);
+            BigDecimal::from_str(&safe_val.to_string()).unwrap_or(BigDecimal::from(0))
+        };
+        
+        // Helper for optional DECIMAL(10,8) fields
+        let cap_small_opt = |v: Option<f64>| -> Option<BigDecimal> {
+            v.map(|x| cap_small(x))
+        };
+        
+        // Helper to cap optional f64 values for DECIMAL(20,8)
         let cap_opt = |v: Option<f64>| -> Option<BigDecimal> {
             v.map(|x| cap_value(x))
         };
         
-        let capped_pnl = sanitize(result.total_pnl);
+        // Helper for DECIMAL(10,2) fields (time in trade)
+        let cap_time = |v: f64| -> BigDecimal {
+            let safe_val = sanitize(v, MAX_VALUE_10_2);
+            BigDecimal::from_str(&safe_val.to_string()).unwrap_or(BigDecimal::from(0))
+        };
+        
+        let capped_pnl = sanitize(result.total_pnl, MAX_VALUE_20_8);
         
         // Calculate annualized metrics (simplified - using 252 trading days)
         let total_return_bd = cap_value(capped_pnl);
@@ -558,7 +581,7 @@ impl JobQueue for PostgresQueue {
             sortino_ratio: cap_opt(result.sortino_ratio),
             max_drawdown: cap_value(result.max_drawdown),
             calmar_ratio: cap_opt(result.calmar_ratio),
-            win_rate: cap_value(result.win_rate),
+            win_rate: cap_small(result.win_rate),  // DECIMAL(10,8)
             profit_factor: cap_value(result.profit_factor),
             avg_trade_return: cap_opt(result.avg_trade_return)
                 .unwrap_or_else(|| if result.total_trades > 0 {
@@ -569,7 +592,7 @@ impl JobQueue for PostgresQueue {
             total_trades: result.total_trades as i32,
             best_trade: cap_opt(result.best_trade),
             worst_trade: cap_opt(result.worst_trade),
-            avg_time_in_trade: cap_opt(result.avg_time_in_trade),
+            avg_time_in_trade: result.avg_time_in_trade.map(|v| cap_time(v)),  // DECIMAL(10,2)
             value_at_risk_95: cap_opt(result.value_at_risk_95),
             expected_shortfall_95: cap_opt(result.expected_shortfall_95),
             beta: None,
@@ -588,7 +611,7 @@ impl JobQueue for PostgresQueue {
             total_orders: result.total_orders.unwrap_or(0),
             filled_orders: result.filled_orders.unwrap_or(0),
             cancelled_orders: result.cancelled_orders.unwrap_or(0),
-            avg_slippage: cap_opt(result.avg_slippage)
+            avg_slippage: cap_small_opt(result.avg_slippage)  // DECIMAL(10,8)
                 .unwrap_or(BigDecimal::from(0)),
             total_commission_paid: cap_opt(result.total_commission_paid)
                 .unwrap_or(BigDecimal::from(0)),
