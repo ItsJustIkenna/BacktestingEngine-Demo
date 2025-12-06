@@ -40,10 +40,10 @@ secrets:
     url: "postgresql://tsdbadmin:m1jgd4o66synfmi8@ha42vyxkd7.yd4ed8gjcp.tsdb.cloud.timescale.com:39470/tsdb"
   
   elasticsearch:
-    enabled: false
-    endpoint: ""
-    username: ""
-    password: ""
+    enabled: true
+    endpoint: "https://trading-bot-observability-6b76eb.es.us-central1.gcp.cloud.es.io"
+    username: "elastic"
+    password: "iXMYLAxROoLWzmxerC0V1ivR"
 
 # External database configuration
 externalDatabase:
