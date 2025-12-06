@@ -2,11 +2,12 @@ import React from 'react';
 
 interface EquityCurveData {
   timestamp: string;
-  equity: number;
+  equity?: number;
+  value?: number;  // Support both 'equity' and 'value' property names
 }
 
 interface EquityCurveChartProps {
-  data: EquityCurveData[];
+  data?: EquityCurveData[];
 }
 
 export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
@@ -17,20 +18,24 @@ export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
     return <div style={{ padding: '20px', textAlign: 'center' }}>No data available</div>;
   }
 
+  // Helper to get the equity value (supports both 'equity' and 'value' properties)
+  const getEquity = (d: EquityCurveData): number => d.equity ?? d.value ?? 0;
+
   const width = 800;
   const height = 400;
   const padding = 40;
 
-  const maxEquity = Math.max(...data.map(d => d.equity));
-  const minEquity = Math.min(...data.map(d => d.equity));
-  const equityRange = maxEquity - minEquity;
+  const equities = data.map(getEquity);
+  const maxEquity = Math.max(...equities);
+  const minEquity = Math.min(...equities);
+  const equityRange = maxEquity - minEquity || 1; // Prevent division by zero
 
-  const xScale = (index: number) => padding + (index / (data.length - 1)) * (width - 2 * padding);
+  const xScale = (index: number) => padding + (index / (data.length - 1 || 1)) * (width - 2 * padding);
   const yScale = (equity: number) => height - padding - ((equity - minEquity) / equityRange) * (height - 2 * padding);
 
   const pathData = data.map((d, i) => {
     const x = xScale(i);
-    const y = yScale(d.equity);
+    const y = yScale(getEquity(d));
     return i === 0 ? `M ${x} ${y}` : `L ${x} ${y}`;
   }).join(' ');
 

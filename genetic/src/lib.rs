@@ -80,6 +80,7 @@ pub struct GeneticOptimizer<C: Chromosome> {
 impl<C: Chromosome + 'static> GeneticOptimizer<C> {
     pub async fn run(&self) -> (C, f64) {
         let job_tag = self.job_id.as_ref().map(|id| format!("[Job {}] ", id)).unwrap_or_default();
+        let optimization_start = std::time::Instant::now();
         log_info!("{}Starting genetic optimization: pop={} gen={}", 
             job_tag, self.config.population_size, self.config.generations);
         
@@ -101,24 +102,22 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
         let elite_size = (self.config.population_size as f64 * 0.05).ceil() as usize;
 
         for generation in 0..self.config.generations {
+            let generation_start = std::time::Instant::now();
+            
             // Progress callback
             if let Some(ref callback) = self.progress_callback {
-                eprintln!("GENETIC DEBUG: {}Gen {}: Calling progress callback...", job_tag, generation + 1);
-                log_info!("{}Gen {}: Calling progress callback...", job_tag, generation + 1);
                 callback(generation + 1, self.config.generations).await;
-                eprintln!("GENETIC DEBUG: {}Gen {}: Progress callback returned", job_tag, generation + 1);
-                log_info!("{}Gen {}: Progress callback returned", job_tag, generation + 1);
             }
             
-            eprintln!("GENETIC DEBUG: {}Gen {}: Starting fitness evaluation for {} chromosomes", job_tag, generation + 1, population.len());
-            log_info!("{}Gen {}: Starting fitness evaluation for {} chromosomes", 
-                job_tag, generation + 1, population.len());
+            log_info!("{}Gen {}/{}: Starting fitness evaluation for {} chromosomes", 
+                job_tag, generation + 1, self.config.generations, population.len());
             
             // Evaluate fitness with controlled parallelism (prevent OOM)
             // Process in batches of 4 to limit memory usage while still parallelizing
             let mut futures = FuturesUnordered::new();
             let mut fitness_results = Vec::with_capacity(population.len());
-            
+            let batch_start = std::time::Instant::now();
+
             for (chunk_idx, chunk) in population.chunks(4).enumerate() {
                 // Queue up fitness evaluations for this batch
                 for chromo in chunk {
@@ -129,13 +128,18 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
                     fitness_results.push(result);
                 }
                 
+                // Log every 3 batches with timing
                 if chunk_idx % 3 == 0 {
-                    log_info!("{}Gen {}: Completed batch {}, {} chromosomes evaluated", 
-                        job_tag, generation + 1, chunk_idx + 1, fitness_results.len());
+                    let elapsed = batch_start.elapsed().as_secs_f64();
+                    let rate = fitness_results.len() as f64 / elapsed.max(0.001);
+                    log_info!("{}Gen {}: batch {} done, {}/{} chromosomes, {:.1}s elapsed, {:.1}/s", 
+                        job_tag, generation + 1, chunk_idx + 1, fitness_results.len(), population.len(), elapsed, rate);
                 }
             }
             
-            log_info!("{}Gen {}: Fitness evaluation complete", job_tag, generation + 1);
+            let gen_elapsed = generation_start.elapsed().as_secs_f64();
+            log_info!("{}Gen {}/{}: Fitness evaluation complete in {:.1}s", 
+                job_tag, generation + 1, self.config.generations, gen_elapsed);
             
             // Extract raw fitness values
             let mut fitnesses: Vec<f64> = fitness_results.iter().map(|r| r.fitness).collect();
@@ -251,6 +255,9 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
             let (mean_sharpe, std_sharpe) = Self::run_lightweight_monte_carlo(&best_equity_curve, self.config.mc_sample_size);
             log_info!("{}Best chromosome robustness: mean_sharpe={:.3}, std_sharpe={:.3}", job_tag, mean_sharpe, std_sharpe);
         }
+        
+        let total_time = optimization_start.elapsed().as_secs_f64();
+        log_info!("{}Genetic optimization complete in {:.1}s | best_fitness={:.4}", job_tag, total_time, best_fitness);
         
         (best, best_fitness)
     }

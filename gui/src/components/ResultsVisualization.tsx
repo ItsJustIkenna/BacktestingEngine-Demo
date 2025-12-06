@@ -18,17 +18,17 @@ interface WalkForwardSummary {
 }
 
 interface BacktestResult {
-  job_id: string;
-  symbol: string;
-  exchange: string;
-  sharpe_ratio: number;
-  max_drawdown: number;
-  total_pnl: number;
-  win_rate: number;
-  profit_factor: number;
-  total_trades: number;
-  avg_trade_duration: number;
-  equity_curve: Array<{ timestamp: string; value: number }>;
+  job_id?: string;
+  symbol?: string;
+  exchange?: string;
+  sharpe_ratio?: number;
+  max_drawdown?: number;
+  total_pnl?: number;
+  win_rate?: number;
+  profit_factor?: number;
+  total_trades?: number;
+  avg_trade_duration?: number;
+  equity_curve?: Array<{ timestamp: string; value: number }>;
   strategy_metrics?: any;
   monte_carlo?: MonteCarloSummary;
   walk_forward?: WalkForwardSummary;
@@ -298,9 +298,9 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
       ];
       
       const row = [
-        result.job_id,
-        result.symbol,
-        result.exchange,
+        result.job_id ?? 'N/A',
+        result.symbol ?? 'N/A',
+        result.exchange ?? 'N/A',
         safeToFixed(result.sharpe_ratio, 4),
         safeToFixed(result.max_drawdown, 2),
         safeToFixed(result.total_pnl, 2),
@@ -668,9 +668,9 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         <div>
           <h2>Backtest Results</h2>
           <div style={{ color: '#666', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            Job ID: <code>{result.job_id}</code>
+            Job ID: <code>{result.job_id ?? 'N/A'}</code>
             <button
-              onClick={() => copyToClipboard(result.job_id)}
+              onClick={() => copyToClipboard(result.job_id ?? '')}
               style={{
                 padding: '2px 8px',
                 fontSize: '12px',
@@ -684,7 +684,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
             >
               {copied ? '✓ Copied' : '📋 Copy'}
             </button>
-            <span>| {result.symbol} on {result.exchange}</span>
+            <span>| {result.symbol ?? 'Unknown'} on {result.exchange ?? 'Unknown'}</span>
           </div>
         </div>
         <div style={{ display: 'flex', gap: '10px' }}>
