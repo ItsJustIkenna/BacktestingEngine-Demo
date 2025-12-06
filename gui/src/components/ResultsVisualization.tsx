@@ -1096,7 +1096,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         marginBottom: '30px',
       }}>
         <h3 style={{ marginTop: 0 }}>Equity Curve</h3>
-        <EquityCurveChart data={result.equity_curve} />
+        <EquityCurveChart data={result.equity_curve ?? []} />
       </div>
 
       {/* Strategy Metrics */}
