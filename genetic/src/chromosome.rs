@@ -27,7 +27,8 @@ impl Chromosome for AvellanedaStoikovChromosome {
     fn random<R: Rng + ?Sized>(rng: &mut R) -> Self {
         Self {
             risk_aversion: rng.gen_range(0.001..0.1),
-            order_size: rng.gen_range(0.001..1.0),
+            // order_size in base asset (BTC). For $10k capital at ~$90k/BTC, max ~0.1 BTC
+            order_size: rng.gen_range(0.001..0.1),
             window_ms: rng.gen_range(10_000..300_000), // 10s to 5 min
             min_quote_lifetime_ms: rng.gen_range(100..5_000), // 100ms to 5s
             fee_rate: rng.gen_range(0.0001..0.01),
@@ -73,8 +74,8 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.risk_aversion = self.risk_aversion.clamp(0.001, 0.1);
         }
         if rng.gen_bool(mutation_rate) {
-            self.order_size += rng.gen_range(-0.1..0.1);
-            self.order_size = self.order_size.clamp(0.001, 1.0);
+            self.order_size += rng.gen_range(-0.01..0.01);
+            self.order_size = self.order_size.clamp(0.001, 0.1);
         }
         if rng.gen_bool(mutation_rate) {
             let delta = rng.gen_range(-10_000..10_000);
@@ -133,7 +134,7 @@ impl Chromosome for AvellanedaStoikovChromosome {
         // Each parameter is normalized to [0, 1] based on its range
         
         let d_risk = (self.risk_aversion - other.risk_aversion).abs() / 0.1; // Range: 0.001-0.1
-        let d_size = (self.order_size - other.order_size).abs() / 1.0; // Range: 0.001-1.0
+        let d_size = (self.order_size - other.order_size).abs() / 0.1; // Range: 0.001-0.1 (updated for $10k capital)
         let d_window = (self.window_ms as f64 - other.window_ms as f64).abs() / 290_000.0; // Range: 10k-300k
         let d_lifetime = (self.min_quote_lifetime_ms as f64 - other.min_quote_lifetime_ms as f64).abs() / 4_900.0; // Range: 100-5000
         let d_fee = (self.fee_rate - other.fee_rate).abs() / 0.01; // Range: 0.0001-0.01

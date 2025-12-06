@@ -32,6 +32,9 @@ resources:
 # Database URL format: postgresql://username:password@host:port/database
 
 secrets:
+  # Use the existing secret that's already deployed in the cluster
+  existingSecret: "backtesting-secrets"
+  
   database:
     enabled: true
     # Azure TimescaleDB (production database)

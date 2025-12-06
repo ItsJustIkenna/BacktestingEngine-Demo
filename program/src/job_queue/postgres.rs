@@ -496,8 +496,13 @@ impl JobQueue for PostgresQueue {
         // Create backtest result record
         let backtest_uuid = uuid::Uuid::parse_str(&result.job_id)?;
         
+        // Cap PnL values to prevent numeric overflow in database (DECIMAL(20,8) = max 12 digits before decimal)
+        // This handles edge cases where simulation produces unrealistic values
+        const MAX_PNL: f64 = 999_999_999_999.0; // 12 digits max
+        let capped_pnl = result.total_pnl.clamp(-MAX_PNL, MAX_PNL);
+        
         // Calculate annualized metrics (simplified - using 252 trading days)
-        let total_return_bd = BigDecimal::from_str(&result.total_pnl.to_string())?;
+        let total_return_bd = BigDecimal::from_str(&capped_pnl.to_string())?;
         let annualized_return = total_return_bd.clone(); // Simplified
         
         // Downsample equity curve to 500 points max (reduced from 1000 for faster serialization)
