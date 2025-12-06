@@ -631,6 +631,19 @@ impl JobQueue for PostgresQueue {
             new_result.profit_factor
         );
         
+        // Log additional fields that might overflow
+        log_info!(crate::MAIN_LOGGER, "Job {} more fields | avg_trade_return={} best_trade={} worst_trade={} sortino={} calmar={} current_dd={} avg_slippage={} total_commission={}",
+            result.job_id,
+            new_result.avg_trade_return,
+            new_result.best_trade.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+            new_result.worst_trade.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+            new_result.sortino_ratio.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+            new_result.calmar_ratio.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+            new_result.current_drawdown,
+            new_result.avg_slippage,
+            new_result.total_commission_paid
+        );
+        
         // Insert result into database
         let result_id: uuid::Uuid = diesel::insert_into(backtest_results::table)
             .values(&new_result)
