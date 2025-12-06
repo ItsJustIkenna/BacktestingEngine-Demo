@@ -163,6 +163,9 @@ impl SimulationLoop {
 
     // Start equity curve with initial capital
     equity_curve.push(config.trading.initial_capital);
+    
+    // Track current market price for unrealized P&L calculation
+    let mut current_market_price: Option<BigDecimal> = None;
 
     for data in market_data {
             // 1. Update orderbook with new market data if needed
@@ -180,6 +183,9 @@ impl SimulationLoop {
                     }
                 }
                 MarketData::Trade(trade) => {
+                    // Update current market price from trade
+                    current_market_price = Some(trade.price.clone());
+                    
                     // Convert TradeData side string to BookSide
                     // Incoming trade side indicates the aggressor:
                     // - "buy" means aggressor bought from asks (our ask orders get filled)
@@ -205,14 +211,18 @@ impl SimulationLoop {
                         }
                     }
                 }
-                MarketData::Candle(_) => {
-                    // Candles don't directly update orderbook
+                MarketData::Candle(candle) => {
+                    // Update current market price from candle close
+                    current_market_price = Some(candle.close.clone());
                 }
             }
             
             #[cfg(not(feature = "postgres"))]
             match &data {
                 MarketData::Trade(trade) => {
+                    // Update current market price from trade
+                    current_market_price = Some(trade.price.clone());
+                    
                     // Convert TradeData side string to BookSide
                     // Incoming trade side indicates the aggressor:
                     // - "buy" means aggressor bought from asks (our ask orders get filled)
@@ -238,8 +248,9 @@ impl SimulationLoop {
                         }
                     }
                 }
-                MarketData::Candle(_) => {
-                    // Candles don't directly update orderbook
+                MarketData::Candle(candle) => {
+                    // Update current market price from candle close
+                    current_market_price = Some(candle.close.clone());
                 }
             }
 
@@ -339,8 +350,15 @@ impl SimulationLoop {
                 }
             }
 
-            // Collect equity value at each step
-            equity_curve.push(portfolio.balance.to_f64().unwrap_or(0.0));
+            // Update unrealized P&L with current market price before collecting equity
+            if let Some(ref price) = current_market_price {
+                portfolio.update_unrealized_pnl(price);
+            }
+            
+            // Collect TOTAL portfolio value (balance + unrealized P&L) at each step
+            // This correctly reflects the portfolio's worth including open positions
+            let total_portfolio_value = portfolio.get_total_value().to_f64().unwrap_or(0.0);
+            equity_curve.push(total_portfolio_value);
         }
 
         // Collect trade returns and durations from closed positions (do this after market data processing)
