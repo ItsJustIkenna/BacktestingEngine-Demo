@@ -2,7 +2,7 @@
 # API-ONLY BUILD: Lean container for the Rust API server
 # UI is served separately via nginx/CDN in production (see k8s/ for orchestration)
 # Build: docker build -f deployment/Dockerfile -t backtesting-engine:latest .
-# Build context MUST be parent directory containing: BacktestingEngine/, databaseschema/, LoggingEngine/
+# Build context MUST be parent directory containing: BacktestingEngine/, databaseschema/, LoggingEngine/, MessageBrokerEngine/
 
 ARG RUST_VERSION=1.82.0
 ARG APP_NAME=program
@@ -42,6 +42,7 @@ LABEL logging_engine_sha="${LOGGING_ENGINE_SHA}" database_schema_sha="${DATABASE
 # Copy dependencies (cache invalidated when SHAs change via LABEL above)
 COPY databaseschema/ ./databaseschema/
 COPY LoggingEngine/ ./LoggingEngine/
+COPY MessageBrokerEngine/ ./MessageBrokerEngine/
 
 # Copy BacktestingEngine
 COPY BacktestingEngine/ ./BacktestingEngine/
