@@ -114,8 +114,11 @@ impl PortfolioState {
                     BookSide::Bid if position.side == PositionSide::Long => {
                         // Adding to long position
                         let new_quantity = position.quantity + quantity_change;
-                        let total_cost = &position.entry_price * BigDecimal::from_f64(position.quantity).unwrap_or_default() + &fill_value;
-                        position.entry_price = &total_cost / BigDecimal::from_f64(new_quantity).unwrap_or(BigDecimal::from(1));
+                        // Guard against division by zero
+                        if new_quantity > 0.0 {
+                            let total_cost = &position.entry_price * BigDecimal::from_f64(position.quantity).unwrap_or_default() + &fill_value;
+                            position.entry_price = &total_cost / BigDecimal::from_f64(new_quantity).unwrap_or(BigDecimal::from(1));
+                        }
                         position.quantity = new_quantity;
                     }
                     BookSide::Ask if position.side == PositionSide::Long => {

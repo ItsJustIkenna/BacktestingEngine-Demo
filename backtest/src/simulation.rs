@@ -428,11 +428,11 @@ impl SimulationLoop {
 #[cfg(feature = "postgres")]
 fn convert_historical_order_to_event(order: &HistoricalOrder) -> Option<OrderBookEvent> {
     
-    let event_type = order.get_event_type();
+    let event_type = order.get_event_type().to_uppercase();
     let order_id = order.get_order_id().to_string();
     let timestamp = *order.get_timestamp();
     
-    match event_type {
+    match event_type.as_str() {
         "NEW" => {
             // Parse side
             let side = match BookSide::from_str(order.get_side()) {
