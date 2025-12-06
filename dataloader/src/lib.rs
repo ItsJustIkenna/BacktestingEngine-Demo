@@ -434,7 +434,7 @@ impl DataLoader {
                     self.pool.clone(),
                     &params.symbol,
                     &params.exchange,
-                    params.limit.unwrap_or(1000),
+                    params.limit.unwrap_or(1000) as usize,
                     mc_params.block_size,
                     seed,
                 ).await.map_err(|e| anyhow::anyhow!("Bootstrap simulation error: {}", e))?
