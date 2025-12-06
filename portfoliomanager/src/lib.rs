@@ -164,9 +164,33 @@ impl PortfolioState {
         Ok(())
     }
 
-    /// Get total portfolio value including unrealized P&L
+    /// Get total portfolio value including the market value of all open positions
+    /// Total Value = Cash Balance + Sum(current_price * quantity) for all open positions
+    /// This correctly reflects the portfolio's worth at current market prices
     pub fn get_total_value(&self) -> BigDecimal {
-        &self.balance + &self.unrealized_pnl
+        let mut position_value = BigDecimal::from(0);
+        
+        for position in &self.positions {
+            if position.close_time.is_none() {
+                // Use mark_price if available, otherwise fall back to entry_price
+                let price = position.mark_price.as_ref().unwrap_or(&position.entry_price);
+                let qty = BigDecimal::from_f64(position.quantity).unwrap_or_default();
+                
+                match position.side {
+                    PositionSide::Long => {
+                        // Long position: we own the asset, add its value
+                        position_value += price * &qty;
+                    }
+                    PositionSide::Short => {
+                        // Short position: we owe the asset, subtract its value
+                        // (In practice, for a market maker that only goes long, this may not apply)
+                        position_value -= price * &qty;
+                    }
+                }
+            }
+        }
+        
+        &self.balance + position_value
     }
 
     /// Update unrealized P&L for all open positions based on current market price

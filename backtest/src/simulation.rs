@@ -408,8 +408,8 @@ impl SimulationLoop {
             .unwrap_or_default();
             
         // Calculate total P&L: ending portfolio value - initial capital
-        let final_portfolio_value = portfolio.balance.clone() + 
-            portfolio.positions.iter().map(|pos| pos.unrealized_pnl.clone()).sum::<BigDecimal>();
+        // Use get_total_value() which correctly includes position market values
+        let final_portfolio_value = portfolio.get_total_value();
         let initial_capital_bd = BigDecimal::from_f64(config.trading.initial_capital).unwrap_or_default();
         result.total_pnl = final_portfolio_value - initial_capital_bd;
 
