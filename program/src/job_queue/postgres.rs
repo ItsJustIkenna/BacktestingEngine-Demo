@@ -496,13 +496,25 @@ impl JobQueue for PostgresQueue {
         // Create backtest result record
         let backtest_uuid = uuid::Uuid::parse_str(&result.job_id)?;
         
-        // Cap PnL values to prevent numeric overflow in database (DECIMAL(20,8) = max 12 digits before decimal)
+        // Cap numeric values to prevent overflow in database (DECIMAL(20,8) = max 12 digits before decimal)
         // This handles edge cases where simulation produces unrealistic values
-        const MAX_PNL: f64 = 999_999_999_999.0; // 12 digits max
-        let capped_pnl = result.total_pnl.clamp(-MAX_PNL, MAX_PNL);
+        const MAX_VALUE: f64 = 999_999_999_999.0; // 12 digits max
+        
+        // Helper to cap f64 values and convert to BigDecimal
+        let cap_value = |v: f64| -> BigDecimal {
+            let capped = v.clamp(-MAX_VALUE, MAX_VALUE);
+            BigDecimal::from_str(&capped.to_string()).unwrap_or(BigDecimal::from(0))
+        };
+        
+        // Helper to cap optional f64 values
+        let cap_opt = |v: Option<f64>| -> Option<BigDecimal> {
+            v.map(|x| cap_value(x))
+        };
+        
+        let capped_pnl = result.total_pnl.clamp(-MAX_VALUE, MAX_VALUE);
         
         // Calculate annualized metrics (simplified - using 252 trading days)
-        let total_return_bd = BigDecimal::from_str(&capped_pnl.to_string())?;
+        let total_return_bd = cap_value(capped_pnl);
         let annualized_return = total_return_bd.clone(); // Simplified
         
         // Downsample equity curve to 500 points max (reduced from 1000 for faster serialization)
@@ -529,57 +541,37 @@ impl JobQueue for PostgresQueue {
             point_in_time: true,
             warmup_period_days: 30,
             total_return: total_return_bd.clone(),
-            annualized_return: result.annualized_return
-                .map(|v| BigDecimal::from_str(&v.to_string()).unwrap_or(BigDecimal::from(0)))
-                .unwrap_or(annualized_return),
-            volatility: result.volatility
-                .map(|v| BigDecimal::from_str(&v.to_string()).unwrap_or(BigDecimal::from(0)))
+            annualized_return: cap_opt(result.annualized_return)
+                .unwrap_or_else(|| annualized_return.clone()),
+            volatility: cap_opt(result.volatility)
                 .unwrap_or(BigDecimal::from(0)),
-            sharpe_ratio: Some(BigDecimal::from_str(&result.sharpe_ratio.to_string())?),
-            sortino_ratio: result.sortino_ratio
-                .map(|v| BigDecimal::from_str(&v.to_string()).ok())
-                .flatten(),
-            max_drawdown: BigDecimal::from_str(&result.max_drawdown.to_string())?,
-            calmar_ratio: result.calmar_ratio
-                .map(|v| BigDecimal::from_str(&v.to_string()).ok())
-                .flatten(),
-            win_rate: BigDecimal::from_str(&result.win_rate.to_string())?,
-            profit_factor: BigDecimal::from_str(&result.profit_factor.to_string())?,
-            avg_trade_return: result.avg_trade_return
-                .map(|v| BigDecimal::from_str(&v.to_string()).unwrap_or(BigDecimal::from(0)))
+            sharpe_ratio: Some(cap_value(result.sharpe_ratio)),
+            sortino_ratio: cap_opt(result.sortino_ratio),
+            max_drawdown: cap_value(result.max_drawdown),
+            calmar_ratio: cap_opt(result.calmar_ratio),
+            win_rate: cap_value(result.win_rate),
+            profit_factor: cap_value(result.profit_factor),
+            avg_trade_return: cap_opt(result.avg_trade_return)
                 .unwrap_or_else(|| if result.total_trades > 0 {
                     total_return_bd.clone() / BigDecimal::from(result.total_trades as i64)
                 } else {
                     BigDecimal::from(0)
                 }),
             total_trades: result.total_trades as i32,
-            best_trade: result.best_trade
-                .map(|v| BigDecimal::from_str(&v.to_string()).ok())
-                .flatten(),
-            worst_trade: result.worst_trade
-                .map(|v| BigDecimal::from_str(&v.to_string()).ok())
-                .flatten(),
-            avg_time_in_trade: result.avg_time_in_trade
-                .map(|v| BigDecimal::from_str(&v.to_string()).ok())
-                .flatten(),
-            value_at_risk_95: result.value_at_risk_95
-                .map(|v| BigDecimal::from_str(&v.to_string()).ok())
-                .flatten(),
-            expected_shortfall_95: result.expected_shortfall_95
-                .map(|v| BigDecimal::from_str(&v.to_string()).ok())
-                .flatten(),
+            best_trade: cap_opt(result.best_trade),
+            worst_trade: cap_opt(result.worst_trade),
+            avg_time_in_trade: cap_opt(result.avg_time_in_trade),
+            value_at_risk_95: cap_opt(result.value_at_risk_95),
+            expected_shortfall_95: cap_opt(result.expected_shortfall_95),
             beta: None,
             correlation_with_benchmark: None,
             tracking_error: None,
             information_ratio: None,
             jensen_alpha: None,
             max_drawdown_duration_days: result.max_drawdown_duration_days,
-            current_drawdown: result.current_drawdown
-                .map(|v| BigDecimal::from_str(&v.to_string()).unwrap_or(BigDecimal::from(0)))
+            current_drawdown: cap_opt(result.current_drawdown)
                 .unwrap_or(BigDecimal::from(0)),
-            avg_drawdown: result.avg_drawdown
-                .map(|v| BigDecimal::from_str(&v.to_string()).ok())
-                .flatten(),
+            avg_drawdown: cap_opt(result.avg_drawdown),
             benchmark_return: None,
             excess_return: None,
             outperformance_periods: None,
@@ -587,11 +579,9 @@ impl JobQueue for PostgresQueue {
             total_orders: result.total_orders.unwrap_or(0),
             filled_orders: result.filled_orders.unwrap_or(0),
             cancelled_orders: result.cancelled_orders.unwrap_or(0),
-            avg_slippage: result.avg_slippage
-                .map(|v| BigDecimal::from_str(&v.to_string()).unwrap_or(BigDecimal::from(0)))
+            avg_slippage: cap_opt(result.avg_slippage)
                 .unwrap_or(BigDecimal::from(0)),
-            total_commission_paid: result.total_commission_paid
-                .map(|v| BigDecimal::from_str(&v.to_string()).unwrap_or(BigDecimal::from(0)))
+            total_commission_paid: cap_opt(result.total_commission_paid)
                 .unwrap_or(BigDecimal::from(0)),
             avg_fill_time_seconds: None,
             strategy_metrics: Some(serde_json::json!({
