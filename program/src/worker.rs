@@ -674,18 +674,31 @@ impl Worker {
                 let mut orderbook = OrderBook::new(symbol.clone(), exchange.clone(), orderbook_config);
                 let mut risk_manager = RiskManager::new();
                 
-                // Create strategy with chromosome parameters
+                // Create strategy with ALL chromosome parameters (fixing incomplete mapping)
                 let strategy_params = AvellanedaStoikovParams {
                     risk_aversion: chr.risk_aversion,
                     inventory_target: chr.inventory_target,
                     order_size: chr.order_size,
-                    ..Default::default()
+                    window_ms: chr.window_ms,
+                    min_quote_lifetime_ms: chr.min_quote_lifetime_ms,
+                    fee_rate: chr.fee_rate,
+                    latency_buffer: chr.latency_buffer,
+                    volatility_cap: chr.volatility_cap,
+                    time_horizon_minutes: chr.time_horizon_minutes,
+                    market_depth_k: chr.market_depth_k,
+                    volatility_adjustment_factor: chr.volatility_adjustment_factor,
+                    inventory_penalty_factor: chr.inventory_penalty_factor,
+                    trend_sensitivity: chr.trend_sensitivity,
+                    flow_sensitivity: chr.flow_sensitivity,
                 };
                 
                 let mut strategy_params_map = HashMap::new();
                 strategy_params_map.insert("risk_aversion".to_string(), config::ParameterValue::Float(chr.risk_aversion));
                 strategy_params_map.insert("inventory_target".to_string(), config::ParameterValue::Float(chr.inventory_target));
                 strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(chr.order_size));
+                strategy_params_map.insert("window_ms".to_string(), config::ParameterValue::Float(chr.window_ms as f64));
+                strategy_params_map.insert("fee_rate".to_string(), config::ParameterValue::Float(chr.fee_rate));
+                strategy_params_map.insert("volatility_cap".to_string(), config::ParameterValue::Float(chr.volatility_cap));
                 
                 let strategy_config = StrategyConfig {
                     id: "genetic-eval".to_string(),
