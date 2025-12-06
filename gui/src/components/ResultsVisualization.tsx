@@ -781,7 +781,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         />
         <MetricCard
           title="Total Trades"
-          value={result.total_trades.toString()}
+          value={(result.total_trades ?? 0).toString()}
           color="#007bff"
         />
       </div>
