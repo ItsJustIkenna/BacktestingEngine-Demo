@@ -62,6 +62,29 @@ spec:
                   key: DATABASE_URL
             - name: RUST_LOG
               value: "info"
+            # Elasticsearch logging configuration (shared with DataEngine)
+            {{- if .Values.secrets.elasticsearch.enabled }}
+            - name: USE_ELASTICSEARCH_LOGGING
+              value: "true"
+            - name: ELASTIC_CLOUD_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
+                  key: ELASTIC_CLOUD_ENDPOINT
+            - name: ELASTIC_CLOUD_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
+                  key: ELASTIC_CLOUD_USERNAME
+            - name: ELASTIC_CLOUD_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
+                  key: ELASTIC_CLOUD_PASSWORD
+            {{- else }}
+            - name: USE_ELASTICSEARCH_LOGGING
+              value: "false"
+            {{- end }}
           envFrom:
             - configMapRef:
                 name: {{ include "backtesting-engine.fullname" . }}-config
