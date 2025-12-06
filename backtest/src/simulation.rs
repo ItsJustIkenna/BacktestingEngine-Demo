@@ -30,6 +30,8 @@ pub struct SimulationLoop {
     // Track 30-day rolling volume per exchange for fee tiers
     trade_history_by_exchange: FxHashMap<String, Vec<(chrono::DateTime<chrono::Utc>, f64)>>, // exchange -> (timestamp, volume_usd)
     current_30d_volume_by_exchange: FxHashMap<String, f64>,
+    // Track current active order IDs to cancel before placing new orders
+    active_order_ids: Vec<String>,
 }
 
 impl SimulationLoop {
@@ -44,6 +46,7 @@ impl SimulationLoop {
             liquidity_warnings: Vec::with_capacity(100),
             trade_history_by_exchange: FxHashMap::default(),
             current_30d_volume_by_exchange: FxHashMap::default(),
+            active_order_ids: Vec::with_capacity(10),
         }
     }
     
@@ -290,6 +293,17 @@ impl SimulationLoop {
 
             // 3. Run all enabled strategies, collect signals
             let signals = strategy_manager.process_market_data(&data, &context).await.unwrap_or_default();
+            
+            // Cancel previous active orders before placing new quotes
+            // This prevents order accumulation that leads to incorrect fill volumes
+            if !signals.is_empty() {
+                for order_id in &self.active_order_ids {
+                    let cancel_event = OrderBookEvent::CancelOrder { order_id: order_id.clone(), timestamp };
+                    let _ = orderbook.apply_event(cancel_event);
+                }
+                self.active_order_ids.clear();
+            }
+            
             for (_strategy_id, sigs) in signals {
                 for signal in sigs {
                     // Extract order details for cost calculation
@@ -308,6 +322,9 @@ impl SimulationLoop {
                     // Estimate market impact (using placeholder for avg_volume)
                     let avg_volume = 1000.0; // TODO: get from market data
                     let _impact_cost = self.calculate_market_impact(order_size, order_price, avg_volume, config, timestamp);
+                    
+                    // Track this order ID for later cancellation
+                    self.active_order_ids.push(signal.id.clone());
                     
                     // 4. Submit order to orderbook
                     let _ = orderbook.submit_order_from_signal(&signal, timestamp);
