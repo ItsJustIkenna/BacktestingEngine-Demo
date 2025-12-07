@@ -407,10 +407,36 @@ impl SimulationLoop {
             .map(|v| BigDecimal::from_f64(v).unwrap_or_default())
             .unwrap_or_default();
             
+        // Debug: Log portfolio state before calculating PnL
+        log_info!(BACKTEST_LOGGER, "Portfolio state: balance={} positions={} open_positions={}",
+            portfolio.balance.to_f64().unwrap_or(0.0),
+            portfolio.positions.len(),
+            portfolio.positions.iter().filter(|p| p.close_time.is_none()).count()
+        );
+        
+        for (i, pos) in portfolio.positions.iter().enumerate() {
+            let mark = pos.mark_price.as_ref().map(|p| p.to_f64().unwrap_or(0.0)).unwrap_or(0.0);
+            log_info!(BACKTEST_LOGGER, "Position {}: side={:?} qty={} entry={} mark={} closed={}",
+                i,
+                pos.side,
+                pos.quantity,
+                pos.entry_price.to_f64().unwrap_or(0.0),
+                mark,
+                pos.close_time.is_some()
+            );
+        }
+            
         // Calculate total P&L: ending portfolio value - initial capital
         // Use get_total_value() which correctly includes position market values
         let final_portfolio_value = portfolio.get_total_value();
         let initial_capital_bd = BigDecimal::from_f64(config.trading.initial_capital).unwrap_or_default();
+        
+        log_info!(BACKTEST_LOGGER, "PnL calc: final_value={} initial={} pnl={}",
+            final_portfolio_value.to_f64().unwrap_or(0.0),
+            config.trading.initial_capital,
+            (&final_portfolio_value - &initial_capital_bd).to_f64().unwrap_or(0.0)
+        );
+        
         result.total_pnl = final_portfolio_value - initial_capital_bd;
 
         // Include equity curve data for visualization
