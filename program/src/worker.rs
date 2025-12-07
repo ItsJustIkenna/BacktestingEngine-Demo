@@ -460,8 +460,8 @@ impl Worker {
         
         let strategy_config = StrategyConfig {
             id: format!("backtest-{}", job.id),
-            name: "Avellaneda-Stoikov".to_string(),
-            strategy_type: "AvellanedaStoikov".to_string(),
+            name: "Market Making".to_string(),
+            strategy_type: "MarketMaking".to_string(),
             symbol: params.symbol.clone(),
             exchange: params.exchange.clone(),
             parameters: strategy_params_map,

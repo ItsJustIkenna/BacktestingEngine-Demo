@@ -114,7 +114,7 @@ fn default_inventory_penalty() -> f64 { 0.3 }
 fn default_trend_sensitivity() -> f64 { 0.2 }
 fn default_flow_sensitivity() -> f64 { -0.1 }
 fn default_monte_carlo_enabled() -> bool { true }
-fn default_monte_carlo_runs() -> usize { 500 }
+fn default_monte_carlo_runs() -> usize { 1000 }
 fn default_walk_forward_enabled() -> bool { true }
 
 /// Backtest job

@@ -28,7 +28,7 @@ interface BacktestResult {
   profit_factor?: number;
   total_trades?: number;
   avg_trade_duration?: number;
-  equity_curve?: Array<{ timestamp: string; value: number }>;
+  equity_curve?: Array<number | { timestamp?: string; value?: number }>;
   strategy_metrics?: any;
   monte_carlo?: MonteCarloSummary;
   walk_forward?: WalkForwardSummary;
@@ -1147,7 +1147,7 @@ const MetricCard: React.FC<MetricCardProps> = ({ title, value, color }) => (
 );
 
 interface EquityCurveChartProps {
-  data: Array<{ timestamp: string; value: number }>;
+  data: Array<number | { timestamp?: string; value?: number }>;
 }
 
 const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
@@ -1155,24 +1155,45 @@ const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
     return <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>No data available</div>;
   }
 
+  // Helper to get the equity value (supports numbers and objects)
+  const getValue = (d: number | { timestamp?: string; value?: number }): number => {
+    if (typeof d === 'number') return d;
+    return d.value ?? 0;
+  };
+
   // Simple SVG line chart implementation
   const width = 900;
   const height = 400;
-  const padding = 50;
+  const padding = 60;
   
-  const values = data.map(d => d.value);
+  const values = data.map(getValue).filter(v => !isNaN(v) && isFinite(v));
+  
+  if (values.length === 0) {
+    return <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>No valid data available</div>;
+  }
+  
   const minValue = Math.min(...values);
   const maxValue = Math.max(...values);
   const valueRange = maxValue - minValue || 1;
 
-  const xScale = (index: number) => padding + (index / (data.length - 1)) * (width - 2 * padding);
+  const xScale = (index: number) => padding + (index / (values.length - 1 || 1)) * (width - 2 * padding);
   const yScale = (value: number) => height - padding - ((value - minValue) / valueRange) * (height - 2 * padding);
 
-  // Generate path
-  const pathData = data
-    .map((point, index) => {
+  // Format currency for Y-axis labels
+  const formatCurrency = (value: number): string => {
+    if (Math.abs(value) >= 1000000) {
+      return `$${(value / 1000000).toFixed(1)}M`;
+    } else if (Math.abs(value) >= 1000) {
+      return `$${(value / 1000).toFixed(1)}K`;
+    }
+    return `$${value.toFixed(0)}`;
+  };
+
+  // Generate path from values
+  const pathData = values
+    .map((value, index) => {
       const x = xScale(index);
-      const y = yScale(point.value);
+      const y = yScale(value);
       return index === 0 ? `M ${x} ${y}` : `L ${x} ${y}`;
     })
     .join(' ');
@@ -1184,15 +1205,28 @@ const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
         <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke="#dee2e6" strokeWidth={1} />
         <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#dee2e6" strokeWidth={1} />
         
-        {/* Horizontal grid lines */}
+        {/* Horizontal grid lines and Y-axis labels */}
         {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
           const y = height - padding - ratio * (height - 2 * padding);
           const value = minValue + ratio * valueRange;
           return (
             <g key={ratio}>
               <line x1={padding} y1={y} x2={width - padding} y2={y} stroke="#e9ecef" strokeWidth={1} />
-              <text x={padding - 10} y={y + 4} textAnchor="end" fontSize="12" fill="#666">
-                {safeToFixed(value, 2)}
+              <text x={padding - 5} y={y + 4} textAnchor="end" fontSize="11" fill="#666">
+                {formatCurrency(value)}
+              </text>
+            </g>
+          );
+        })}
+        
+        {/* Vertical grid lines and X-axis labels */}
+        {[0, 0.25, 0.5, 0.75, 1].map((ratio, i) => {
+          const x = padding + ratio * (width - 2 * padding);
+          return (
+            <g key={`x-${i}`}>
+              <line x1={x} y1={padding} x2={x} y2={height - padding} stroke="#e9ecef" strokeWidth={1} />
+              <text x={x} y={height - padding + 15} textAnchor="middle" fontSize="11" fill="#666">
+                {`${Math.round(ratio * 100)}%`}
               </text>
             </g>
           );
@@ -1201,37 +1235,13 @@ const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
         {/* Equity curve line */}
         <path d={pathData} fill="none" stroke="#007bff" strokeWidth={2} />
         
-        {/* Data points */}
-        {data.map((point, index) => (
-          <circle
-            key={index}
-            cx={xScale(index)}
-            cy={yScale(point.value)}
-            r={3}
-            fill="#007bff"
-          >
-            <title>{`${new Date(point.timestamp).toLocaleString()}: ${safeToFixed(point.value, 2)}`}</title>
-          </circle>
-        ))}
-        
-        {/* X-axis labels (show first, middle, last) */}
-        {[0, Math.floor(data.length / 2), data.length - 1].map((index) => {
-          if (index >= data.length || !data[index]) return null;
-          const x = xScale(index);
-          const timestamp = new Date(data[index].timestamp).toLocaleDateString();
-          return (
-            <text
-              key={index}
-              x={x}
-              y={height - padding + 20}
-              textAnchor="middle"
-              fontSize="12"
-              fill="#666"
-            >
-              {timestamp}
-            </text>
-          );
-        })}
+        {/* Axis labels */}
+        <text x={width / 2} y={height - 5} textAnchor="middle" fontSize="12" fill="#333">
+          Time Progress
+        </text>
+        <text x={15} y={height / 2} textAnchor="middle" fontSize="12" fill="#333" transform={`rotate(-90, 15, ${height / 2})`}>
+          Portfolio Value
+        </text>
       </svg>
     </div>
   );

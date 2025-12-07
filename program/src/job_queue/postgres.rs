@@ -236,7 +236,7 @@ impl PostgresQueue {
                 walkforward_step_days: None,
                 // Monte Carlo and Walk-Forward settings - default to enabled
                 monte_carlo_enabled: true,
-                monte_carlo_runs: 500,
+                monte_carlo_runs: 1000,
                 walk_forward_enabled: true,
                 risk_aversion: f64::from_str(&record.risk_aversion.to_string())?,
                 inventory_target: f64::from_str(&record.inventory_target.to_string())?,
@@ -1037,7 +1037,7 @@ mod tests {
             trend_sensitivity: 0.2,
             flow_sensitivity: -0.1,
             monte_carlo_enabled: true,
-            monte_carlo_runs: 500,
+            monte_carlo_runs: 1000,
             walk_forward_enabled: true,
         };
         

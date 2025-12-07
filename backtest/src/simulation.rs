@@ -190,18 +190,18 @@ impl SimulationLoop {
                     current_market_price = Some(trade.price.clone());
                     
                     // Convert TradeData side string to BookSide
-                    // Incoming trade side indicates the aggressor:
-                    // - "buy" means aggressor bought from asks (our ask orders get filled)
-                    // - "sell" means aggressor sold to bids (our bid orders get filled)
-                    let book_side = match trade.side.to_lowercase().as_str() {
-                        "buy" | "b" => BookSide::Ask,   // Aggressor bought, fills ask side
-                        "sell" | "s" => BookSide::Bid, // Aggressor sold, fills bid side
+                    // The trade side is the AGGRESSOR's side (the taker who initiated):
+                    // - "buy" means a buyer aggressed -> fills our ASK orders
+                    // - "sell" means a seller aggressed -> fills our BID orders
+                    let aggressor_side = match trade.side.to_lowercase().as_str() {
+                        "buy" | "b" => BookSide::Bid,   // Aggressor is buyer
+                        "sell" | "s" => BookSide::Ask,  // Aggressor is seller
                         _ => continue, // Skip unknown side
                     };
                     
                     // Execute the trade against our resting orders and get fills
                     let trade_fills = orderbook.execute_trade_with_fills(
-                        book_side,
+                        aggressor_side,
                         trade.price.clone(),
                         trade.quantity.clone(),
                         trade.timestamp,
@@ -227,18 +227,18 @@ impl SimulationLoop {
                     current_market_price = Some(trade.price.clone());
                     
                     // Convert TradeData side string to BookSide
-                    // Incoming trade side indicates the aggressor:
-                    // - "buy" means aggressor bought from asks (our ask orders get filled)
-                    // - "sell" means aggressor sold to bids (our bid orders get filled)
-                    let book_side = match trade.side.to_lowercase().as_str() {
-                        "buy" | "b" => BookSide::Ask,   // Aggressor bought, fills ask side
-                        "sell" | "s" => BookSide::Bid, // Aggressor sold, fills bid side
+                    // The trade side is the AGGRESSOR's side (the taker who initiated):
+                    // - "buy" means a buyer aggressed -> fills our ASK orders
+                    // - "sell" means a seller aggressed -> fills our BID orders
+                    let aggressor_side = match trade.side.to_lowercase().as_str() {
+                        "buy" | "b" => BookSide::Bid,   // Aggressor is buyer
+                        "sell" | "s" => BookSide::Ask,  // Aggressor is seller
                         _ => continue, // Skip unknown side
                     };
                     
                     // Execute the trade against our resting orders and get fills
                     let trade_fills = orderbook.execute_trade_with_fills(
-                        book_side,
+                        aggressor_side,
                         trade.price.clone(),
                         trade.quantity.clone(),
                         trade.timestamp,

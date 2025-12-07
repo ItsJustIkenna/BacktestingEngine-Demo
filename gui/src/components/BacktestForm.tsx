@@ -41,14 +41,14 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     symbol: '',
     exchange: '',
     strategy_type: 'market_making',
-    initial_capital: 100000,
+    initial_capital: 10000,
     optimization_method: 'genetic',
     // Genetic algorithm defaults
     population_size: 50,
     generations: 20,
     // Monte Carlo defaults
     monte_carlo_enabled: true,
-    monte_carlo_runs: 500,
+    monte_carlo_runs: 1000,
     // Walk-Forward defaults
     walk_forward_enabled: true,
     // Manual parameter defaults

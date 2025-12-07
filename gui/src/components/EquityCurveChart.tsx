@@ -1,13 +1,13 @@
 import React from 'react';
 
-interface EquityCurveData {
-  timestamp: string;
-  equity?: number;
-  value?: number;  // Support both 'equity' and 'value' property names
-}
+// Support multiple data formats:
+// 1. Array of numbers (from backend): [10000, 10050, 10100, ...]
+// 2. Array of objects with value: [{ value: 10000 }, ...]
+// 3. Array of objects with timestamp and value: [{ timestamp: "2025-01-01", value: 10000 }, ...]
+type EquityCurveDataItem = number | { timestamp?: string; equity?: number; value?: number };
 
 interface EquityCurveChartProps {
-  data?: EquityCurveData[];
+  data?: EquityCurveDataItem[];
 }
 
 export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
@@ -18,26 +18,54 @@ export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
     return <div style={{ padding: '20px', textAlign: 'center' }}>No data available</div>;
   }
 
-  // Helper to get the equity value (supports both 'equity' and 'value' properties)
-  const getEquity = (d: EquityCurveData): number => d.equity ?? d.value ?? 0;
+  // Helper to get the equity value (supports numbers and objects with 'equity' or 'value' properties)
+  const getEquity = (d: EquityCurveDataItem): number => {
+    if (typeof d === 'number') {
+      return d;
+    }
+    return d.equity ?? d.value ?? 0;
+  };
 
   const width = 800;
   const height = 400;
-  const padding = 40;
+  const padding = 60;  // Increased padding for Y-axis labels
 
-  const equities = data.map(getEquity);
+  // Filter out invalid values and get clean equity array
+  const equities = data.map(getEquity).filter(v => !isNaN(v) && isFinite(v));
+  
+  if (equities.length === 0) {
+    return <div style={{ padding: '20px', textAlign: 'center' }}>No valid data points available</div>;
+  }
+
   const maxEquity = Math.max(...equities);
   const minEquity = Math.min(...equities);
   const equityRange = maxEquity - minEquity || 1; // Prevent division by zero
 
-  const xScale = (index: number) => padding + (index / (data.length - 1 || 1)) * (width - 2 * padding);
+  const xScale = (index: number) => padding + (index / (equities.length - 1 || 1)) * (width - 2 * padding);
   const yScale = (equity: number) => height - padding - ((equity - minEquity) / equityRange) * (height - 2 * padding);
 
-  const pathData = data.map((d, i) => {
+  // Build path data from valid equities only
+  const pathData = equities.map((equity, i) => {
     const x = xScale(i);
-    const y = yScale(getEquity(d));
+    const y = yScale(equity);
     return i === 0 ? `M ${x} ${y}` : `L ${x} ${y}`;
   }).join(' ');
+
+  // Format currency for Y-axis labels
+  const formatCurrency = (value: number): string => {
+    if (Math.abs(value) >= 1000000) {
+      return `$${(value / 1000000).toFixed(1)}M`;
+    } else if (Math.abs(value) >= 1000) {
+      return `$${(value / 1000).toFixed(1)}K`;
+    }
+    return `$${value.toFixed(0)}`;
+  };
+
+  // Format time labels for X-axis (show data point indices as percentages of total time)
+  const getTimeLabel = (percent: number): string => {
+    const index = Math.floor(percent * (equities.length - 1));
+    return `${Math.round(percent * 100)}%`;
+  };
 
   return (
     <div style={{ width: '100%', overflowX: 'auto' }}>
@@ -45,11 +73,12 @@ export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
         {/* Background */}
         <rect width={width} height={height} fill="#f9f9f9" />
         
-        {/* Grid lines */}
+        {/* Horizontal Grid lines and Y-axis labels */}
         {[0, 0.25, 0.5, 0.75, 1].map((percent, i) => {
           const y = padding + percent * (height - 2 * padding);
+          const value = maxEquity - percent * equityRange;
           return (
-            <g key={i}>
+            <g key={`h-${i}`}>
               <line
                 x1={padding}
                 y1={y}
@@ -58,8 +87,28 @@ export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
                 stroke="#e0e0e0"
                 strokeWidth={1}
               />
-              <text x={padding - 10} y={y + 5} fontSize="12" textAnchor="end" fill="#666">
-                {(maxEquity - percent * equityRange).toFixed(0)}
+              <text x={padding - 5} y={y + 4} fontSize="11" textAnchor="end" fill="#666">
+                {formatCurrency(value)}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Vertical Grid lines and X-axis labels */}
+        {[0, 0.25, 0.5, 0.75, 1].map((percent, i) => {
+          const x = padding + percent * (width - 2 * padding);
+          return (
+            <g key={`v-${i}`}>
+              <line
+                x1={x}
+                y1={padding}
+                x2={x}
+                y2={height - padding}
+                stroke="#e0e0e0"
+                strokeWidth={1}
+              />
+              <text x={x} y={height - padding + 15} fontSize="11" textAnchor="middle" fill="#666">
+                {getTimeLabel(percent)}
               </text>
             </g>
           );
