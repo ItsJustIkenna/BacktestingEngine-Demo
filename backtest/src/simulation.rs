@@ -88,12 +88,8 @@ impl SimulationLoop {
         }
     }
     
-    /// Calculate realistic slippage based on order size and market conditions
-    fn calculate_slippage(&self, order_size: f64, price: f64, config: &config::BacktestConfig) -> f64 {
-        let slippage_bps = config.trading.slippage_bps;
-        let slippage_ratio = slippage_bps / 10000.0; // Convert basis points to decimal
-        price * order_size * slippage_ratio
-    }
+    // Note: Slippage is now calculated internally by the orderbook during order matching.
+    // The simulation tracks actual slippage from fill.slippage_bps in the fills loop.
     
     /// Calculate market impact using configured model
     fn calculate_market_impact(&mut self, order_size: f64, price: f64, avg_volume: f64, config: &config::BacktestConfig, timestamp: chrono::DateTime<chrono::Utc>) -> f64 {
@@ -315,9 +311,8 @@ impl SimulationLoop {
                         .unwrap_or(0.0);
                     let exchange = orderbook.exchange.clone();
                     
-                    // Calculate transaction costs
-                    let slippage_cost = self.calculate_slippage(order_size, order_price, config);
-                    self.total_slippage += slippage_cost;
+                    // Note: Slippage is now handled internally by the orderbook during order matching
+                    // We track the actual slippage from fills below
                     
                     // Estimate market impact (using placeholder for avg_volume)
                     let avg_volume = 1000.0; // TODO: get from market data
@@ -332,11 +327,18 @@ impl SimulationLoop {
                     // 5. Simulate order matching/fills with proper fee calculation
                     let fills = orderbook.match_all_orders(timestamp);
 
-                    // Track commission costs with dynamic fee rates per exchange
+                    // Track commission and slippage costs from fills
                     for fill in &fills {
                         let fill_price = fill.price.to_f64().unwrap_or(0.0);
                         let fill_quantity = fill.quantity.to_f64().unwrap_or(0.0);
                         let fill_value = fill_price * fill_quantity;
+                        
+                        // Track slippage from the orderbook's calculation (already applied to fill.price)
+                        if let Some(slippage_bps) = fill.slippage_bps {
+                            // Calculate the dollar slippage cost from bps
+                            let slippage_cost = fill_value * (slippage_bps / 10000.0);
+                            self.total_slippage += slippage_cost;
+                        }
                         
                         // Determine if maker or taker based on original signal
                         // Limit orders (with price) = maker, market orders (no price) = taker

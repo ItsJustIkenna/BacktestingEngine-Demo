@@ -185,11 +185,11 @@ impl Default for SlippageConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            base_slippage_bps: 1.0,    // 1 basis point base
-            impact_coefficient: 0.1,    // 10% impact factor
+            base_slippage_bps: 0.5,    // 0.5 basis point base
+            impact_coefficient: 0.01,   // 1% impact factor (was 10% - too aggressive)
             depth_levels: 5,            // Analyze 5 levels deep
-            min_slippage_bps: 0.5,     // 0.5 bps minimum
-            max_slippage_bps: 50.0,    // 50 bps maximum
+            min_slippage_bps: 0.1,     // 0.1 bps minimum
+            max_slippage_bps: 10.0,    // 10 bps maximum (was 50 - too high)
         }
     }
 }
