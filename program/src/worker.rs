@@ -1396,6 +1396,28 @@ impl Worker {
             data,
         ).await?;
         
+        // Debug: Log portfolio state after final backtest using MAIN_LOGGER (which we know works)
+        log_info!(MAIN_LOGGER, "Job {} final portfolio | balance={} positions={} open={}",
+            job_id,
+            portfolio.balance.to_string(),
+            portfolio.positions.len(),
+            portfolio.positions.iter().filter(|p| p.close_time.is_none()).count()
+        );
+        
+        // Log each position for debugging the PnL issue
+        for (i, pos) in portfolio.positions.iter().enumerate() {
+            let mark = pos.mark_price.as_ref().map(|p| p.to_string()).unwrap_or_else(|| "None".to_string());
+            log_info!(MAIN_LOGGER, "Job {} position {} | side={:?} qty={} entry={} mark={} closed={}",
+                job_id, i, pos.side, pos.quantity, pos.entry_price, mark, pos.close_time.is_some()
+            );
+        }
+        
+        // Log total value calculation
+        let total_value = portfolio.get_total_value();
+        log_info!(MAIN_LOGGER, "Job {} total_value={} initial={} => pnl={}",
+            job_id, total_value, initial_capital, &total_value - bigdecimal::BigDecimal::from_f64(initial_capital).unwrap_or_default()
+        );
+        
         // Log Monte Carlo results if available
         if let Some(ref mc) = result.monte_carlo {
             log_info!(MAIN_LOGGER, "Job {} Monte Carlo complete | runs={} mean_sharpe={:.3} VaR95={:.2}% CVaR95={:.2}%",
