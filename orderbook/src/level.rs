@@ -140,11 +140,13 @@ impl Level {
                 remaining_quantity -= &fill_quantity;
 
                 // Create executed order info
+                // Note: remaining_quantity is what's LEFT after this fill, not the fill amount
+                // The fill amount is calculated later as: original_quantity - remaining_quantity
                 executed_orders.push(OrderInfo {
                     order_id: order.order_id.clone(),
                     side: order.side,
                     original_quantity: order.original_quantity.clone(),
-                    remaining_quantity: fill_quantity,
+                    remaining_quantity: order.remaining_quantity.clone(),
                     price: order.price.clone(),
                     timestamp,
                     order_type: order.order_type,
