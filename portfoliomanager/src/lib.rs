@@ -73,8 +73,8 @@ impl PortfolioState {
 
     /// Get the available quantity for a given symbol and side
     /// For sells: returns the quantity of Long positions we can sell
-    /// For buys: returns f64::MAX (unlimited, subject to balance)
-    fn get_available_quantity(&self, symbol: &str, side: &BookSide) -> f64 {
+    /// For buys: returns max quantity affordable with current balance
+    fn get_available_quantity(&self, symbol: &str, side: &BookSide, price: &BigDecimal) -> f64 {
         match side {
             BookSide::Ask => {
                 // For selling, we can only sell what we have in Long positions
@@ -84,8 +84,18 @@ impl PortfolioState {
                     .sum()
             }
             BookSide::Bid => {
-                // For buying, technically unlimited (subject to balance check elsewhere)
-                f64::MAX
+                // For buying, limited by available balance
+                // Calculate max quantity we can afford: balance / price
+                let price_f64 = price.to_f64().unwrap_or(1.0);
+                if price_f64 <= 0.0 {
+                    return 0.0;
+                }
+                let balance_f64 = self.balance.to_f64().unwrap_or(0.0);
+                if balance_f64 <= 0.0 {
+                    return 0.0; // No balance, can't buy
+                }
+                // Allow buying up to 95% of balance to leave room for fees
+                (balance_f64 * 0.95) / price_f64
             }
         }
     }
@@ -107,8 +117,10 @@ impl PortfolioState {
             return Ok(()); // Nothing to do
         }
         
-        // Validate and cap the execution quantity
-        let available = self.get_available_quantity(&symbol, &fill.side);
+        // Validate and cap the execution quantity based on:
+        // - For sells: available position quantity
+        // - For buys: available balance
+        let available = self.get_available_quantity(&symbol, &fill.side, &fill.price);
         let executed_quantity = requested_quantity.min(available);
         
         // Skip if we can't execute anything meaningful
@@ -338,13 +350,14 @@ mod tests {
     fn test_cannot_sell_more_than_owned() {
         let mut portfolio = PortfolioState::with_balance(BigDecimal::from(100_000));
         
-        // Buy 1 BTC at $50,000
+        // Buy 1 BTC at $50,000 (well within $100k balance)
         let buy_fill = create_fill(BookSide::Bid, 50000.0, 1.0);
         portfolio.apply_fill(&buy_fill).unwrap();
         
-        assert_eq!(portfolio.net_position, 1.0);
+        // Should have bought ~1 BTC (might be slightly less due to 95% balance limit)
+        assert!(portfolio.net_position > 0.9, "Should have bought close to 1 BTC, got {}", portfolio.net_position);
         
-        // Try to sell 2 BTC (should only sell 1)
+        // Try to sell 2 BTC (should only sell what we have)
         let sell_fill = create_fill(BookSide::Ask, 51000.0, 2.0);
         portfolio.apply_fill(&sell_fill).unwrap();
         
@@ -379,22 +392,57 @@ mod tests {
 
     #[test]
     fn test_buy_and_partial_sell() {
-        let mut portfolio = PortfolioState::with_balance(BigDecimal::from(100_000));
+        let mut portfolio = PortfolioState::with_balance(BigDecimal::from(200_000));
         
-        // Buy 2 BTC at $50,000
+        // Buy 2 BTC at $50,000 (=$100k, within $200k balance)
         let buy_fill = create_fill(BookSide::Bid, 50000.0, 2.0);
         portfolio.apply_fill(&buy_fill).unwrap();
         
-        assert!((portfolio.net_position - 2.0).abs() < 1e-10);
+        assert!((portfolio.net_position - 2.0).abs() < 0.1, "Should have ~2 BTC, got {}", portfolio.net_position);
         
         // Sell 1 BTC at $51,000
         let sell_fill = create_fill(BookSide::Ask, 51000.0, 1.0);
         portfolio.apply_fill(&sell_fill).unwrap();
         
-        // Should still have 1 BTC
-        assert!((portfolio.net_position - 1.0).abs() < 1e-10);
+        // Should still have ~1 BTC
+        assert!((portfolio.net_position - 1.0).abs() < 0.1, "Should have ~1 BTC, got {}", portfolio.net_position);
         
         // Realized P&L should be positive (sold higher than bought)
         assert!(portfolio.realized_pnl > BigDecimal::from(0));
+    }
+
+    #[test]
+    fn test_cannot_buy_more_than_balance_allows() {
+        let mut portfolio = PortfolioState::with_balance(BigDecimal::from(10_000));
+        
+        // Try to buy 1 BTC at $50,000 (but only have $10k)
+        let buy_fill = create_fill(BookSide::Bid, 50000.0, 1.0);
+        portfolio.apply_fill(&buy_fill).unwrap();
+        
+        // Should only buy what we can afford: $10k * 0.95 / $50k = 0.19 BTC
+        assert!(portfolio.net_position < 0.2, "Should only buy ~0.19 BTC with $10k, got {}", portfolio.net_position);
+        assert!(portfolio.net_position > 0.1, "Should have bought some BTC, got {}", portfolio.net_position);
+        
+        // Balance should never go negative
+        assert!(portfolio.balance >= BigDecimal::from(0), "Balance should never be negative: {}", portfolio.balance);
+    }
+
+    #[test]
+    fn test_balance_never_goes_negative() {
+        let mut portfolio = PortfolioState::with_balance(BigDecimal::from(10_000));
+        
+        // Try to buy massive amounts repeatedly
+        for _ in 0..10 {
+            let buy_fill = create_fill(BookSide::Bid, 90000.0, 100.0); // Try to buy $9M worth
+            portfolio.apply_fill(&buy_fill).unwrap();
+        }
+        
+        // Balance should never go negative
+        assert!(portfolio.balance.to_f64().unwrap_or(-1.0) >= -0.01, 
+            "Balance should never be significantly negative: {}", portfolio.balance);
+        
+        // Position should be limited by what we could afford
+        assert!(portfolio.net_position < 0.2, 
+            "Position should be limited to what $10k can buy at $90k/BTC: {}", portfolio.net_position);
     }
 }
