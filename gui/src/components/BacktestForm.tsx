@@ -261,7 +261,7 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
             required
             style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
           >
-            <option value="market_making">Avellaneda-Stoikov (Market Making)</option>
+            <option value="market_making">Market Making</option>
           </select>
         </div>
 

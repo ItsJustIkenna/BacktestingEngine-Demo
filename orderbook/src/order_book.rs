@@ -523,12 +523,21 @@ impl OrderBook {
     fn create_fill(&self, order: &OrderInfo, quantity: &BigDecimal, liquidity_type: LiquidityType, timestamp: DateTime<Utc>) -> Fill {
         let base_price = &order.price;
         
-        // Calculate slippage
-        let trade_value_usd = (base_price * quantity).to_f64().unwrap_or(0.0);
-        let slippage_rate = self.calculate_slippage(order.side, trade_value_usd);
-        let execution_price = self.apply_slippage(base_price, order.side, slippage_rate);
+        // Calculate slippage - only applies to TAKERS (market orders)
+        // MAKERS (limit orders being filled) get their exact limit price
+        let (execution_price, slippage_bps) = if liquidity_type == LiquidityType::Maker {
+            // Maker: no slippage, we get our limit price
+            (base_price.clone(), None)
+        } else {
+            // Taker: apply slippage based on order size and market impact
+            let trade_value_usd = (base_price * quantity).to_f64().unwrap_or(0.0);
+            let slippage_rate = self.calculate_slippage(order.side, trade_value_usd);
+            let slipped_price = self.apply_slippage(base_price, order.side, slippage_rate);
+            let bps = if slippage_rate > 0.0 { Some(slippage_rate * 10000.0) } else { None };
+            (slipped_price, bps)
+        };
         
-        // Calculate final trade value with slippage
+        // Calculate final trade value with execution price
         let final_trade_value = &execution_price * quantity;
         
         // Calculate fees
@@ -549,13 +558,13 @@ impl OrderBook {
         Fill {
             order_id: order.order_id.clone(),
             side: order.side,
-            price: execution_price.clone(),  // Use slippage-adjusted price
+            price: execution_price.clone(),  // Use slippage-adjusted price (or exact limit price for makers)
             base_price: Some(base_price.clone()),  // Original price before slippage
             quantity: quantity.clone(),
             liquidity_type,
             fee_rate,
             fee_amount,
-            slippage_bps: if slippage_rate > 0.0 { Some(slippage_rate * 10000.0) } else { None }, // Convert to basis points
+            slippage_bps,  // Already computed above (None for makers)
             timestamp,
         }
     }
