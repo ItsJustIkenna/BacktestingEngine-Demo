@@ -6,7 +6,7 @@ use crate::Chromosome;
 #[derive(Clone, Debug)]
 pub struct AvellanedaStoikovChromosome {
     pub risk_aversion: f64,
-    pub order_size: f64,
+    pub order_size_pct: f64,  // Order size as percentage of capital (0.01 = 1%)
     pub window_ms: u64,
     pub min_quote_lifetime_ms: u64,
     pub fee_rate: f64,
@@ -27,8 +27,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
     fn random<R: Rng + ?Sized>(rng: &mut R) -> Self {
         Self {
             risk_aversion: rng.gen_range(0.001..0.1),
-            // order_size in base asset (BTC). For $10k capital at ~$90k/BTC, max ~0.1 BTC
-            order_size: rng.gen_range(0.001..0.1),
+            // order_size_pct: percentage of capital per order (0.5% to 15%)
+            // Wide range lets genetic algorithm find optimal sizing
+            // At $10k capital: 0.5% = $50, 15% = $1,500 per trade
+            order_size_pct: rng.gen_range(0.005..0.15),
             window_ms: rng.gen_range(10_000..300_000), // 10s to 5 min
             min_quote_lifetime_ms: rng.gen_range(100..5_000), // 100ms to 5s
             fee_rate: rng.gen_range(0.0001..0.01),
@@ -49,7 +51,7 @@ impl Chromosome for AvellanedaStoikovChromosome {
     fn crossover(&self, other: &Self, rng: &mut impl Rng) -> Self {
         Self {
             risk_aversion: if rng.gen_bool(0.5) { self.risk_aversion } else { other.risk_aversion },
-            order_size: if rng.gen_bool(0.5) { self.order_size } else { other.order_size },
+            order_size_pct: if rng.gen_bool(0.5) { self.order_size_pct } else { other.order_size_pct },
             window_ms: if rng.gen_bool(0.5) { self.window_ms } else { other.window_ms },
             min_quote_lifetime_ms: if rng.gen_bool(0.5) { self.min_quote_lifetime_ms } else { other.min_quote_lifetime_ms },
             fee_rate: if rng.gen_bool(0.5) { self.fee_rate } else { other.fee_rate },
@@ -74,8 +76,8 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.risk_aversion = self.risk_aversion.clamp(0.001, 0.1);
         }
         if rng.gen_bool(mutation_rate) {
-            self.order_size += rng.gen_range(-0.01..0.01);
-            self.order_size = self.order_size.clamp(0.001, 0.1);
+            self.order_size_pct += rng.gen_range(-0.02..0.02);
+            self.order_size_pct = self.order_size_pct.clamp(0.005, 0.15);
         }
         if rng.gen_bool(mutation_rate) {
             let delta = rng.gen_range(-10_000..10_000);
@@ -134,7 +136,7 @@ impl Chromosome for AvellanedaStoikovChromosome {
         // Each parameter is normalized to [0, 1] based on its range
         
         let d_risk = (self.risk_aversion - other.risk_aversion).abs() / 0.1; // Range: 0.001-0.1
-        let d_size = (self.order_size - other.order_size).abs() / 0.1; // Range: 0.001-0.1 (updated for $10k capital)
+        let d_size = (self.order_size_pct - other.order_size_pct).abs() / 0.145; // Range: 0.005-0.15 (0.5-15% of capital)
         let d_window = (self.window_ms as f64 - other.window_ms as f64).abs() / 290_000.0; // Range: 10k-300k
         let d_lifetime = (self.min_quote_lifetime_ms as f64 - other.min_quote_lifetime_ms as f64).abs() / 4_900.0; // Range: 100-5000
         let d_fee = (self.fee_rate - other.fee_rate).abs() / 0.01; // Range: 0.0001-0.01

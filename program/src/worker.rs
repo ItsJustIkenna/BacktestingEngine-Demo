@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use tokio::time::{sleep, Duration};
 use chrono::Utc;
-use bigdecimal::{BigDecimal, FromPrimitive};
+use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 
 use crate::job_queue::{BacktestJob, BacktestResult, JobQueue, JobStatus, MonteCarloSummary, WalkForwardSummary};
 
@@ -196,7 +196,7 @@ struct WalkForwardWindow {
 struct OptimalParams {
     risk_aversion: f64,
     inventory_target: f64,
-    order_size: f64,
+    order_size_pct: f64,  // Order size as percentage of capital
 }
 
 /// Result from a single walk-forward window
@@ -685,11 +685,16 @@ impl Worker {
                 let mut orderbook = OrderBook::new(symbol.clone(), exchange.clone(), orderbook_config);
                 let mut risk_manager = RiskManager::new();
                 
+                // Calculate order_size in asset units from percentage of capital
+                // order_size = (capital * order_size_pct) / asset_price
+                let asset_price = Self::get_reference_price(&data);
+                let order_size_units = (initial_capital * chr.order_size_pct) / asset_price;
+                
                 // Create strategy with ALL chromosome parameters (fixing incomplete mapping)
                 let strategy_params = AvellanedaStoikovParams {
                     risk_aversion: chr.risk_aversion,
                     inventory_target: chr.inventory_target,
-                    order_size: chr.order_size,
+                    order_size: order_size_units,
                     window_ms: chr.window_ms,
                     min_quote_lifetime_ms: chr.min_quote_lifetime_ms,
                     fee_rate: chr.fee_rate,
@@ -706,7 +711,8 @@ impl Worker {
                 let mut strategy_params_map = HashMap::new();
                 strategy_params_map.insert("risk_aversion".to_string(), config::ParameterValue::Float(chr.risk_aversion));
                 strategy_params_map.insert("inventory_target".to_string(), config::ParameterValue::Float(chr.inventory_target));
-                strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(chr.order_size));
+                strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(order_size_units));
+                strategy_params_map.insert("order_size_pct".to_string(), config::ParameterValue::Float(chr.order_size_pct));
                 strategy_params_map.insert("window_ms".to_string(), config::ParameterValue::Float(chr.window_ms as f64));
                 strategy_params_map.insert("fee_rate".to_string(), config::ParameterValue::Float(chr.fee_rate));
                 strategy_params_map.insert("volatility_cap".to_string(), config::ParameterValue::Float(chr.volatility_cap));
@@ -772,8 +778,8 @@ impl Worker {
             "inventory_target": best_chromosome.inventory_target,
         })).await;
         
-        log_info!(GENETIC_LOGGER, "Job {} genetic optimization complete | best_fitness={:.4} risk_aversion={:.3} inventory_target={:.3} order_size={:.4}", 
-            job.id, best_fitness, best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size);
+        log_info!(GENETIC_LOGGER, "Job {} genetic optimization complete | best_fitness={:.4} risk_aversion={:.3} inventory_target={:.3} order_size_pct={:.2}%", 
+            job.id, best_fitness, best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size_pct * 100.0);
         
         // Update phase for final analysis
         progress_tracker.broadcast_phase("final_analysis", serde_json::json!({
@@ -988,17 +994,21 @@ impl Worker {
                         let mut orderbook = OrderBook::new(symbol.clone(), exchange.clone(), orderbook_config);
                         let mut risk_manager = RiskManager::new();
                         
+                        // Calculate order_size in asset units from percentage
+                        let asset_price = Self::get_reference_price(&data);
+                        let order_size_units = (initial_capital * chr.order_size_pct) / asset_price;
+                        
                         let strategy_params = AvellanedaStoikovParams {
                             risk_aversion: chr.risk_aversion,
                             inventory_target: chr.inventory_target,
-                            order_size: chr.order_size,
+                            order_size: order_size_units,
                             ..Default::default()
                         };
                         
                         let mut strategy_params_map = HashMap::new();
                         strategy_params_map.insert("risk_aversion".to_string(), config::ParameterValue::Float(chr.risk_aversion));
                         strategy_params_map.insert("inventory_target".to_string(), config::ParameterValue::Float(chr.inventory_target));
-                        strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(chr.order_size));
+                        strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(order_size_units));
                         
                         let strategy_config = StrategyConfig {
                             id: "wf-genetic-eval".to_string(),
@@ -1047,10 +1057,10 @@ impl Worker {
             log_debug!(MAIN_LOGGER, "🧬 Window {}: Running genetic optimization...", window_num);
             let (best_chromosome, optimization_fitness) = optimizer.run().await;
             
-            log_info!(WALKFORWARD_LOGGER, "Job {} window {} optimization complete | fitness={:.4} risk_aversion={:.3} inventory_target={:.3} order_size={:.4}",
-                job.id, window_num, optimization_fitness, best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size);
-            log_debug!(MAIN_LOGGER, "✅ Window {}: Best params - risk_aversion={:.3}, inventory_target={:.3}, order_size={:.4}",
-                window_num, best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size);
+            log_info!(WALKFORWARD_LOGGER, "Job {} window {} optimization complete | fitness={:.4} risk_aversion={:.3} inventory_target={:.3} order_size_pct={:.2}%",
+                job.id, window_num, optimization_fitness, best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size_pct * 100.0);
+            log_debug!(MAIN_LOGGER, "✅ Window {}: Best params - risk_aversion={:.3}, inventory_target={:.3}, order_size_pct={:.2}%",
+                window_num, best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size_pct * 100.0);
             
             // Update phase to testing
             let _ = self.job_queue.update_phase(
@@ -1107,7 +1117,7 @@ impl Worker {
                 optimal_params: OptimalParams {
                     risk_aversion: best_chromosome.risk_aversion,
                     inventory_target: best_chromosome.inventory_target,
-                    order_size: best_chromosome.order_size,
+                    order_size_pct: best_chromosome.order_size_pct,
                 },
                 optimization_fitness,
                 oos_pnl: test_result.total_pnl,
@@ -1167,7 +1177,7 @@ impl Worker {
                     "optimal_params": {
                         "risk_aversion": w.optimal_params.risk_aversion,
                         "inventory_target": w.optimal_params.inventory_target,
-                        "order_size": w.optimal_params.order_size,
+                        "order_size_pct": w.optimal_params.order_size_pct,
                     }
                 })).collect::<Vec<_>>()
             })
@@ -1251,6 +1261,32 @@ impl Worker {
         windows
     }
     
+    /// Get a reference price from market data (first available price)
+    /// Used for converting order_size_pct to asset units (works for any trading pair)
+    #[cfg(feature = "postgres")]
+    fn get_reference_price(data: &[MarketData]) -> f64 {
+        data.first().map(|d| {
+            match d {
+                MarketData::Candle(c) => c.close.to_f64().unwrap_or(100_000.0),
+                MarketData::Order(o) => o.price.to_f64().unwrap_or(100_000.0),
+                MarketData::Snapshot(s) => s.mid_price.to_f64().unwrap_or(100_000.0),
+                MarketData::Trade(t) => t.price.to_f64().unwrap_or(100_000.0),
+            }
+        }).unwrap_or(100_000.0)
+    }
+    
+    /// Get a reference price from market data (first available price)
+    /// Used for converting order_size_pct to asset units (works for any trading pair)
+    #[cfg(not(feature = "postgres"))]
+    fn get_reference_price(data: &[MarketData]) -> f64 {
+        data.first().map(|d| {
+            match d {
+                MarketData::Candle(c) => c.close.to_f64().unwrap_or(100_000.0),
+                MarketData::Trade(t) => t.price.to_f64().unwrap_or(100_000.0),
+            }
+        }).unwrap_or(100_000.0)
+    }
+    
     /// Get the timestamp from MarketData (candle, order, snapshot, or trade)
     #[cfg(feature = "postgres")]
     fn get_market_data_timestamp(&self, data: &MarketData) -> chrono::DateTime<Utc> {
@@ -1306,7 +1342,7 @@ impl Worker {
             &windows.iter().map(|w| w.optimal_params.inventory_target).collect::<Vec<_>>()
         );
         let order_size_stability = calc_stability(
-            &windows.iter().map(|w| w.optimal_params.order_size).collect::<Vec<_>>()
+            &windows.iter().map(|w| w.optimal_params.order_size_pct).collect::<Vec<_>>()
         );
         
         (risk_aversion_stability + inventory_target_stability + order_size_stability) / 3.0
@@ -1353,17 +1389,21 @@ impl Worker {
         let mut orderbook = OrderBook::new(symbol.to_string(), exchange.to_string(), orderbook_config);
         let mut risk_manager = RiskManager::new();
         
+        // Calculate order_size in asset units from percentage of capital
+        let asset_price = Self::get_reference_price(data);
+        let order_size_units = (initial_capital * chromosome.order_size_pct) / asset_price;
+        
         let strategy_params = AvellanedaStoikovParams {
             risk_aversion: chromosome.risk_aversion,
             inventory_target: chromosome.inventory_target,
-            order_size: chromosome.order_size,
+            order_size: order_size_units,
             ..Default::default()
         };
         
         let mut strategy_params_map = HashMap::new();
         strategy_params_map.insert("risk_aversion".to_string(), config::ParameterValue::Float(chromosome.risk_aversion));
         strategy_params_map.insert("inventory_target".to_string(), config::ParameterValue::Float(chromosome.inventory_target));
-        strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(chromosome.order_size));
+        strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(order_size_units));
         
         let strategy_config = StrategyConfig {
             id: format!("full-analysis-{}", job_id),
@@ -1515,17 +1555,21 @@ impl Worker {
         let mut orderbook = OrderBook::new(symbol.to_string(), exchange.to_string(), orderbook_config);
         let mut risk_manager = RiskManager::new();
         
+        // Calculate order_size in asset units from percentage of capital
+        let asset_price = Self::get_reference_price(data);
+        let order_size_units = (initial_capital * chromosome.order_size_pct) / asset_price;
+        
         let strategy_params = AvellanedaStoikovParams {
             risk_aversion: chromosome.risk_aversion,
             inventory_target: chromosome.inventory_target,
-            order_size: chromosome.order_size,
+            order_size: order_size_units,
             ..Default::default()
         };
         
         let mut strategy_params_map = HashMap::new();
         strategy_params_map.insert("risk_aversion".to_string(), config::ParameterValue::Float(chromosome.risk_aversion));
         strategy_params_map.insert("inventory_target".to_string(), config::ParameterValue::Float(chromosome.inventory_target));
-        strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(chromosome.order_size));
+        strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(order_size_units));
         
         let strategy_config = StrategyConfig {
             id: format!("final-{}", job_id),
@@ -1593,7 +1637,8 @@ impl Worker {
             strategy_params: Some(serde_json::json!({
                 "risk_aversion": chromosome.risk_aversion,
                 "inventory_target": chromosome.inventory_target,
-                "order_size": chromosome.order_size
+                "order_size_pct": chromosome.order_size_pct,
+                "order_size_units": order_size_units
             })),
             monte_carlo: None, // Chromosome evaluation doesn't run MC
             walk_forward: None, // Chromosome evaluation doesn't run WF

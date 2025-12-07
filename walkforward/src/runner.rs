@@ -151,9 +151,14 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
     };
     let (best_chromo, _score) = optimizer.run().await;
     // Convert chromosome to params - using all 14 parameters (Phase 2)
+    // order_size_pct is converted to asset units assuming $10k capital and ~$100k asset price
+    // This gives: order_size_units = (10000 * pct) / 100000 = pct * 0.1
+    // The actual conversion happens in the worker with real capital/price
+    let order_size_units = best_chromo.order_size_pct * 0.1; // Approximate for walkforward
+    
     AvellanedaStoikovParams {
         risk_aversion: best_chromo.risk_aversion,
-        order_size: best_chromo.order_size,
+        order_size: order_size_units,
         window_ms: best_chromo.window_ms,
         min_quote_lifetime_ms: best_chromo.min_quote_lifetime_ms,
         fee_rate: best_chromo.fee_rate,

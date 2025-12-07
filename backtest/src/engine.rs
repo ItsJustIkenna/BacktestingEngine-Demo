@@ -74,6 +74,23 @@ impl BacktestEngine {
         }
     }
     
+    /// Get a reference price from market data (first available price)
+    /// Used for converting order_size_pct to asset units (works for any trading pair)
+    fn get_reference_price(market_data: &[MarketData]) -> Option<f64> {
+        use bigdecimal::ToPrimitive;
+        
+        market_data.first().and_then(|data| {
+            match data {
+                #[cfg(feature = "postgres")]
+                MarketData::Order(o) => o.price.to_f64(),
+                #[cfg(feature = "postgres")]
+                MarketData::Snapshot(s) => s.mid_price.to_f64(),
+                MarketData::Candle(c) => c.close.to_f64(),
+                MarketData::Trade(t) => t.price.to_f64(),
+            }
+        })
+    }
+    
     /// Set a progress callback for Monte Carlo and Walk-Forward analysis
     pub fn with_progress_callback(mut self, callback: ProgressCallback) -> Self {
         self.progress_callback = Some(callback);
@@ -349,6 +366,12 @@ impl BacktestEngine {
             let chromo = chromo.clone(); // Clone to satisfy 'static lifetime
             
             Box::pin(async move {
+                // Calculate order_size in asset units from percentage of capital
+                // order_size = (capital * order_size_pct) / asset_price
+                let initial_capital = config.trading.initial_capital;
+                let asset_price = Self::get_reference_price(&market_data).unwrap_or(100_000.0);
+                let order_size_units = (initial_capital * chromo.order_size_pct) / asset_price;
+                
                 // Create temporary components for fitness evaluation
                 let mut temp_strategy_manager = strategy::StrategyManager::new();
                 let mut temp_orderbook = orderbook::OrderBook::new(
@@ -374,7 +397,7 @@ impl BacktestEngine {
                 let strategy = strategy::strategies::avellaneda_stoikov::AvellanedaStoikovStrategy::new(
                     strategy::strategies::avellaneda_stoikov::AvellanedaStoikovParams {
                         risk_aversion: chromo.risk_aversion,
-                        order_size: chromo.order_size,
+                        order_size: order_size_units,
                         window_ms: chromo.window_ms,
                         min_quote_lifetime_ms: chromo.min_quote_lifetime_ms,
                         fee_rate: chromo.fee_rate,
@@ -450,13 +473,19 @@ impl BacktestEngine {
         
         let (best_chromo, best_fitness) = optimizer.run().await;
         
-        log_info!(BACKTEST_LOGGER, "Best fitness: {:.4}, risk_aversion={:.4}, order_size={:.4}", 
-            best_fitness, best_chromo.risk_aversion, best_chromo.order_size);
+        // Calculate order_size in asset units from percentage for logging and params
+        let asset_price = Self::get_reference_price(market_data).unwrap_or(100_000.0);
+        let order_size_units = (self.config.trading.initial_capital * best_chromo.order_size_pct) / asset_price;
+        
+        log_info!(BACKTEST_LOGGER, "Best fitness: {:.4}, risk_aversion={:.4}, order_size_pct={:.2}% (={:.6} units)", 
+            best_fitness, best_chromo.risk_aversion, best_chromo.order_size_pct * 100.0, order_size_units);
         
         // Convert chromosome to parameter map (Phase 2: all 14 parameters)
+        // Note: order_size is stored in asset units, converted from percentage
         let mut params = std::collections::HashMap::new();
         params.insert("risk_aversion".to_string(), config::ParameterValue::Float(best_chromo.risk_aversion));
-        params.insert("order_size".to_string(), config::ParameterValue::Float(best_chromo.order_size));
+        params.insert("order_size".to_string(), config::ParameterValue::Float(order_size_units));
+        params.insert("order_size_pct".to_string(), config::ParameterValue::Float(best_chromo.order_size_pct));
         params.insert("window_ms".to_string(), config::ParameterValue::Float(best_chromo.window_ms as f64));
         params.insert("min_quote_lifetime_ms".to_string(), config::ParameterValue::Float(best_chromo.min_quote_lifetime_ms as f64));
         params.insert("fee_rate".to_string(), config::ParameterValue::Float(best_chromo.fee_rate));
