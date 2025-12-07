@@ -746,17 +746,20 @@ impl OrderBook {
         let trade_price = OrderedFloat(price_f64);
 
         // Collect price levels to process (to avoid borrow issues)
+        // The trade 'side' is the AGGRESSOR's side (taker):
+        // - side = Bid means a buyer aggressed -> fills our ASK orders (sellers)
+        // - side = Ask means a seller aggressed -> fills our BID orders (buyers)
         let levels_to_process: Vec<OrderedFloat<f64>> = match side {
-            BookSide::Ask => {
-                // Incoming buy trade fills our asks at or below trade price
+            BookSide::Bid => {
+                // Buyer aggressed - fills our asks at or below trade price
                 // Best asks (lowest) get filled first
                 self.asks.keys()
                     .filter(|&k| *k <= trade_price)
                     .copied()
                     .collect()
             }
-            BookSide::Bid => {
-                // Incoming sell trade fills our bids at or above trade price
+            BookSide::Ask => {
+                // Seller aggressed - fills our bids at or above trade price
                 // Best bids (highest) get filled first - reverse iterator
                 self.bids.keys()
                     .rev()
@@ -775,9 +778,10 @@ impl OrderBook {
                 break;
             }
             
+            // Access the OPPOSITE side: aggressor side = Bid -> fills asks, Ask -> fills bids
             let levels = match side {
-                BookSide::Bid => &mut self.bids,
-                BookSide::Ask => &mut self.asks,
+                BookSide::Bid => &mut self.asks,  // Buyer fills asks
+                BookSide::Ask => &mut self.bids,  // Seller fills bids
             };
             
             if let Some(level) = levels.get_mut(&level_price) {
@@ -799,11 +803,11 @@ impl OrderBook {
             }
         }
         
-        // Remove empty levels
+        // Remove empty levels from the OPPOSITE side
         for level_price in levels_to_remove {
             match side {
-                BookSide::Bid => { self.bids.remove(&level_price); }
-                BookSide::Ask => { self.asks.remove(&level_price); }
+                BookSide::Bid => { self.asks.remove(&level_price); }  // Buyer filled asks
+                BookSide::Ask => { self.bids.remove(&level_price); }  // Seller filled bids
             }
         }
         
