@@ -718,6 +718,14 @@ impl OrderBook {
 
     /// Execute a trade against the book and return fills
     /// This is used when processing incoming market trades that may fill our resting orders
+    /// Execute an incoming market trade against our resting orders
+    /// 
+    /// For market making simulation:
+    /// - Incoming buy trade (side=Ask): fills our ask orders at or below the trade price
+    /// - Incoming sell trade (side=Bid): fills our bid orders at or above the trade price
+    /// 
+    /// Orders are filled at THEIR order price (not the trade price) - this is how
+    /// market makers capture the spread.
     pub fn execute_trade_with_fills(
         &mut self,
         side: BookSide,
@@ -726,6 +734,7 @@ impl OrderBook {
         timestamp: DateTime<Utc>,
     ) -> Vec<Fill> {
         let mut fills = Vec::new();
+        let mut remaining_quantity = quantity.clone();
         
         let price_f64 = match price.to_string().parse::<f64>() {
             Ok(p) => p,
@@ -734,36 +743,81 @@ impl OrderBook {
                 return fills;
             }
         };
-        let price_key = OrderedFloat(price_f64);
+        let trade_price = OrderedFloat(price_f64);
 
-        // Collect executed orders first to avoid borrow issues
-        let executed_orders: Vec<OrderInfo> = {
+        // Collect price levels to process (to avoid borrow issues)
+        let levels_to_process: Vec<OrderedFloat<f64>> = match side {
+            BookSide::Ask => {
+                // Incoming buy trade fills our asks at or below trade price
+                // Best asks (lowest) get filled first
+                self.asks.keys()
+                    .filter(|&k| *k <= trade_price)
+                    .copied()
+                    .collect()
+            }
+            BookSide::Bid => {
+                // Incoming sell trade fills our bids at or above trade price
+                // Best bids (highest) get filled first - reverse iterator
+                self.bids.keys()
+                    .rev()
+                    .filter(|&k| *k >= trade_price)
+                    .copied()
+                    .collect()
+            }
+        };
+
+        // Collect all executed orders first, then create fills
+        let mut executed_orders_all: Vec<OrderInfo> = Vec::new();
+        let mut levels_to_remove = Vec::new();
+        
+        for level_price in levels_to_process {
+            if remaining_quantity <= BigDecimal::from(0) {
+                break;
+            }
+            
             let levels = match side {
                 BookSide::Bid => &mut self.bids,
                 BookSide::Ask => &mut self.asks,
             };
-
-            if let Some(level) = levels.get_mut(&price_key) {
-                let orders = level.execute_trade(&quantity, timestamp).unwrap_or_default();
-                self.last_updated = timestamp;
+            
+            if let Some(level) = levels.get_mut(&level_price) {
+                // Execute as much as possible from this level
+                let level_available = level.total_quantity.clone();
+                let fill_qty = remaining_quantity.clone().min(level_available);
                 
-                // Remove level if empty
-                if level.is_empty() {
-                    levels.remove(&price_key);
+                if fill_qty > BigDecimal::from(0) {
+                    let executed_orders = level.execute_trade(&fill_qty, timestamp).unwrap_or_default();
+                    executed_orders_all.extend(executed_orders);
+                    
+                    remaining_quantity -= &fill_qty;
+                    
+                    // Mark level for removal if empty
+                    if level.is_empty() {
+                        levels_to_remove.push(level_price);
+                    }
                 }
-                orders
-            } else {
-                Vec::new()
             }
-        };
-
-        // Now create fills from executed orders
-        for order in executed_orders {
-            let fill_quantity = &order.original_quantity - &order.remaining_quantity;
-            if fill_quantity > BigDecimal::from(0) {
-                let fill = self.create_fill(&order, &fill_quantity, LiquidityType::Maker, timestamp);
+        }
+        
+        // Remove empty levels
+        for level_price in levels_to_remove {
+            match side {
+                BookSide::Bid => { self.bids.remove(&level_price); }
+                BookSide::Ask => { self.asks.remove(&level_price); }
+            }
+        }
+        
+        // Now create fills from all executed orders (no mutable borrow conflict)
+        for order in executed_orders_all {
+            let order_fill_qty = &order.original_quantity - &order.remaining_quantity;
+            if order_fill_qty > BigDecimal::from(0) {
+                let fill = self.create_fill(&order, &order_fill_qty, LiquidityType::Maker, timestamp);
                 fills.push(fill);
             }
+        }
+        
+        if !fills.is_empty() {
+            self.last_updated = timestamp;
         }
 
         // Track volume for fee tier calculation
