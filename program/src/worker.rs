@@ -26,6 +26,106 @@ use config::BacktestConfig;
 use dataloader::MarketData;
 
 // ============================================================================
+// COMPREHENSIVE FITNESS FUNCTION
+// ============================================================================
+
+/// Calculate comprehensive fitness score for genetic optimization
+/// 
+/// This function evaluates strategies holistically to find genuinely profitable ones.
+/// It penalizes strategies that look good on paper but fail after transaction costs.
+/// 
+/// # Weights (sum to 1.0)
+/// - Sortino Ratio: 0.25 (risk-adjusted returns, downside only)
+/// - Sharpe Ratio: 0.15 (risk-adjusted returns, total volatility)
+/// - Profit Factor: 0.20 (gross profit / gross loss)
+/// - Win Rate: 0.15 (consistency of winning)
+/// - Net Profit %: 0.15 (absolute profitability)
+/// - Calmar Ratio: 0.10 (recovery ability)
+/// 
+/// # Penalties
+/// - Commission ratio > 40%: scaled penalty up to 0.1x
+/// - Drawdown > 15%: 0.8x, > 25%: 0.5x, > 40%: 0.2x
+/// - < 30 trades: linear penalty
+/// - Avg trade < 2x commission: 0.7x
+fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult, initial_capital: f64) -> f64 {
+    use bigdecimal::ToPrimitive;
+    
+    // === Primary Metrics ===
+    let sharpe = result.sharpe_ratio.unwrap_or(0.0);
+    let sortino = result.sortino_ratio.unwrap_or(sharpe);
+    let pf = result.profit_factor.unwrap_or(1.0);
+    let win_rate = result.win_rate.unwrap_or(0.0);
+    let net_profit_pct = result.net_profit.unwrap_or(0.0) / initial_capital;
+    let calmar = result.calmar_ratio.unwrap_or(0.0);
+    
+    // === Base Fitness (weights sum to 1.0) ===
+    let mut fitness = 
+        sortino * 0.25 +
+        sharpe * 0.15 +
+        (pf - 1.0).max(0.0) * 0.20 +
+        win_rate * 0.15 +
+        net_profit_pct * 0.15 +
+        calmar.min(3.0) * 0.10;
+    
+    // === Penalty: Insufficient Trades ===
+    if result.num_trades < 30 {
+        fitness *= (result.num_trades as f64 / 30.0).max(0.1);
+    }
+    
+    // === Penalty: Excessive Drawdown ===
+    let dd_value = result.max_drawdown.to_f64().unwrap_or(0.0);
+    let dd_pct = (dd_value / initial_capital).abs();
+    if dd_pct > 0.15 {
+        let dd_penalty = if dd_pct > 0.40 { 0.2 } else if dd_pct > 0.25 { 0.5 } else { 0.8 };
+        fitness *= dd_penalty;
+    }
+    
+    // === CRITICAL: Penalty for Commission Inefficiency ===
+    // This is the key fix - strategies where commissions eat profits should be rejected
+    if let (Some(gross_profit), Some(transaction_costs)) = 
+        (&result.gross_profit, &result.transaction_costs) 
+    {
+        let gross = *gross_profit;
+        let commission = transaction_costs.total_commission;
+        
+        if gross > 0.0 {
+            let commission_ratio = commission / gross;
+            if commission_ratio > 0.40 {
+                // Scale: 40-70% = warning, 70-100% = severe, >100% = near-zero fitness
+                let penalty = if commission_ratio >= 1.0 { 0.05 }  // Commissions exceed profit - almost kill fitness
+                    else if commission_ratio >= 0.70 { 0.2 }       // Very marginal
+                    else { 1.0 - (commission_ratio - 0.4) * 2.0 }; // Linear scale 0.4-0.7 -> 1.0-0.4
+                fitness *= penalty;
+            }
+        } else if gross <= 0.0 {
+            // No gross profit - heavy penalty regardless of commission
+            fitness *= 0.05;
+        }
+    }
+    
+    // === Penalty: Poor Average Trade ===
+    if let (Some(avg_trade), Some(transaction_costs)) = 
+        (&result.avg_trade_return, &result.transaction_costs)
+    {
+        let avg_commission = if result.num_trades > 0 {
+            transaction_costs.total_commission / result.num_trades as f64
+        } else { 0.0 };
+        
+        // Each trade should profit more than 2x the commission to be worthwhile
+        if *avg_trade > 0.0 && *avg_trade < avg_commission * 2.0 {
+            fitness *= 0.7;
+        }
+    }
+    
+    // === Bonus: Well-Rounded Strategy ===
+    if net_profit_pct > 0.05 && pf > 1.5 && win_rate > 0.50 && dd_pct < 0.15 {
+        fitness *= 1.2;
+    }
+    
+    fitness.max(0.0)
+}
+
+// ============================================================================
 // EFFICIENT PROGRESS TRACKING
 // ============================================================================
 
@@ -862,9 +962,8 @@ impl Worker {
                     &data,
                 ).await {
                     Ok(result) => {
-                        let sharpe = result.sharpe_ratio.unwrap_or(0.0);
-                        let pnl = result.total_pnl.to_string().parse::<f64>().unwrap_or(0.0);
-                        let fitness = sharpe + (pnl / initial_capital) * 0.1;
+                        // Use comprehensive fitness function that penalizes commission-heavy strategies
+                        let fitness = calculate_comprehensive_fitness(&result, initial_capital);
                         genetic::FitnessResult::new(fitness, result.equity_curve)
                     }
                     Err(_) => genetic::FitnessResult::failure(),
@@ -1154,9 +1253,8 @@ impl Worker {
                             &data,
                         ).await {
                             Ok(result) => {
-                                let sharpe = result.sharpe_ratio.unwrap_or(0.0);
-                                let pnl = result.total_pnl.to_string().parse::<f64>().unwrap_or(0.0);
-                                let fitness = sharpe + (pnl / initial_capital) * 0.1;
+                                // Use comprehensive fitness function that penalizes commission-heavy strategies
+                                let fitness = calculate_comprehensive_fitness(&result, initial_capital);
                                 FitnessResult::new(fitness, result.equity_curve.clone())
                             }
                             Err(_) => FitnessResult::new(0.0, Vec::new()),
