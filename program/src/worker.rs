@@ -814,8 +814,10 @@ impl Worker {
                     volatility_cap: chr.volatility_cap,
                     time_horizon_minutes: chr.time_horizon_minutes,
                     market_depth_k: chr.market_depth_k,
-                    min_spread_bps: 20.0,  // Default minimum spread
-                    max_trades_per_minute: 5.0,  // Default rate limit
+                    min_spread_bps: chr.min_spread_bps,
+                    max_trades_per_minute: chr.max_trades_per_minute,
+                    take_profit_pct: chr.take_profit_pct,
+                    stop_loss_pct: chr.stop_loss_pct,
                     volatility_adjustment_factor: chr.volatility_adjustment_factor,
                     inventory_penalty_factor: chr.inventory_penalty_factor,
                     trend_sensitivity: chr.trend_sensitivity,
@@ -1443,12 +1445,12 @@ impl Worker {
 
         // Build Monte Carlo JSON section
         let mc_json = if let Some(ref mc) = result.monte_carlo {
-            format!(r#", "monte_carlo": {{"num_runs": {}, "mean_sharpe": {:.4}, "stddev_sharpe": {:.4}, "var_95_pct": {:.2}, "cvar_95_pct": {:.2}, "confidence_lower": {:.2}, "confidence_upper": {:.2}, "p5_pnl": {:.2}, "p50_pnl": {:.2}, "p95_pnl": {:.2}, "p5_drawdown_pct": {:.2}, "p50_drawdown_pct": {:.2}, "p95_drawdown_pct": {:.2}, "p5_win_rate_pct": {:.2}, "p50_win_rate_pct": {:.2}, "p95_win_rate_pct": {:.2}, "p50_sharpe": {:.4}}}"#,
+            format!(r#", "monte_carlo": {{"num_runs": {}, "mean_sharpe": {:.4}, "stddev_sharpe": {:.4}, "var_95_usd": {:.2}, "cvar_95_usd": {:.2}, "confidence_lower": {:.2}, "confidence_upper": {:.2}, "p5_pnl": {:.2}, "p50_pnl": {:.2}, "p95_pnl": {:.2}, "p5_drawdown_pct": {:.2}, "p50_drawdown_pct": {:.2}, "p95_drawdown_pct": {:.2}, "p5_win_rate_pct": {:.2}, "p50_win_rate_pct": {:.2}, "p95_win_rate_pct": {:.2}, "p50_sharpe": {:.4}}}"#,
                 mc.num_runs,
                 mc.mean_sharpe,
                 mc.stddev_sharpe,
-                mc.var_95 * 100.0,
-                mc.cvar_95 * 100.0,
+                mc.var_95,  // Absolute $ value, not percentage
+                mc.cvar_95, // Absolute $ value, not percentage
                 mc.confidence_lower,
                 mc.confidence_upper,
                 mc.p5_total_pnl.unwrap_or(0.0),
@@ -1480,7 +1482,7 @@ impl Worker {
 
         // Log single structured JSON entry - Kibana can parse and index all fields
         log_info!(MAIN_LOGGER, 
-            r#"{{"event": "BACKTEST_RESULT", "job_id": "{}", "status": "{}", "performance": {{"total_pnl": {:.2}, "gross_pnl": {:.2}, "sharpe_ratio": {:.4}, "max_drawdown_pct": {:.2}, "win_rate_pct": {:.2}, "profit_factor": {:.4}, "total_trades": {}}}, "returns": {{"annualized_pct": {:.2}, "volatility_pct": {:.2}, "sortino_ratio": {:.4}, "calmar_ratio": {:.4}}}, "trades": {{"avg_return": {:.4}, "avg_time_min": {:.1}, "best_trade": {:.2}, "worst_trade": {:.2}}}, "risk": {{"var_95_pct": {:.2}, "cvar_95_pct": {:.2}, "current_drawdown_pct": {:.2}, "avg_drawdown_pct": {:.2}, "max_dd_days": {}}}, "execution": {{"commission": {:.2}, "commission_ratio_pct": {:.1}, "avg_slippage_pct": {:.4}, "total_orders": {}, "filled_orders": {}, "cancelled_orders": {}, "fill_rate_pct": {:.1}}}{}{}}}"#,
+            r#"{{"event": "BACKTEST_RESULT", "job_id": "{}", "status": "{}", "performance": {{"total_pnl": {:.2}, "gross_pnl": {:.2}, "sharpe_ratio": {:.4}, "max_drawdown_pct": {:.2}, "win_rate_pct": {:.2}, "profit_factor": {:.4}, "total_trades": {}}}, "returns": {{"annualized_pct": {:.2}, "volatility_pct": {:.2}, "sortino_ratio": {:.4}, "calmar_ratio": {:.4}}}, "trades": {{"avg_return": {:.4}, "avg_time_min": {:.1}, "best_trade": {:.2}, "worst_trade": {:.2}}}, "risk": {{"var_95_usd": {:.2}, "cvar_95_usd": {:.2}, "current_drawdown_pct": {:.2}, "avg_drawdown_pct": {:.2}, "max_dd_days": {}}}, "execution": {{"commission": {:.2}, "commission_ratio_pct": {:.1}, "avg_slippage_pct": {:.4}, "total_orders": {}, "filled_orders": {}, "cancelled_orders": {}, "fill_rate_pct": {:.1}}}{}{}}}"#,
             job_id,
             status,
             // Performance
@@ -1501,9 +1503,9 @@ impl Worker {
             result.avg_time_in_trade.unwrap_or(0.0),
             result.best_trade.unwrap_or(0.0),
             result.worst_trade.unwrap_or(0.0),
-            // Risk
-            result.value_at_risk_95.unwrap_or(0.0) * 100.0,
-            result.expected_shortfall_95.unwrap_or(0.0) * 100.0,
+            // Risk (VaR/CVaR are absolute $ values from Monte Carlo)
+            result.value_at_risk_95.unwrap_or(0.0),
+            result.expected_shortfall_95.unwrap_or(0.0),
             result.current_drawdown.unwrap_or(0.0) * 100.0,
             result.avg_drawdown.unwrap_or(0.0) * 100.0,
             result.max_drawdown_duration_days.unwrap_or(0),

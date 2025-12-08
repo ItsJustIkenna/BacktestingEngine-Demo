@@ -21,6 +21,12 @@ pub struct AvellanedaStoikovChromosome {
     pub inventory_penalty_factor: f64,
     pub trend_sensitivity: f64,
     pub flow_sensitivity: f64,
+    
+    // Exit and trading control parameters
+    pub take_profit_pct: f64,
+    pub stop_loss_pct: f64,
+    pub min_spread_bps: f64,
+    pub max_trades_per_minute: f64,
 }
 
 impl Chromosome for AvellanedaStoikovChromosome {
@@ -45,6 +51,12 @@ impl Chromosome for AvellanedaStoikovChromosome {
             inventory_penalty_factor: rng.gen_range(0.0..0.8),     // 0-80% penalty
             trend_sensitivity: rng.gen_range(-0.5..0.5),           // Contrarian to trend-following
             flow_sensitivity: rng.gen_range(-0.3..0.3),            // Fade or follow flow
+            
+            // Exit and trading control parameters
+            take_profit_pct: rng.gen_range(0.002..0.02),           // 0.2% to 2% take profit
+            stop_loss_pct: rng.gen_range(0.001..0.01),             // 0.1% to 1% stop loss
+            min_spread_bps: rng.gen_range(5.0..50.0),              // 5 to 50 basis points
+            max_trades_per_minute: rng.gen_range(5.0..60.0),       // 5 to 60 trades per minute
         }
     }
 
@@ -66,6 +78,12 @@ impl Chromosome for AvellanedaStoikovChromosome {
             inventory_penalty_factor: if rng.gen_bool(0.5) { self.inventory_penalty_factor } else { other.inventory_penalty_factor },
             trend_sensitivity: if rng.gen_bool(0.5) { self.trend_sensitivity } else { other.trend_sensitivity },
             flow_sensitivity: if rng.gen_bool(0.5) { self.flow_sensitivity } else { other.flow_sensitivity },
+            
+            // Exit and trading control crossover
+            take_profit_pct: if rng.gen_bool(0.5) { self.take_profit_pct } else { other.take_profit_pct },
+            stop_loss_pct: if rng.gen_bool(0.5) { self.stop_loss_pct } else { other.stop_loss_pct },
+            min_spread_bps: if rng.gen_bool(0.5) { self.min_spread_bps } else { other.min_spread_bps },
+            max_trades_per_minute: if rng.gen_bool(0.5) { self.max_trades_per_minute } else { other.max_trades_per_minute },
         }
     }
 
@@ -129,6 +147,24 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.flow_sensitivity += rng.gen_range(-0.05..0.05);
             self.flow_sensitivity = self.flow_sensitivity.clamp(-0.3, 0.3);
         }
+        
+        // Exit and trading control mutations
+        if rng.gen_bool(mutation_rate) {
+            self.take_profit_pct += rng.gen_range(-0.002..0.002);
+            self.take_profit_pct = self.take_profit_pct.clamp(0.002, 0.02);
+        }
+        if rng.gen_bool(mutation_rate) {
+            self.stop_loss_pct += rng.gen_range(-0.001..0.001);
+            self.stop_loss_pct = self.stop_loss_pct.clamp(0.001, 0.01);
+        }
+        if rng.gen_bool(mutation_rate) {
+            self.min_spread_bps += rng.gen_range(-5.0..5.0);
+            self.min_spread_bps = self.min_spread_bps.clamp(5.0, 50.0);
+        }
+        if rng.gen_bool(mutation_rate) {
+            self.max_trades_per_minute += rng.gen_range(-5.0..5.0);
+            self.max_trades_per_minute = self.max_trades_per_minute.clamp(5.0, 60.0);
+        }
     }
     
     fn distance(&self, other: &Self) -> f64 {
@@ -152,10 +188,17 @@ impl Chromosome for AvellanedaStoikovChromosome {
         let d_trend = (self.trend_sensitivity - other.trend_sensitivity).abs() / 1.0; // Range: -0.5 to 0.5
         let d_flow = (self.flow_sensitivity - other.flow_sensitivity).abs() / 0.6; // Range: -0.3 to 0.3
         
-        // Euclidean distance in 14D normalized space
+        // Exit and trading control distances
+        let d_tp = (self.take_profit_pct - other.take_profit_pct).abs() / 0.018; // Range: 0.002-0.02
+        let d_sl = (self.stop_loss_pct - other.stop_loss_pct).abs() / 0.009; // Range: 0.001-0.01
+        let d_spread = (self.min_spread_bps - other.min_spread_bps).abs() / 45.0; // Range: 5-50
+        let d_trades = (self.max_trades_per_minute - other.max_trades_per_minute).abs() / 55.0; // Range: 5-60
+        
+        // Euclidean distance in 18D normalized space
         (d_risk.powi(2) + d_size.powi(2) + d_window.powi(2) + d_lifetime.powi(2) + 
          d_fee.powi(2) + d_latency.powi(2) + d_inventory.powi(2) + d_vol_cap.powi(2) +
          d_horizon.powi(2) + d_depth.powi(2) + d_vol_adj.powi(2) + d_inv_penalty.powi(2) +
-         d_trend.powi(2) + d_flow.powi(2)).sqrt()
+         d_trend.powi(2) + d_flow.powi(2) + d_tp.powi(2) + d_sl.powi(2) +
+         d_spread.powi(2) + d_trades.powi(2)).sqrt()
     }
 }

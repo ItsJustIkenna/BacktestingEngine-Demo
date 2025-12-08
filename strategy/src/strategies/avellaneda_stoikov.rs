@@ -31,6 +31,8 @@ pub struct AvellanedaStoikovParams {
     pub market_depth_k: f64,        // k: market depth parameter (higher = tighter spread)
     pub min_spread_bps: f64,        // Minimum spread in basis points (to cover costs)
     pub max_trades_per_minute: f64, // Rate limit on trading frequency
+    pub take_profit_pct: f64,       // Take profit percentage (close position when profit exceeds this)
+    pub stop_loss_pct: f64,         // Stop loss percentage (close position when loss exceeds this)
     
     // Phase 2: Dynamic adjustment parameters (optimized by genetic algorithm)
     pub volatility_adjustment_factor: f64, // How much to scale γ with volatility (0.5 = 50% increase per 1.0 vol ratio)
@@ -43,17 +45,19 @@ impl Default for AvellanedaStoikovParams {
     fn default() -> Self {
         Self {
             risk_aversion: 0.1,             // Increased from 0.01 - wider spreads to cover costs
-            order_size: 0.01,
+            order_size: 0.001,              // Small order size to reduce commission impact
             window_ms: 60_000, // 60 seconds
-            min_quote_lifetime_ms: 2000,    // Increased from 500ms - reduce quote frequency
-            fee_rate: 0.001,                // Increased from 0.0005 - more realistic total cost
-            latency_buffer: 1.0,            // Increased from 0.5 - more buffer for slippage
+            min_quote_lifetime_ms: 500,     // 500ms quote lifetime for responsive market making
+            fee_rate: 0.0003,               // 3bps maker fee (typical for high-volume)
+            latency_buffer: 0.3,            // Small buffer for slippage
             inventory_target: 0.0,
             volatility_cap: 0.10, // 10% annualized
-            time_horizon_minutes: 5.0,      // Increased from 1.0 - longer horizon = wider spreads
-            market_depth_k: 0.8,            // Decreased from 1.5 - wider spreads
-            min_spread_bps: 20.0,           // Minimum 20bps spread (covers 2x fee + buffer)
-            max_trades_per_minute: 5.0,     // Max 5 trades per minute to control costs
+            time_horizon_minutes: 1.0,      // Short horizon for tighter spreads
+            market_depth_k: 1.5,            // Higher k = tighter spreads, more fills
+            min_spread_bps: 15.0,           // Minimum 15bps spread (covers fees + small buffer)
+            max_trades_per_minute: 30.0,    // Max 30 trades per minute - allows active trading
+            take_profit_pct: 0.005,         // 0.5% take profit (50bps)
+            stop_loss_pct: 0.003,           // 0.3% stop loss (30bps) - tighter than TP for market making
             
             // Phase 2: Dynamic adjustment defaults
             volatility_adjustment_factor: 0.8,  // Increased from 0.5 - more responsive to vol
@@ -122,6 +126,9 @@ pub struct AvellanedaStoikovStrategy {
     // Trade rate limiting
     trades_this_minute: u32,                 // Count of trades in current minute
     current_minute_start: Option<DateTime<Utc>>, // Start of current minute window
+    
+    // Position exit tracking
+    avg_entry_price: Option<f64>,            // Average entry price for current position
 }
 
 impl AvellanedaStoikovStrategy {
@@ -153,6 +160,9 @@ impl AvellanedaStoikovStrategy {
             // Trade rate limiting
             trades_this_minute: 0,
             current_minute_start: None,
+            
+            // Position exit tracking
+            avg_entry_price: None,
         }
     }
     
@@ -176,6 +186,68 @@ impl AvellanedaStoikovStrategy {
     /// Record a trade for rate limiting
     fn record_trade(&mut self) {
         self.trades_this_minute += 1;
+    }
+    
+    /// Check if we should exit current position (take profit or stop loss)
+    fn check_exit_conditions(&mut self, current_price: f64, now: DateTime<Utc>) -> Vec<Signal> {
+        let mut signals = Vec::new();
+        
+        // Only check exits if we have a position and an entry price
+        if self.inventory.abs() < 1e-8 || self.avg_entry_price.is_none() {
+            return signals;
+        }
+        
+        let entry_price = self.avg_entry_price.unwrap();
+        let position_size = self.inventory.abs();
+        
+        // Calculate P&L percentage
+        let pnl_pct = if self.inventory > 0.0 {
+            // Long position: profit if price goes up
+            (current_price - entry_price) / entry_price
+        } else {
+            // Short position: profit if price goes down
+            (entry_price - current_price) / entry_price
+        };
+        
+        // Check take profit
+        if pnl_pct >= self.params.take_profit_pct {
+            let signal_type = if self.inventory > 0.0 {
+                SignalType::TakeProfit
+            } else {
+                SignalType::TakeProfit
+            };
+            
+            signals.push(Signal::new(
+                format!("as_tp_{}", now.timestamp_millis()),
+                signal_type,
+                SignalStrength::Strong,
+                SignalReason::RiskManagement(format!("Take profit at {:.2}% gain", pnl_pct * 100.0)),
+            ).with_price(BigDecimal::from_f64(current_price).unwrap())
+             .with_quantity(BigDecimal::from_f64(position_size).unwrap()));
+            
+            // Reset entry price after exit
+            self.avg_entry_price = None;
+            return signals;
+        }
+        
+        // Check stop loss
+        if pnl_pct <= -self.params.stop_loss_pct {
+            let signal_type = SignalType::StopLoss;
+            
+            signals.push(Signal::new(
+                format!("as_sl_{}", now.timestamp_millis()),
+                signal_type,
+                SignalStrength::Strong,
+                SignalReason::RiskManagement(format!("Stop loss at {:.2}% loss", pnl_pct.abs() * 100.0)),
+            ).with_price(BigDecimal::from_f64(current_price).unwrap())
+             .with_quantity(BigDecimal::from_f64(position_size).unwrap()));
+            
+            // Reset entry price after exit
+            self.avg_entry_price = None;
+            return signals;
+        }
+        
+        signals
     }
     
     /// Phase 2: Calculate dynamic risk aversion (gamma) based on market conditions
@@ -485,12 +557,18 @@ impl Strategy for AvellanedaStoikovStrategy {
         let bid = r - spread / 2.0;
         let ask = r + spread / 2.0;
 
-        // 5. Check trade rate limit
+        // 5. Check for exit signals (take profit / stop loss)
+        let exit_signals = self.check_exit_conditions(mid_price, now);
+        if !exit_signals.is_empty() {
+            return Ok(exit_signals);
+        }
+
+        // 6. Check trade rate limit
         if !self.can_trade(now) {
             return Ok(vec![]);
         }
 
-        // 6. Only re-quote if price changes by threshold or min quote lifetime elapsed
+        // 7. Only re-quote if price changes by threshold or min quote lifetime elapsed
         let min_lifetime = Duration::milliseconds(self.params.min_quote_lifetime_ms as i64);
         let should_quote = match self.last_quote_time {
             Some(last) => now - last >= min_lifetime
@@ -509,7 +587,7 @@ impl Strategy for AvellanedaStoikovStrategy {
     self.last_bid = Some(BigDecimal::from_f64(bid).unwrap());
     self.last_ask = Some(BigDecimal::from_f64(ask).unwrap());
 
-        // 7. Generate bid and ask signals
+        // 8. Generate bid and ask signals
         let mut signals = Vec::new();
         signals.push(Signal::new(
             format!("as_bid_{}", now.timestamp_millis()),
@@ -529,8 +607,27 @@ impl Strategy for AvellanedaStoikovStrategy {
     }
 
     async fn update_state(&mut self, market_data: &dataloader::MarketData, context: &StrategyContext) -> StrategyResult<()> {
+        let old_inventory = self.inventory;
+        
         // Update inventory from portfolio state
         self.inventory = context.portfolio_state.net_position;
+        
+        // Track entry price when position is opened or increased
+        if old_inventory.abs() < 1e-8 && self.inventory.abs() > 1e-8 {
+            // New position opened - get current price as entry
+            let current_price = match market_data {
+                dataloader::MarketData::Trade(t) => t.price.to_f64().unwrap_or(0.0),
+                dataloader::MarketData::Candle(c) => c.close.to_f64().unwrap_or(0.0),
+                #[cfg(feature = "postgres")]
+                dataloader::MarketData::Snapshot(s) => s.price_level.to_f64().unwrap_or(0.0),
+                #[cfg(feature = "postgres")]
+                dataloader::MarketData::Order(o) => o.price_level.to_f64().unwrap_or(0.0),
+            };
+            self.avg_entry_price = Some(current_price);
+        } else if self.inventory.abs() < 1e-8 {
+            // Position closed
+            self.avg_entry_price = None;
+        }
         
         // Phase 2: Update volume tracking for dynamic adjustments
         self.update_volume_tracking(market_data);

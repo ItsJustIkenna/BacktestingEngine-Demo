@@ -28,8 +28,10 @@ pub async fn avellaneda_stoikov_fitness(
         volatility_cap: chromo.volatility_cap,
         time_horizon_minutes: chromo.time_horizon_minutes,
         market_depth_k: chromo.market_depth_k,
-        min_spread_bps: 20.0,
-        max_trades_per_minute: 5.0,
+        min_spread_bps: chromo.min_spread_bps,
+        max_trades_per_minute: chromo.max_trades_per_minute,
+        take_profit_pct: chromo.take_profit_pct,
+        stop_loss_pct: chromo.stop_loss_pct,
         
         // Phase 2: Dynamic adjustment parameters
         volatility_adjustment_factor: chromo.volatility_adjustment_factor,

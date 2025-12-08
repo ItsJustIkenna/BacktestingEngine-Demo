@@ -262,6 +262,10 @@ impl PostgresQueue {
                 inventory_penalty_factor: 0.3,
                 trend_sensitivity: 0.2,
                 flow_sensitivity: -0.1,
+                take_profit_pct: 0.005,
+                stop_loss_pct: 0.003,
+                min_spread_bps: 15.0,
+                max_trades_per_minute: 30.0,
                 commission_rate: f64::from_str(&record.commission_rate.to_string())?,
                 start_date: record.start_date.map(|dt| dt.to_rfc3339()),
                 end_date: record.end_date.map(|dt| dt.to_rfc3339()),
@@ -1069,6 +1073,10 @@ mod tests {
             min_sortino_ratio: None,
             min_calmar_ratio: None,
             min_total_pnl: None,
+            take_profit_pct: 0.005,
+            stop_loss_pct: 0.003,
+            min_spread_bps: 15.0,
+            max_trades_per_minute: 30.0,
         };
         
         let job_id = queue.submit_job(params).await.unwrap();

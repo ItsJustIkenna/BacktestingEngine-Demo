@@ -352,6 +352,10 @@ mod tests {
             min_sortino_ratio: None,
             min_calmar_ratio: None,
             min_total_pnl: None,
+            take_profit_pct: 0.005,
+            stop_loss_pct: 0.003,
+            min_spread_bps: 15.0,
+            max_trades_per_minute: 30.0,
         };
 
         // Need to set up default for BacktestJobParams
@@ -403,6 +407,10 @@ mod tests {
             min_sortino_ratio: None,
             min_calmar_ratio: None,
             min_total_pnl: None,
+            take_profit_pct: 0.005,
+            stop_loss_pct: 0.003,
+            min_spread_bps: 15.0,
+            max_trades_per_minute: 30.0,
         };
 
         let job_id = broker.submit_job(params).await;

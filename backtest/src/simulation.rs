@@ -495,7 +495,23 @@ impl SimulationLoop {
         );
         result.win_rate = trade_stats::win_rate(&trade_returns);
         result.avg_trade_duration = trade_stats::average_trade_duration(&trade_durations);
-        result.volatility = risk::volatility(&trade_returns);
+        
+        // Calculate volatility using percentage returns from equity curve (not dollar returns)
+        // This gives a proper annualizable volatility metric
+        let pct_returns: Vec<f64> = if equity_curve.len() > 1 {
+            equity_curve.windows(2)
+                .filter_map(|w| {
+                    if w[0] > 0.0 {
+                        Some((w[1] - w[0]) / w[0])
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        result.volatility = risk::volatility(&pct_returns);
         result.max_drawdown = risk::max_drawdown(&equity_curve)
             .map(|v| BigDecimal::from_f64(v).unwrap_or_default())
             .unwrap_or_default();
