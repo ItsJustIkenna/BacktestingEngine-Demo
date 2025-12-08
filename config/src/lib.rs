@@ -124,16 +124,23 @@ pub struct ExchangeFeeConfig {
     pub maker_fee: f64,           // e.g., 0.0002 (0.02% for Kraken at high volume)
     pub taker_fee: f64,           // e.g., 0.0012 (0.12% for Kraken at high volume)
     pub volume_tiers: Vec<VolumeTier>,
+    /// Starting 30-day volume to simulate an established market maker
+    /// Set this to skip the highest fee tiers and use more realistic fees
+    /// e.g., 1_000_000.0 for $1M 30-day volume = 0.06% maker / 0.16% taker on Kraken
+    #[serde(default)]
+    pub starting_30d_volume: f64,
 }
 
 impl Default for ExchangeFeeConfig {
-    /// Default to Kraken fees at $5M-$10M 30-day volume (realistic for co-located market making)
+    /// Default to Kraken fees starting at 0 volume (realistic for new market makers)
+    /// Fees will decrease as 30-day volume builds during the backtest
     fn default() -> Self {
         Self {
             exchange: "kraken".to_string(),
-            maker_fee: 0.0002,  // 0.02% (2 bps)
-            taker_fee: 0.0012,  // 0.12% (12 bps)
+            maker_fee: 0.0025,  // 0.25% (25 bps) at 0 volume tier
+            taker_fee: 0.0040,  // 0.40% (40 bps) at 0 volume tier
             volume_tiers: Self::kraken_fee_tiers(),
+            starting_30d_volume: 0.0, // Start from scratch - fees decrease as volume builds
         }
     }
 }
@@ -156,13 +163,14 @@ impl ExchangeFeeConfig {
         ]
     }
     
-    /// Create Kraken exchange configuration
+    /// Create Kraken exchange configuration (starting from 0 volume)
     pub fn kraken() -> Self {
         Self {
             exchange: "kraken".to_string(),
-            maker_fee: 0.0002,  // 0.02% at $5M-$10M volume
-            taker_fee: 0.0012,  // 0.12% at $5M-$10M volume
+            maker_fee: 0.0025,  // 0.25% at 0 volume tier
+            taker_fee: 0.0040,  // 0.40% at 0 volume tier
             volume_tiers: Self::kraken_fee_tiers(),
+            starting_30d_volume: 0.0,
         }
     }
     
@@ -176,6 +184,7 @@ impl ExchangeFeeConfig {
                 VolumeTier { min_volume_30d: 0.0,         maker_fee: 0.0010, taker_fee: 0.0010 },
                 VolumeTier { min_volume_30d: 1_000_000.0, maker_fee: 0.0009, taker_fee: 0.0010 },
             ],
+            starting_30d_volume: 0.0,
         }
     }
     
@@ -190,6 +199,7 @@ impl ExchangeFeeConfig {
                 VolumeTier { min_volume_30d: 10_000.0,     maker_fee: 0.0025, taker_fee: 0.0040 },
                 VolumeTier { min_volume_30d: 100_000.0,    maker_fee: 0.0015, taker_fee: 0.0025 },
             ],
+            starting_30d_volume: 0.0,
         }
     }
     
@@ -204,6 +214,7 @@ impl ExchangeFeeConfig {
                 // DeepBook has flat fees (no volume tiers currently)
                 VolumeTier { min_volume_30d: 0.0, maker_fee: 0.0005, taker_fee: 0.0010 },
             ],
+            starting_30d_volume: 0.0,
         }
     }
     
@@ -216,6 +227,7 @@ impl ExchangeFeeConfig {
             volume_tiers: vec![
                 VolumeTier { min_volume_30d: 0.0, maker_fee: 0.0030, taker_fee: 0.0030 },
             ],
+            starting_30d_volume: 0.0,
         }
     }
     
@@ -234,6 +246,7 @@ impl ExchangeFeeConfig {
                     maker_fee: 0.0010,
                     taker_fee: 0.0015,
                     volume_tiers: vec![],
+                    starting_30d_volume: 0.0,
                 }
             }
         }
@@ -616,13 +629,14 @@ impl Default for TradingConfig {
 }
 
 impl ExchangeFeeConfig {
-    /// Kraken exchange fee configuration at $5M-$10M volume tier (realistic for co-located market making)
+    /// Kraken exchange fee configuration starting at 0 volume (new market maker)
     pub fn kraken_default() -> Self {
         Self {
             exchange: "kraken".to_string(),
-            maker_fee: 0.0002,     // 0.02% (2 bps) at high volume
-            taker_fee: 0.0012,     // 0.12% (12 bps) at high volume
+            maker_fee: 0.0025,     // 0.25% (25 bps) at 0 volume
+            taker_fee: 0.0040,     // 0.40% (40 bps) at 0 volume
             volume_tiers: Self::kraken_fee_tiers(),
+            starting_30d_volume: 0.0,
         }
     }
 
@@ -644,6 +658,7 @@ impl ExchangeFeeConfig {
                     taker_fee: 0.0040,
                 },
             ],
+            starting_30d_volume: 0.0,
         }
     }
 

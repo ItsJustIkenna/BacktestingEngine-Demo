@@ -391,30 +391,35 @@ impl MultiExchangeOrderBooks {
                 maker_fee: 0.001,   // 10 bps
                 taker_fee: 0.001,   // 10 bps
                 volume_tiers: vec![], // Simplified - no volume tiers
+                starting_30d_volume: 0.0,
             },
             "coinbase" => ExchangeFeeConfig {
                 exchange: "coinbase".to_string(),
                 maker_fee: 0.005,   // 50 bps
                 taker_fee: 0.005,   // 50 bps
                 volume_tiers: vec![],
+                starting_30d_volume: 0.0,
             },
             "kraken" => ExchangeFeeConfig {
                 exchange: "kraken".to_string(),
                 maker_fee: 0.0016,  // 16 bps
                 taker_fee: 0.0026,  // 26 bps
                 volume_tiers: vec![],
+                starting_30d_volume: 0.0,
             },
             "ftx" => ExchangeFeeConfig {
                 exchange: "ftx".to_string(),
                 maker_fee: 0.0002,  // 2 bps
                 taker_fee: 0.0007,  // 7 bps
                 volume_tiers: vec![],
+                starting_30d_volume: 0.0,
             },
             _ => ExchangeFeeConfig {
                 exchange: exchange.to_string(),
                 maker_fee: 0.002,   // 20 bps default
                 taker_fee: 0.002,   // 20 bps default
                 volume_tiers: vec![],
+                starting_30d_volume: 0.0,
             },
         }
     }

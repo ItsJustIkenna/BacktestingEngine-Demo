@@ -55,6 +55,20 @@ impl SimulationLoop {
         }
     }
     
+    /// Initialize starting 30-day volume for an exchange
+    /// This simulates an established market maker who already has volume history
+    /// allowing them to start at a lower fee tier
+    pub fn initialize_starting_volume(&mut self, config: &config::BacktestConfig) {
+        if let Some(ref fee_config) = config.trading.exchange_fees {
+            if fee_config.starting_30d_volume > 0.0 {
+                self.current_30d_volume_by_exchange.insert(
+                    fee_config.exchange.clone(),
+                    fee_config.starting_30d_volume,
+                );
+            }
+        }
+    }
+    
     /// Update rolling market volume from observed trades
     /// Uses a 1-hour window to calculate average trade size
     fn update_market_volume(&mut self, timestamp: chrono::DateTime<chrono::Utc>, trade_volume_usd: f64) {
