@@ -8,6 +8,17 @@ interface MonteCarloSummary {
   cvar_95: number;
   confidence_lower: number;
   confidence_upper: number;
+  // Percentile distributions
+  p5_total_pnl?: number;
+  p50_total_pnl?: number;
+  p95_total_pnl?: number;
+  p5_max_drawdown?: number;
+  p50_max_drawdown?: number;
+  p95_max_drawdown?: number;
+  p50_sharpe?: number;
+  p5_win_rate?: number;
+  p50_win_rate?: number;
+  p95_win_rate?: number;
 }
 
 interface WalkForwardSummary {
@@ -796,10 +807,14 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
           marginBottom: '20px',
         }}>
           <h3 style={{ marginTop: 0, marginBottom: '15px' }}>🎲 Monte Carlo Analysis ({result.monte_carlo.num_runs} runs)</h3>
+          
+          {/* Risk Metrics */}
+          <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Risk Metrics</h4>
           <div style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
             gap: '15px',
+            marginBottom: '20px',
           }}>
             <MetricCard
               title="Mean Sharpe"
@@ -822,11 +837,97 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
               color={result.monte_carlo.cvar_95 < 0.15 ? '#28a745' : result.monte_carlo.cvar_95 < 0.25 ? '#ffc107' : '#dc3545'}
             />
             <MetricCard
-              title="95% Confidence"
+              title="Sharpe 95% CI"
               value={`[${safeToFixed(result.monte_carlo.confidence_lower, 2)}, ${safeToFixed(result.monte_carlo.confidence_upper, 2)}]`}
               color="#007bff"
             />
           </div>
+          
+          {/* Percentile Distributions - PnL */}
+          {(result.monte_carlo.p5_total_pnl !== undefined || result.monte_carlo.p50_total_pnl !== undefined) && (
+            <>
+              <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>📊 PnL Distribution (P5 / P50 / P95)</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '15px',
+                marginBottom: '20px',
+              }}>
+                <MetricCard
+                  title="Worst Case (P5)"
+                  value={`$${safeToFixed(result.monte_carlo.p5_total_pnl ?? 0, 0)}`}
+                  color={(result.monte_carlo.p5_total_pnl ?? 0) > 0 ? '#28a745' : '#dc3545'}
+                />
+                <MetricCard
+                  title="Typical (P50)"
+                  value={`$${safeToFixed(result.monte_carlo.p50_total_pnl ?? 0, 0)}`}
+                  color={(result.monte_carlo.p50_total_pnl ?? 0) > 0 ? '#28a745' : '#dc3545'}
+                />
+                <MetricCard
+                  title="Best Case (P95)"
+                  value={`$${safeToFixed(result.monte_carlo.p95_total_pnl ?? 0, 0)}`}
+                  color={(result.monte_carlo.p95_total_pnl ?? 0) > 0 ? '#28a745' : '#ffc107'}
+                />
+              </div>
+            </>
+          )}
+          
+          {/* Percentile Distributions - Drawdown */}
+          {(result.monte_carlo.p5_max_drawdown !== undefined || result.monte_carlo.p50_max_drawdown !== undefined) && (
+            <>
+              <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>📉 Max Drawdown Distribution (P5 / P50 / P95)</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '15px',
+                marginBottom: '20px',
+              }}>
+                <MetricCard
+                  title="Best Case (P5)"
+                  value={`${safeToFixed((result.monte_carlo.p5_max_drawdown ?? 0) * 100, 1)}%`}
+                  color={(result.monte_carlo.p5_max_drawdown ?? 0) > -0.1 ? '#28a745' : '#ffc107'}
+                />
+                <MetricCard
+                  title="Typical (P50)"
+                  value={`${safeToFixed((result.monte_carlo.p50_max_drawdown ?? 0) * 100, 1)}%`}
+                  color={(result.monte_carlo.p50_max_drawdown ?? 0) > -0.2 ? '#28a745' : '#ffc107'}
+                />
+                <MetricCard
+                  title="Worst Case (P95)"
+                  value={`${safeToFixed((result.monte_carlo.p95_max_drawdown ?? 0) * 100, 1)}%`}
+                  color={(result.monte_carlo.p95_max_drawdown ?? 0) > -0.3 ? '#ffc107' : '#dc3545'}
+                />
+              </div>
+            </>
+          )}
+          
+          {/* Percentile Distributions - Win Rate */}
+          {(result.monte_carlo.p5_win_rate !== undefined || result.monte_carlo.p50_win_rate !== undefined) && (
+            <>
+              <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>🎯 Win Rate Distribution (P5 / P50 / P95)</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '15px',
+              }}>
+                <MetricCard
+                  title="Worst Case (P5)"
+                  value={`${safeToFixed((result.monte_carlo.p5_win_rate ?? 0) * 100, 1)}%`}
+                  color={(result.monte_carlo.p5_win_rate ?? 0) > 0.45 ? '#28a745' : (result.monte_carlo.p5_win_rate ?? 0) > 0.35 ? '#ffc107' : '#dc3545'}
+                />
+                <MetricCard
+                  title="Typical (P50)"
+                  value={`${safeToFixed((result.monte_carlo.p50_win_rate ?? 0) * 100, 1)}%`}
+                  color={(result.monte_carlo.p50_win_rate ?? 0) > 0.5 ? '#28a745' : '#ffc107'}
+                />
+                <MetricCard
+                  title="Best Case (P95)"
+                  value={`${safeToFixed((result.monte_carlo.p95_win_rate ?? 0) * 100, 1)}%`}
+                  color="#28a745"
+                />
+              </div>
+            </>
+          )}
         </div>
       )}
 

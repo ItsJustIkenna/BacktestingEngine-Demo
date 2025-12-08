@@ -216,6 +216,27 @@ pub struct MonteCarloSummary {
     pub cvar_95: f64,      // Conditional VaR (expected loss beyond VaR)
     pub confidence_lower: f64,  // 5th percentile Sharpe
     pub confidence_upper: f64,  // 95th percentile Sharpe
+    // Percentile distributions for key metrics
+    #[serde(default)]
+    pub p5_total_pnl: Option<f64>,
+    #[serde(default)]
+    pub p50_total_pnl: Option<f64>,
+    #[serde(default)]
+    pub p95_total_pnl: Option<f64>,
+    #[serde(default)]
+    pub p5_max_drawdown: Option<f64>,
+    #[serde(default)]
+    pub p50_max_drawdown: Option<f64>,
+    #[serde(default)]
+    pub p95_max_drawdown: Option<f64>,
+    #[serde(default)]
+    pub p50_sharpe: Option<f64>,
+    #[serde(default)]
+    pub p5_win_rate: Option<f64>,
+    #[serde(default)]
+    pub p50_win_rate: Option<f64>,
+    #[serde(default)]
+    pub p95_win_rate: Option<f64>,
 }
 
 /// Walk-Forward results summary

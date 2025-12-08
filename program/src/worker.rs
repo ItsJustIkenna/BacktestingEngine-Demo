@@ -1370,8 +1370,8 @@ impl Worker {
         data.first().map(|d| {
             match d {
                 MarketData::Candle(c) => c.close.to_f64().unwrap_or(100_000.0),
-                MarketData::Order(o) => o.price.to_f64().unwrap_or(100_000.0),
-                MarketData::Snapshot(s) => s.mid_price.to_f64().unwrap_or(100_000.0),
+                MarketData::Order(o) => o.price_level.to_f64().unwrap_or(100_000.0),
+                MarketData::Snapshot(s) => s.price_level.to_f64().unwrap_or(100_000.0),
                 MarketData::Trade(t) => t.price.to_f64().unwrap_or(100_000.0),
             }
         }).unwrap_or(100_000.0)
@@ -1586,6 +1586,17 @@ impl Worker {
             cvar_95: mc.cvar_95,
             confidence_lower: mc.percentile_metrics.get(&5).map(|m| m.sharpe_ratio).unwrap_or(0.0),
             confidence_upper: mc.percentile_metrics.get(&95).map(|m| m.sharpe_ratio).unwrap_or(0.0),
+            // Percentile distributions
+            p5_total_pnl: mc.percentile_metrics.get(&5).map(|m| m.total_pnl),
+            p50_total_pnl: mc.percentile_metrics.get(&50).map(|m| m.total_pnl),
+            p95_total_pnl: mc.percentile_metrics.get(&95).map(|m| m.total_pnl),
+            p5_max_drawdown: mc.percentile_metrics.get(&5).map(|m| m.max_drawdown),
+            p50_max_drawdown: mc.percentile_metrics.get(&50).map(|m| m.max_drawdown),
+            p95_max_drawdown: mc.percentile_metrics.get(&95).map(|m| m.max_drawdown),
+            p50_sharpe: mc.percentile_metrics.get(&50).map(|m| m.sharpe_ratio),
+            p5_win_rate: mc.percentile_metrics.get(&5).map(|m| m.win_rate),
+            p50_win_rate: mc.percentile_metrics.get(&50).map(|m| m.win_rate),
+            p95_win_rate: mc.percentile_metrics.get(&95).map(|m| m.win_rate),
         });
         
         // Convert Walk-Forward results if available
