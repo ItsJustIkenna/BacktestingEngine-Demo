@@ -798,6 +798,17 @@ impl JobQueue for PostgresQueue {
                                 cvar_95: v.get("cvar_95")?.as_f64()?,
                                 confidence_lower: v.get("confidence_lower")?.as_f64().unwrap_or(0.0),
                                 confidence_upper: v.get("confidence_upper")?.as_f64().unwrap_or(0.0),
+                                // Percentile distributions
+                                p5_total_pnl: v.get("p5_total_pnl").and_then(|x| x.as_f64()),
+                                p50_total_pnl: v.get("p50_total_pnl").and_then(|x| x.as_f64()),
+                                p95_total_pnl: v.get("p95_total_pnl").and_then(|x| x.as_f64()),
+                                p5_max_drawdown: v.get("p5_max_drawdown").and_then(|x| x.as_f64()),
+                                p50_max_drawdown: v.get("p50_max_drawdown").and_then(|x| x.as_f64()),
+                                p95_max_drawdown: v.get("p95_max_drawdown").and_then(|x| x.as_f64()),
+                                p50_sharpe: v.get("p50_sharpe").and_then(|x| x.as_f64()),
+                                p5_win_rate: v.get("p5_win_rate").and_then(|x| x.as_f64()),
+                                p50_win_rate: v.get("p50_win_rate").and_then(|x| x.as_f64()),
+                                p95_win_rate: v.get("p95_win_rate").and_then(|x| x.as_f64()),
                             })
                         });
                     

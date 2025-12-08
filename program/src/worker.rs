@@ -626,6 +626,17 @@ impl Worker {
             cvar_95: mc.cvar_95,
             confidence_lower: mc.percentile_metrics.get(&5).map(|m| m.sharpe_ratio).unwrap_or(0.0),
             confidence_upper: mc.percentile_metrics.get(&95).map(|m| m.sharpe_ratio).unwrap_or(0.0),
+            // Percentile distributions
+            p5_total_pnl: mc.percentile_metrics.get(&5).map(|m| m.net_profit),
+            p50_total_pnl: mc.percentile_metrics.get(&50).map(|m| m.net_profit),
+            p95_total_pnl: mc.percentile_metrics.get(&95).map(|m| m.net_profit),
+            p5_max_drawdown: mc.percentile_metrics.get(&5).map(|m| m.max_drawdown),
+            p50_max_drawdown: mc.percentile_metrics.get(&50).map(|m| m.max_drawdown),
+            p95_max_drawdown: mc.percentile_metrics.get(&95).map(|m| m.max_drawdown),
+            p50_sharpe: mc.percentile_metrics.get(&50).map(|m| m.sharpe_ratio),
+            p5_win_rate: mc.percentile_metrics.get(&5).map(|m| m.win_rate),
+            p50_win_rate: mc.percentile_metrics.get(&50).map(|m| m.win_rate),
+            p95_win_rate: mc.percentile_metrics.get(&95).map(|m| m.win_rate),
         });
         
         // Convert Walk-Forward results if available
@@ -1587,9 +1598,9 @@ impl Worker {
             confidence_lower: mc.percentile_metrics.get(&5).map(|m| m.sharpe_ratio).unwrap_or(0.0),
             confidence_upper: mc.percentile_metrics.get(&95).map(|m| m.sharpe_ratio).unwrap_or(0.0),
             // Percentile distributions
-            p5_total_pnl: mc.percentile_metrics.get(&5).map(|m| m.total_pnl),
-            p50_total_pnl: mc.percentile_metrics.get(&50).map(|m| m.total_pnl),
-            p95_total_pnl: mc.percentile_metrics.get(&95).map(|m| m.total_pnl),
+            p5_total_pnl: mc.percentile_metrics.get(&5).map(|m| m.net_profit),
+            p50_total_pnl: mc.percentile_metrics.get(&50).map(|m| m.net_profit),
+            p95_total_pnl: mc.percentile_metrics.get(&95).map(|m| m.net_profit),
             p5_max_drawdown: mc.percentile_metrics.get(&5).map(|m| m.max_drawdown),
             p50_max_drawdown: mc.percentile_metrics.get(&50).map(|m| m.max_drawdown),
             p95_max_drawdown: mc.percentile_metrics.get(&95).map(|m| m.max_drawdown),
