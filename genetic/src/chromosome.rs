@@ -33,10 +33,11 @@ impl Chromosome for AvellanedaStoikovChromosome {
     fn random<R: Rng + ?Sized>(rng: &mut R) -> Self {
         Self {
             risk_aversion: rng.gen_range(0.001..0.1),
-            // order_size_pct: percentage of capital per order (0.5% to 15%)
-            // Wide range lets genetic algorithm find optimal sizing
-            // At $10k capital: 0.5% = $50, 15% = $1,500 per trade
-            order_size_pct: rng.gen_range(0.005..0.15),
+            // order_size_pct: percentage of capital per order (2% to 20%)
+            // Increased minimum to favor larger positions that amortize commission costs
+            // At $10k capital: 2% = $200, 20% = $2,000 per trade
+            // Larger positions = lower commission ratio per dollar traded
+            order_size_pct: rng.gen_range(0.02..0.20),
             window_ms: rng.gen_range(10_000..300_000), // 10s to 5 min
             min_quote_lifetime_ms: rng.gen_range(100..5_000), // 100ms to 5s
             fee_rate: rng.gen_range(0.0001..0.01),
@@ -55,13 +56,14 @@ impl Chromosome for AvellanedaStoikovChromosome {
             // Exit and trading control parameters
             take_profit_pct: rng.gen_range(0.002..0.02),           // 0.2% to 2% take profit
             stop_loss_pct: rng.gen_range(0.001..0.01),             // 0.1% to 1% stop loss
-            // min_spread_bps range depends on exchange fees:
-            // - DeepBook (SUI): 10 bps round-trip → min 25 bps for profitability
-            // - Kraken (low vol): 50 bps round-trip → min 125 bps for profitability
-            // Range: 20-150 bps to cover both scenarios
-            min_spread_bps: rng.gen_range(20.0..150.0),
-            // Trade frequency - balance between opportunity capture and cost
-            max_trades_per_minute: rng.gen_range(0.5..15.0),       // 0.5 to 15 trades per minute
+            // min_spread_bps range: MUST exceed round-trip commission costs
+            // With 10 bps round-trip fees, need at least 30-50 bps spread for profit
+            // Increased minimum to reduce commission-heavy strategies
+            // Range: 50-200 bps to ensure profitability after costs
+            min_spread_bps: rng.gen_range(50.0..200.0),
+            // Trade frequency - REDUCED to minimize commission drag
+            // Fewer, higher-quality trades > many small trades eaten by fees
+            max_trades_per_minute: rng.gen_range(0.1..5.0),        // 0.1 to 5 trades per minute (was 0.5-15)
         }
     }
 
@@ -99,8 +101,8 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.risk_aversion = self.risk_aversion.clamp(0.001, 0.1);
         }
         if rng.gen_bool(mutation_rate) {
-            self.order_size_pct += rng.gen_range(-0.02..0.02);
-            self.order_size_pct = self.order_size_pct.clamp(0.005, 0.15);
+            self.order_size_pct += rng.gen_range(-0.03..0.03);
+            self.order_size_pct = self.order_size_pct.clamp(0.02, 0.20);
         }
         if rng.gen_bool(mutation_rate) {
             let delta = rng.gen_range(-10_000..10_000);
@@ -163,12 +165,12 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.stop_loss_pct = self.stop_loss_pct.clamp(0.001, 0.01);
         }
         if rng.gen_bool(mutation_rate) {
-            self.min_spread_bps += rng.gen_range(-15.0..15.0);
-            self.min_spread_bps = self.min_spread_bps.clamp(20.0, 150.0);
+            self.min_spread_bps += rng.gen_range(-20.0..20.0);
+            self.min_spread_bps = self.min_spread_bps.clamp(50.0, 200.0);
         }
         if rng.gen_bool(mutation_rate) {
-            self.max_trades_per_minute += rng.gen_range(-2.0..2.0);
-            self.max_trades_per_minute = self.max_trades_per_minute.clamp(0.5, 15.0);
+            self.max_trades_per_minute += rng.gen_range(-1.0..1.0);
+            self.max_trades_per_minute = self.max_trades_per_minute.clamp(0.1, 5.0);
         }
     }
     

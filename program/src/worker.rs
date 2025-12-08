@@ -43,10 +43,11 @@ use dataloader::MarketData;
 /// - Calmar Ratio: 0.10 (recovery ability)
 /// 
 /// # Penalties
-/// - Commission ratio > 40%: scaled penalty up to 0.1x
-/// - Drawdown > 15%: 0.8x, > 25%: 0.5x, > 40%: 0.2x
+/// - Commission ratio > 30%: scaled penalty up to 0.1x (stricter than before)
+/// - Drawdown > 10%: 0.8x, > 20%: 0.5x, > 35%: 0.2x
 /// - < 30 trades: linear penalty
-/// - Avg trade < 2x commission: 0.7x
+/// - Avg trade < 4x commission: 0.5x (raised from 3x)
+/// - VaR > 5% of capital: penalty
 fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult, initial_capital: f64) -> f64 {
     use bigdecimal::ToPrimitive;
     
@@ -58,7 +59,7 @@ fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult, ini
         let gross = *gross_profit;
         let commission = transaction_costs.total_commission;
         
-        // Hard reject: If commissions exceed 80% of gross profit, this is unviable
+        // Hard reject: If commissions exceed 60% of gross profit, this is unviable (was 80%)
         if gross <= 0.0 {
             log_debug!(GENETIC_LOGGER, "FITNESS: gross_profit={:.2} <= 0, returning 0.001", gross);
             return 0.001; // No gross profit = essentially zero fitness
@@ -66,11 +67,11 @@ fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult, ini
         let commission_ratio = commission / gross;
         log_debug!(GENETIC_LOGGER, "FITNESS: gross={:.2} commission={:.2} ratio={:.2}% trades={}", 
             gross, commission, commission_ratio * 100.0, result.num_trades);
-        if commission_ratio >= 0.80 {
+        if commission_ratio >= 0.60 {
             // Return a tiny but non-zero value that's proportional to how bad it is
             // This ensures even the "best" commission-heavy strategy loses to any viable one
-            let tiny_fitness = 0.001 * (1.0 - (commission_ratio - 0.80).min(0.5));
-            log_warn!(GENETIC_LOGGER, "FITNESS REJECTED: commission_ratio={:.2}% >= 80%, fitness={:.6}", 
+            let tiny_fitness = 0.001 * (1.0 - (commission_ratio - 0.60).min(0.4));
+            log_warn!(GENETIC_LOGGER, "FITNESS REJECTED: commission_ratio={:.2}% >= 60%, fitness={:.6}", 
                 commission_ratio * 100.0, tiny_fitness);
             return tiny_fitness;
         }
@@ -87,29 +88,29 @@ fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult, ini
     let calmar = result.calmar_ratio.unwrap_or(0.0);
     
     // === Base Fitness (weights sum to 1.0) ===
-    // Emphasize NET profitability more heavily
+    // Emphasize NET profitability and risk-adjusted returns
     let mut fitness = 
-        sortino * 0.15 +
-        sharpe * 0.10 +
-        (pf - 1.0).max(0.0) * 0.15 +
-        win_rate * 0.10 +
-        net_profit_pct * 0.35 +  // Increased: Net profit is what matters!
-        calmar.min(3.0) * 0.15;
+        sortino * 0.20 +           // Increased weight on downside risk
+        sharpe * 0.15 +            // Increased weight on risk-adjusted return
+        (pf - 1.0).max(0.0) * 0.10 +
+        win_rate * 0.05 +          // Reduced - win rate matters less than avg profit
+        net_profit_pct * 0.35 +    // Net profit is what matters!
+        calmar.min(3.0) * 0.15;    // Return vs max drawdown
     
     // === Penalty: Insufficient Trades ===
     if result.num_trades < 30 {
         fitness *= (result.num_trades as f64 / 30.0).max(0.1);
     }
     
-    // === Penalty: Excessive Drawdown ===
+    // === Penalty: Excessive Drawdown (Stricter) ===
     let dd_value = result.max_drawdown.to_f64().unwrap_or(0.0);
     let dd_pct = (dd_value / initial_capital).abs();
-    if dd_pct > 0.15 {
-        let dd_penalty = if dd_pct > 0.40 { 0.2 } else if dd_pct > 0.25 { 0.5 } else { 0.8 };
+    if dd_pct > 0.10 {
+        let dd_penalty = if dd_pct > 0.35 { 0.2 } else if dd_pct > 0.20 { 0.5 } else { 0.8 };
         fitness *= dd_penalty;
     }
     
-    // === Soft Penalty for Moderate Commission Ratio (40-80%) ===
+    // === Soft Penalty for Moderate Commission Ratio (30-60%) - Stricter ===
     if let (Some(gross_profit), Some(transaction_costs)) = 
         (&result.gross_profit, &result.transaction_costs) 
     {
@@ -118,15 +119,15 @@ fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult, ini
         
         if gross > 0.0 {
             let commission_ratio = commission / gross;
-            if commission_ratio > 0.40 && commission_ratio < 0.80 {
-                // Linear penalty: 40% = no penalty, 80% = 0.2x (before hard cutoff kicks in)
-                let penalty = 1.0 - (commission_ratio - 0.4) * 2.0;
+            if commission_ratio > 0.30 && commission_ratio < 0.60 {
+                // Linear penalty: 30% = no penalty, 60% = 0.2x (before hard cutoff kicks in)
+                let penalty = 1.0 - (commission_ratio - 0.3) * 2.667;
                 fitness *= penalty.max(0.2);
             }
         }
     }
     
-    // === Penalty: Poor Average Trade ===
+    // === Penalty: Poor Average Trade (Stricter - must be 4x commission) ===
     if let (Some(avg_trade), Some(transaction_costs)) = 
         (&result.avg_trade_return, &result.transaction_costs)
     {
@@ -134,15 +135,33 @@ fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult, ini
             transaction_costs.total_commission / result.num_trades as f64
         } else { 0.0 };
         
-        // Each trade should profit more than 3x the commission to be worthwhile (raised from 2x)
-        if *avg_trade > 0.0 && *avg_trade < avg_commission * 3.0 {
-            fitness *= 0.5; // Stronger penalty for marginal trades
+        // Each trade should profit more than 4x the commission to be worthwhile (raised from 3x)
+        if *avg_trade > 0.0 && *avg_trade < avg_commission * 4.0 {
+            fitness *= 0.4; // Stronger penalty for marginal trades
         }
     }
     
     // === Bonus: Well-Rounded Strategy ===
-    if net_profit_pct > 0.05 && pf > 1.5 && win_rate > 0.50 && dd_pct < 0.15 {
-        fitness *= 1.2;
+    if net_profit_pct > 0.05 && pf > 1.5 && win_rate > 0.50 && dd_pct < 0.10 {
+        fitness *= 1.3; // Increased bonus for truly good strategies
+    }
+    
+    // === Bonus: Low Commission Ratio (reward efficient strategies) ===
+    if let (Some(gross_profit), Some(transaction_costs)) = 
+        (&result.gross_profit, &result.transaction_costs) 
+    {
+        let gross = *gross_profit;
+        let commission = transaction_costs.total_commission;
+        if gross > 0.0 {
+            let commission_ratio = commission / gross;
+            if commission_ratio < 0.20 {
+                // Reward very efficient strategies: <20% commission ratio = 1.2x bonus
+                fitness *= 1.2;
+            } else if commission_ratio < 0.30 {
+                // Moderate reward: 20-30% commission ratio = 1.1x bonus
+                fitness *= 1.1;
+            }
+        }
     }
     
     fitness.max(0.0)
@@ -771,6 +790,29 @@ impl Worker {
             out_of_sample_degradation: wf.out_of_sample_degradation,
         });
         
+        // Calculate annualized return from equity curve
+        let annualized_return = if result.core.equity_curve.len() >= 2 {
+            let initial = result.core.equity_curve.first().copied().unwrap_or(1.0);
+            let final_val = result.core.equity_curve.last().copied().unwrap_or(1.0);
+            if initial > 0.0 {
+                let total_return = (final_val - initial) / initial;
+                // Assuming each equity point is ~1 minute, calculate trading days
+                let minutes = result.core.equity_curve.len() as f64;
+                let trading_days = minutes / (6.5 * 60.0); // ~6.5 hours of trading per day
+                if trading_days > 0.0 {
+                    // Annualize: (1 + total_return)^(252/trading_days) - 1
+                    let annualized = ((1.0 + total_return).powf(252.0 / trading_days) - 1.0);
+                    Some(annualized)
+                } else {
+                    Some(total_return)
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        
         let backtest_result = BacktestResult {
             job_id: job.id.clone(),
             total_pnl,
@@ -787,7 +829,7 @@ impl Worker {
             realized_pnl: result.core.realized_pnl,
             unrealized_pnl: result.core.unrealized_pnl,
             // Additional metrics
-            annualized_return: None, // Calculated from equity curve
+            annualized_return,
             volatility: result.core.volatility,
             sortino_ratio: result.core.sortino_ratio,
             calmar_ratio: result.core.calmar_ratio,
@@ -1599,10 +1641,28 @@ impl Worker {
             .map(|r| r.starts_with("NOT_VIABLE"))
             .unwrap_or(false);
         
+        // Check if Sharpe confidence interval crosses zero (statistically unreliable)
+        let sharpe_unreliable = result.monte_carlo.as_ref()
+            .map(|mc| mc.confidence_lower < 0.0 && mc.confidence_upper > 0.0)
+            .unwrap_or(false);
+        
+        // Check commission ratio for status determination
+        let commission = result.total_commission_paid.unwrap_or(0.0);
+        let gross_pnl_for_status = result.total_pnl + commission;
+        let high_commission_ratio = if gross_pnl_for_status > 0.0 { 
+            commission / gross_pnl_for_status > 0.50 
+        } else { 
+            false 
+        };
+        
         let status = if is_not_viable {
             "NOT_VIABLE"
-        } else if result.total_pnl > 0.0 && result.sharpe_ratio > 0.5 && win_rate > 0.3 && has_meaningful_trades {
+        } else if high_commission_ratio {
+            "HIGH_COMMISSION"
+        } else if result.total_pnl > 0.0 && result.sharpe_ratio > 0.5 && win_rate > 0.3 && has_meaningful_trades && !sharpe_unreliable {
             "PROFITABLE"
+        } else if result.total_pnl > 0.0 && sharpe_unreliable {
+            "STATISTICALLY_UNRELIABLE"
         } else if result.total_pnl > 0.0 && !has_meaningful_trades {
             // Profitable but with too few trades - may be unrealized gains
             "INSUFFICIENT_TRADES"
@@ -1615,7 +1675,6 @@ impl Worker {
         };
 
         // Calculate derived metrics
-        let commission = result.total_commission_paid.unwrap_or(0.0);
         let gross_pnl = result.total_pnl + commission;
         let cost_ratio = if gross_pnl.abs() > 0.0 { commission / gross_pnl.abs() * 100.0 } else { 0.0 };
         let fill_rate = if result.total_orders.unwrap_or(0) > 0 {

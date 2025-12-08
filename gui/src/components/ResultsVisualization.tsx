@@ -832,13 +832,13 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
             />
             <MetricCard
               title="VaR (95%)"
-              value={`${safeToFixed(result.monte_carlo.var_95 * 100, 2)}%`}
-              color={result.monte_carlo.var_95 < 0.1 ? '#28a745' : result.monte_carlo.var_95 < 0.2 ? '#ffc107' : '#dc3545'}
+              value={`$${safeToFixed(result.monte_carlo.var_95, 2)} (${safeToFixed((result.monte_carlo.var_95 / (jobDetails?.initial_capital || 10000)) * 100, 2)}%)`}
+              color={(result.monte_carlo.var_95 / (jobDetails?.initial_capital || 10000)) < 0.05 ? '#28a745' : (result.monte_carlo.var_95 / (jobDetails?.initial_capital || 10000)) < 0.10 ? '#ffc107' : '#dc3545'}
             />
             <MetricCard
               title="CVaR (95%)"
-              value={`${safeToFixed(result.monte_carlo.cvar_95 * 100, 2)}%`}
-              color={result.monte_carlo.cvar_95 < 0.15 ? '#28a745' : result.monte_carlo.cvar_95 < 0.25 ? '#ffc107' : '#dc3545'}
+              value={`$${safeToFixed(result.monte_carlo.cvar_95, 2)} (${safeToFixed((result.monte_carlo.cvar_95 / (jobDetails?.initial_capital || 10000)) * 100, 2)}%)`}
+              color={(result.monte_carlo.cvar_95 / (jobDetails?.initial_capital || 10000)) < 0.08 ? '#28a745' : (result.monte_carlo.cvar_95 / (jobDetails?.initial_capital || 10000)) < 0.15 ? '#ffc107' : '#dc3545'}
             />
             <MetricCard
               title="Sharpe 95% CI"
@@ -1055,15 +1055,15 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
             {result.value_at_risk_95 !== undefined && (
               <MetricCard
                 title="VaR (95%)"
-                value={`${safeToFixed(result.value_at_risk_95 * 100, 2)}%`}
-                color={result.value_at_risk_95 < 0.1 ? '#28a745' : result.value_at_risk_95 < 0.2 ? '#ffc107' : '#dc3545'}
+                value={`$${safeToFixed(result.value_at_risk_95, 2)} (${safeToFixed((result.value_at_risk_95 / (jobDetails?.initial_capital ?? 10000)) * 100, 2)}%)`}
+                color={(result.value_at_risk_95 / (jobDetails?.initial_capital ?? 10000)) < 0.05 ? '#28a745' : (result.value_at_risk_95 / (jobDetails?.initial_capital ?? 10000)) < 0.10 ? '#ffc107' : '#dc3545'}
               />
             )}
             {result.expected_shortfall_95 !== undefined && (
               <MetricCard
                 title="Expected Shortfall"
-                value={`${safeToFixed(result.expected_shortfall_95 * 100, 2)}%`}
-                color={result.expected_shortfall_95 < 0.15 ? '#28a745' : result.expected_shortfall_95 < 0.25 ? '#ffc107' : '#dc3545'}
+                value={`$${safeToFixed(result.expected_shortfall_95, 2)} (${safeToFixed((result.expected_shortfall_95 / (jobDetails?.initial_capital ?? 10000)) * 100, 2)}%)`}
+                color={(result.expected_shortfall_95 / (jobDetails?.initial_capital ?? 10000)) < 0.08 ? '#28a745' : (result.expected_shortfall_95 / (jobDetails?.initial_capital ?? 10000)) < 0.15 ? '#ffc107' : '#dc3545'}
               />
             )}
             {result.current_drawdown !== undefined && (

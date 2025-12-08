@@ -610,15 +610,18 @@ impl SimulationLoop {
             .map(|v| BigDecimal::from_f64(v).unwrap_or_default())
             .unwrap_or_default();
         
-        // Calculate Sortino ratio (uses downside deviation instead of total volatility)
-        result.sortino_ratio = risk::sortino_ratio(&trade_returns, config.trading.risk_free_rate);
+        // Calculate Sortino ratio using percentage returns (same as Sharpe for consistency)
+        // Sortino uses downside deviation instead of total volatility
+        result.sortino_ratio = risk::sortino_ratio(&sharpe_returns, config.trading.risk_free_rate);
         
         // Calculate Calmar ratio (annualized return / max drawdown)
+        // Uses percentage-based annualized return for proper ratio
         let max_dd = result.max_drawdown.to_f64().unwrap_or(0.0);
-        if !trade_returns.is_empty() && max_dd > 0.0 {
-            // Estimate annualized return (assuming 252 trading days per year)
-            let total_return = trade_returns.iter().sum::<f64>();
-            let annualized_return = total_return * (252.0 / trade_returns.len() as f64);
+        if !sharpe_returns.is_empty() && max_dd > 0.0 {
+            // Calculate annualized return from percentage returns
+            // Mean return per period * periods per year (assuming ~252 trading days)
+            let mean_return = sharpe_returns.iter().sum::<f64>() / sharpe_returns.len() as f64;
+            let annualized_return = mean_return * 252.0;  // Annualize the mean daily return
             result.calmar_ratio = risk::calmar_ratio(annualized_return, max_dd);
         }
         
