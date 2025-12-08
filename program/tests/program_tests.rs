@@ -120,7 +120,6 @@ fn test_backtest_job_params_serialization() {
         walk_forward_enabled: false,
         commission_rate: 0.0005,
         start_date: None,
-        end_date: None,
         ..Default::default()
     };
     
@@ -165,7 +164,6 @@ fn test_backtest_job_params_optimization_methods() {
         walk_forward_enabled: true,
         commission_rate: 0.0,
         start_date: None,
-        end_date: None,
         ..Default::default()
     };
     
