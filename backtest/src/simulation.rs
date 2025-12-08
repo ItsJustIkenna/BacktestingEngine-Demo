@@ -474,6 +474,15 @@ impl SimulationLoop {
 
                     // 5. Simulate order matching/fills with proper fee calculation
                     let fills = orderbook.match_all_orders(timestamp);
+                    
+                    // Debug: Log fill count and sizes for first few trades
+                    if self.total_commission < 200.0 && !fills.is_empty() {
+                        let total_fill_value: f64 = fills.iter()
+                            .map(|f| f.price.to_f64().unwrap_or(0.0) * f.quantity.to_f64().unwrap_or(0.0))
+                            .sum();
+                        log_info!(BACKTEST_LOGGER, "Order matched | signal_id={} fills={} total_value=${:.2} expected_order_value=${:.2}",
+                            signal.id, fills.len(), total_fill_value, order_size * order_price);
+                    }
 
                     // Track commission and slippage costs from fills
                     for fill in &fills {
@@ -495,6 +504,12 @@ impl SimulationLoop {
                         // Get fee rate based on this exchange's 30-day volume
                         let fee_rate = self.get_fee_rate(config, &exchange, is_maker);
                         let commission = fill_value * fee_rate;
+                        
+                        // Debug: Log first few fills to understand commission calculation
+                        if self.total_commission < 100.0 {
+                            log_debug!(BACKTEST_LOGGER, "Fill debug | price={:.2} qty={:.6} value=${:.2} fee_rate={:.4}% is_maker={} commission=${:.2}",
+                                fill_price, fill_quantity, fill_value, fee_rate * 100.0, is_maker, commission);
+                        }
                         
                         // Update volume tracking for this exchange
                         self.update_30d_volume(&exchange, timestamp, fill_value);

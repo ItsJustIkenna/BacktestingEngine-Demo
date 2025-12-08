@@ -977,6 +977,10 @@ impl Worker {
                 // order_size = (capital * order_size_pct) / asset_price
                 let asset_price = Self::get_reference_price(&data);
                 let order_size_units = (initial_capital * chr.order_size_pct) / asset_price;
+                let order_size_usd = order_size_units * asset_price;
+                
+                log_debug!(GENETIC_LOGGER, "Order size calc | capital=${:.0} order_size_pct={:.2}% asset_price=${:.2} => order_size={:.6} units = ${:.2}",
+                    initial_capital, chr.order_size_pct * 100.0, asset_price, order_size_units, order_size_usd);
                 
                 // Create strategy with ALL chromosome parameters (fixing incomplete mapping)
                 let strategy_params = AvellanedaStoikovParams {
@@ -1104,6 +1108,23 @@ impl Worker {
             best_chromosome.inventory_penalty_factor,
             best_chromosome.trend_sensitivity,
             best_chromosome.flow_sensitivity
+        );
+        
+        // Log expected economics based on parameters
+        // At 0.25% maker fee, expected commission per trade = 2 * order_value * 0.0025
+        let expected_order_value = params.initial_capital * best_chromosome.order_size_pct;
+        let expected_commission_per_trade = 2.0 * expected_order_value * 0.0025; // Both sides, maker fee
+        let expected_spread_capture = expected_order_value * best_chromosome.min_spread_bps / 10000.0;
+        let expected_net_per_trade = expected_spread_capture - expected_commission_per_trade;
+        log_info!(MAIN_LOGGER,
+            r#"{{"event": "EXPECTED_ECONOMICS", "job_id": "{}", "order_value_usd": {:.2}, "min_spread_bps": {:.1}, "expected_spread_capture": {:.2}, "expected_commission": {:.2}, "expected_net_per_trade": {:.2}, "viable": {}}}"#,
+            job.id,
+            expected_order_value,
+            best_chromosome.min_spread_bps,
+            expected_spread_capture,
+            expected_commission_per_trade,
+            expected_net_per_trade,
+            expected_net_per_trade > 0.0
         );
         
         // Update phase for final analysis
