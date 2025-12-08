@@ -813,6 +813,9 @@ impl JobQueue for PostgresQueue {
                                 p5_win_rate: v.get("p5_win_rate").and_then(|x| x.as_f64()),
                                 p50_win_rate: v.get("p50_win_rate").and_then(|x| x.as_f64()),
                                 p95_win_rate: v.get("p95_win_rate").and_then(|x| x.as_f64()),
+                                // VaR reliability indicators
+                                data_points: v.get("data_points").and_then(|x| x.as_u64()).map(|x| x as usize).unwrap_or(0),
+                                var_unreliable: v.get("var_unreliable").and_then(|x| x.as_bool()).unwrap_or(true),
                             })
                         });
                     
@@ -858,6 +861,11 @@ impl JobQueue for PostgresQueue {
                     profit_factor: bd_to_f64(&profit_factor),
                     equity_curve,
                     completed_at: created_at,
+                    // Trade breakdown not stored in DB (legacy), default to None
+                    closed_trades: None,
+                    open_positions: None,
+                    realized_pnl: None,
+                    unrealized_pnl: None,
                     annualized_return: Some(bd_to_f64(&annualized_return)),
                     volatility: Some(bd_to_f64(&volatility)),
                     sortino_ratio: opt_bd_to_f64(&sortino_ratio),

@@ -748,6 +748,8 @@ impl Worker {
             cvar_95: mc.cvar_95,
             confidence_lower: mc.percentile_metrics.get(&5).map(|m| m.sharpe_ratio).unwrap_or(0.0),
             confidence_upper: mc.percentile_metrics.get(&95).map(|m| m.sharpe_ratio).unwrap_or(0.0),
+            data_points: mc.data_points,
+            var_unreliable: mc.var_unreliable,
             // Percentile distributions
             p5_total_pnl: mc.percentile_metrics.get(&5).map(|m| m.net_profit),
             p50_total_pnl: mc.percentile_metrics.get(&50).map(|m| m.net_profit),
@@ -779,6 +781,11 @@ impl Worker {
             profit_factor: result.core.profit_factor.unwrap_or(1.0),
             equity_curve: result.core.equity_curve,
             completed_at: Utc::now(),
+            // Trade breakdown for transparency
+            closed_trades: Some(result.core.closed_trades),
+            open_positions: Some(result.core.open_positions),
+            realized_pnl: result.core.realized_pnl,
+            unrealized_pnl: result.core.unrealized_pnl,
             // Additional metrics
             annualized_return: None, // Calculated from equity curve
             volatility: result.core.volatility,
@@ -1462,6 +1469,11 @@ impl Worker {
             profit_factor,
             equity_curve: aggregated_equity_curve,
             completed_at: Utc::now(),
+            // Walk-forward aggregates OOS results, breakdown not tracked
+            closed_trades: None,
+            open_positions: None,
+            realized_pnl: None,
+            unrealized_pnl: None,
             annualized_return: None,
             volatility: None,
             sortino_ratio: None,
@@ -1572,8 +1584,15 @@ impl Worker {
     /// Log comprehensive backtest results as structured JSON for Kibana
     fn log_backtest_results(&self, job_id: &str, result: &BacktestResult) {
         // Determine assessment status
-        let status = if result.total_pnl > 0.0 && result.sharpe_ratio > 0.5 && result.win_rate > 0.3 {
+        // Note: win_rate may be None if no closed trades (all positions still open)
+        let win_rate = result.win_rate;
+        let has_meaningful_trades = result.total_trades >= 10;
+        
+        let status = if result.total_pnl > 0.0 && result.sharpe_ratio > 0.5 && win_rate > 0.3 && has_meaningful_trades {
             "PROFITABLE"
+        } else if result.total_pnl > 0.0 && !has_meaningful_trades {
+            // Profitable but with too few trades - may be unrealized gains
+            "INSUFFICIENT_TRADES"
         } else if result.total_pnl > 0.0 {
             "MARGINALLY_PROFITABLE"
         } else if result.sharpe_ratio > 0.0 {
@@ -1589,15 +1608,25 @@ impl Worker {
         let fill_rate = if result.total_orders.unwrap_or(0) > 0 {
             result.filled_orders.unwrap_or(0) as f64 / result.total_orders.unwrap_or(1) as f64 * 100.0
         } else { 0.0 };
+        
+        // Initial capital is the first value in equity curve
+        let initial_capital = result.equity_curve.first().copied().unwrap_or(100_000.0);
 
-        // Build Monte Carlo JSON section
+        // Build Monte Carlo JSON section (VaR values are in USD, also show as % of capital)
         let mc_json = if let Some(ref mc) = result.monte_carlo {
-            format!(r#", "monte_carlo": {{"num_runs": {}, "mean_sharpe": {:.4}, "stddev_sharpe": {:.4}, "var_95_usd": {:.2}, "cvar_95_usd": {:.2}, "confidence_lower": {:.2}, "confidence_upper": {:.2}, "p5_pnl": {:.2}, "p50_pnl": {:.2}, "p95_pnl": {:.2}, "p5_drawdown_pct": {:.2}, "p50_drawdown_pct": {:.2}, "p95_drawdown_pct": {:.2}, "p5_win_rate_pct": {:.2}, "p50_win_rate_pct": {:.2}, "p95_win_rate_pct": {:.2}, "p50_sharpe": {:.4}}}"#,
+            let var_pct = if initial_capital > 0.0 { mc.var_95 / initial_capital * 100.0 } else { 0.0 };
+            let cvar_pct = if initial_capital > 0.0 { mc.cvar_95 / initial_capital * 100.0 } else { 0.0 };
+            let var_warning = if mc.var_unreliable { r#", "var_unreliable": true, "var_warning": "VaR calculated from <30 data points - statistically unreliable""# } else { "" };
+            format!(r#", "monte_carlo": {{"num_runs": {}, "data_points": {}, "mean_sharpe": {:.4}, "stddev_sharpe": {:.4}, "var_95_usd": {:.2}, "var_95_pct": {:.2}, "cvar_95_usd": {:.2}, "cvar_95_pct": {:.2}{}, "confidence_lower": {:.2}, "confidence_upper": {:.2}, "p5_pnl": {:.2}, "p50_pnl": {:.2}, "p95_pnl": {:.2}, "p5_drawdown_pct": {:.2}, "p50_drawdown_pct": {:.2}, "p95_drawdown_pct": {:.2}, "p5_win_rate_pct": {:.2}, "p50_win_rate_pct": {:.2}, "p95_win_rate_pct": {:.2}, "p50_sharpe": {:.4}}}"#,
                 mc.num_runs,
+                mc.data_points,
                 mc.mean_sharpe,
                 mc.stddev_sharpe,
-                mc.var_95,  // Absolute $ value, not percentage
-                mc.cvar_95, // Absolute $ value, not percentage
+                mc.var_95,   // Absolute $ value
+                var_pct,     // As percentage of capital
+                mc.cvar_95,  // Absolute $ value
+                cvar_pct,    // As percentage of capital
+                var_warning, // Warning if unreliable
                 mc.confidence_lower,
                 mc.confidence_upper,
                 mc.p5_total_pnl.unwrap_or(0.0),
@@ -1628,10 +1657,17 @@ impl Worker {
         };
 
         // Log single structured JSON entry - Kibana can parse and index all fields
+        // VaR values are in USD, calculate percentages for easier interpretation
+        let var_95_usd = result.value_at_risk_95.unwrap_or(0.0);
+        let cvar_95_usd = result.expected_shortfall_95.unwrap_or(0.0);
+        let var_95_pct = if initial_capital > 0.0 { var_95_usd / initial_capital * 100.0 } else { 0.0 };
+        let cvar_95_pct = if initial_capital > 0.0 { cvar_95_usd / initial_capital * 100.0 } else { 0.0 };
+        
         log_info!(MAIN_LOGGER, 
-            r#"{{"event": "BACKTEST_RESULT", "job_id": "{}", "status": "{}", "performance": {{"total_pnl": {:.2}, "gross_pnl": {:.2}, "sharpe_ratio": {:.4}, "max_drawdown_pct": {:.2}, "win_rate_pct": {:.2}, "profit_factor": {:.4}, "total_trades": {}}}, "returns": {{"annualized_pct": {:.2}, "volatility_pct": {:.2}, "sortino_ratio": {:.4}, "calmar_ratio": {:.4}}}, "trades": {{"avg_return": {:.4}, "avg_time_min": {:.1}, "best_trade": {:.2}, "worst_trade": {:.2}}}, "risk": {{"var_95_usd": {:.2}, "cvar_95_usd": {:.2}, "current_drawdown_pct": {:.2}, "avg_drawdown_pct": {:.2}, "max_dd_days": {}}}, "execution": {{"commission": {:.2}, "commission_ratio_pct": {:.1}, "avg_slippage_pct": {:.4}, "total_orders": {}, "filled_orders": {}, "cancelled_orders": {}, "fill_rate_pct": {:.1}}}{}{}}}"#,
+            r#"{{"event": "BACKTEST_RESULT", "job_id": "{}", "status": "{}", "initial_capital": {:.2}, "performance": {{"total_pnl": {:.2}, "gross_pnl": {:.2}, "sharpe_ratio": {:.4}, "max_drawdown_pct": {:.2}, "win_rate_pct": {:.2}, "profit_factor": {:.4}, "total_trades": {}}}, "returns": {{"annualized_pct": {:.2}, "volatility_pct": {:.2}, "sortino_ratio": {:.4}, "calmar_ratio": {:.4}}}, "trades": {{"avg_return": {:.4}, "avg_time_min": {:.1}, "best_trade": {:.2}, "worst_trade": {:.2}}}, "risk": {{"var_95_usd": {:.2}, "var_95_pct": {:.2}, "cvar_95_usd": {:.2}, "cvar_95_pct": {:.2}, "current_drawdown_pct": {:.2}, "avg_drawdown_pct": {:.2}, "max_dd_days": {}}}, "execution": {{"commission": {:.2}, "commission_ratio_pct": {:.1}, "avg_slippage_pct": {:.4}, "total_orders": {}, "filled_orders": {}, "cancelled_orders": {}, "fill_rate_pct": {:.1}}}{}{}}}"#,
             job_id,
             status,
+            initial_capital,
             // Performance
             result.total_pnl,
             gross_pnl,
@@ -1650,9 +1686,11 @@ impl Worker {
             result.avg_time_in_trade.unwrap_or(0.0) / 60.0,  // Convert seconds to minutes
             result.best_trade.unwrap_or(0.0),
             result.worst_trade.unwrap_or(0.0),
-            // Risk (VaR/CVaR are now positive values representing potential loss in USD)
-            result.value_at_risk_95.unwrap_or(0.0),
-            result.expected_shortfall_95.unwrap_or(0.0),
+            // Risk (VaR/CVaR are positive values representing potential loss in USD and %)
+            var_95_usd,
+            var_95_pct,
+            cvar_95_usd,
+            cvar_95_pct,
             result.current_drawdown.unwrap_or(0.0) * 100.0,
             result.avg_drawdown.unwrap_or(0.0) * 100.0,
             result.max_drawdown_duration_days.unwrap_or(0),
@@ -1824,8 +1862,11 @@ impl Worker {
         
         // Log Monte Carlo results if available
         if let Some(ref mc) = result.monte_carlo {
-            log_info!(MAIN_LOGGER, "Job {} Monte Carlo complete | runs={} mean_sharpe={:.3} VaR95={:.2}% CVaR95={:.2}%",
-                job_id, mc.num_runs, mc.mean_metrics.sharpe_ratio, mc.var_95 * 100.0, mc.cvar_95 * 100.0);
+            // VaR and CVaR are in USD (absolute potential loss), calculate percentage of capital
+            let var_pct = mc.var_95 / initial_capital * 100.0;
+            let cvar_pct = mc.cvar_95 / initial_capital * 100.0;
+            log_info!(MAIN_LOGGER, "Job {} Monte Carlo complete | runs={} mean_sharpe={:.3} VaR95=${:.2} ({:.2}%) CVaR95=${:.2} ({:.2}%)",
+                job_id, mc.num_runs, mc.mean_metrics.sharpe_ratio, mc.var_95, var_pct, mc.cvar_95, cvar_pct);
         }
         
         // Log Walk-Forward results if available
@@ -1848,6 +1889,8 @@ impl Worker {
             cvar_95: mc.cvar_95,
             confidence_lower: mc.percentile_metrics.get(&5).map(|m| m.sharpe_ratio).unwrap_or(0.0),
             confidence_upper: mc.percentile_metrics.get(&95).map(|m| m.sharpe_ratio).unwrap_or(0.0),
+            data_points: mc.data_points,
+            var_unreliable: mc.var_unreliable,
             // Percentile distributions
             p5_total_pnl: mc.percentile_metrics.get(&5).map(|m| m.net_profit),
             p50_total_pnl: mc.percentile_metrics.get(&50).map(|m| m.net_profit),
@@ -1879,6 +1922,11 @@ impl Worker {
             profit_factor: result.core.profit_factor.unwrap_or(1.0),
             equity_curve: result.core.equity_curve,
             completed_at: Utc::now(),
+            // Trade breakdown from core result
+            closed_trades: Some(result.core.closed_trades),
+            open_positions: Some(result.core.open_positions),
+            realized_pnl: result.core.realized_pnl,
+            unrealized_pnl: result.core.unrealized_pnl,
             annualized_return: None,
             volatility: result.core.volatility,
             sortino_ratio: None,
@@ -1993,6 +2041,11 @@ impl Worker {
             profit_factor: result.core.profit_factor.unwrap_or(1.0),
             equity_curve: result.core.equity_curve,
             completed_at: Utc::now(),
+            // Trade breakdown from core result
+            closed_trades: Some(result.core.closed_trades),
+            open_positions: Some(result.core.open_positions),
+            realized_pnl: result.core.realized_pnl,
+            unrealized_pnl: result.core.unrealized_pnl,
             annualized_return: None,
             volatility: result.core.volatility,
             sortino_ratio: None,

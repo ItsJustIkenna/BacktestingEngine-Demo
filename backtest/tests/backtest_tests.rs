@@ -7,12 +7,7 @@ use backtest::{
     simulation::SimulationLoop,
     types::{GapSeverity, DataQualityReport, DataGap},
 };
-use config::{BacktestConfig, AnalysisMode, AnalysisConfig, OrderBookConfig};
-use strategy::StrategyManager;
-use orderbook::OrderBook;
-use portfoliomanager::PortfolioState;
-use riskmanager::RiskManager;
-use dataloader::MarketData;
+use config::{BacktestConfig, AnalysisMode, AnalysisConfig};
 use metrics::PerformanceMetrics;
 use bigdecimal::BigDecimal;
 use std::sync::Arc;
@@ -130,6 +125,10 @@ fn test_backtest_result_with_data() {
     let result = BacktestResult {
         total_pnl: BigDecimal::from(5000),
         num_trades: 100,
+        closed_trades: 100,
+        open_positions: 0,
+        realized_pnl: Some(5000.0),
+        unrealized_pnl: Some(0.0),
         max_drawdown: BigDecimal::from_str("0.10").unwrap(),
         sharpe_ratio: Some(1.5),
         sortino_ratio: Some(2.1),
@@ -161,6 +160,10 @@ fn test_backtest_result_serialization() {
     let result = BacktestResult {
         total_pnl: BigDecimal::from(2500),
         num_trades: 50,
+        closed_trades: 50,
+        open_positions: 0,
+        realized_pnl: Some(2500.0),
+        unrealized_pnl: Some(0.0),
         max_drawdown: BigDecimal::from_str("0.08").unwrap(),
         sharpe_ratio: Some(1.2),
         sortino_ratio: Some(1.8),
@@ -202,6 +205,8 @@ fn test_monte_carlo_result_structure() {
         percentile_metrics: std::collections::HashMap::new(),
         var_95: 0.05,
         cvar_95: 0.08,
+        data_points: 100,
+        var_unreliable: false,
     };
     
     assert_eq!(result.num_runs, 1000);
@@ -227,13 +232,6 @@ fn test_monte_carlo_with_trades() {
         sharpe_ratio: Some(1.5),
         profit_factor: Some(1.8),
         win_rate: Some(0.55),
-        avg_trade_return: None,
-        median_trade_return: None,
-        avg_trade_duration: None,
-        volatility: None,
-        gross_profit: None,
-        gross_loss: None,
-        net_profit: None,
         equity_curve: vec![
             100000.0, 100200.0, 100500.0, 100300.0, 100800.0,
             101000.0, 100700.0, 101200.0, 101500.0, 101300.0,
@@ -243,12 +241,7 @@ fn test_monte_carlo_with_trades() {
             104300.0, 104800.0, 105000.0,
         ],
         initial_capital: 100000.0,
-        data_quality: None,
-        transaction_costs: None,
-        market_impact: None,
-        sortino_ratio: None,
-        calmar_ratio: None,
-        risk_halt_reason: None,
+        ..Default::default()
     };
     
     let mc_result = monte_carlo::run_monte_carlo_simulation(&base_result, 100);
@@ -268,13 +261,6 @@ fn test_lightweight_monte_carlo() {
         sharpe_ratio: Some(1.2),
         profit_factor: Some(1.5),
         win_rate: Some(0.52),
-        avg_trade_return: None,
-        median_trade_return: None,
-        avg_trade_duration: None,
-        volatility: None,
-        gross_profit: None,
-        gross_loss: None,
-        net_profit: None,
         equity_curve: vec![
             100000.0, 100100.0, 100300.0, 100200.0, 100500.0,
             100700.0, 100600.0, 100900.0, 101100.0, 101000.0,
@@ -282,12 +268,7 @@ fn test_lightweight_monte_carlo() {
             102200.0, 102100.0, 102400.0, 102700.0, 103000.0,
         ],
         initial_capital: 100000.0,
-        data_quality: None,
-        transaction_costs: None,
-        market_impact: None,
-        sortino_ratio: None,
-        calmar_ratio: None,
-        risk_halt_reason: None,
+        ..Default::default()
     };
     
     let result = monte_carlo::run_lightweight_monte_carlo(&base_result, 50);
@@ -552,6 +533,8 @@ fn test_backtest_results_with_monte_carlo() {
         percentile_metrics: std::collections::HashMap::new(),
         var_95: 0.05,
         cvar_95: 0.08,
+        data_points: 50,
+        var_unreliable: false,
     };
     
     let results = BacktestResults {

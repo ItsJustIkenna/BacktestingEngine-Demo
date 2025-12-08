@@ -230,10 +230,16 @@ pub struct MonteCarloSummary {
     pub num_runs: usize,
     pub mean_sharpe: f64,
     pub stddev_sharpe: f64,
-    pub var_95: f64,       // Value at Risk (95th percentile loss)
-    pub cvar_95: f64,      // Conditional VaR (expected loss beyond VaR)
+    pub var_95: f64,       // Value at Risk (95th percentile loss) in USD
+    pub cvar_95: f64,      // Conditional VaR (expected loss beyond VaR) in USD
     pub confidence_lower: f64,  // 5th percentile Sharpe
     pub confidence_upper: f64,  // 95th percentile Sharpe
+    /// Number of data points used for Monte Carlo simulation
+    #[serde(default)]
+    pub data_points: usize,
+    /// True if VaR/CVaR are unreliable due to insufficient data (< 30 points)
+    #[serde(default)]
+    pub var_unreliable: bool,
     // Percentile distributions for key metrics
     #[serde(default)]
     pub p5_total_pnl: Option<f64>,
@@ -278,6 +284,20 @@ pub struct BacktestResult {
     pub profit_factor: f64,
     pub equity_curve: Vec<f64>,
     pub completed_at: DateTime<Utc>,
+    
+    // Trade breakdown - helps explain PnL vs win_rate discrepancies
+    /// Number of closed (completed) trades - these contribute to win_rate
+    #[serde(default)]
+    pub closed_trades: Option<usize>,
+    /// Number of positions still open at end of backtest
+    #[serde(default)]
+    pub open_positions: Option<usize>,
+    /// Realized P&L from closed trades only
+    #[serde(default)]
+    pub realized_pnl: Option<f64>,
+    /// Unrealized P&L from open positions (mark-to-market)
+    #[serde(default)]
+    pub unrealized_pnl: Option<f64>,
     
     // Additional performance metrics
     #[serde(default)]

@@ -193,12 +193,40 @@ impl ExchangeFeeConfig {
         }
     }
     
+    /// Create DeepBook (SUI CLOB) exchange configuration
+    /// DeepBook has very competitive fees for market makers
+    pub fn deepbook() -> Self {
+        Self {
+            exchange: "deepbook".to_string(),
+            maker_fee: 0.0005,  // 5 bps maker - very competitive
+            taker_fee: 0.0010,  // 10 bps taker
+            volume_tiers: vec![
+                // DeepBook has flat fees (no volume tiers currently)
+                VolumeTier { min_volume_30d: 0.0, maker_fee: 0.0005, taker_fee: 0.0010 },
+            ],
+        }
+    }
+    
+    /// Create Cetus (SUI AMM) exchange configuration
+    pub fn cetus() -> Self {
+        Self {
+            exchange: "cetus".to_string(),
+            maker_fee: 0.0030,  // 30 bps - AMM pool fee
+            taker_fee: 0.0030,  // 30 bps - same for AMM
+            volume_tiers: vec![
+                VolumeTier { min_volume_30d: 0.0, maker_fee: 0.0030, taker_fee: 0.0030 },
+            ],
+        }
+    }
+    
     /// Create configuration for a specific exchange by name
     pub fn for_exchange(exchange: &str) -> Self {
         match exchange.to_lowercase().as_str() {
             "kraken" => Self::kraken(),
             "binance" => Self::binance(),
             "coinbase" => Self::coinbase(),
+            "deepbook" | "sui" => Self::deepbook(),
+            "cetus" => Self::cetus(),
             _ => {
                 // Default to generic fees
                 Self {

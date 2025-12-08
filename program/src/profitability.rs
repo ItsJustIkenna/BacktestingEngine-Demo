@@ -454,6 +454,11 @@ mod tests {
             profit_factor: 1.5,
             equity_curve: vec![100000.0, 100500.0, 101000.0],
             completed_at: Utc::now(),
+            // Trade breakdown for test
+            closed_trades: Some(trades),
+            open_positions: Some(0),
+            realized_pnl: Some(pnl),
+            unrealized_pnl: Some(0.0),
             annualized_return: None,
             volatility: None,
             sortino_ratio: Some(2.0),

@@ -16,8 +16,15 @@ pub struct MonteCarloResult {
     pub mean_metrics: PerformanceMetrics,
     pub stddev_metrics: PerformanceMetrics,
     pub percentile_metrics: HashMap<u8, PerformanceMetrics>, // percentile -> metrics
-    pub var_95: f64, // Value at Risk (95th percentile)
-    pub cvar_95: f64, // Conditional VaR (expected loss beyond 95th percentile)
+    pub var_95: f64, // Value at Risk (95th percentile) in USD
+    pub cvar_95: f64, // Conditional VaR (expected loss beyond 95th percentile) in USD
+    /// Number of data points used for Monte Carlo (equity curve length - 1)
+    /// VaR/CVaR are unreliable if this is < 30
+    #[serde(default)]
+    pub data_points: usize,
+    /// True if VaR/CVaR should be considered unreliable due to insufficient data
+    #[serde(default)]
+    pub var_unreliable: bool,
 }
 
 /// Helper functions for aggregation
@@ -127,7 +134,11 @@ fn run_monte_carlo_simulation_internal(
     num_runs: usize,
     progress_callback: Option<std::sync::Arc<dyn Fn(&str, usize, usize) + Send + Sync>>,
 ) -> anyhow::Result<MonteCarloResult> {
-    // Extract individual trade returns from equity curve
+    // Extract individual returns from equity curve (not closed trade returns)
+    // NOTE: This uses equity curve deltas which include BOTH realized and unrealized P&L.
+    // This is intentional for Monte Carlo - we're simulating portfolio value paths,
+    // not just closed trade outcomes. This may differ from the main win_rate which
+    // only considers closed positions.
     let mut trade_returns: Vec<f64> = Vec::new();
     if base_result.equity_curve.len() > 1 {
         for i in 1..base_result.equity_curve.len() {
@@ -152,6 +163,8 @@ fn run_monte_carlo_simulation_internal(
             percentile_metrics: percentiles,
             var_95: 0.0,
             cvar_95: 0.0,
+            data_points: 0,
+            var_unreliable: true, // No data = completely unreliable
         });
     }
     
@@ -417,6 +430,9 @@ fn run_monte_carlo_simulation_internal(
         percentile_metrics: percentiles,
         var_95,
         cvar_95,
+        // Track data reliability
+        data_points: trade_returns.len(),
+        var_unreliable: trade_returns.len() < 30, // VaR needs at least ~30 samples to be meaningful
     })
 }
 

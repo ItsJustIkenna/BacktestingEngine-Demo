@@ -29,6 +29,14 @@ pub enum BacktestEvent {
 pub struct BacktestResult {
     pub total_pnl: BigDecimal,
     pub num_trades: usize,
+    /// Number of closed (completed) trades - these contribute to win_rate and realized P&L
+    pub closed_trades: usize,
+    /// Number of positions still open at end of backtest - contribute to unrealized P&L
+    pub open_positions: usize,
+    /// Realized P&L from closed trades only
+    pub realized_pnl: Option<f64>,
+    /// Unrealized P&L from open positions (mark-to-market)
+    pub unrealized_pnl: Option<f64>,
     pub max_drawdown: BigDecimal,
     pub sharpe_ratio: Option<f64>,
     pub sortino_ratio: Option<f64>,

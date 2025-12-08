@@ -13,6 +13,10 @@ pub fn demo_enhanced_cli() {
     let result = BacktestResult {
         total_pnl: BigDecimal::from_str("15420.50").unwrap(),
         num_trades: 142,
+        closed_trades: 142,
+        open_positions: 0,
+        realized_pnl: Some(15420.5),
+        unrealized_pnl: Some(0.0),
         max_drawdown: BigDecimal::from_str("8300.0").unwrap(),
         sharpe_ratio: Some(1.85),
         sortino_ratio: Some(2.35),

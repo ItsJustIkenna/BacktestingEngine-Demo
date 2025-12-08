@@ -518,29 +518,77 @@ impl SimulationLoop {
         }
 
         // Collect trade returns and durations from closed positions (do this after market data processing)
+        let mut closed_position_count = 0;
+        let mut open_position_count = 0;
+        let mut total_unrealized_pnl = 0.0;
+        
         for pos in &portfolio.positions {
             if let Some(close_time) = pos.close_time {
-                // Only consider closed positions
+                // Only consider closed positions for trade statistics
+                closed_position_count += 1;
                 trade_returns.push(pos.realized_pnl.to_f64().unwrap_or(0.0));
                 let duration = (close_time - pos.open_time).num_seconds() as f64;
                 trade_durations.push(duration);
+            } else {
+                // Track open positions and their unrealized P&L
+                open_position_count += 1;
+                total_unrealized_pnl += pos.unrealized_pnl.to_f64().unwrap_or(0.0);
             }
         }
+        
+        // Log position breakdown for debugging
+        log_info!(BACKTEST_LOGGER, "Position breakdown: closed={} open={} unrealized_pnl={:.2}",
+            closed_position_count, open_position_count, total_unrealized_pnl);
 
         // Compute metrics using collected data
+        // NOTE: These metrics are based on CLOSED positions only.
+        // If there are open positions with unrealized P&L, the total_pnl may differ from net_profit.
         result.num_trades = performance::number_of_trades(&trade_returns);
         result.gross_profit = Some(performance::gross_profit(&trade_returns));
         result.gross_loss = Some(performance::gross_loss(&trade_returns));
         result.net_profit = Some(performance::net_profit(&trade_returns));
         result.avg_trade_return = performance::average_trade_return(&trade_returns);
         result.median_trade_return = performance::median_trade_return(&trade_returns);
-        result.sharpe_ratio = performance::sharpe_ratio(&trade_returns, config.trading.risk_free_rate);
+        
+        // For Sharpe ratio, if we have very few closed trades but significant unrealized P&L,
+        // use the equity curve returns instead for a more representative metric
+        let use_equity_returns = trade_returns.len() < 10 && open_position_count > 0;
+        let sharpe_returns = if use_equity_returns {
+            // Calculate returns from equity curve for better Sharpe estimation
+            equity_curve.windows(2)
+                .filter_map(|w| if w[0] > 0.0 { Some((w[1] - w[0]) / w[0]) } else { None })
+                .collect::<Vec<_>>()
+        } else {
+            trade_returns.clone()
+        };
+        result.sharpe_ratio = performance::sharpe_ratio(&sharpe_returns, config.trading.risk_free_rate);
+        
         result.profit_factor = performance::profit_factor(
             result.gross_profit.unwrap_or(0.0),
             result.gross_loss.unwrap_or(0.0),
         );
-        result.win_rate = trade_stats::win_rate(&trade_returns);
+        
+        // Calculate win rate - if no closed trades, indicate this clearly with None
+        result.win_rate = if closed_position_count > 0 {
+            trade_stats::win_rate(&trade_returns)
+        } else {
+            // No closed trades - win rate is undefined, not 0%
+            None
+        };
         result.avg_trade_duration = trade_stats::average_trade_duration(&trade_durations);
+        
+        // Populate closed/open position counts and realized/unrealized PnL for transparency
+        result.closed_trades = closed_position_count;
+        result.open_positions = open_position_count;
+        let realized_pnl = performance::net_profit(&trade_returns);
+        result.realized_pnl = Some(realized_pnl);
+        result.unrealized_pnl = Some(total_unrealized_pnl);
+        
+        // Log warning if PnL is primarily from unrealized gains
+        if total_unrealized_pnl.abs() > realized_pnl.abs() && open_position_count > 0 {
+            log_info!(BACKTEST_LOGGER, "WARNING: PnL dominated by unrealized gains. realized={:.2} unrealized={:.2}",
+                realized_pnl, total_unrealized_pnl);
+        }
         
         // Calculate volatility using percentage returns from equity curve (not dollar returns)
         // This gives a proper annualizable volatility metric

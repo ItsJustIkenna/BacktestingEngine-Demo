@@ -55,10 +55,13 @@ impl Chromosome for AvellanedaStoikovChromosome {
             // Exit and trading control parameters
             take_profit_pct: rng.gen_range(0.002..0.02),           // 0.2% to 2% take profit
             stop_loss_pct: rng.gen_range(0.001..0.01),             // 0.1% to 1% stop loss
-            // min_spread_bps must exceed round-trip commission (2 * 10bps = 20bps minimum)
-            // Range: 25-150 bps to ensure profitability after costs
-            min_spread_bps: rng.gen_range(25.0..150.0),
-            max_trades_per_minute: rng.gen_range(1.0..30.0),       // 1 to 30 trades per minute (reduced from 60 to favor quality over quantity)
+            // min_spread_bps range depends on exchange fees:
+            // - DeepBook (SUI): 10 bps round-trip → min 25 bps for profitability
+            // - Kraken (low vol): 50 bps round-trip → min 125 bps for profitability
+            // Range: 20-150 bps to cover both scenarios
+            min_spread_bps: rng.gen_range(20.0..150.0),
+            // Trade frequency - balance between opportunity capture and cost
+            max_trades_per_minute: rng.gen_range(0.5..15.0),       // 0.5 to 15 trades per minute
         }
     }
 
@@ -161,11 +164,11 @@ impl Chromosome for AvellanedaStoikovChromosome {
         }
         if rng.gen_bool(mutation_rate) {
             self.min_spread_bps += rng.gen_range(-15.0..15.0);
-            self.min_spread_bps = self.min_spread_bps.clamp(25.0, 150.0);
+            self.min_spread_bps = self.min_spread_bps.clamp(20.0, 150.0);
         }
         if rng.gen_bool(mutation_rate) {
-            self.max_trades_per_minute += rng.gen_range(-3.0..3.0);
-            self.max_trades_per_minute = self.max_trades_per_minute.clamp(1.0, 30.0);
+            self.max_trades_per_minute += rng.gen_range(-2.0..2.0);
+            self.max_trades_per_minute = self.max_trades_per_minute.clamp(0.5, 15.0);
         }
     }
     
