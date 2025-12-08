@@ -817,6 +817,7 @@ impl Worker {
             end_date: job.params.end_date.clone(),
             monte_carlo,
             walk_forward,
+            risk_halt_reason: None,
         };
         
         log_info!(BACKTEST_LOGGER, "Job {} backtest complete | pnl={:.2} sharpe={:.3} trades={}", 
@@ -1014,18 +1015,13 @@ impl Worker {
         let (best_chromosome, best_fitness) = optimizer.run().await;
         log_info!(GENETIC_LOGGER, "Job {} optimizer.run() completed | best_fitness={:.6}", job.id, best_fitness);
         
-        // Check if the best fitness is essentially zero (all strategies rejected)
-        if best_fitness < 0.01 {
-            log_error!(GENETIC_LOGGER, "Job {} FAILED: No viable strategy found! best_fitness={:.6} < 0.01 threshold. All strategies had commission ratio >= 80%", 
+        // Track if strategy is below viability threshold (but continue to show results)
+        let strategy_below_threshold = best_fitness < 0.01;
+        if strategy_below_threshold {
+            log_warn!(GENETIC_LOGGER, "Job {} WARNING: No viable strategy found! best_fitness={:.6} < 0.01 threshold. All strategies had commission ratio >= 80%", 
                 job.id, best_fitness);
-            log_error!(GENETIC_LOGGER, "Job {} best params were: risk_aversion={:.4} order_size_pct={:.2}% min_spread_bps={:.1}", 
+            log_warn!(GENETIC_LOGGER, "Job {} best params were: risk_aversion={:.4} order_size_pct={:.2}% min_spread_bps={:.1} - continuing to show results anyway", 
                 job.id, best_chromosome.risk_aversion, best_chromosome.order_size_pct * 100.0, best_chromosome.min_spread_bps);
-            return Err(format!(
-                "No viable strategy found. Best fitness {:.6} is below threshold 0.01. \
-                All tested strategies had commission costs exceeding 80% of gross profits. \
-                This market/timeframe may not be suitable for market-making, or try different parameters.",
-                best_fitness
-            ).into());
         }
         
         // Broadcast + persist phase change after optimization completes
@@ -1059,7 +1055,7 @@ impl Worker {
         log_info!(GENETIC_LOGGER, "Job {} running full analysis pipeline (Backtest → Monte Carlo → Walk-Forward)", job.id);
         log_debug!(MAIN_LOGGER, "🚀 About to run final backtest for job {}", job.id);
         
-        let final_result = self.run_full_analysis_with_chromosome(
+        let mut final_result = self.run_full_analysis_with_chromosome(
             &job.id,
             &params.symbol,
             &params.exchange,
@@ -1071,6 +1067,15 @@ impl Worker {
             params.monte_carlo_runs,
             params.walk_forward_enabled,
         ).await?;
+        
+        // If strategy was below viability threshold, add warning to result
+        if strategy_below_threshold {
+            final_result.risk_halt_reason = Some(format!(
+                "NOT_VIABLE: Best fitness {:.6} < 0.01 threshold. Commission costs exceeded 80% of gross profits. \
+                This market/timeframe may not be suitable for market-making.",
+                best_fitness
+            ));
+        }
         
         // Final broadcast + persist (lifecycle event)
         progress_tracker.broadcast_progress(100.0);
@@ -1497,6 +1502,7 @@ impl Worker {
             end_date: job.params.end_date.clone(),
             monte_carlo: None, // Walk-forward uses aggregated OOS results
             walk_forward: None, // This IS the walk-forward result
+            risk_halt_reason: None,
         })
     }
     
@@ -1588,7 +1594,14 @@ impl Worker {
         let win_rate = result.win_rate;
         let has_meaningful_trades = result.total_trades >= 10;
         
-        let status = if result.total_pnl > 0.0 && result.sharpe_ratio > 0.5 && win_rate > 0.3 && has_meaningful_trades {
+        // Check if strategy was flagged as not viable (commission costs too high)
+        let is_not_viable = result.risk_halt_reason.as_ref()
+            .map(|r| r.starts_with("NOT_VIABLE"))
+            .unwrap_or(false);
+        
+        let status = if is_not_viable {
+            "NOT_VIABLE"
+        } else if result.total_pnl > 0.0 && result.sharpe_ratio > 0.5 && win_rate > 0.3 && has_meaningful_trades {
             "PROFITABLE"
         } else if result.total_pnl > 0.0 && !has_meaningful_trades {
             // Profitable but with too few trades - may be unrealized gains
@@ -1950,6 +1963,7 @@ impl Worker {
             end_date: None,
             monte_carlo: monte_carlo_summary,
             walk_forward: walk_forward_summary,
+            risk_halt_reason: None,
         })
     }
     /// Used for fitness evaluation and walk-forward window testing
@@ -2074,6 +2088,7 @@ impl Worker {
             end_date: None,
             monte_carlo: None, // Chromosome evaluation doesn't run MC
             walk_forward: None, // Chromosome evaluation doesn't run WF
+            risk_halt_reason: None,
         })
     }
     

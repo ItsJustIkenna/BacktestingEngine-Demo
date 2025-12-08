@@ -482,6 +482,7 @@ mod tests {
             walk_forward: None,
             start_date: None,
             end_date: None,
+            risk_halt_reason: None,
         }
     }
     

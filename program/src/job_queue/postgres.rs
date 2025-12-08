@@ -889,6 +889,7 @@ impl JobQueue for PostgresQueue {
                     walk_forward,
                     start_date: None,
                     end_date: None,
+                    risk_halt_reason: None, // Not stored in DB
                 }))
             }
             None => Ok(None),

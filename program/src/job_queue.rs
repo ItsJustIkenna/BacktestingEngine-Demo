@@ -359,6 +359,10 @@ pub struct BacktestResult {
     pub monte_carlo: Option<MonteCarloSummary>,
     #[serde(default)]
     pub walk_forward: Option<WalkForwardSummary>,
+    
+    // Warning/halt reason (e.g., "NOT_VIABLE: Commission costs exceeded 80%")
+    #[serde(default)]
+    pub risk_halt_reason: Option<String>,
 }
 
 /// Job queue interface
