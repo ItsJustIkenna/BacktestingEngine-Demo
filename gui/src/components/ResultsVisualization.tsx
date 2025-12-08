@@ -44,6 +44,10 @@ interface BacktestResult {
   monte_carlo?: MonteCarloSummary;
   walk_forward?: WalkForwardSummary;
   
+  // Date range for equity curve x-axis display
+  start_date?: string;
+  end_date?: string;
+  
   // Additional performance metrics
   annualized_return?: number;
   volatility?: number;
@@ -1197,7 +1201,11 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         marginBottom: '30px',
       }}>
         <h3 style={{ marginTop: 0 }}>Equity Curve</h3>
-        <EquityCurveChart data={result.equity_curve ?? []} />
+        <EquityCurveChart 
+          data={result.equity_curve ?? []} 
+          startDate={result.start_date}
+          endDate={result.end_date}
+        />
       </div>
 
       {/* Strategy Metrics */}
@@ -1249,9 +1257,11 @@ const MetricCard: React.FC<MetricCardProps> = ({ title, value, color }) => (
 
 interface EquityCurveChartProps {
   data: Array<number | { timestamp?: string; value?: number }>;
+  startDate?: string;
+  endDate?: string;
 }
 
-const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
+const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data, startDate, endDate }) => {
   if (!data || data.length === 0) {
     return <div style={{ padding: '20px', textAlign: 'center', color: '#666' }}>No data available</div>;
   }
@@ -1260,6 +1270,23 @@ const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
   const getValue = (d: number | { timestamp?: string; value?: number }): number => {
     if (typeof d === 'number') return d;
     return d.value ?? 0;
+  };
+
+  // Calculate intermediate date labels based on start and end dates
+  const getDateAtRatio = (ratio: number): string => {
+    if (!startDate || !endDate) return `${Math.round(ratio * 100)}%`;
+    try {
+      const start = new Date(startDate).getTime();
+      const end = new Date(endDate).getTime();
+      const targetTime = start + (end - start) * ratio;
+      const targetDate = new Date(targetTime);
+      return targetDate.toLocaleDateString('en-US', { 
+        month: 'short', 
+        day: 'numeric'
+      });
+    } catch {
+      return `${Math.round(ratio * 100)}%`;
+    }
   };
 
   // Simple SVG line chart implementation
@@ -1327,7 +1354,7 @@ const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
             <g key={`x-${i}`}>
               <line x1={x} y1={padding} x2={x} y2={height - padding} stroke="#e9ecef" strokeWidth={1} />
               <text x={x} y={height - padding + 15} textAnchor="middle" fontSize="11" fill="#666">
-                {`${Math.round(ratio * 100)}%`}
+                {getDateAtRatio(ratio)}
               </text>
             </g>
           );
@@ -1338,7 +1365,7 @@ const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
         
         {/* Axis labels */}
         <text x={width / 2} y={height - 5} textAnchor="middle" fontSize="12" fill="#333">
-          Time Progress
+          {startDate && endDate ? 'Date' : 'Time Progress'}
         </text>
         <text x={15} y={height / 2} textAnchor="middle" fontSize="12" fill="#333" transform={`rotate(-90, 15, ${height / 2})`}>
           Portfolio Value

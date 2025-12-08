@@ -294,12 +294,15 @@ pub struct BacktestResult {
     pub best_trade: Option<f64>,
     #[serde(default)]
     pub worst_trade: Option<f64>,
+    /// Average time in trade in SECONDS (convert to minutes for display: value / 60.0)
     #[serde(default)]
     pub avg_time_in_trade: Option<f64>,
     
     // Risk metrics
+    /// Value at Risk (95% confidence) - POSITIVE value representing potential loss in USD
     #[serde(default)]
     pub value_at_risk_95: Option<f64>,
+    /// Expected Shortfall / CVaR (95%) - POSITIVE value representing expected loss beyond VaR in USD
     #[serde(default)]
     pub expected_shortfall_95: Option<f64>,
     #[serde(default)]
@@ -324,6 +327,12 @@ pub struct BacktestResult {
     // Strategy parameters used
     #[serde(default)]
     pub strategy_params: Option<serde_json::Value>,
+    
+    // Date range for the backtest (for equity curve x-axis display)
+    #[serde(default)]
+    pub start_date: Option<String>,
+    #[serde(default)]
+    pub end_date: Option<String>,
     
     // Advanced analysis results
     #[serde(default)]

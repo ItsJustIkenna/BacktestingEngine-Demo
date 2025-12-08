@@ -682,6 +682,9 @@ impl Worker {
                 "inventory_target": job.params.inventory_target,
                 "order_size": job.params.order_size
             })),
+            // Date range for equity curve x-axis
+            start_date: job.params.start_date.clone(),
+            end_date: job.params.end_date.clone(),
             monte_carlo,
             walk_forward,
         };
@@ -1336,6 +1339,8 @@ impl Worker {
             avg_slippage: None,
             total_commission_paid: None,
             strategy_params: None,
+            start_date: job.params.start_date.clone(),
+            end_date: job.params.end_date.clone(),
             monte_carlo: None, // Walk-forward uses aggregated OOS results
             walk_forward: None, // This IS the walk-forward result
         })
@@ -1498,12 +1503,12 @@ impl Worker {
             result.volatility.unwrap_or(0.0) * 100.0,
             result.sortino_ratio.unwrap_or(0.0),
             result.calmar_ratio.unwrap_or(0.0),
-            // Trades
+            // Trades (avg_time_in_trade is stored in seconds, convert to minutes for display)
             result.avg_trade_return.unwrap_or(0.0),
-            result.avg_time_in_trade.unwrap_or(0.0),
+            result.avg_time_in_trade.unwrap_or(0.0) / 60.0,  // Convert seconds to minutes
             result.best_trade.unwrap_or(0.0),
             result.worst_trade.unwrap_or(0.0),
-            // Risk (VaR/CVaR are absolute $ values from Monte Carlo)
+            // Risk (VaR/CVaR are now positive values representing potential loss in USD)
             result.value_at_risk_95.unwrap_or(0.0),
             result.expected_shortfall_95.unwrap_or(0.0),
             result.current_drawdown.unwrap_or(0.0) * 100.0,
@@ -1751,6 +1756,8 @@ impl Worker {
             avg_slippage: result.core.transaction_costs.as_ref().map(|tc| tc.total_slippage / result.core.num_trades.max(1) as f64),
             total_commission_paid: result.core.transaction_costs.as_ref().map(|tc| tc.total_commission),
             strategy_params: None,
+            start_date: None, // Internal genetic eval doesn't have job params
+            end_date: None,
             monte_carlo: monte_carlo_summary,
             walk_forward: walk_forward_summary,
         })
@@ -1868,6 +1875,8 @@ impl Worker {
                 "order_size_pct": chromosome.order_size_pct,
                 "order_size_units": order_size_units
             })),
+            start_date: None, // Chromosome evaluation doesn't have date range
+            end_date: None,
             monte_carlo: None, // Chromosome evaluation doesn't run MC
             walk_forward: None, // Chromosome evaluation doesn't run WF
         })

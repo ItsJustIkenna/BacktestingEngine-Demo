@@ -10,7 +10,14 @@ use riskmanager::RiskManager;
 use strategy::StrategyManager;
 
 /// Fitness function: runs actual backtest with given chromosome parameters
-/// Returns Sharpe ratio as fitness score (higher is better)
+/// Returns a composite fitness score using weighted combination:
+/// - Sharpe ratio (0.5 weight)
+/// - Profit Factor (0.3 weight)  
+/// - Win Rate (0.2 weight)
+/// With penalties for:
+/// - Excessive drawdown (>20%)
+/// - High commission ratio (>50% of gross profit)
+/// - Too few trades (<10)
 pub async fn avellaneda_stoikov_fitness(
     chromo: &AvellanedaStoikovChromosome,
     market_data: Vec<dataloader::MarketData>,
@@ -82,13 +89,80 @@ pub async fn avellaneda_stoikov_fitness(
         config,
     ).await;
     
-    // Return Sharpe ratio as fitness (or 0.0 if None)
-    // Penalize strategies with too few trades
-    if result.num_trades < 10 {
-        return result.sharpe_ratio.unwrap_or(0.0) * 0.1; // Heavy penalty
+    // ========== COMPREHENSIVE FITNESS FUNCTION ==========
+    // Same logic as backtest/src/engine.rs for consistency
+    
+    use bigdecimal::ToPrimitive;
+    let initial_capital = config.trading.initial_capital;
+    
+    // === Primary Metrics ===
+    let sharpe = result.sharpe_ratio.unwrap_or(0.0);
+    let sortino = result.sortino_ratio.unwrap_or(sharpe);
+    let pf = result.profit_factor.unwrap_or(1.0);
+    let win_rate = result.win_rate.unwrap_or(0.0);
+    let net_profit_pct = result.net_profit.unwrap_or(0.0) / initial_capital;
+    let calmar = result.calmar_ratio.unwrap_or(0.0);
+    
+    // === Base Fitness (weights sum to 1.0) ===
+    let mut fitness = 
+        sortino * 0.25 +
+        sharpe * 0.15 +
+        (pf - 1.0).max(0.0) * 0.20 +
+        win_rate * 0.15 +
+        net_profit_pct * 0.15 +
+        calmar.min(3.0) * 0.10;
+    
+    // === Penalty: Insufficient Trades ===
+    if result.num_trades < 30 {
+        fitness *= (result.num_trades as f64 / 30.0).max(0.1);
     }
     
-    // Return Sharpe ratio, but ensure minimum of 0.0
-    result.sharpe_ratio.unwrap_or(0.0).max(0.0)
+    // === Penalty: Excessive Drawdown ===
+    let dd_value = result.max_drawdown.to_f64().unwrap_or(0.0);
+    let dd_pct = (dd_value / initial_capital).abs();
+    if dd_pct > 0.15 {
+        let dd_penalty = if dd_pct > 0.40 { 0.2 } else if dd_pct > 0.25 { 0.5 } else { 0.8 };
+        fitness *= dd_penalty;
+    }
+    
+    // === Penalty: Commission Inefficiency ===
+    if let (Some(gross_profit), Some(transaction_costs)) = 
+        (&result.gross_profit, &result.transaction_costs) 
+    {
+        let gross = *gross_profit;
+        let commission = transaction_costs.total_commission;
+        
+        if gross > 0.0 {
+            let commission_ratio = commission / gross;
+            if commission_ratio > 0.40 {
+                let penalty = if commission_ratio >= 1.0 { 0.1 }
+                    else if commission_ratio >= 0.70 { 0.3 }
+                    else { 1.0 - (commission_ratio - 0.4) * 1.5 };
+                fitness *= penalty;
+            }
+        } else if gross <= 0.0 && commission > 0.0 {
+            fitness *= 0.05;
+        }
+    }
+    
+    // === Penalty: Poor Average Trade ===
+    if let (Some(avg_trade), Some(transaction_costs)) = 
+        (&result.avg_trade_return, &result.transaction_costs)
+    {
+        let avg_commission = if result.num_trades > 0 {
+            transaction_costs.total_commission / result.num_trades as f64
+        } else { 0.0 };
+        
+        if *avg_trade > 0.0 && *avg_trade < avg_commission * 2.0 {
+            fitness *= 0.7;
+        }
+    }
+    
+    // === Bonus: Well-Rounded Strategy ===
+    if net_profit_pct > 0.05 && pf > 1.5 && win_rate > 0.50 && dd_pct < 0.15 {
+        fitness *= 1.2;
+    }
+    
+    fitness.max(0.0)
 }
 

@@ -32,6 +32,9 @@ pub struct SimulationLoop {
     current_30d_volume_by_exchange: FxHashMap<String, f64>,
     // Track current active order IDs to cancel before placing new orders
     active_order_ids: Vec<String>,
+    // Track rolling market volume for realistic market impact calculation
+    market_volume_window: Vec<(chrono::DateTime<chrono::Utc>, f64)>, // (timestamp, trade_volume_usd)
+    rolling_avg_volume: f64, // Average volume over rolling window
 }
 
 impl SimulationLoop {
@@ -47,6 +50,41 @@ impl SimulationLoop {
             trade_history_by_exchange: FxHashMap::default(),
             current_30d_volume_by_exchange: FxHashMap::default(),
             active_order_ids: Vec::with_capacity(10),
+            market_volume_window: Vec::with_capacity(1000), // Track last ~1000 trades
+            rolling_avg_volume: 0.0,
+        }
+    }
+    
+    /// Update rolling market volume from observed trades
+    /// Uses a 1-hour window to calculate average trade size
+    fn update_market_volume(&mut self, timestamp: chrono::DateTime<chrono::Utc>, trade_volume_usd: f64) {
+        use chrono::Duration;
+        
+        // Add new trade
+        self.market_volume_window.push((timestamp, trade_volume_usd));
+        
+        // Remove trades older than 1 hour
+        let cutoff = timestamp - Duration::hours(1);
+        self.market_volume_window.retain(|(ts, _)| *ts >= cutoff);
+        
+        // Calculate average trade volume in the window
+        if !self.market_volume_window.is_empty() {
+            let total: f64 = self.market_volume_window.iter().map(|(_, vol)| vol).sum();
+            // Average volume per minute (for market impact comparison)
+            let window_minutes = 60.0; // 1 hour = 60 minutes
+            self.rolling_avg_volume = total / window_minutes;
+        }
+    }
+    
+    /// Get the current average market volume (per minute)
+    /// Returns a reasonable default if no data yet
+    fn get_avg_volume(&self) -> f64 {
+        if self.rolling_avg_volume > 0.0 {
+            self.rolling_avg_volume
+        } else {
+            // Default fallback: assume $100k per minute for BTC (reasonable for major exchanges)
+            // This is conservative - will result in some market impact
+            100_000.0
         }
     }
     
@@ -192,6 +230,10 @@ impl SimulationLoop {
                     // Update current market price from trade
                     current_market_price = Some(trade.price.clone());
                     
+                    // Track market volume for realistic market impact calculation
+                    let trade_volume_usd = trade.price.to_f64().unwrap_or(0.0) * trade.quantity.to_f64().unwrap_or(0.0);
+                    self.update_market_volume(trade.timestamp, trade_volume_usd);
+                    
                     // Convert TradeData side string to BookSide
                     // The trade side is the AGGRESSOR's side (the taker who initiated):
                     // - "buy" means a buyer aggressed -> fills our ASK orders
@@ -228,6 +270,10 @@ impl SimulationLoop {
                 MarketData::Trade(trade) => {
                     // Update current market price from trade
                     current_market_price = Some(trade.price.clone());
+                    
+                    // Track market volume for realistic market impact calculation
+                    let trade_volume_usd = trade.price.to_f64().unwrap_or(0.0) * trade.quantity.to_f64().unwrap_or(0.0);
+                    self.update_market_volume(trade.timestamp, trade_volume_usd);
                     
                     // Convert TradeData side string to BookSide
                     // The trade side is the AGGRESSOR's side (the taker who initiated):
@@ -402,8 +448,8 @@ impl SimulationLoop {
                     // Note: Slippage is now handled internally by the orderbook during order matching
                     // We track the actual slippage from fills below
                     
-                    // Estimate market impact (using placeholder for avg_volume)
-                    let avg_volume = 1000.0; // TODO: get from market data
+                    // Calculate market impact using rolling average volume from observed trades
+                    let avg_volume = self.get_avg_volume();
                     let _impact_cost = self.calculate_market_impact(order_size, order_price, avg_volume, config, timestamp);
                     
                     // Track this order ID for later cancellation

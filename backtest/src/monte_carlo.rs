@@ -343,20 +343,37 @@ fn run_monte_carlo_simulation_internal(
     }
     
     // Calculate VaR and CVaR (95% confidence)
+    // VaR = Value at Risk = potential loss at 95% confidence
+    // This means: "We are 95% confident we won't lose more than VaR"
+    // Convention: VaR is expressed as a POSITIVE number representing potential loss
     let mut sorted_profits = all_net_profits.clone();
-    sorted_profits.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sorted_profits.sort_by(|a, b| a.partial_cmp(b).unwrap()); // Ascending: worst to best
     let var_95_index = (0.05 * sorted_profits.len() as f64) as usize;
-    let var_95 = sorted_profits[var_95_index];
+    let percentile_5_profit = sorted_profits[var_95_index];
     
-    // CVaR: average of losses below VaR threshold
+    // VaR = negative of the 5th percentile (if 5th percentile is -$1000, VaR is $1000)
+    // If even the 5th percentile is positive (all runs profitable), VaR is 0 (no expected loss)
+    let var_95 = if percentile_5_profit < 0.0 {
+        -percentile_5_profit  // Convert loss to positive VaR
+    } else {
+        0.0  // No VaR if even worst outcomes are profitable
+    };
+    
+    // CVaR (Conditional VaR / Expected Shortfall): average loss BEYOND the VaR threshold
+    // This is the expected loss in the worst 5% of scenarios
     let losses_beyond_var: Vec<f64> = sorted_profits.iter()
         .take(var_95_index)
         .copied()
         .collect();
     let cvar_95 = if !losses_beyond_var.is_empty() {
-        mean(&losses_beyond_var)
+        let avg_worst_profit = mean(&losses_beyond_var);
+        if avg_worst_profit < 0.0 {
+            -avg_worst_profit  // Convert to positive expected loss
+        } else {
+            0.0
+        }
     } else {
-        var_95
+        var_95  // Fall back to VaR if no data
     };
     
     Ok(MonteCarloResult {

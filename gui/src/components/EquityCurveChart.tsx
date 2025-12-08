@@ -8,9 +8,11 @@ type EquityCurveDataItem = number | { timestamp?: string; equity?: number; value
 
 interface EquityCurveChartProps {
   data?: EquityCurveDataItem[];
+  startDate?: string;
+  endDate?: string;
 }
 
-export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
+export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data, startDate, endDate }) => {
   // Basic SVG chart implementation
   // For production, use a library like recharts or Chart.js
   
@@ -24,6 +26,25 @@ export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
       return d;
     }
     return d.equity ?? d.value ?? 0;
+  };
+
+  // Helper to calculate date at a given ratio between start and end
+  const getDateAtRatio = (ratio: number): string => {
+    if (!startDate || !endDate) {
+      return `${Math.round(ratio * 100)}%`;
+    }
+    try {
+      const start = new Date(startDate).getTime();
+      const end = new Date(endDate).getTime();
+      const targetTime = start + (end - start) * ratio;
+      const targetDate = new Date(targetTime);
+      return targetDate.toLocaleDateString('en-US', { 
+        month: 'short', 
+        day: 'numeric'
+      });
+    } catch {
+      return `${Math.round(ratio * 100)}%`;
+    }
   };
 
   const width = 800;
@@ -59,12 +80,6 @@ export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
       return `$${(value / 1000).toFixed(1)}K`;
     }
     return `$${value.toFixed(0)}`;
-  };
-
-  // Format time labels for X-axis (show data point indices as percentages of total time)
-  const getTimeLabel = (percent: number): string => {
-    const index = Math.floor(percent * (equities.length - 1));
-    return `${Math.round(percent * 100)}%`;
   };
 
   return (
@@ -108,7 +123,7 @@ export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
                 strokeWidth={1}
               />
               <text x={x} y={height - padding + 15} fontSize="11" textAnchor="middle" fill="#666">
-                {getTimeLabel(percent)}
+                {getDateAtRatio(percent)}
               </text>
             </g>
           );
@@ -123,7 +138,7 @@ export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data }) => {
 
         {/* Labels */}
         <text x={width / 2} y={height - 5} fontSize="14" textAnchor="middle" fill="#333">
-          Time
+          {startDate && endDate ? 'Date' : 'Time'}
         </text>
         <text x={10} y={height / 2} fontSize="14" textAnchor="middle" transform={`rotate(-90, 10, ${height / 2})`} fill="#333">
           Equity

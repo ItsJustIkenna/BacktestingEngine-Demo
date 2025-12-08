@@ -879,6 +879,8 @@ impl JobQueue for PostgresQueue {
                     strategy_params,
                     monte_carlo,
                     walk_forward,
+                    start_date: None,
+                    end_date: None,
                 }))
             }
             None => Ok(None),

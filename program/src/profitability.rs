@@ -475,6 +475,8 @@ mod tests {
             strategy_params: None,
             monte_carlo: None,
             walk_forward: None,
+            start_date: None,
+            end_date: None,
         }
     }
     
