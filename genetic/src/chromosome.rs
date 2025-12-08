@@ -55,8 +55,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
             // Exit and trading control parameters
             take_profit_pct: rng.gen_range(0.002..0.02),           // 0.2% to 2% take profit
             stop_loss_pct: rng.gen_range(0.001..0.01),             // 0.1% to 1% stop loss
-            min_spread_bps: rng.gen_range(5.0..50.0),              // 5 to 50 basis points
-            max_trades_per_minute: rng.gen_range(5.0..60.0),       // 5 to 60 trades per minute
+            // min_spread_bps must exceed round-trip commission (2 * 10bps = 20bps minimum)
+            // Range: 25-150 bps to ensure profitability after costs
+            min_spread_bps: rng.gen_range(25.0..150.0),
+            max_trades_per_minute: rng.gen_range(1.0..30.0),       // 1 to 30 trades per minute (reduced from 60 to favor quality over quantity)
         }
     }
 
@@ -158,12 +160,12 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.stop_loss_pct = self.stop_loss_pct.clamp(0.001, 0.01);
         }
         if rng.gen_bool(mutation_rate) {
-            self.min_spread_bps += rng.gen_range(-5.0..5.0);
-            self.min_spread_bps = self.min_spread_bps.clamp(5.0, 50.0);
+            self.min_spread_bps += rng.gen_range(-15.0..15.0);
+            self.min_spread_bps = self.min_spread_bps.clamp(25.0, 150.0);
         }
         if rng.gen_bool(mutation_rate) {
-            self.max_trades_per_minute += rng.gen_range(-5.0..5.0);
-            self.max_trades_per_minute = self.max_trades_per_minute.clamp(5.0, 60.0);
+            self.max_trades_per_minute += rng.gen_range(-3.0..3.0);
+            self.max_trades_per_minute = self.max_trades_per_minute.clamp(1.0, 30.0);
         }
     }
     

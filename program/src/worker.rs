@@ -50,6 +50,26 @@ use dataloader::MarketData;
 fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult, initial_capital: f64) -> f64 {
     use bigdecimal::ToPrimitive;
     
+    // === HARD CONSTRAINT: Reject commission-inefficient strategies early ===
+    // This prevents the optimizer from wasting time on strategies that can't be profitable
+    if let (Some(gross_profit), Some(transaction_costs)) = 
+        (&result.gross_profit, &result.transaction_costs) 
+    {
+        let gross = *gross_profit;
+        let commission = transaction_costs.total_commission;
+        
+        // Hard reject: If commissions exceed 80% of gross profit, this is unviable
+        if gross <= 0.0 {
+            return 0.001; // No gross profit = essentially zero fitness
+        }
+        let commission_ratio = commission / gross;
+        if commission_ratio >= 0.80 {
+            // Return a tiny but non-zero value that's proportional to how bad it is
+            // This ensures even the "best" commission-heavy strategy loses to any viable one
+            return 0.001 * (1.0 - (commission_ratio - 0.80).min(0.5));
+        }
+    }
+    
     // === Primary Metrics ===
     let sharpe = result.sharpe_ratio.unwrap_or(0.0);
     let sortino = result.sortino_ratio.unwrap_or(sharpe);
@@ -59,13 +79,14 @@ fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult, ini
     let calmar = result.calmar_ratio.unwrap_or(0.0);
     
     // === Base Fitness (weights sum to 1.0) ===
+    // Emphasize NET profitability more heavily
     let mut fitness = 
-        sortino * 0.25 +
-        sharpe * 0.15 +
-        (pf - 1.0).max(0.0) * 0.20 +
-        win_rate * 0.15 +
-        net_profit_pct * 0.15 +
-        calmar.min(3.0) * 0.10;
+        sortino * 0.15 +
+        sharpe * 0.10 +
+        (pf - 1.0).max(0.0) * 0.15 +
+        win_rate * 0.10 +
+        net_profit_pct * 0.35 +  // Increased: Net profit is what matters!
+        calmar.min(3.0) * 0.15;
     
     // === Penalty: Insufficient Trades ===
     if result.num_trades < 30 {
@@ -80,8 +101,7 @@ fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult, ini
         fitness *= dd_penalty;
     }
     
-    // === CRITICAL: Penalty for Commission Inefficiency ===
-    // This is the key fix - strategies where commissions eat profits should be rejected
+    // === Soft Penalty for Moderate Commission Ratio (40-80%) ===
     if let (Some(gross_profit), Some(transaction_costs)) = 
         (&result.gross_profit, &result.transaction_costs) 
     {
@@ -90,16 +110,11 @@ fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult, ini
         
         if gross > 0.0 {
             let commission_ratio = commission / gross;
-            if commission_ratio > 0.40 {
-                // Scale: 40-70% = warning, 70-100% = severe, >100% = near-zero fitness
-                let penalty = if commission_ratio >= 1.0 { 0.05 }  // Commissions exceed profit - almost kill fitness
-                    else if commission_ratio >= 0.70 { 0.2 }       // Very marginal
-                    else { 1.0 - (commission_ratio - 0.4) * 2.0 }; // Linear scale 0.4-0.7 -> 1.0-0.4
-                fitness *= penalty;
+            if commission_ratio > 0.40 && commission_ratio < 0.80 {
+                // Linear penalty: 40% = no penalty, 80% = 0.2x (before hard cutoff kicks in)
+                let penalty = 1.0 - (commission_ratio - 0.4) * 2.0;
+                fitness *= penalty.max(0.2);
             }
-        } else if gross <= 0.0 {
-            // No gross profit - heavy penalty regardless of commission
-            fitness *= 0.05;
         }
     }
     
@@ -111,9 +126,9 @@ fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult, ini
             transaction_costs.total_commission / result.num_trades as f64
         } else { 0.0 };
         
-        // Each trade should profit more than 2x the commission to be worthwhile
-        if *avg_trade > 0.0 && *avg_trade < avg_commission * 2.0 {
-            fitness *= 0.7;
+        // Each trade should profit more than 3x the commission to be worthwhile (raised from 2x)
+        if *avg_trade > 0.0 && *avg_trade < avg_commission * 3.0 {
+            fitness *= 0.5; // Stronger penalty for marginal trades
         }
     }
     

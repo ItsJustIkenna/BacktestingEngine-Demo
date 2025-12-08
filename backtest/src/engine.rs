@@ -449,53 +449,56 @@ impl BacktestEngine {
                 use bigdecimal::ToPrimitive;
                 let initial_capital = config.trading.initial_capital;
                 
+                // === HARD CONSTRAINT: Reject commission-inefficient strategies early ===
+                if let (Some(gross_profit), Some(transaction_costs)) = 
+                    (&result.gross_profit, &result.transaction_costs) 
+                {
+                    let gross = *gross_profit;
+                    let commission = transaction_costs.total_commission;
+                    
+                    if gross <= 0.0 {
+                        return genetic::FitnessResult::new(0.001, result.equity_curve);
+                    }
+                    let commission_ratio = commission / gross;
+                    if commission_ratio >= 0.80 {
+                        let tiny_fitness = 0.001 * (1.0 - (commission_ratio - 0.80).min(0.5));
+                        return genetic::FitnessResult::new(tiny_fitness, result.equity_curve);
+                    }
+                }
+                
                 // === Primary Metrics (weighted combination) ===
                 let sharpe = result.sharpe_ratio.unwrap_or(0.0);
-                let sortino = result.sortino_ratio.unwrap_or(sharpe); // Fall back to Sharpe if no Sortino
+                let sortino = result.sortino_ratio.unwrap_or(sharpe);
                 let pf = result.profit_factor.unwrap_or(1.0);
                 let win_rate = result.win_rate.unwrap_or(0.0);
-                
-                // Net profit as percentage of capital (normalized)
                 let net_profit_pct = result.net_profit.unwrap_or(0.0) / initial_capital;
-                
-                // Calmar ratio: annualized return / max drawdown (recovery ability)
                 let calmar = result.calmar_ratio.unwrap_or(0.0);
                 
                 // === Base Fitness Calculation ===
-                // Weights sum to 1.0 for interpretability
+                // Emphasize NET profitability more heavily
                 let mut fitness = 
-                    sortino * 0.25 +           // Risk-adjusted returns (downside only)
-                    sharpe * 0.15 +            // Risk-adjusted returns (total volatility)
-                    (pf - 1.0).max(0.0) * 0.20 + // Profit factor (capped at 0 contribution if < 1)
-                    win_rate * 0.15 +          // Consistency of winning
-                    net_profit_pct * 0.15 +    // Absolute profitability (normalized)
-                    calmar.min(3.0) * 0.10;    // Recovery factor (capped to prevent outliers)
+                    sortino * 0.15 +
+                    sharpe * 0.10 +
+                    (pf - 1.0).max(0.0) * 0.15 +
+                    win_rate * 0.10 +
+                    net_profit_pct * 0.35 +    // Increased: Net profit is what matters!
+                    calmar.min(3.0) * 0.15;
                 
                 // === Penalty: Insufficient Trades ===
-                // Need enough trades for statistical significance
+                let dd_value = result.max_drawdown.to_f64().unwrap_or(0.0);
+                let dd_pct = (dd_value / initial_capital).abs();
+                
                 if result.num_trades < 30 {
-                    let trade_penalty = (result.num_trades as f64 / 30.0).max(0.1);
-                    fitness *= trade_penalty;
+                    fitness *= (result.num_trades as f64 / 30.0).max(0.1);
                 }
                 
                 // === Penalty: Excessive Drawdown ===
-                let dd_value = result.max_drawdown.to_f64().unwrap_or(0.0);
-                let dd_pct = (dd_value / initial_capital).abs();
                 if dd_pct > 0.15 {
-                    // Graduated penalty: 15-25% = minor, 25-40% = moderate, >40% = severe
-                    let dd_penalty = if dd_pct > 0.40 {
-                        0.2
-                    } else if dd_pct > 0.25 {
-                        0.5
-                    } else {
-                        0.8
-                    };
+                    let dd_penalty = if dd_pct > 0.40 { 0.2 } else if dd_pct > 0.25 { 0.5 } else { 0.8 };
                     fitness *= dd_penalty;
                 }
                 
-                // === Penalty: Commission Inefficiency ===
-                // Critical: prevents optimizer from finding strategies that are
-                // unprofitable after transaction costs
+                // === Soft Penalty for Moderate Commission Ratio (40-80%) ===
                 if let (Some(gross_profit), Some(transaction_costs)) = 
                     (&result.gross_profit, &result.transaction_costs) 
                 {
@@ -504,24 +507,14 @@ impl BacktestEngine {
                     
                     if gross > 0.0 {
                         let commission_ratio = commission / gross;
-                        if commission_ratio > 0.40 {
-                            // Scale: 40-70% = warning, 70-100% = severe, >100% = near-zero fitness
-                            let penalty = if commission_ratio >= 1.0 {
-                                0.1
-                            } else if commission_ratio >= 0.70 {
-                                0.3
-                            } else {
-                                1.0 - (commission_ratio - 0.4) * 1.5
-                            };
-                            fitness *= penalty;
+                        if commission_ratio > 0.40 && commission_ratio < 0.80 {
+                            let penalty = 1.0 - (commission_ratio - 0.4) * 2.0;
+                            fitness *= penalty.max(0.2);
                         }
-                    } else if gross <= 0.0 && commission > 0.0 {
-                        fitness *= 0.05; // Nearly kill fitness if losing AND paying commissions
                     }
                 }
                 
                 // === Penalty: Poor Average Trade ===
-                // Each trade should be worth taking after costs
                 if let (Some(avg_trade), Some(transaction_costs)) = 
                     (&result.avg_trade_return, &result.transaction_costs)
                 {
@@ -531,21 +524,17 @@ impl BacktestEngine {
                         0.0
                     };
                     
-                    // Average trade return should be at least 2x the commission
-                    if *avg_trade > 0.0 && *avg_trade < avg_commission_per_trade * 2.0 {
-                        fitness *= 0.7; // Marginal trades
+                    if *avg_trade > 0.0 && *avg_trade < avg_commission_per_trade * 3.0 {
+                        fitness *= 0.5;
                     }
                 }
                 
-                // === Bonus: Consistent Profitability ===
-                // Reward strategies that are profitable in multiple conditions
+                // === Bonus: Well-Rounded Strategy ===
                 if net_profit_pct > 0.05 && pf > 1.5 && win_rate > 0.50 && dd_pct < 0.15 {
-                    fitness *= 1.2; // 20% bonus for well-rounded strategies
+                    fitness *= 1.2;
                 }
                 
-                let final_fitness = fitness.max(0.0); // Ensure non-negative
-                
-                // Return fitness AND equity curve for robustness analysis
+                let final_fitness = fitness.max(0.0);
                 genetic::FitnessResult::new(final_fitness, result.equity_curve)
             }) as Pin<Box<dyn Future<Output = genetic::FitnessResult> + Send + 'static>>
         });
