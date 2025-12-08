@@ -1081,6 +1081,31 @@ impl Worker {
         log_info!(GENETIC_LOGGER, "Job {} genetic optimization complete | best_fitness={:.4} risk_aversion={:.3} inventory_target={:.3} order_size_pct={:.2}%", 
             job.id, best_fitness, best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size_pct * 100.0);
         
+        // Log ALL chromosome parameters for debugging unprofitable strategies
+        log_info!(MAIN_LOGGER, 
+            r#"{{"event": "STRATEGY_PARAMS", "job_id": "{}", "best_fitness": {:.6}, "params": {{"risk_aversion": {:.4}, "order_size_pct": {:.4}, "window_ms": {}, "min_quote_lifetime_ms": {}, "fee_rate": {:.6}, "latency_buffer": {:.2}, "inventory_target": {:.4}, "volatility_cap": {:.4}, "time_horizon_min": {:.2}, "market_depth_k": {:.2}, "min_spread_bps": {:.1}, "max_trades_per_min": {:.2}, "take_profit_pct": {:.4}, "stop_loss_pct": {:.4}, "vol_adj_factor": {:.2}, "inv_penalty_factor": {:.2}, "trend_sensitivity": {:.3}, "flow_sensitivity": {:.3}}}}}"#,
+            job.id,
+            best_fitness,
+            best_chromosome.risk_aversion,
+            best_chromosome.order_size_pct,
+            best_chromosome.window_ms,
+            best_chromosome.min_quote_lifetime_ms,
+            best_chromosome.fee_rate,
+            best_chromosome.latency_buffer,
+            best_chromosome.inventory_target,
+            best_chromosome.volatility_cap,
+            best_chromosome.time_horizon_minutes,
+            best_chromosome.market_depth_k,
+            best_chromosome.min_spread_bps,
+            best_chromosome.max_trades_per_minute,
+            best_chromosome.take_profit_pct,
+            best_chromosome.stop_loss_pct,
+            best_chromosome.volatility_adjustment_factor,
+            best_chromosome.inventory_penalty_factor,
+            best_chromosome.trend_sensitivity,
+            best_chromosome.flow_sensitivity
+        );
+        
         // Update phase for final analysis
         progress_tracker.broadcast_phase("final_analysis", serde_json::json!({
             "stage": "monte_carlo_walkforward"
@@ -1777,6 +1802,34 @@ impl Worker {
             // Optional sections
             mc_json,
             wf_json
+        );
+        
+        // Log detailed per-trade economics for strategy improvement insights
+        let avg_gross_per_trade = if result.total_trades > 0 { 
+            gross_pnl / result.total_trades as f64 
+        } else { 0.0 };
+        let avg_commission_per_trade = if result.total_trades > 0 { 
+            commission / result.total_trades as f64 
+        } else { 0.0 };
+        let avg_net_per_trade = if result.total_trades > 0 { 
+            result.total_pnl / result.total_trades as f64 
+        } else { 0.0 };
+        let breakeven_spread_bps = if avg_gross_per_trade > 0.0 {
+            // Estimate: commission / gross = commission ratio, so breakeven spread = current spread * commission_ratio
+            (avg_commission_per_trade / avg_gross_per_trade) * 100.0 * 2.0 // *2 because spread needs to cover both sides
+        } else { 0.0 };
+        
+        log_info!(MAIN_LOGGER,
+            r#"{{"event": "TRADE_ECONOMICS", "job_id": "{}", "per_trade": {{"avg_gross": {:.2}, "avg_commission": {:.2}, "avg_net": {:.2}, "commission_pct_of_gross": {:.1}}}, "breakeven": {{"min_spread_bps_needed": {:.1}, "min_profit_per_trade": {:.2}}}, "efficiency": {{"trades_per_dollar_commission": {:.2}, "gross_to_net_ratio": {:.2}}}}}"#,
+            job_id,
+            avg_gross_per_trade,
+            avg_commission_per_trade,
+            avg_net_per_trade,
+            if avg_gross_per_trade > 0.0 { (avg_commission_per_trade / avg_gross_per_trade) * 100.0 } else { 0.0 },
+            breakeven_spread_bps,
+            avg_commission_per_trade,  // This is the minimum profit needed per trade
+            if commission > 0.0 { result.total_trades as f64 / commission } else { 0.0 },
+            if gross_pnl != 0.0 { result.total_pnl / gross_pnl } else { 0.0 }
         );
     }
     

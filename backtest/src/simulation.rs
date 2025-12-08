@@ -714,6 +714,17 @@ impl SimulationLoop {
             total_impact_cost: self.total_market_impact,
             liquidity_warnings: self.liquidity_warnings.clone(),
         });
+        
+        // Log fee tier progression for debugging commission issues
+        for (exchange, volume) in &self.current_30d_volume_by_exchange {
+            let fee_rate = if let Some(ref fee_config) = config.trading.exchange_fees {
+                fee_config.get_fee_rate(*volume, true) // maker rate
+            } else {
+                config.trading.commission_rate
+            };
+            log_info!(BACKTEST_LOGGER, "Fee tier summary | exchange={} final_30d_volume=${:.0} final_maker_fee_bps={:.1} total_commission=${:.2}",
+                exchange, volume, fee_rate * 10000.0, self.total_commission);
+        }
 
         result
     }
