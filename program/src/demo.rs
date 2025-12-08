@@ -15,6 +15,8 @@ pub fn demo_enhanced_cli() {
         num_trades: 142,
         max_drawdown: BigDecimal::from_str("8300.0").unwrap(),
         sharpe_ratio: Some(1.85),
+        sortino_ratio: Some(2.35),
+        calmar_ratio: Some(1.86),
         profit_factor: Some(2.1),
         win_rate: Some(68.5),
         avg_trade_return: Some(3.2),
@@ -34,6 +36,7 @@ pub fn demo_enhanced_cli() {
         data_quality: None,
         transaction_costs: None,
         market_impact: None,
+        risk_halt_reason: None,
     };
     
     // Create and use the enhanced visualizer with configuration

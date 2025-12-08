@@ -31,6 +31,8 @@ pub struct BacktestResult {
     pub num_trades: usize,
     pub max_drawdown: BigDecimal,
     pub sharpe_ratio: Option<f64>,
+    pub sortino_ratio: Option<f64>,
+    pub calmar_ratio: Option<f64>,
     pub profit_factor: Option<f64>,
     pub win_rate: Option<f64>,
     pub avg_trade_return: Option<f64>,
@@ -45,6 +47,7 @@ pub struct BacktestResult {
     pub data_quality: Option<DataQualityReport>,
     pub transaction_costs: Option<TransactionCostAnalysis>,
     pub market_impact: Option<MarketImpactAnalysis>,
+    pub risk_halt_reason: Option<String>,
 }
 
 /// Comprehensive data quality report

@@ -216,6 +216,7 @@ mod tests {
             max_order_size: Some(5.0),
             max_inventory_skew: Some(3.0),
             max_volatility: Some(0.15),
+            ..Default::default()
         };
         let risk_manager = RiskManager::with_limits(limits);
         

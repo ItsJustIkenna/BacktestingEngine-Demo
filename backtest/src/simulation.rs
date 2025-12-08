@@ -9,7 +9,7 @@ use orderbook::{OrderBookEvent, BookSide};
 #[cfg(feature = "postgres")]
 use databaseschema::models::historical_order::HistoricalOrder;
 use portfoliomanager::PortfolioState;
-use riskmanager::RiskManager;
+use riskmanager::{RiskManager, RiskMetrics, RiskAction};
 use dataloader::MarketData;
 use crate::types::{BacktestEvent, BacktestResult, TransactionCostAnalysis, MarketImpactAnalysis, LiquidityWarning};
 use crate::logging_facade::BACKTEST_LOGGER;
@@ -148,12 +148,16 @@ impl SimulationLoop {
         strategy_manager: &mut StrategyManager,
         orderbook: &mut OrderBook,
         portfolio: &mut PortfolioState,
-        _risk_manager: &mut RiskManager,
+        risk_manager: &mut RiskManager,
         market_data: Vec<MarketData>,
         config: &config::BacktestConfig,
     ) -> BacktestResult {
     let mut events: Vec<BacktestEvent> = Vec::with_capacity(market_data.len());
     let mut result = BacktestResult::default();
+    
+    // Track if trading has been halted due to risk limits
+    let mut trading_halted = false;
+    let mut halt_reason: Option<String> = None;
 
     // Collectors for metrics (pre-allocated)
     let mut trade_returns: Vec<f64> = Vec::with_capacity(100);
@@ -162,6 +166,9 @@ impl SimulationLoop {
 
     // Start equity curve with initial capital
     equity_curve.push(config.trading.initial_capital);
+    
+    // Initialize risk manager with starting equity
+    risk_manager.initialize(config.trading.initial_capital);
     
     // Track current market price for unrealized P&L calculation
     let mut current_market_price: Option<BigDecimal> = None;
@@ -286,6 +293,17 @@ impl SimulationLoop {
                     next_close: None,
                 }, // Default session
             };
+            
+            // Skip signal processing if trading has been halted
+            if trading_halted {
+                // Still update equity curve even when halted
+                if let Some(ref price) = current_market_price {
+                    portfolio.update_unrealized_pnl(price);
+                }
+                let total_portfolio_value = portfolio.get_total_value().to_f64().unwrap_or(0.0);
+                equity_curve.push(total_portfolio_value);
+                continue;
+            }
 
             // 3. Run all enabled strategies, collect signals
             let signals = strategy_manager.process_market_data(&data, &context).await.unwrap_or_default();
@@ -300,16 +318,86 @@ impl SimulationLoop {
                 self.active_order_ids.clear();
             }
             
+            // Calculate current risk metrics for risk checks
+            let current_equity = portfolio.get_total_value().to_f64().unwrap_or(config.trading.initial_capital);
+            let current_position = portfolio.positions.iter()
+                .filter(|p| p.close_time.is_none())
+                .map(|p| {
+                    let qty = p.quantity.to_f64().unwrap_or(0.0);
+                    match p.side {
+                        portfoliomanager::PositionSide::Long => qty,
+                        portfoliomanager::PositionSide::Short => -qty,
+                    }
+                })
+                .sum::<f64>();
+            
+            // Update risk manager's equity tracking
+            risk_manager.update_equity(current_equity);
+            let current_drawdown = risk_manager.get_current_drawdown(current_equity);
+            
+            // Build risk metrics
+            let risk_metrics = RiskMetrics {
+                current_position,
+                current_order_size: 0.0,
+                current_inventory_skew: 0.0,
+                current_volatility: 0.0,
+                current_drawdown,
+                unrealized_pnl: portfolio.positions.iter()
+                    .filter(|p| p.close_time.is_none())
+                    .map(|p| p.unrealized_pnl.to_f64().unwrap_or(0.0))
+                    .sum(),
+                daily_pnl: current_equity - config.trading.initial_capital,
+            };
+            
+            // Check global risk limits before processing signals
+            if let Err(reason) = risk_manager.check(&risk_metrics) {
+                log_error!(BACKTEST_LOGGER, "Risk limit exceeded: {}", reason);
+                trading_halted = true;
+                halt_reason = Some(reason);
+                continue;
+            }
+            
             for (_strategy_id, sigs) in signals {
                 for signal in sigs {
                     // Extract order details for cost calculation
                     let order_price = signal.price.as_ref()
                         .and_then(|p| p.to_f64())
                         .unwrap_or(0.0);
-                    let order_size = signal.quantity.as_ref()
+                    let mut order_size = signal.quantity.as_ref()
                         .and_then(|q| q.to_f64())
                         .unwrap_or(0.0);
                     let exchange = orderbook.exchange.clone();
+                    
+                    // Check if this specific order should be allowed
+                    match risk_manager.check_order(order_size, current_position, &risk_metrics) {
+                        RiskAction::Proceed => {
+                            // Order is allowed, continue
+                        }
+                        RiskAction::ReducePosition(allowed_size) => {
+                            log_info!(BACKTEST_LOGGER, "Risk: reducing order size from {} to {}", order_size, allowed_size);
+                            order_size = allowed_size;
+                            if order_size <= 0.0 {
+                                continue; // Skip this order entirely
+                            }
+                        }
+                        RiskAction::RejectOrder(reason) => {
+                            log_info!(BACKTEST_LOGGER, "Risk: rejecting order - {}", reason);
+                            continue;
+                        }
+                        RiskAction::CloseAllPositions(reason) => {
+                            log_error!(BACKTEST_LOGGER, "Risk: closing all positions - {}", reason);
+                            // TODO: Implement position closing logic
+                            trading_halted = true;
+                            halt_reason = Some(reason);
+                            continue;
+                        }
+                        RiskAction::HaltTrading(reason) => {
+                            log_error!(BACKTEST_LOGGER, "Risk: halting trading - {}", reason);
+                            trading_halted = true;
+                            halt_reason = Some(reason);
+                            continue;
+                        }
+                    }
                     
                     // Note: Slippage is now handled internally by the orderbook during order matching
                     // We track the actual slippage from fills below
@@ -359,7 +447,10 @@ impl SimulationLoop {
                     if let Err(e) = portfolio.apply_fills(&fills) {
                         log_error!(BACKTEST_LOGGER, "Error applying fills: {}", e);
                     }
-                    // risk_manager.update(&portfolio, &fills); // TODO: Implement this method in RiskManager
+                    
+                    // Update risk manager equity after fills
+                    let new_equity = portfolio.get_total_value().to_f64().unwrap_or(0.0);
+                    risk_manager.update_equity(new_equity);
 
                     // 7. Record event
                     events.push(BacktestEvent::OrderSubmitted {
@@ -408,6 +499,21 @@ impl SimulationLoop {
         result.max_drawdown = risk::max_drawdown(&equity_curve)
             .map(|v| BigDecimal::from_f64(v).unwrap_or_default())
             .unwrap_or_default();
+        
+        // Calculate Sortino ratio (uses downside deviation instead of total volatility)
+        result.sortino_ratio = risk::sortino_ratio(&trade_returns, config.trading.risk_free_rate);
+        
+        // Calculate Calmar ratio (annualized return / max drawdown)
+        let max_dd = result.max_drawdown.to_f64().unwrap_or(0.0);
+        if !trade_returns.is_empty() && max_dd > 0.0 {
+            // Estimate annualized return (assuming 252 trading days per year)
+            let total_return = trade_returns.iter().sum::<f64>();
+            let annualized_return = total_return * (252.0 / trade_returns.len() as f64);
+            result.calmar_ratio = risk::calmar_ratio(annualized_return, max_dd);
+        }
+        
+        // Record risk halt reason if trading was stopped
+        result.risk_halt_reason = halt_reason;
             
         // Debug: Log portfolio state before calculating PnL
         log_info!(BACKTEST_LOGGER, "Portfolio state: balance={} positions={} open_positions={}",

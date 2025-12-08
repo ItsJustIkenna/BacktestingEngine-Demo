@@ -10,6 +10,7 @@ fn create_risk_metrics() -> RiskMetrics {
         current_order_size: 1.0,
         current_inventory_skew: 1.5,
         current_volatility: 0.08,
+        ..Default::default()
     }
 }
 
@@ -30,6 +31,7 @@ fn bench_risk_manager_with_limits(c: &mut Criterion) {
         max_order_size: Some(5.0),
         max_inventory_skew: Some(3.0),
         max_volatility: Some(0.15),
+        ..Default::default()
     };
     
     c.bench_function("risk_manager_with_limits", |b| {

@@ -547,8 +547,8 @@ impl Worker {
             // Additional metrics
             annualized_return: None, // Calculated from equity curve
             volatility: result.core.volatility,
-            sortino_ratio: None, // TODO: Add to core metrics
-            calmar_ratio: None, // TODO: Add to core metrics
+            sortino_ratio: result.core.sortino_ratio,
+            calmar_ratio: result.core.calmar_ratio,
             avg_trade_return: result.core.avg_trade_return,
             best_trade: result.core.gross_profit, // Approximate
             worst_trade: result.core.gross_loss, // Approximate

@@ -177,9 +177,10 @@ impl Strategy for SimpleArbitrageStrategy {
         crate::config::RiskLimits {
             max_position_size: Some(self.position_size * 2.0), // 2x position size limit
             max_daily_loss: Some(1000.0), // $1000 max daily loss
-            max_drawdown: Some(0.05), // 5% max drawdown
-            stop_loss_pct: Some(0.02), // 2% stop loss
-            take_profit_pct: Some(0.01), // 1% take profit (quick arbitrage)
+            max_drawdown_percent: Some(0.05), // 5% max drawdown
+            stop_loss_percent: Some(0.02), // 2% stop loss
+            take_profit_percent: Some(0.01), // 1% take profit (quick arbitrage)
+            max_open_orders: None,
         }
     }
 }

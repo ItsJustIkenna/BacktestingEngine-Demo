@@ -129,21 +129,21 @@ mod tests {
         
         // Test that values are in expected ranges
         assert!(chromo1.risk_aversion >= 0.001 && chromo1.risk_aversion <= 0.1);
-        assert!(chromo1.order_size >= 0.001 && chromo1.order_size <= 1.0);
+        assert!(chromo1.order_size_pct >= 0.005 && chromo1.order_size_pct <= 0.15);
         assert!(chromo1.window_ms >= 10_000 && chromo1.window_ms <= 300_000);
         assert!(chromo1.fee_rate >= 0.0001 && chromo1.fee_rate <= 0.01);
         
         // Test crossover
         let child = chromo1.crossover(&chromo2, &mut rng);
         assert!(child.risk_aversion >= 0.001 && child.risk_aversion <= 0.1);
-        assert!(child.order_size >= 0.001 && child.order_size <= 1.0);
+        assert!(child.order_size_pct >= 0.005 && child.order_size_pct <= 0.15);
         
         // Test mutation
         let mut chromo_mut = chromo1.clone();
         chromo_mut.mutate(&mut rng, 0.1);
         // Values should stay in bounds after mutation
         assert!(chromo_mut.risk_aversion >= 0.001 && chromo_mut.risk_aversion <= 0.1);
-        assert!(chromo_mut.order_size >= 0.001 && chromo_mut.order_size <= 1.0);
+        assert!(chromo_mut.order_size_pct >= 0.005 && chromo_mut.order_size_pct <= 0.15);
     }
 
     #[tokio::test]
@@ -157,12 +157,12 @@ mod tests {
         // Simple fitness function for A-S parameters
         let fitness_fn: AsyncFitnessFn<AvellanedaStoikovChromosome> = Arc::new(|chromo| {
             let risk = chromo.risk_aversion;
-            let size = chromo.order_size;
+            let size_pct = chromo.order_size_pct;
             let inv_target = chromo.inventory_target;
             Box::pin(async move {
-                // Prefer moderate risk aversion and reasonable order sizes
+                // Prefer moderate risk aversion and reasonable order size percentages
                 let risk_score = if risk > 0.01 && risk < 0.05 { 10.0 } else { 1.0 };
-                let size_score = if size > 0.1 && size < 0.5 { 10.0 } else { 1.0 };
+                let size_score = if size_pct > 0.02 && size_pct < 0.10 { 10.0 } else { 1.0 };
                 let inv_score = if inv_target.abs() < 0.5 { 5.0 } else { 1.0 };
                 FitnessResult::new(risk_score + size_score + inv_score, Vec::new())
             })
@@ -180,7 +180,7 @@ mod tests {
         // Should find decent parameters
         assert!(fitness > 10.0);
         assert!(best.risk_aversion > 0.001);
-        assert!(best.order_size > 0.001);
+        assert!(best.order_size_pct > 0.005);
     }
 
     #[tokio::test]

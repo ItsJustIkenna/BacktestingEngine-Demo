@@ -512,6 +512,11 @@ impl Strategy for AvellanedaStoikovStrategy {
             max_order_size: Some(self.params.order_size),
             max_inventory_skew: Some(2.0),
             max_volatility: Some(self.params.volatility_cap),
+            // New risk controls to prevent massive losses
+            max_drawdown: Some(0.15),      // Halt trading at 15% drawdown
+            stop_loss_pct: Some(0.05),     // 5% stop-loss per position
+            max_daily_loss: Some(0.10),    // 10% max daily loss
+            ..Default::default()
         }
     }
 }
