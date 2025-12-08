@@ -317,9 +317,9 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         result.symbol ?? 'N/A',
         result.exchange ?? 'N/A',
         safeToFixed(result.sharpe_ratio, 4),
-        safeToFixed(result.max_drawdown, 2),
+        safeToFixed((result.max_drawdown ?? 0) * 100, 2),
         safeToFixed(result.total_pnl, 2),
-        safeToFixed(result.win_rate, 2),
+        safeToFixed((result.win_rate ?? 0) * 100, 2),
         safeToFixed(result.profit_factor, 2),
         (result.total_trades ?? 0).toString(),
         safeToFixed(result.avg_trade_duration, 2),
@@ -776,8 +776,8 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         />
         <MetricCard
           title="Max Drawdown"
-          value={`${safeToFixed(result.max_drawdown, 2)}%`}
-          color={(result.max_drawdown ?? 0) < 10 ? '#28a745' : (result.max_drawdown ?? 0) < 20 ? '#ffc107' : '#dc3545'}
+          value={`${safeToFixed((result.max_drawdown ?? 0) * 100, 2)}%`}
+          color={(result.max_drawdown ?? 0) < 0.10 ? '#28a745' : (result.max_drawdown ?? 0) < 0.20 ? '#ffc107' : '#dc3545'}
         />
         <MetricCard
           title="Total P&L"
@@ -786,8 +786,8 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         />
         <MetricCard
           title="Win Rate"
-          value={`${safeToFixed(result.win_rate, 2)}%`}
-          color={(result.win_rate ?? 0) > 50 ? '#28a745' : '#ffc107'}
+          value={`${safeToFixed((result.win_rate ?? 0) * 100, 2)}%`}
+          color={(result.win_rate ?? 0) > 0.50 ? '#28a745' : '#ffc107'}
         />
         <MetricCard
           title="Profit Factor"
@@ -987,8 +987,8 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
             {result.avg_trade_return !== undefined && (
               <MetricCard
                 title="Avg Trade Return"
-                value={`${safeToFixed(result.avg_trade_return, 2)}%`}
-                color={result.avg_trade_return > 0 ? '#28a745' : '#dc3545'}
+                value={`$${safeToFixed(result.avg_trade_return, 2)}`}
+                color={(result.avg_trade_return ?? 0) > 0 ? '#28a745' : '#dc3545'}
               />
             )}
             {result.best_trade !== undefined && (
@@ -1015,8 +1015,8 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
             {result.volatility !== undefined && (
               <MetricCard
                 title="Volatility"
-                value={`${safeToFixed(result.volatility, 2)}%`}
-                color={result.volatility < 20 ? '#28a745' : result.volatility < 40 ? '#ffc107' : '#dc3545'}
+                value={`${safeToFixed((result.volatility ?? 0) * 100, 2)}%`}
+                color={(result.volatility ?? 0) < 0.20 ? '#28a745' : (result.volatility ?? 0) < 0.40 ? '#ffc107' : '#dc3545'}
               />
             )}
             {result.sortino_ratio !== undefined && (
@@ -1069,15 +1069,15 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
             {result.current_drawdown !== undefined && (
               <MetricCard
                 title="Current Drawdown"
-                value={`${safeToFixed(result.current_drawdown, 2)}%`}
-                color={result.current_drawdown < 5 ? '#28a745' : result.current_drawdown < 15 ? '#ffc107' : '#dc3545'}
+                value={`${safeToFixed((result.current_drawdown ?? 0) * 100, 2)}%`}
+                color={(result.current_drawdown ?? 0) < 0.05 ? '#28a745' : (result.current_drawdown ?? 0) < 0.15 ? '#ffc107' : '#dc3545'}
               />
             )}
             {result.avg_drawdown !== undefined && (
               <MetricCard
                 title="Avg Drawdown"
-                value={`${safeToFixed(result.avg_drawdown, 2)}%`}
-                color={result.avg_drawdown < 5 ? '#28a745' : result.avg_drawdown < 10 ? '#ffc107' : '#dc3545'}
+                value={`${safeToFixed((result.avg_drawdown ?? 0) * 100, 2)}%`}
+                color={(result.avg_drawdown ?? 0) < 0.05 ? '#28a745' : (result.avg_drawdown ?? 0) < 0.10 ? '#ffc107' : '#dc3545'}
               />
             )}
             {result.max_drawdown_duration_days !== undefined && (

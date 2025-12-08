@@ -464,11 +464,11 @@ export const JobList: React.FC<JobListProps> = ({
                     </div>
                   </td>
                   <td style={{ padding: '12px' }}>{formatNumber(job.sharpe_ratio)}</td>
-                  <td style={{ padding: '12px' }}>{formatNumber(job.max_drawdown)}%</td>
+                  <td style={{ padding: '12px' }}>{formatNumber((job.max_drawdown ?? 0) * 100)}%</td>
                   <td style={{ padding: '12px', color: (job.total_pnl || 0) >= 0 ? '#28a745' : '#dc3545' }}>
                     {formatNumber(job.total_pnl, 2)}
                   </td>
-                  <td style={{ padding: '12px' }}>{formatNumber(job.win_rate)}%</td>
+                  <td style={{ padding: '12px' }}>{formatNumber((job.win_rate ?? 0) * 100)}%</td>
                   <td style={{ padding: '12px', fontSize: '12px' }}>{formatDate(job.created_at)}</td>
                   <td style={{ padding: '12px' }}>
                     {isJobCancellable(job.status) ? (
