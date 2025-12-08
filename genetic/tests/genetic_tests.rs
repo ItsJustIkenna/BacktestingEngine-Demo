@@ -34,7 +34,7 @@ fn test_chromosome_random_bounds() {
         
         assert!(chromosome.risk_aversion >= 0.001 && chromosome.risk_aversion <= 0.1,
             "Risk aversion out of range: {}", chromosome.risk_aversion);
-        assert!(chromosome.order_size_pct >= 0.005 && chromosome.order_size_pct <= 0.15,
+        assert!(chromosome.order_size_pct >= 0.02 && chromosome.order_size_pct <= 0.20,
             "Order size pct out of range: {}", chromosome.order_size_pct);
         assert!(chromosome.fee_rate >= 0.0001 && chromosome.fee_rate <= 0.01,
             "Fee rate out of range: {}", chromosome.fee_rate);
@@ -88,7 +88,7 @@ fn test_mutation_produces_valid_chromosomes() {
         // Mutated chromosome should still have valid values within bounds
         assert!(chromosome.risk_aversion >= 0.001 && chromosome.risk_aversion <= 0.1,
             "Risk aversion should stay in bounds");
-        assert!(chromosome.order_size_pct >= 0.005 && chromosome.order_size_pct <= 0.15,
+        assert!(chromosome.order_size_pct >= 0.02 && chromosome.order_size_pct <= 0.20,
             "Order size should stay in bounds");
     }
 }
@@ -485,7 +485,7 @@ fn test_parameter_clamping() {
         
         // These should always be within bounds
         assert!(chromosome.risk_aversion >= 0.001 && chromosome.risk_aversion <= 0.1);
-        assert!(chromosome.order_size_pct >= 0.005 && chromosome.order_size_pct <= 0.15);
+        assert!(chromosome.order_size_pct >= 0.02 && chromosome.order_size_pct <= 0.20);
         assert!(chromosome.fee_rate >= 0.0001 && chromosome.fee_rate <= 0.01);
     }
 }
@@ -498,7 +498,7 @@ fn test_all_parameter_ranges() {
         let c = AvellanedaStoikovChromosome::random(&mut rng);
         
         assert!(c.risk_aversion >= 0.001 && c.risk_aversion <= 0.1);
-        assert!(c.order_size_pct >= 0.005 && c.order_size_pct <= 0.15);
+        assert!(c.order_size_pct >= 0.02 && c.order_size_pct <= 0.20);
         assert!(c.window_ms >= 10_000 && c.window_ms <= 300_000);
         assert!(c.min_quote_lifetime_ms >= 100 && c.min_quote_lifetime_ms <= 5_000);
         assert!(c.fee_rate >= 0.0001 && c.fee_rate <= 0.01);
