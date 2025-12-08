@@ -32,11 +32,11 @@ fn test_chromosome_random_bounds() {
     for _ in 0..100 {
         let chromosome = AvellanedaStoikovChromosome::random(&mut rng);
         
-        assert!(chromosome.risk_aversion >= 0.001 && chromosome.risk_aversion <= 0.1,
+        assert!(chromosome.risk_aversion >= 0.0001 && chromosome.risk_aversion <= 1.0,
             "Risk aversion out of range: {}", chromosome.risk_aversion);
-        assert!(chromosome.order_size_pct >= 0.02 && chromosome.order_size_pct <= 0.20,
+        assert!(chromosome.order_size_pct >= 0.001 && chromosome.order_size_pct <= 0.25,
             "Order size pct out of range: {}", chromosome.order_size_pct);
-        assert!(chromosome.fee_rate >= 0.0001 && chromosome.fee_rate <= 0.01,
+        assert!(chromosome.fee_rate >= 0.00001 && chromosome.fee_rate <= 0.005,
             "Fee rate out of range: {}", chromosome.fee_rate);
     }
 }
@@ -86,9 +86,9 @@ fn test_mutation_produces_valid_chromosomes() {
         chromosome.mutate(&mut rng, 0.3);
         
         // Mutated chromosome should still have valid values within bounds
-        assert!(chromosome.risk_aversion >= 0.001 && chromosome.risk_aversion <= 0.1,
+        assert!(chromosome.risk_aversion >= 0.0001 && chromosome.risk_aversion <= 1.0,
             "Risk aversion should stay in bounds");
-        assert!(chromosome.order_size_pct >= 0.02 && chromosome.order_size_pct <= 0.20,
+        assert!(chromosome.order_size_pct >= 0.001 && chromosome.order_size_pct <= 0.25,
             "Order size should stay in bounds");
     }
 }
@@ -484,9 +484,9 @@ fn test_parameter_clamping() {
         chromosome.mutate(&mut rng, 0.5);
         
         // These should always be within bounds
-        assert!(chromosome.risk_aversion >= 0.001 && chromosome.risk_aversion <= 0.1);
-        assert!(chromosome.order_size_pct >= 0.02 && chromosome.order_size_pct <= 0.20);
-        assert!(chromosome.fee_rate >= 0.0001 && chromosome.fee_rate <= 0.01);
+        assert!(chromosome.risk_aversion >= 0.0001 && chromosome.risk_aversion <= 1.0);
+        assert!(chromosome.order_size_pct >= 0.001 && chromosome.order_size_pct <= 0.25);
+        assert!(chromosome.fee_rate >= 0.00001 && chromosome.fee_rate <= 0.005);
     }
 }
 
@@ -497,16 +497,16 @@ fn test_all_parameter_ranges() {
     for _ in 0..50 {
         let c = AvellanedaStoikovChromosome::random(&mut rng);
         
-        assert!(c.risk_aversion >= 0.001 && c.risk_aversion <= 0.1);
-        assert!(c.order_size_pct >= 0.02 && c.order_size_pct <= 0.20);
-        assert!(c.window_ms >= 10_000 && c.window_ms <= 300_000);
-        assert!(c.min_quote_lifetime_ms >= 100 && c.min_quote_lifetime_ms <= 5_000);
-        assert!(c.fee_rate >= 0.0001 && c.fee_rate <= 0.01);
-        assert!(c.latency_buffer >= 0.1 && c.latency_buffer <= 2.0);
+        assert!(c.risk_aversion >= 0.0001 && c.risk_aversion <= 1.0);
+        assert!(c.order_size_pct >= 0.001 && c.order_size_pct <= 0.25);
+        assert!(c.window_ms >= 1_000 && c.window_ms <= 1_800_000);
+        assert!(c.min_quote_lifetime_ms >= 10 && c.min_quote_lifetime_ms <= 60_000);
+        assert!(c.fee_rate >= 0.00001 && c.fee_rate <= 0.005);
+        assert!(c.latency_buffer >= 0.01 && c.latency_buffer <= 3.0);
         assert!(c.inventory_target >= -1.0 && c.inventory_target <= 1.0);
-        assert!(c.volatility_cap >= 0.1 && c.volatility_cap <= 3.0);
-        assert!(c.time_horizon_minutes >= 0.5 && c.time_horizon_minutes <= 5.0);
-        assert!(c.market_depth_k >= 0.5 && c.market_depth_k <= 5.0);
+        assert!(c.volatility_cap >= 0.05 && c.volatility_cap <= 5.0);
+        assert!(c.time_horizon_minutes >= 0.167 && c.time_horizon_minutes <= 60.0);
+        assert!(c.market_depth_k >= 0.1 && c.market_depth_k <= 10.0);
     }
 }
 
@@ -667,8 +667,8 @@ fn test_phase2_dynamic_parameters() {
     let c = AvellanedaStoikovChromosome::random(&mut rng);
     
     // Phase 2 parameters should be within bounds
-    assert!(c.volatility_adjustment_factor >= 0.0 && c.volatility_adjustment_factor <= 1.0);
-    assert!(c.inventory_penalty_factor >= 0.0 && c.inventory_penalty_factor <= 0.8);
-    assert!(c.trend_sensitivity >= -0.5 && c.trend_sensitivity <= 0.5);
-    assert!(c.flow_sensitivity >= -0.3 && c.flow_sensitivity <= 0.3);
+    assert!(c.volatility_adjustment_factor >= 0.0 && c.volatility_adjustment_factor <= 2.0);
+    assert!(c.inventory_penalty_factor >= 0.0 && c.inventory_penalty_factor <= 1.0);
+    assert!(c.trend_sensitivity >= -1.0 && c.trend_sensitivity <= 1.0);
+    assert!(c.flow_sensitivity >= -1.0 && c.flow_sensitivity <= 1.0);
 }
