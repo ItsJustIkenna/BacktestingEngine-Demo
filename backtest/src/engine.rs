@@ -82,9 +82,9 @@ impl BacktestEngine {
         market_data.first().and_then(|data| {
             match data {
                 #[cfg(feature = "postgres")]
-                MarketData::Order(o) => o.price.to_f64(),
+                MarketData::Order(o) => o.price_level.to_f64(),
                 #[cfg(feature = "postgres")]
-                MarketData::Snapshot(s) => s.mid_price.to_f64(),
+                MarketData::Snapshot(s) => s.price_level.to_f64(),
                 MarketData::Candle(c) => c.close.to_f64(),
                 MarketData::Trade(t) => t.price.to_f64(),
             }
