@@ -45,14 +45,14 @@ describe('BacktestForm', () => {
     await waitFor(() => {
       const symbolSelect = screen.getByLabelText(/symbol/i) as HTMLSelectElement;
       expect(symbolSelect.options).toHaveLength(2);
-      expect(symbolSelect.options[0].value).toBe('BTC-USD');
-      expect(symbolSelect.options[1].value).toBe('ETH-USD');
+      expect(symbolSelect.options[0]!.value).toBe('BTC-USD');
+      expect(symbolSelect.options[1]!.value).toBe('ETH-USD');
     });
 
     const exchangeSelect = screen.getByLabelText(/exchange/i) as HTMLSelectElement;
     expect(exchangeSelect.options).toHaveLength(2);
-    expect(exchangeSelect.options[0].value).toBe('coinbase');
-    expect(exchangeSelect.options[1].value).toBe('binance');
+    expect(exchangeSelect.options[0]!.value).toBe('coinbase');
+    expect(exchangeSelect.options[1]!.value).toBe('binance');
   });
 
   test('shows genetic algorithm parameters by default', async () => {

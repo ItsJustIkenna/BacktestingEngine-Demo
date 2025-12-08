@@ -284,7 +284,7 @@ describe('JobList', () => {
     });
 
     const deleteButtons = screen.getAllByRole('button', { name: /delete/i });
-    fireEvent.click(deleteButtons[0]);
+    fireEvent.click(deleteButtons[0]!);
 
     await waitFor(() => {
       expect(screen.getByText(/are you sure/i)).toBeInTheDocument();
@@ -335,7 +335,7 @@ describe('JobList', () => {
     });
 
     const deleteButtons = screen.getAllByRole('button', { name: /delete/i });
-    fireEvent.click(deleteButtons[0]);
+    fireEvent.click(deleteButtons[0]!);
 
     await waitFor(() => {
       expect(screen.getByText(/are you sure/i)).toBeInTheDocument();
@@ -343,7 +343,7 @@ describe('JobList', () => {
 
     // After dialog opens, get all Delete buttons - last one is the confirm button in modal
     const allDeleteButtons = screen.getAllByRole('button', { name: /delete/i });
-    const confirmButton = allDeleteButtons[allDeleteButtons.length - 1];
+    const confirmButton = allDeleteButtons[allDeleteButtons.length - 1]!;
     fireEvent.click(confirmButton);
 
     await waitFor(() => {
@@ -362,7 +362,7 @@ describe('JobList', () => {
     });
 
     const deleteButtons = screen.getAllByRole('button', { name: /delete/i });
-    fireEvent.click(deleteButtons[0]);
+    fireEvent.click(deleteButtons[0]!);
 
     await waitFor(() => {
       expect(screen.getByText(/are you sure/i)).toBeInTheDocument();
