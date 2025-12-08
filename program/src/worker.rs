@@ -60,14 +60,22 @@ fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult, ini
         
         // Hard reject: If commissions exceed 80% of gross profit, this is unviable
         if gross <= 0.0 {
+            log_debug!(GENETIC_LOGGER, "FITNESS: gross_profit={:.2} <= 0, returning 0.001", gross);
             return 0.001; // No gross profit = essentially zero fitness
         }
         let commission_ratio = commission / gross;
+        log_debug!(GENETIC_LOGGER, "FITNESS: gross={:.2} commission={:.2} ratio={:.2}% trades={}", 
+            gross, commission, commission_ratio * 100.0, result.num_trades);
         if commission_ratio >= 0.80 {
             // Return a tiny but non-zero value that's proportional to how bad it is
             // This ensures even the "best" commission-heavy strategy loses to any viable one
-            return 0.001 * (1.0 - (commission_ratio - 0.80).min(0.5));
+            let tiny_fitness = 0.001 * (1.0 - (commission_ratio - 0.80).min(0.5));
+            log_warn!(GENETIC_LOGGER, "FITNESS REJECTED: commission_ratio={:.2}% >= 80%, fitness={:.6}", 
+                commission_ratio * 100.0, tiny_fitness);
+            return tiny_fitness;
         }
+    } else {
+        log_warn!(GENETIC_LOGGER, "FITNESS: gross_profit or transaction_costs is None!");
     }
     
     // === Primary Metrics ===
@@ -997,7 +1005,21 @@ impl Worker {
         
         log_info!(GENETIC_LOGGER, "Job {} starting genetic algorithm with robustness-weighted fitness", job.id);
         let (best_chromosome, best_fitness) = optimizer.run().await;
-        log_info!(GENETIC_LOGGER, "Job {} optimizer.run() completed", job.id);
+        log_info!(GENETIC_LOGGER, "Job {} optimizer.run() completed | best_fitness={:.6}", job.id, best_fitness);
+        
+        // Check if the best fitness is essentially zero (all strategies rejected)
+        if best_fitness < 0.01 {
+            log_error!(GENETIC_LOGGER, "Job {} FAILED: No viable strategy found! best_fitness={:.6} < 0.01 threshold. All strategies had commission ratio >= 80%", 
+                job.id, best_fitness);
+            log_error!(GENETIC_LOGGER, "Job {} best params were: risk_aversion={:.4} order_size_pct={:.2}% min_spread_bps={:.1}", 
+                job.id, best_chromosome.risk_aversion, best_chromosome.order_size_pct * 100.0, best_chromosome.min_spread_bps);
+            return Err(format!(
+                "No viable strategy found. Best fitness {:.6} is below threshold 0.01. \
+                All tested strategies had commission costs exceeding 80% of gross profits. \
+                This market/timeframe may not be suitable for market-making, or try different parameters.",
+                best_fitness
+            ).into());
+        }
         
         // Broadcast + persist phase change after optimization completes
         progress_tracker.broadcast_phase("post_optimization", serde_json::json!({
@@ -1288,6 +1310,13 @@ impl Worker {
             log_debug!(WALKFORWARD_LOGGER, "Job {} window {} starting genetic optimization", job.id, window_num);
             log_debug!(MAIN_LOGGER, "🧬 Window {}: Running genetic optimization...", window_num);
             let (best_chromosome, optimization_fitness) = optimizer.run().await;
+            
+            // Check if optimization found a viable strategy
+            if optimization_fitness < 0.01 {
+                log_warn!(WALKFORWARD_LOGGER, "Job {} window {} no viable strategy found (fitness={:.6}), skipping window", 
+                    job.id, window_num, optimization_fitness);
+                continue;
+            }
             
             log_info!(WALKFORWARD_LOGGER, "Job {} window {} optimization complete | fitness={:.4} risk_aversion={:.3} inventory_target={:.3} order_size_pct={:.2}%",
                 job.id, window_num, optimization_fitness, best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size_pct * 100.0);
