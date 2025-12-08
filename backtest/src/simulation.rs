@@ -23,6 +23,13 @@ pub struct SimulationLoop {
     total_slippage: f64,
     total_market_impact: f64,
     commission_by_exchange: FxHashMap<String, f64>,
+    // Track commission by fee tier (bps -> total commission at that tier)
+    commission_by_tier_bps: FxHashMap<u32, f64>,
+    fills_by_tier_bps: FxHashMap<u32, u32>,
+    // Track fill count distribution
+    fill_count_histogram: FxHashMap<u32, u32>, // fills_per_order -> count
+    total_fill_count: u32,
+    total_order_count: u32,
     // Track market impact
     trades_with_impact: usize,
     impact_costs_bps: Vec<f64>,
@@ -44,6 +51,11 @@ impl SimulationLoop {
             total_slippage: 0.0,
             total_market_impact: 0.0,
             commission_by_exchange: FxHashMap::default(),
+            commission_by_tier_bps: FxHashMap::default(),
+            fills_by_tier_bps: FxHashMap::default(),
+            fill_count_histogram: FxHashMap::default(),
+            total_fill_count: 0,
+            total_order_count: 0,
             trades_with_impact: 0,
             impact_costs_bps: Vec::with_capacity(1000),  // Pre-allocate for typical backtest
             liquidity_warnings: Vec::with_capacity(100),
@@ -244,6 +256,9 @@ impl SimulationLoop {
                     // Update current market price from trade
                     current_market_price = Some(trade.price.clone());
                     
+                    // Get exchange for fee tracking
+                    let exchange = orderbook.exchange.clone();
+                    
                     // Track market volume for realistic market impact calculation
                     let trade_volume_usd = trade.price.to_f64().unwrap_or(0.0) * trade.quantity.to_f64().unwrap_or(0.0);
                     self.update_market_volume(trade.timestamp, trade_volume_usd);
@@ -265,6 +280,36 @@ impl SimulationLoop {
                         trade.quantity.clone(),
                         trade.timestamp,
                     );
+                    
+                    // Track fill count for market fills
+                    let fill_count = trade_fills.len() as u32;
+                    if fill_count > 0 {
+                        self.total_order_count += 1;
+                        self.total_fill_count += fill_count;
+                        *self.fill_count_histogram.entry(fill_count).or_insert(0) += 1;
+                    }
+                    
+                    // Track commission for market fills (our resting orders getting filled)
+                    for fill in &trade_fills {
+                        let fill_price = fill.price.to_f64().unwrap_or(0.0);
+                        let fill_quantity = fill.quantity.to_f64().unwrap_or(0.0);
+                        let fill_value = fill_price * fill_quantity;
+                        
+                        // Our resting orders are MAKERS
+                        let fee_rate = self.get_fee_rate(config, &exchange, true);
+                        let commission = fill_value * fee_rate;
+                        
+                        // Track commission by fee tier (convert to bps for bucketing)
+                        let tier_bps = (fee_rate * 10000.0).round() as u32;
+                        *self.commission_by_tier_bps.entry(tier_bps).or_insert(0.0) += commission;
+                        *self.fills_by_tier_bps.entry(tier_bps).or_insert(0) += 1;
+                        
+                        // Update volume tracking for this exchange
+                        self.update_30d_volume(&exchange, trade.timestamp, fill_value);
+                        
+                        self.total_commission += commission;
+                        *self.commission_by_exchange.entry(exchange.clone()).or_insert(0.0) += commission;
+                    }
                     
                     // Apply fills from incoming trades to portfolio
                     if !trade_fills.is_empty() {
@@ -285,6 +330,9 @@ impl SimulationLoop {
                     // Update current market price from trade
                     current_market_price = Some(trade.price.clone());
                     
+                    // Get exchange for fee tracking
+                    let exchange = orderbook.exchange.clone();
+                    
                     // Track market volume for realistic market impact calculation
                     let trade_volume_usd = trade.price.to_f64().unwrap_or(0.0) * trade.quantity.to_f64().unwrap_or(0.0);
                     self.update_market_volume(trade.timestamp, trade_volume_usd);
@@ -306,6 +354,36 @@ impl SimulationLoop {
                         trade.quantity.clone(),
                         trade.timestamp,
                     );
+                    
+                    // Track fill count for market fills
+                    let fill_count = trade_fills.len() as u32;
+                    if fill_count > 0 {
+                        self.total_order_count += 1;
+                        self.total_fill_count += fill_count;
+                        *self.fill_count_histogram.entry(fill_count).or_insert(0) += 1;
+                    }
+                    
+                    // Track commission for market fills (our resting orders getting filled)
+                    for fill in &trade_fills {
+                        let fill_price = fill.price.to_f64().unwrap_or(0.0);
+                        let fill_quantity = fill.quantity.to_f64().unwrap_or(0.0);
+                        let fill_value = fill_price * fill_quantity;
+                        
+                        // Our resting orders are MAKERS
+                        let fee_rate = self.get_fee_rate(config, &exchange, true);
+                        let commission = fill_value * fee_rate;
+                        
+                        // Track commission by fee tier (convert to bps for bucketing)
+                        let tier_bps = (fee_rate * 10000.0).round() as u32;
+                        *self.commission_by_tier_bps.entry(tier_bps).or_insert(0.0) += commission;
+                        *self.fills_by_tier_bps.entry(tier_bps).or_insert(0) += 1;
+                        
+                        // Update volume tracking for this exchange
+                        self.update_30d_volume(&exchange, trade.timestamp, fill_value);
+                        
+                        self.total_commission += commission;
+                        *self.commission_by_exchange.entry(exchange.clone()).or_insert(0.0) += commission;
+                    }
                     
                     // Apply fills from incoming trades to portfolio
                     if !trade_fills.is_empty() {
@@ -475,6 +553,14 @@ impl SimulationLoop {
                     // 5. Simulate order matching/fills with proper fee calculation
                     let fills = orderbook.match_all_orders(timestamp);
                     
+                    // Track fill count for this order
+                    let fill_count = fills.len() as u32;
+                    if fill_count > 0 {
+                        self.total_order_count += 1;
+                        self.total_fill_count += fill_count;
+                        *self.fill_count_histogram.entry(fill_count).or_insert(0) += 1;
+                    }
+                    
                     // Debug: Log fill count and sizes for first few trades
                     if self.total_commission < 200.0 && !fills.is_empty() {
                         let total_fill_value: f64 = fills.iter()
@@ -504,6 +590,11 @@ impl SimulationLoop {
                         // Get fee rate based on this exchange's 30-day volume
                         let fee_rate = self.get_fee_rate(config, &exchange, is_maker);
                         let commission = fill_value * fee_rate;
+                        
+                        // Track commission by fee tier (convert to bps for bucketing)
+                        let tier_bps = (fee_rate * 10000.0).round() as u32;
+                        *self.commission_by_tier_bps.entry(tier_bps).or_insert(0.0) += commission;
+                        *self.fills_by_tier_bps.entry(tier_bps).or_insert(0) += 1;
                         
                         // Debug: Log first few fills to understand commission calculation
                         if self.total_commission < 100.0 {
@@ -740,6 +831,28 @@ impl SimulationLoop {
             log_info!(BACKTEST_LOGGER, "Fee tier summary | exchange={} final_30d_volume=${:.0} final_maker_fee_bps={:.1} total_commission=${:.2}",
                 exchange, volume, fee_rate * 10000.0, self.total_commission);
         }
+        
+        // Log commission breakdown by fee tier
+        let mut tier_breakdown: Vec<_> = self.commission_by_tier_bps.iter().collect();
+        tier_breakdown.sort_by_key(|(tier, _)| **tier);
+        for (tier_bps, commission) in &tier_breakdown {
+            let fills = self.fills_by_tier_bps.get(tier_bps).unwrap_or(&0);
+            let avg_per_fill = if *fills > 0 { *commission / *fills as f64 } else { 0.0 };
+            log_info!(BACKTEST_LOGGER, "Commission by tier | fee_bps={} fills={} commission=${:.2} avg_per_fill=${:.2}",
+                tier_bps, fills, commission, avg_per_fill);
+        }
+        
+        // Log fill count distribution
+        let mut fill_dist: Vec<_> = self.fill_count_histogram.iter().collect();
+        fill_dist.sort_by_key(|(count, _)| **count);
+        let fill_dist_str: String = fill_dist.iter()
+            .map(|(fills, orders)| format!("{}fills:{}orders", fills, orders))
+            .collect::<Vec<_>>()
+            .join(", ");
+        log_info!(BACKTEST_LOGGER, "Fill distribution | total_orders={} total_fills={} avg_fills_per_order={:.2} distribution=[{}]",
+            self.total_order_count, self.total_fill_count, 
+            if self.total_order_count > 0 { self.total_fill_count as f64 / self.total_order_count as f64 } else { 0.0 },
+            fill_dist_str);
 
         result
     }

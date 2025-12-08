@@ -1835,19 +1835,21 @@ impl Worker {
         let avg_net_per_trade = if result.total_trades > 0 { 
             result.total_pnl / result.total_trades as f64 
         } else { 0.0 };
-        let breakeven_spread_bps = if avg_gross_per_trade > 0.0 {
-            // Estimate: commission / gross = commission ratio, so breakeven spread = current spread * commission_ratio
-            (avg_commission_per_trade / avg_gross_per_trade) * 100.0 * 2.0 // *2 because spread needs to cover both sides
+        
+        // Calculate how much spread increase is needed to break even
+        // If commission is 130% of gross, need to increase spread by 30% to break even
+        let spread_increase_needed_pct = if avg_gross_per_trade > 0.0 {
+            ((avg_commission_per_trade / avg_gross_per_trade) - 1.0).max(0.0) * 100.0
         } else { 0.0 };
         
         log_info!(MAIN_LOGGER,
-            r#"{{"event": "TRADE_ECONOMICS", "job_id": "{}", "per_trade": {{"avg_gross": {:.2}, "avg_commission": {:.2}, "avg_net": {:.2}, "commission_pct_of_gross": {:.1}}}, "breakeven": {{"min_spread_bps_needed": {:.1}, "min_profit_per_trade": {:.2}}}, "efficiency": {{"trades_per_dollar_commission": {:.2}, "gross_to_net_ratio": {:.2}}}}}"#,
+            r#"{{"event": "TRADE_ECONOMICS", "job_id": "{}", "per_trade": {{"avg_gross": {:.2}, "avg_commission": {:.2}, "avg_net": {:.2}, "commission_pct_of_gross": {:.1}}}, "breakeven": {{"spread_increase_needed_pct": {:.1}, "min_profit_per_trade": {:.2}}}, "efficiency": {{"trades_per_dollar_commission": {:.2}, "gross_to_net_ratio": {:.2}}}}}"#,
             job_id,
             avg_gross_per_trade,
             avg_commission_per_trade,
             avg_net_per_trade,
             if avg_gross_per_trade > 0.0 { (avg_commission_per_trade / avg_gross_per_trade) * 100.0 } else { 0.0 },
-            breakeven_spread_bps,
+            spread_increase_needed_pct,
             avg_commission_per_trade,  // This is the minimum profit needed per trade
             if commission > 0.0 { result.total_trades as f64 / commission } else { 0.0 },
             if gross_pnl != 0.0 { result.total_pnl / gross_pnl } else { 0.0 }
