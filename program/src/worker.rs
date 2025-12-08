@@ -1420,149 +1420,105 @@ impl Worker {
         }
     }
     
-    /// Log comprehensive backtest results in organized format
+    /// Log comprehensive backtest results as structured JSON for Kibana
     fn log_backtest_results(&self, job_id: &str, result: &BacktestResult) {
-        // ═══════════════════════════════════════════════════════════════════
-        // HEADER
-        // ═══════════════════════════════════════════════════════════════════
-        log_info!(MAIN_LOGGER, "");
-        log_info!(MAIN_LOGGER, "╔══════════════════════════════════════════════════════════════════════════════╗");
-        log_info!(MAIN_LOGGER, "║                    BACKTEST RESULTS: {}                    ║", &job_id[..8]);
-        log_info!(MAIN_LOGGER, "╚══════════════════════════════════════════════════════════════════════════════╝");
-        
-        // ─────────────────────────────────────────────────────────────────
-        // CORE PERFORMANCE METRICS
-        // ─────────────────────────────────────────────────────────────────
-        log_info!(MAIN_LOGGER, "┌─ CORE PERFORMANCE ─────────────────────────────────────────────────────────┐");
-        log_info!(MAIN_LOGGER, "│ Total PnL:        ${:>12.2}  │  Sharpe Ratio:    {:>8.4}              │", 
-            result.total_pnl, result.sharpe_ratio);
-        log_info!(MAIN_LOGGER, "│ Max Drawdown:     {:>12.2}%  │  Win Rate:        {:>8.2}%             │", 
-            result.max_drawdown * 100.0, result.win_rate * 100.0);
-        log_info!(MAIN_LOGGER, "│ Profit Factor:    {:>12.4}  │  Total Trades:    {:>8}              │", 
-            result.profit_factor, result.total_trades);
-        log_info!(MAIN_LOGGER, "└────────────────────────────────────────────────────────────────────────────┘");
-        
-        // ─────────────────────────────────────────────────────────────────
-        // RETURN METRICS
-        // ─────────────────────────────────────────────────────────────────
-        log_info!(MAIN_LOGGER, "┌─ RETURN METRICS ───────────────────────────────────────────────────────────┐");
-        log_info!(MAIN_LOGGER, "│ Annualized Return: {:>11.2}%  │  Volatility:      {:>8.2}%             │", 
-            result.annualized_return.unwrap_or(0.0) * 100.0, 
-            result.volatility.unwrap_or(0.0) * 100.0);
-        log_info!(MAIN_LOGGER, "│ Sortino Ratio:     {:>11.4}  │  Calmar Ratio:    {:>8.4}              │", 
-            result.sortino_ratio.unwrap_or(0.0), 
-            result.calmar_ratio.unwrap_or(0.0));
-        log_info!(MAIN_LOGGER, "└────────────────────────────────────────────────────────────────────────────┘");
-        
-        // ─────────────────────────────────────────────────────────────────
-        // TRADE STATISTICS
-        // ─────────────────────────────────────────────────────────────────
-        log_info!(MAIN_LOGGER, "┌─ TRADE STATISTICS ─────────────────────────────────────────────────────────┐");
-        log_info!(MAIN_LOGGER, "│ Avg Trade Return:  ${:>10.4}  │  Avg Time in Trade: {:>6.1} min         │", 
-            result.avg_trade_return.unwrap_or(0.0), 
-            result.avg_time_in_trade.unwrap_or(0.0));
-        log_info!(MAIN_LOGGER, "│ Best Trade:        ${:>10.2}  │  Worst Trade:     ${:>10.2}          │", 
-            result.best_trade.unwrap_or(0.0), 
-            result.worst_trade.unwrap_or(0.0));
-        log_info!(MAIN_LOGGER, "└────────────────────────────────────────────────────────────────────────────┘");
-        
-        // ─────────────────────────────────────────────────────────────────
-        // RISK METRICS
-        // ─────────────────────────────────────────────────────────────────
-        log_info!(MAIN_LOGGER, "┌─ RISK METRICS ─────────────────────────────────────────────────────────────┐");
-        log_info!(MAIN_LOGGER, "│ VaR (95%):         {:>11.2}%  │  CVaR/ES (95%):   {:>8.2}%             │", 
-            result.value_at_risk_95.unwrap_or(0.0) * 100.0, 
-            result.expected_shortfall_95.unwrap_or(0.0) * 100.0);
-        log_info!(MAIN_LOGGER, "│ Current Drawdown:  {:>11.2}%  │  Avg Drawdown:    {:>8.2}%             │", 
-            result.current_drawdown.unwrap_or(0.0) * 100.0, 
-            result.avg_drawdown.unwrap_or(0.0) * 100.0);
-        log_info!(MAIN_LOGGER, "│ Max DD Duration:   {:>8} days │                                        │", 
-            result.max_drawdown_duration_days.unwrap_or(0));
-        log_info!(MAIN_LOGGER, "└────────────────────────────────────────────────────────────────────────────┘");
-        
-        // ─────────────────────────────────────────────────────────────────
-        // EXECUTION COSTS
-        // ─────────────────────────────────────────────────────────────────
-        log_info!(MAIN_LOGGER, "┌─ EXECUTION COSTS ──────────────────────────────────────────────────────────┐");
-        log_info!(MAIN_LOGGER, "│ Total Commission:  ${:>10.2}  │  Avg Slippage:    {:>8.4}%            │", 
-            result.total_commission_paid.unwrap_or(0.0), 
-            result.avg_slippage.unwrap_or(0.0) * 100.0);
-        log_info!(MAIN_LOGGER, "│ Total Orders:      {:>10}  │  Filled Orders:   {:>10}            │", 
-            result.total_orders.unwrap_or(0), 
-            result.filled_orders.unwrap_or(0));
-        log_info!(MAIN_LOGGER, "│ Cancelled Orders:  {:>10}  │  Fill Rate:       {:>8.1}%            │", 
-            result.cancelled_orders.unwrap_or(0),
-            if result.total_orders.unwrap_or(0) > 0 {
-                result.filled_orders.unwrap_or(0) as f64 / result.total_orders.unwrap_or(1) as f64 * 100.0
-            } else { 0.0 });
-        log_info!(MAIN_LOGGER, "└────────────────────────────────────────────────────────────────────────────┘");
-        
-        // ─────────────────────────────────────────────────────────────────
-        // MONTE CARLO ANALYSIS (if available)
-        // ─────────────────────────────────────────────────────────────────
-        if let Some(ref mc) = result.monte_carlo {
-            log_info!(MAIN_LOGGER, "┌─ MONTE CARLO ANALYSIS ({} runs) ─────────────────────────────────────────┐", mc.num_runs);
-            log_info!(MAIN_LOGGER, "│ Mean Sharpe:       {:>11.4}  │  Sharpe Std Dev:  {:>8.4}              │", 
-                mc.mean_sharpe, mc.stddev_sharpe);
-            log_info!(MAIN_LOGGER, "│ VaR (95%):         {:>11.2}%  │  CVaR (95%):      {:>8.2}%             │", 
-                mc.var_95 * 100.0, mc.cvar_95 * 100.0);
-            log_info!(MAIN_LOGGER, "│ Sharpe 95% CI:     [{:>5.2}, {:>5.2}]  │  Median Sharpe:   {:>8.4}              │", 
-                mc.confidence_lower, mc.confidence_upper, mc.p50_sharpe.unwrap_or(0.0));
-            log_info!(MAIN_LOGGER, "├─ PnL Distribution ─────────────────────────────────────────────────────────┤");
-            log_info!(MAIN_LOGGER, "│ P5 (Worst):        ${:>10.0}  │  P50 (Median):    ${:>10.0}          │", 
-                mc.p5_total_pnl.unwrap_or(0.0), mc.p50_total_pnl.unwrap_or(0.0));
-            log_info!(MAIN_LOGGER, "│ P95 (Best):        ${:>10.0}  │                                        │", 
-                mc.p95_total_pnl.unwrap_or(0.0));
-            log_info!(MAIN_LOGGER, "├─ Drawdown Distribution ──────────────────────────────────────────────────┤");
-            log_info!(MAIN_LOGGER, "│ P5 (Best):         {:>11.1}%  │  P50 (Median):    {:>8.1}%             │", 
-                mc.p5_max_drawdown.unwrap_or(0.0) * 100.0, mc.p50_max_drawdown.unwrap_or(0.0) * 100.0);
-            log_info!(MAIN_LOGGER, "│ P95 (Worst):       {:>11.1}%  │                                        │", 
-                mc.p95_max_drawdown.unwrap_or(0.0) * 100.0);
-            log_info!(MAIN_LOGGER, "├─ Win Rate Distribution ──────────────────────────────────────────────────┤");
-            log_info!(MAIN_LOGGER, "│ P5 (Worst):        {:>11.1}%  │  P50 (Median):    {:>8.1}%             │", 
-                mc.p5_win_rate.unwrap_or(0.0) * 100.0, mc.p50_win_rate.unwrap_or(0.0) * 100.0);
-            log_info!(MAIN_LOGGER, "│ P95 (Best):        {:>11.1}%  │                                        │", 
-                mc.p95_win_rate.unwrap_or(0.0) * 100.0);
-            log_info!(MAIN_LOGGER, "└────────────────────────────────────────────────────────────────────────────┘");
-        }
-        
-        // ─────────────────────────────────────────────────────────────────
-        // WALK-FORWARD ANALYSIS (if available)
-        // ─────────────────────────────────────────────────────────────────
-        if let Some(ref wf) = result.walk_forward {
-            log_info!(MAIN_LOGGER, "┌─ WALK-FORWARD ANALYSIS ({} periods) ───────────────────────────────────────┐", wf.periods_tested);
-            log_info!(MAIN_LOGGER, "│ Avg Performance:   {:>11.2}%  │  Consistency:     {:>8.1}%             │", 
-                wf.average_performance * 100.0, wf.consistency_score * 100.0);
-            log_info!(MAIN_LOGGER, "│ OOS Degradation:   {:>11.2}%  │                                        │", 
-                wf.out_of_sample_degradation * 100.0);
-            log_info!(MAIN_LOGGER, "└────────────────────────────────────────────────────────────────────────────┘");
-        }
-        
-        // ─────────────────────────────────────────────────────────────────
-        // QUICK ASSESSMENT
-        // ─────────────────────────────────────────────────────────────────
+        // Determine assessment status
         let status = if result.total_pnl > 0.0 && result.sharpe_ratio > 0.5 && result.win_rate > 0.3 {
-            "✅ PROFITABLE"
+            "PROFITABLE"
         } else if result.total_pnl > 0.0 {
-            "⚠️  MARGINALLY PROFITABLE"
+            "MARGINALLY_PROFITABLE"
         } else if result.sharpe_ratio > 0.0 {
-            "⚠️  LOSING BUT POSITIVE SHARPE"
+            "LOSING_POSITIVE_SHARPE"
         } else {
-            "❌ UNPROFITABLE"
+            "UNPROFITABLE"
         };
-        
-        log_info!(MAIN_LOGGER, "┌─ ASSESSMENT ───────────────────────────────────────────────────────────────┐");
-        log_info!(MAIN_LOGGER, "│ Status: {}                                                      │", status);
-        
-        // Cost analysis
-        if let Some(commission) = result.total_commission_paid {
-            let gross_pnl = result.total_pnl + commission;
-            let cost_ratio = if gross_pnl.abs() > 0.0 { commission / gross_pnl.abs() * 100.0 } else { 0.0 };
-            log_info!(MAIN_LOGGER, "│ Gross PnL: ${:.2}, Commission: ${:.2} ({:.1}% of gross)              │", 
-                gross_pnl, commission, cost_ratio);
-        }
-        log_info!(MAIN_LOGGER, "└────────────────────────────────────────────────────────────────────────────┘");
-        log_info!(MAIN_LOGGER, "");
+
+        // Calculate derived metrics
+        let commission = result.total_commission_paid.unwrap_or(0.0);
+        let gross_pnl = result.total_pnl + commission;
+        let cost_ratio = if gross_pnl.abs() > 0.0 { commission / gross_pnl.abs() * 100.0 } else { 0.0 };
+        let fill_rate = if result.total_orders.unwrap_or(0) > 0 {
+            result.filled_orders.unwrap_or(0) as f64 / result.total_orders.unwrap_or(1) as f64 * 100.0
+        } else { 0.0 };
+
+        // Build Monte Carlo JSON section
+        let mc_json = if let Some(ref mc) = result.monte_carlo {
+            format!(r#", "monte_carlo": {{"num_runs": {}, "mean_sharpe": {:.4}, "stddev_sharpe": {:.4}, "var_95_pct": {:.2}, "cvar_95_pct": {:.2}, "confidence_lower": {:.2}, "confidence_upper": {:.2}, "p5_pnl": {:.2}, "p50_pnl": {:.2}, "p95_pnl": {:.2}, "p5_drawdown_pct": {:.2}, "p50_drawdown_pct": {:.2}, "p95_drawdown_pct": {:.2}, "p5_win_rate_pct": {:.2}, "p50_win_rate_pct": {:.2}, "p95_win_rate_pct": {:.2}, "p50_sharpe": {:.4}}}"#,
+                mc.num_runs,
+                mc.mean_sharpe,
+                mc.stddev_sharpe,
+                mc.var_95 * 100.0,
+                mc.cvar_95 * 100.0,
+                mc.confidence_lower,
+                mc.confidence_upper,
+                mc.p5_total_pnl.unwrap_or(0.0),
+                mc.p50_total_pnl.unwrap_or(0.0),
+                mc.p95_total_pnl.unwrap_or(0.0),
+                mc.p5_max_drawdown.unwrap_or(0.0) * 100.0,
+                mc.p50_max_drawdown.unwrap_or(0.0) * 100.0,
+                mc.p95_max_drawdown.unwrap_or(0.0) * 100.0,
+                mc.p5_win_rate.unwrap_or(0.0) * 100.0,
+                mc.p50_win_rate.unwrap_or(0.0) * 100.0,
+                mc.p95_win_rate.unwrap_or(0.0) * 100.0,
+                mc.p50_sharpe.unwrap_or(0.0)
+            )
+        } else {
+            String::new()
+        };
+
+        // Build Walk-Forward JSON section
+        let wf_json = if let Some(ref wf) = result.walk_forward {
+            format!(r#", "walk_forward": {{"periods_tested": {}, "avg_performance_pct": {:.2}, "consistency_pct": {:.2}, "oos_degradation_pct": {:.2}}}"#,
+                wf.periods_tested,
+                wf.average_performance * 100.0,
+                wf.consistency_score * 100.0,
+                wf.out_of_sample_degradation * 100.0
+            )
+        } else {
+            String::new()
+        };
+
+        // Log single structured JSON entry - Kibana can parse and index all fields
+        log_info!(MAIN_LOGGER, 
+            r#"{{"event": "BACKTEST_RESULT", "job_id": "{}", "status": "{}", "performance": {{"total_pnl": {:.2}, "gross_pnl": {:.2}, "sharpe_ratio": {:.4}, "max_drawdown_pct": {:.2}, "win_rate_pct": {:.2}, "profit_factor": {:.4}, "total_trades": {}}}, "returns": {{"annualized_pct": {:.2}, "volatility_pct": {:.2}, "sortino_ratio": {:.4}, "calmar_ratio": {:.4}}}, "trades": {{"avg_return": {:.4}, "avg_time_min": {:.1}, "best_trade": {:.2}, "worst_trade": {:.2}}}, "risk": {{"var_95_pct": {:.2}, "cvar_95_pct": {:.2}, "current_drawdown_pct": {:.2}, "avg_drawdown_pct": {:.2}, "max_dd_days": {}}}, "execution": {{"commission": {:.2}, "commission_ratio_pct": {:.1}, "avg_slippage_pct": {:.4}, "total_orders": {}, "filled_orders": {}, "cancelled_orders": {}, "fill_rate_pct": {:.1}}}{}{}}}"#,
+            job_id,
+            status,
+            // Performance
+            result.total_pnl,
+            gross_pnl,
+            result.sharpe_ratio,
+            result.max_drawdown * 100.0,
+            result.win_rate * 100.0,
+            result.profit_factor,
+            result.total_trades,
+            // Returns
+            result.annualized_return.unwrap_or(0.0) * 100.0,
+            result.volatility.unwrap_or(0.0) * 100.0,
+            result.sortino_ratio.unwrap_or(0.0),
+            result.calmar_ratio.unwrap_or(0.0),
+            // Trades
+            result.avg_trade_return.unwrap_or(0.0),
+            result.avg_time_in_trade.unwrap_or(0.0),
+            result.best_trade.unwrap_or(0.0),
+            result.worst_trade.unwrap_or(0.0),
+            // Risk
+            result.value_at_risk_95.unwrap_or(0.0) * 100.0,
+            result.expected_shortfall_95.unwrap_or(0.0) * 100.0,
+            result.current_drawdown.unwrap_or(0.0) * 100.0,
+            result.avg_drawdown.unwrap_or(0.0) * 100.0,
+            result.max_drawdown_duration_days.unwrap_or(0),
+            // Execution
+            commission,
+            cost_ratio,
+            result.avg_slippage.unwrap_or(0.0) * 100.0,
+            result.total_orders.unwrap_or(0),
+            result.filled_orders.unwrap_or(0),
+            result.cancelled_orders.unwrap_or(0),
+            fill_rate,
+            // Optional sections
+            mc_json,
+            wf_json
+        );
     }
     
     /// Get the date range of market data
