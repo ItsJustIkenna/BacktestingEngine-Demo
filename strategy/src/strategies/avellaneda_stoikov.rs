@@ -29,6 +29,8 @@ pub struct AvellanedaStoikovParams {
     pub volatility_cap: f64,        // Max allowed volatility (pause quoting above this)
     pub time_horizon_minutes: f64,  // t: time horizon for optimization (in minutes)
     pub market_depth_k: f64,        // k: market depth parameter (higher = tighter spread)
+    pub min_spread_bps: f64,        // Minimum spread in basis points (to cover costs)
+    pub max_trades_per_minute: f64, // Rate limit on trading frequency
     
     // Phase 2: Dynamic adjustment parameters (optimized by genetic algorithm)
     pub volatility_adjustment_factor: f64, // How much to scale γ with volatility (0.5 = 50% increase per 1.0 vol ratio)
@@ -40,22 +42,24 @@ pub struct AvellanedaStoikovParams {
 impl Default for AvellanedaStoikovParams {
     fn default() -> Self {
         Self {
-            risk_aversion: 0.01,
+            risk_aversion: 0.1,             // Increased from 0.01 - wider spreads to cover costs
             order_size: 0.01,
             window_ms: 60_000, // 60 seconds
-            min_quote_lifetime_ms: 500,
-            fee_rate: 0.0005,
-            latency_buffer: 0.5,
+            min_quote_lifetime_ms: 2000,    // Increased from 500ms - reduce quote frequency
+            fee_rate: 0.001,                // Increased from 0.0005 - more realistic total cost
+            latency_buffer: 1.0,            // Increased from 0.5 - more buffer for slippage
             inventory_target: 0.0,
             volatility_cap: 0.10, // 10% annualized
-            time_horizon_minutes: 1.0, // 1 minute default
-            market_depth_k: 1.5, // Default market depth parameter
+            time_horizon_minutes: 5.0,      // Increased from 1.0 - longer horizon = wider spreads
+            market_depth_k: 0.8,            // Decreased from 1.5 - wider spreads
+            min_spread_bps: 20.0,           // Minimum 20bps spread (covers 2x fee + buffer)
+            max_trades_per_minute: 5.0,     // Max 5 trades per minute to control costs
             
             // Phase 2: Dynamic adjustment defaults
-            volatility_adjustment_factor: 0.5,  // Moderate volatility scaling
-            inventory_penalty_factor: 0.3,      // Moderate inventory penalty
-            trend_sensitivity: 0.2,             // Slight trend following
-            flow_sensitivity: -0.1,             // Fade order flow (contrarian)
+            volatility_adjustment_factor: 0.8,  // Increased from 0.5 - more responsive to vol
+            inventory_penalty_factor: 0.5,      // Increased from 0.3 - stronger inventory control
+            trend_sensitivity: 0.3,             // Increased from 0.2 - more trend following
+            flow_sensitivity: -0.15,            // Increased from -0.1 - stronger fade
         }
     }
 }
@@ -114,6 +118,10 @@ pub struct AvellanedaStoikovStrategy {
     buy_volume: f64,                         // Recent buy volume
     sell_volume: f64,                        // Recent sell volume
     max_inventory: f64,                      // Maximum allowed inventory for penalty calculation
+    
+    // Trade rate limiting
+    trades_this_minute: u32,                 // Count of trades in current minute
+    current_minute_start: Option<DateTime<Utc>>, // Start of current minute window
 }
 
 impl AvellanedaStoikovStrategy {
@@ -141,7 +149,33 @@ impl AvellanedaStoikovStrategy {
             buy_volume: 0.0,
             sell_volume: 0.0,
             max_inventory: 10.0, // Default max inventory (will be calibrated)
+            
+            // Trade rate limiting
+            trades_this_minute: 0,
+            current_minute_start: None,
         }
+    }
+    
+    /// Check if we can trade (rate limiting)
+    fn can_trade(&mut self, now: DateTime<Utc>) -> bool {
+        // Reset counter if we're in a new minute
+        if let Some(minute_start) = self.current_minute_start {
+            if now - minute_start >= Duration::seconds(60) {
+                self.current_minute_start = Some(now);
+                self.trades_this_minute = 0;
+            }
+        } else {
+            self.current_minute_start = Some(now);
+            self.trades_this_minute = 0;
+        }
+        
+        // Check if under rate limit
+        (self.trades_this_minute as f64) < self.params.max_trades_per_minute
+    }
+    
+    /// Record a trade for rate limiting
+    fn record_trade(&mut self) {
+        self.trades_this_minute += 1;
     }
     
     /// Phase 2: Calculate dynamic risk aversion (gamma) based on market conditions
@@ -440,12 +474,23 @@ impl Strategy for AvellanedaStoikovStrategy {
         // Reservation price (skew)
         let r = s - (q - q_star) * gamma * sigma * sigma * t;
         
-        // Optimal spread
-        let spread = gamma * sigma * sigma * t + (2.0 / gamma) * (1.0 + fee + latency) / k;
+        // Optimal spread from A-S formula
+        let as_spread = gamma * sigma * sigma * t + (2.0 / gamma) * (1.0 + fee + latency) / k;
+        
+        // Enforce minimum spread to cover transaction costs
+        // min_spread_bps is in basis points, convert to price
+        let min_spread = s * self.params.min_spread_bps / 10000.0;
+        let spread = as_spread.max(min_spread);
+        
         let bid = r - spread / 2.0;
         let ask = r + spread / 2.0;
 
-        // 5. Only re-quote if price changes by threshold or min quote lifetime elapsed
+        // 5. Check trade rate limit
+        if !self.can_trade(now) {
+            return Ok(vec![]);
+        }
+
+        // 6. Only re-quote if price changes by threshold or min quote lifetime elapsed
         let min_lifetime = Duration::milliseconds(self.params.min_quote_lifetime_ms as i64);
         let should_quote = match self.last_quote_time {
             Some(last) => now - last >= min_lifetime
@@ -456,11 +501,15 @@ impl Strategy for AvellanedaStoikovStrategy {
         if !should_quote {
             return Ok(vec![]);
         }
+        
+        // Record the quote for rate limiting
+        self.record_trade();
+        
     self.last_quote_time = Some(now);
     self.last_bid = Some(BigDecimal::from_f64(bid).unwrap());
     self.last_ask = Some(BigDecimal::from_f64(ask).unwrap());
 
-        // 6. Generate bid and ask signals
+        // 7. Generate bid and ask signals
         let mut signals = Vec::new();
         signals.push(Signal::new(
             format!("as_bid_{}", now.timestamp_millis()),

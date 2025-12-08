@@ -167,6 +167,8 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
         volatility_cap: best_chromo.volatility_cap,
         time_horizon_minutes: best_chromo.time_horizon_minutes,
         market_depth_k: best_chromo.market_depth_k,
+        min_spread_bps: 20.0,
+        max_trades_per_minute: 5.0,
         
         // Phase 2: Dynamic adjustment parameters
         volatility_adjustment_factor: best_chromo.volatility_adjustment_factor,
@@ -268,6 +270,8 @@ fn extract_best_parameters_from_walkforward(_wf_summary: &WalkForwardSummary) ->
         volatility_cap: 0.10,
         time_horizon_minutes: 1.0,
         market_depth_k: 1.5,
+        min_spread_bps: 20.0,
+        max_trades_per_minute: 5.0,
         
         // Phase 2: Using default dynamic adjustment parameters
         volatility_adjustment_factor: 0.5,
