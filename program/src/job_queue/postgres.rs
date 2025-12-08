@@ -238,6 +238,16 @@ impl PostgresQueue {
                 monte_carlo_enabled: true,
                 monte_carlo_runs: 1000,
                 walk_forward_enabled: true,
+                // Profitability criteria - use defaults when loading from DB
+                auto_save_profitable: true,
+                min_sharpe_ratio: 1.0,
+                min_profit_factor: 1.2,
+                max_drawdown: 0.25,
+                min_win_rate: 0.40,
+                min_trades: 30,
+                min_sortino_ratio: None,
+                min_calmar_ratio: None,
+                min_total_pnl: None,
                 risk_aversion: f64::from_str(&record.risk_aversion.to_string())?,
                 inventory_target: f64::from_str(&record.inventory_target.to_string())?,
                 order_size: f64::from_str(&record.order_size.to_string())?,
@@ -1039,6 +1049,15 @@ mod tests {
             monte_carlo_enabled: true,
             monte_carlo_runs: 1000,
             walk_forward_enabled: true,
+            auto_save_profitable: true,
+            min_sharpe_ratio: 1.0,
+            min_profit_factor: 1.2,
+            max_drawdown: 0.25,
+            min_win_rate: 0.40,
+            min_trades: 30,
+            min_sortino_ratio: None,
+            min_calmar_ratio: None,
+            min_total_pnl: None,
         };
         
         let job_id = queue.submit_job(params).await.unwrap();

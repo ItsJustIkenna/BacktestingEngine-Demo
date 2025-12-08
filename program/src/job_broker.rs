@@ -343,6 +343,15 @@ mod tests {
             walkforward_optimization_days: None,
             walkforward_test_days: None,
             walkforward_step_days: None,
+            auto_save_profitable: true,
+            min_sharpe_ratio: 1.0,
+            min_profit_factor: 1.2,
+            max_drawdown: 0.25,
+            min_win_rate: 0.40,
+            min_trades: 30,
+            min_sortino_ratio: None,
+            min_calmar_ratio: None,
+            min_total_pnl: None,
         };
 
         // Need to set up default for BacktestJobParams
@@ -385,6 +394,15 @@ mod tests {
             walkforward_optimization_days: None,
             walkforward_test_days: None,
             walkforward_step_days: None,
+            auto_save_profitable: true,
+            min_sharpe_ratio: 1.0,
+            min_profit_factor: 1.2,
+            max_drawdown: 0.25,
+            min_win_rate: 0.40,
+            min_trades: 30,
+            min_sortino_ratio: None,
+            min_calmar_ratio: None,
+            min_total_pnl: None,
         };
 
         let job_id = broker.submit_job(params).await;

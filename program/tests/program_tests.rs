@@ -80,6 +80,7 @@ fn test_backtest_job_params_creation() {
         commission_rate: 0.001,
         start_date: Some("2023-01-01".to_string()),
         end_date: Some("2023-12-31".to_string()),
+        ..Default::default()
     };
     
     assert_eq!(params.symbol, "BTCUSD");
@@ -120,6 +121,7 @@ fn test_backtest_job_params_serialization() {
         commission_rate: 0.0005,
         start_date: None,
         end_date: None,
+        ..Default::default()
     };
     
     let json_str = serde_json::to_string(&params).unwrap();
@@ -164,6 +166,7 @@ fn test_backtest_job_params_optimization_methods() {
         commission_rate: 0.0,
         start_date: None,
         end_date: None,
+        ..Default::default()
     };
     
     assert_eq!(genetic_params.optimization_method, "genetic");
@@ -243,7 +246,7 @@ fn test_job_message_creation() {
         walk_forward_enabled: true,
         commission_rate: 0.0,
         start_date: None,
-        end_date: None,
+        ..Default::default()
     };
     
     let message = JobMessage {
@@ -289,7 +292,7 @@ fn test_job_message_serialization() {
         walk_forward_enabled: true,
         commission_rate: 0.0,
         start_date: None,
-        end_date: None,
+        ..Default::default()
     };
     
     let message = JobMessage {
@@ -432,7 +435,7 @@ async fn test_job_broker_submit_job() {
         walk_forward_enabled: true,
         commission_rate: 0.0,
         start_date: None,
-        end_date: None,
+        ..Default::default()
     };
     
     let job_id = broker.submit_job(params).await;
@@ -479,7 +482,7 @@ async fn test_job_broker_subscribe_jobs() {
         walk_forward_enabled: true,
         commission_rate: 0.0,
         start_date: None,
-        end_date: None,
+        ..Default::default()
     };
     
     tokio::spawn(async move {
@@ -533,7 +536,7 @@ async fn test_job_broker_claim_job() {
         walk_forward_enabled: true,
         commission_rate: 0.0,
         start_date: None,
-        end_date: None,
+        ..Default::default()
     };
     
     // Submit a job
@@ -579,7 +582,7 @@ async fn test_job_broker_complete_job() {
         walk_forward_enabled: true,
         commission_rate: 0.0,
         start_date: None,
-        end_date: None,
+        ..Default::default()
     };
     
     // Submit and claim
@@ -626,7 +629,7 @@ async fn test_job_broker_fail_job() {
         walk_forward_enabled: true,
         commission_rate: 0.0,
         start_date: None,
-        end_date: None,
+        ..Default::default()
     };
     
     // Submit and claim
@@ -673,7 +676,7 @@ async fn test_job_broker_get_pending_job() {
         walk_forward_enabled: true,
         commission_rate: 0.0,
         start_date: None,
-        end_date: None,
+        ..Default::default()
     };
     
     // Submit a job

@@ -14,6 +14,16 @@ interface BacktestFormData {
   monte_carlo_runs: number;
   // Walk-Forward configuration
   walk_forward_enabled: boolean;
+  // Profitability criteria for auto-saving strategies
+  auto_save_profitable: boolean;
+  min_sharpe_ratio: number;
+  min_profit_factor: number;
+  max_drawdown: number;
+  min_win_rate: number;
+  min_trades: number;
+  min_sortino_ratio: number | null;
+  min_calmar_ratio: number | null;
+  min_total_pnl: number | null;
   // Manual parameters (14 total for Avellaneda-Stoikov)
   risk_aversion: number;
   inventory_target: number;
@@ -51,6 +61,16 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     monte_carlo_runs: 1000,
     // Walk-Forward defaults
     walk_forward_enabled: true,
+    // Profitability criteria defaults
+    auto_save_profitable: true,
+    min_sharpe_ratio: 1.0,
+    min_profit_factor: 1.2,
+    max_drawdown: 0.25,
+    min_win_rate: 0.40,
+    min_trades: 30,
+    min_sortino_ratio: null,
+    min_calmar_ratio: null,
+    min_total_pnl: null,
     // Manual parameter defaults
     risk_aversion: 0.5,
     inventory_target: 0.5,
@@ -139,6 +159,16 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
         monte_carlo_enabled: formData.monte_carlo_enabled,
         monte_carlo_runs: formData.monte_carlo_runs,
         walk_forward_enabled: formData.walk_forward_enabled,
+        // Profitability criteria for auto-saving
+        auto_save_profitable: formData.auto_save_profitable,
+        min_sharpe_ratio: formData.min_sharpe_ratio,
+        min_profit_factor: formData.min_profit_factor,
+        max_drawdown: formData.max_drawdown,
+        min_win_rate: formData.min_win_rate,
+        min_trades: formData.min_trades,
+        min_sortino_ratio: formData.min_sortino_ratio,
+        min_calmar_ratio: formData.min_calmar_ratio,
+        min_total_pnl: formData.min_total_pnl,
       };
 
       if (formData.optimization_method === 'genetic') {
@@ -458,6 +488,134 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Profitability Criteria Section */}
+          <div style={{ 
+            marginTop: '15px', 
+            padding: '15px', 
+            backgroundColor: '#f0fff4', 
+            borderRadius: '6px',
+            border: '1px solid #38a169'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px' }}>
+              <input
+                type="checkbox"
+                id="auto_save_profitable"
+                name="auto_save_profitable"
+                checked={formData.auto_save_profitable}
+                onChange={(e) => setFormData({...formData, auto_save_profitable: e.target.checked})}
+                style={{ marginRight: '8px' }}
+              />
+              <label htmlFor="auto_save_profitable" style={{ fontSize: '14px', fontWeight: 600, color: '#276749' }}>
+                💾 Auto-Save Profitable Strategies
+              </label>
+            </div>
+            
+            {formData.auto_save_profitable && (
+              <>
+                <div style={{ fontSize: '11px', color: '#2f855a', marginBottom: '12px' }}>
+                  Strategies meeting these criteria will be automatically saved to the database for future use
+                </div>
+                
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                  <div>
+                    <label htmlFor="min_sharpe_ratio" style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
+                      Min Sharpe Ratio
+                    </label>
+                    <input
+                      type="number"
+                      id="min_sharpe_ratio"
+                      name="min_sharpe_ratio"
+                      value={formData.min_sharpe_ratio}
+                      onChange={handleChange}
+                      step="0.1"
+                      min="0"
+                      max="5"
+                      style={{ width: '100%', padding: '5px', border: '1px solid #9ae6b4', borderRadius: '4px', fontSize: '12px' }}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="min_profit_factor" style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
+                      Min Profit Factor
+                    </label>
+                    <input
+                      type="number"
+                      id="min_profit_factor"
+                      name="min_profit_factor"
+                      value={formData.min_profit_factor}
+                      onChange={handleChange}
+                      step="0.1"
+                      min="1"
+                      max="10"
+                      style={{ width: '100%', padding: '5px', border: '1px solid #9ae6b4', borderRadius: '4px', fontSize: '12px' }}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="max_drawdown" style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
+                      Max Drawdown (%)
+                    </label>
+                    <input
+                      type="number"
+                      id="max_drawdown"
+                      name="max_drawdown"
+                      value={formData.max_drawdown * 100}
+                      onChange={(e) => setFormData({...formData, max_drawdown: parseFloat(e.target.value) / 100})}
+                      step="1"
+                      min="5"
+                      max="50"
+                      style={{ width: '100%', padding: '5px', border: '1px solid #9ae6b4', borderRadius: '4px', fontSize: '12px' }}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="min_win_rate" style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
+                      Min Win Rate (%)
+                    </label>
+                    <input
+                      type="number"
+                      id="min_win_rate"
+                      name="min_win_rate"
+                      value={formData.min_win_rate * 100}
+                      onChange={(e) => setFormData({...formData, min_win_rate: parseFloat(e.target.value) / 100})}
+                      step="1"
+                      min="30"
+                      max="80"
+                      style={{ width: '100%', padding: '5px', border: '1px solid #9ae6b4', borderRadius: '4px', fontSize: '12px' }}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="min_trades" style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
+                      Min Trades
+                    </label>
+                    <input
+                      type="number"
+                      id="min_trades"
+                      name="min_trades"
+                      value={formData.min_trades}
+                      onChange={handleChange}
+                      step="10"
+                      min="10"
+                      max="500"
+                      style={{ width: '100%', padding: '5px', border: '1px solid #9ae6b4', borderRadius: '4px', fontSize: '12px' }}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="min_total_pnl" style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
+                      Min PnL ($)
+                    </label>
+                    <input
+                      type="number"
+                      id="min_total_pnl"
+                      name="min_total_pnl"
+                      value={formData.min_total_pnl ?? 0}
+                      onChange={(e) => setFormData({...formData, min_total_pnl: parseFloat(e.target.value) || null})}
+                      step="100"
+                      style={{ width: '100%', padding: '5px', border: '1px solid #9ae6b4', borderRadius: '4px', fontSize: '12px' }}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
           </div>
 
           {/* Manual Parameters */}

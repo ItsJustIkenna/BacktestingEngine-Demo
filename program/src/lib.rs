@@ -16,6 +16,7 @@ pub mod api;
 pub mod worker;
 pub mod streaming; // Memory-efficient data loading
 pub mod progress_broadcaster; // Real-time progress streaming via broadcast channels
+pub mod profitability; // Profitability criteria for saving strategies to database
 
 // Re-export logging components for easy access
 pub use logging_facade::{
@@ -31,8 +32,8 @@ pub use progress_broadcaster::{ProgressBroadcaster, ProgressUpdate, get_progress
 // Re-export job broker for job distribution
 pub use job_broker::{JobBroker, JobMessage, JobReceiver, JobPriority, get_job_broker};
 
-// Logging macros (log_info, log_warn, log_error, log_debug, log_trace) are automatically
-// exported at the crate root via #[macro_export] in logging_facade.rs
+// Re-export profitability criteria for strategy evaluation
+pub use profitability::{ProfitabilityCriteria, ProfitabilityResult, save_profitable_strategy};
 
 
 

@@ -221,11 +221,40 @@ struct WalkForwardWindowResult {
 pub struct Worker {
     id: usize,
     job_queue: Arc<dyn JobQueue>,
+    /// Database connection pool for saving profitable strategies
+    db_pool: Option<Arc<diesel_async::pooled_connection::deadpool::Pool<diesel_async::AsyncPgConnection>>>,
+    /// Profitability criteria for auto-saving strategies
+    profitability_criteria: crate::profitability::ProfitabilityCriteria,
 }
 
 impl Worker {
     pub fn new(id: usize, job_queue: Arc<dyn JobQueue>) -> Self {
-        Self { id, job_queue }
+        Self { 
+            id, 
+            job_queue,
+            db_pool: None,
+            profitability_criteria: crate::profitability::ProfitabilityCriteria::default(),
+        }
+    }
+    
+    /// Create a worker with database connection pool for saving profitable strategies
+    pub fn with_db_pool(
+        id: usize, 
+        job_queue: Arc<dyn JobQueue>,
+        db_pool: Arc<diesel_async::pooled_connection::deadpool::Pool<diesel_async::AsyncPgConnection>>,
+    ) -> Self {
+        Self { 
+            id, 
+            job_queue,
+            db_pool: Some(db_pool),
+            profitability_criteria: crate::profitability::ProfitabilityCriteria::default(),
+        }
+    }
+    
+    /// Set custom profitability criteria
+    pub fn with_profitability_criteria(mut self, criteria: crate::profitability::ProfitabilityCriteria) -> Self {
+        self.profitability_criteria = criteria;
+        self
     }
     
     /// Start the worker loop
@@ -372,6 +401,11 @@ impl Worker {
                 
                 status_result?;
                 
+                // Check profitability and save strategy if criteria are met
+                if let Some(ref pool) = self.db_pool {
+                    self.save_if_profitable(&result, &job).await;
+                }
+                
                 log_info!(MAIN_LOGGER, "Job {} completed successfully | total_pnl={:.2} sharpe={:.3} max_dd={:.2}% trades={}", 
                     job.id, result.total_pnl, result.sharpe_ratio, result.max_drawdown * 100.0, result.total_trades);
                 
@@ -395,6 +429,74 @@ impl Worker {
         };
         
         result
+    }
+    
+    /// Check if the strategy is profitable and save it to the database
+    /// Uses profitability criteria from job parameters (UI-configurable)
+    async fn save_if_profitable(&self, result: &BacktestResult, job: &BacktestJob) {
+        use crate::profitability::{self, ProfitabilityCriteria};
+        
+        // Check if auto-save is enabled for this job
+        if !job.params.auto_save_profitable {
+            log_debug!(BACKTEST_LOGGER, 
+                "Job {} auto-save disabled, skipping profitability check", 
+                job.id
+            );
+            return;
+        }
+        
+        // Use criteria from job parameters (UI-configurable)
+        let criteria = ProfitabilityCriteria::from_job_params(&job.params);
+        
+        // Check profitability criteria
+        let profitability_result = criteria.is_profitable(result);
+        
+        if profitability_result.is_profitable {
+            log_info!(BACKTEST_LOGGER, 
+                "Job {} strategy meets profitability criteria (score: {:.2}). Saving to database...", 
+                job.id, profitability_result.score
+            );
+            
+            // Get the database pool
+            if let Some(ref pool) = self.db_pool {
+                // Determine strategy name and type from job params
+                let strategy_name = format!("{}_{}", job.params.strategy_type, job.params.symbol);
+                let strategy_type = &job.params.strategy_type;
+                
+                match profitability::save_profitable_strategy(
+                    pool.clone(),
+                    result,
+                    &strategy_name,
+                    strategy_type,
+                    &criteria,
+                ).await {
+                    Ok(Some(instance_id)) => {
+                        log_info!(BACKTEST_LOGGER, 
+                            "Job {} saved profitable strategy instance {} to database", 
+                            job.id, instance_id
+                        );
+                    }
+                    Ok(None) => {
+                        // This shouldn't happen since we already checked profitability
+                        log_warn!(BACKTEST_LOGGER, 
+                            "Job {} strategy not saved (profitability check failed in save function)", 
+                            job.id
+                        );
+                    }
+                    Err(e) => {
+                        log_error!(BACKTEST_LOGGER, 
+                            "Job {} failed to save profitable strategy: {}", 
+                            job.id, e
+                        );
+                    }
+                }
+            }
+        } else {
+            log_debug!(BACKTEST_LOGGER, 
+                "Job {} strategy does not meet profitability criteria: {:?}", 
+                job.id, profitability_result.failures
+            );
+        }
     }
     
     /// Execute backtest using existing CLI logic

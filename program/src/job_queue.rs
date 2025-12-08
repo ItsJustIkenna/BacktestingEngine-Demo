@@ -87,6 +87,26 @@ pub struct BacktestJobParams {
     #[serde(default = "default_walk_forward_enabled")]
     pub walk_forward_enabled: bool,
     
+    // Profitability criteria for auto-saving strategies to database
+    #[serde(default = "default_auto_save_enabled")]
+    pub auto_save_profitable: bool,
+    #[serde(default = "default_min_sharpe_ratio")]
+    pub min_sharpe_ratio: f64,
+    #[serde(default = "default_min_profit_factor")]
+    pub min_profit_factor: f64,
+    #[serde(default = "default_max_drawdown")]
+    pub max_drawdown: f64,
+    #[serde(default = "default_min_win_rate")]
+    pub min_win_rate: f64,
+    #[serde(default = "default_min_trades")]
+    pub min_trades: usize,
+    #[serde(default)]
+    pub min_sortino_ratio: Option<f64>,
+    #[serde(default)]
+    pub min_calmar_ratio: Option<f64>,
+    #[serde(default)]
+    pub min_total_pnl: Option<f64>,
+    
     // Auto-populated fields
     #[serde(default)]
     pub commission_rate: f64, // Auto-populated from exchange
@@ -116,6 +136,58 @@ fn default_flow_sensitivity() -> f64 { -0.1 }
 fn default_monte_carlo_enabled() -> bool { true }
 fn default_monte_carlo_runs() -> usize { 1000 }
 fn default_walk_forward_enabled() -> bool { true }
+fn default_auto_save_enabled() -> bool { true }
+fn default_min_sharpe_ratio() -> f64 { 1.0 }
+fn default_min_profit_factor() -> f64 { 1.2 }
+fn default_max_drawdown() -> f64 { 0.25 }
+fn default_min_win_rate() -> f64 { 0.40 }
+fn default_min_trades() -> usize { 30 }
+
+impl Default for BacktestJobParams {
+    fn default() -> Self {
+        Self {
+            symbol: String::new(),
+            exchange: String::new(),
+            strategy_type: "market_making".to_string(),
+            initial_capital: 10000.0,
+            optimization_method: default_optimization_method(),
+            population_size: default_population_size(),
+            generations: default_generations(),
+            walkforward_optimization_days: None,
+            walkforward_test_days: None,
+            walkforward_step_days: None,
+            risk_aversion: default_risk_aversion(),
+            inventory_target: default_inventory_target(),
+            order_size: default_order_size(),
+            window_ms: default_window_ms(),
+            min_quote_lifetime_ms: default_min_quote_lifetime(),
+            fee_rate: 0.0,
+            latency_buffer: default_latency_buffer(),
+            volatility_cap: default_volatility_cap(),
+            time_horizon_minutes: default_time_horizon(),
+            market_depth_k: default_market_depth_k(),
+            volatility_adjustment_factor: default_volatility_adjustment(),
+            inventory_penalty_factor: default_inventory_penalty(),
+            trend_sensitivity: default_trend_sensitivity(),
+            flow_sensitivity: default_flow_sensitivity(),
+            monte_carlo_enabled: default_monte_carlo_enabled(),
+            monte_carlo_runs: default_monte_carlo_runs(),
+            walk_forward_enabled: default_walk_forward_enabled(),
+            auto_save_profitable: default_auto_save_enabled(),
+            min_sharpe_ratio: default_min_sharpe_ratio(),
+            min_profit_factor: default_min_profit_factor(),
+            max_drawdown: default_max_drawdown(),
+            min_win_rate: default_min_win_rate(),
+            min_trades: default_min_trades(),
+            min_sortino_ratio: None,
+            min_calmar_ratio: None,
+            min_total_pnl: None,
+            commission_rate: 0.0,
+            start_date: None,
+            end_date: None,
+        }
+    }
+}
 
 /// Backtest job
 #[derive(Debug, Clone, Serialize, Deserialize)]
