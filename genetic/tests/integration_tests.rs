@@ -129,21 +129,21 @@ mod tests {
         
         // Test that values are in expected ranges
         assert!(chromo1.risk_aversion >= 0.001 && chromo1.risk_aversion <= 0.1);
-        assert!(chromo1.order_size_pct >= 0.005 && chromo1.order_size_pct <= 0.15);
+        assert!(chromo1.order_size_pct >= 0.02 && chromo1.order_size_pct <= 0.20);
         assert!(chromo1.window_ms >= 10_000 && chromo1.window_ms <= 300_000);
         assert!(chromo1.fee_rate >= 0.0001 && chromo1.fee_rate <= 0.01);
         
         // Test crossover
         let child = chromo1.crossover(&chromo2, &mut rng);
         assert!(child.risk_aversion >= 0.001 && child.risk_aversion <= 0.1);
-        assert!(child.order_size_pct >= 0.005 && child.order_size_pct <= 0.15);
+        assert!(child.order_size_pct >= 0.02 && child.order_size_pct <= 0.20);
         
         // Test mutation
         let mut chromo_mut = chromo1.clone();
         chromo_mut.mutate(&mut rng, 0.1);
         // Values should stay in bounds after mutation
         assert!(chromo_mut.risk_aversion >= 0.001 && chromo_mut.risk_aversion <= 0.1);
-        assert!(chromo_mut.order_size_pct >= 0.005 && chromo_mut.order_size_pct <= 0.15);
+        assert!(chromo_mut.order_size_pct >= 0.02 && chromo_mut.order_size_pct <= 0.20);
     }
 
     #[tokio::test]

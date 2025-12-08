@@ -57,13 +57,13 @@ impl Chromosome for AvellanedaStoikovChromosome {
             take_profit_pct: rng.gen_range(0.002..0.02),           // 0.2% to 2% take profit
             stop_loss_pct: rng.gen_range(0.001..0.01),             // 0.1% to 1% stop loss
             // min_spread_bps range: MUST exceed round-trip commission costs
-            // With 10 bps round-trip fees, need at least 30-50 bps spread for profit
-            // Increased minimum to reduce commission-heavy strategies
-            // Range: 50-200 bps to ensure profitability after costs
-            min_spread_bps: rng.gen_range(50.0..200.0),
+            // With 10 bps round-trip fees + market impact, need 100+ bps spread for profit
+            // Range: 100-300 bps to ensure profitability after all costs
+            min_spread_bps: rng.gen_range(100.0..300.0),
             // Trade frequency - REDUCED to minimize commission drag
             // Fewer, higher-quality trades > many small trades eaten by fees
-            max_trades_per_minute: rng.gen_range(0.1..5.0),        // 0.1 to 5 trades per minute (was 0.5-15)
+            // Each trade has fixed cost, so fewer but larger trades are better
+            max_trades_per_minute: rng.gen_range(0.05..2.0),        // 0.05 to 2 trades per minute (1 trade every 30s to 20min)
         }
     }
 
@@ -165,12 +165,12 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.stop_loss_pct = self.stop_loss_pct.clamp(0.001, 0.01);
         }
         if rng.gen_bool(mutation_rate) {
-            self.min_spread_bps += rng.gen_range(-20.0..20.0);
-            self.min_spread_bps = self.min_spread_bps.clamp(50.0, 200.0);
+            self.min_spread_bps += rng.gen_range(-30.0..30.0);
+            self.min_spread_bps = self.min_spread_bps.clamp(100.0, 300.0);
         }
         if rng.gen_bool(mutation_rate) {
-            self.max_trades_per_minute += rng.gen_range(-1.0..1.0);
-            self.max_trades_per_minute = self.max_trades_per_minute.clamp(0.1, 5.0);
+            self.max_trades_per_minute += rng.gen_range(-0.5..0.5);
+            self.max_trades_per_minute = self.max_trades_per_minute.clamp(0.05, 2.0);
         }
     }
     
