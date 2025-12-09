@@ -898,8 +898,14 @@ impl Strategy for AvellanedaStoikovStrategy {
         // Reservation price (skew)
         let r = s - (q - q_star) * gamma * sigma * sigma * t;
         
-        // Optimal spread from A-S formula
-        let as_spread = gamma * sigma * sigma * t + (2.0 / gamma) * (1.0 + fee + latency) / k;
+        // Optimal spread from A-S formula (normalized to price)
+        // The classic A-S formula: spread = γσ²t + (2/γ)ln(1+γ/k)
+        // We use a simplified version that scales properly with price:
+        // spread = s × [γσ²t + (2/γ)(fee + latency)/k]
+        // where all terms are now dimensionless fractions
+        let variance_term = gamma * sigma * sigma * t;  // Dimensionless (vol is already annualized %)
+        let liquidity_term = (2.0 / gamma) * (fee + latency) / k;  // Dimensionless
+        let as_spread = s * (variance_term + liquidity_term);  // Now in dollars, scaled to price
         
         // Phase 4: Use dynamic minimum spread based on volatility and flow
         let dynamic_min_spread_bps = self.calculate_dynamic_min_spread(ann_vol);
