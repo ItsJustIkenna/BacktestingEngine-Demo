@@ -299,6 +299,13 @@ impl SimulationLoop {
                         let fee_rate = self.get_fee_rate(config, &exchange, true);
                         let commission = fill_value * fee_rate;
                         
+                        // Debug: Log first 5 market fills to understand fill sizes
+                        if self.total_fill_count <= 5 {
+                            log_info!(BACKTEST_LOGGER, 
+                                "MARKET_FILL | order_id={} price=${:.2} qty={:.6} value=${:.2} fee_rate={:.4}% commission=${:.2}",
+                                fill.order_id, fill_price, fill_quantity, fill_value, fee_rate * 100.0, commission);
+                        }
+                        
                         // Track commission by fee tier (convert to bps for bucketing)
                         let tier_bps = (fee_rate * 10000.0).round() as u32;
                         *self.commission_by_tier_bps.entry(tier_bps).or_insert(0.0) += commission;
@@ -372,6 +379,13 @@ impl SimulationLoop {
                         // Our resting orders are MAKERS
                         let fee_rate = self.get_fee_rate(config, &exchange, true);
                         let commission = fill_value * fee_rate;
+                        
+                        // Debug: Log first 5 market fills to understand fill sizes
+                        if self.total_fill_count <= 5 {
+                            log_info!(BACKTEST_LOGGER, 
+                                "MARKET_FILL | order_id={} price=${:.2} qty={:.6} value=${:.2} fee_rate={:.4}% commission=${:.2}",
+                                fill.order_id, fill_price, fill_quantity, fill_value, fee_rate * 100.0, commission);
+                        }
                         
                         // Track commission by fee tier (convert to bps for bucketing)
                         let tier_bps = (fee_rate * 10000.0).round() as u32;
