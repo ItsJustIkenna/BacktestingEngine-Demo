@@ -416,8 +416,12 @@ impl AvellanedaStoikovStrategy {
                 1.0
             }
         } else {
-            // Initialize baseline on first call
-            self.baseline_volatility = Some(current_volatility);
+            // Initialize baseline on first call, but only if volatility is reasonable
+            // Don't use tiny values from early EWMA warmup as baseline
+            let min_reasonable_vol = 0.05;  // 5% annualized minimum
+            if current_volatility > min_reasonable_vol && self.price_history.len() >= 10 {
+                self.baseline_volatility = Some(current_volatility);
+            }
             1.0
         };
         
@@ -919,17 +923,23 @@ impl Strategy for AvellanedaStoikovStrategy {
         let dynamic_min_spread_bps = self.calculate_dynamic_min_spread(ann_vol);
         let min_spread = s * dynamic_min_spread_bps / 10000.0;
         
-        // Cap spread to reasonable bounds (min 3 bps, max 100 bps of price)
-        let max_spread = s * 0.01;  // 1% max spread (100 bps)
+        // Cap spread to reasonable bounds (min 3 bps, max 50 bps of price)
+        let max_spread = s * 0.005;  // 0.5% max spread (50 bps)
         let as_spread = as_spread_raw.clamp(min_spread, max_spread);
         let spread = as_spread.max(min_spread);
         
-        // Sanity check: bid and ask must be positive and within 5% of mid price
+        // Sanity check: bid and ask must be positive and reasonable
         let bid = r - spread / 2.0;
         let ask = r + spread / 2.0;
         
-        // Validate quotes are sane before emitting
-        if bid <= 0.0 || ask <= 0.0 || bid > s * 1.05 || ask < s * 0.95 {
+        // Validate quotes are sane before emitting:
+        // - Both prices must be positive
+        // - Bid must be below mid price (can't bid above market)
+        // - Ask must be above mid price (can't offer below market)
+        // - Neither should deviate more than 1% from mid (sanity check for broken calcs)
+        let bid_ok = bid > 0.0 && bid <= s && bid >= s * 0.99;
+        let ask_ok = ask > 0.0 && ask >= s && ask <= s * 1.01;
+        if !bid_ok || !ask_ok {
             // Skip invalid quotes silently - the reservation price or spread is broken
             return Ok(vec![]);
         }
