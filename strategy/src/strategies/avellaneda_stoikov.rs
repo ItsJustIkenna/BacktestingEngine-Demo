@@ -6,6 +6,8 @@ use num_traits::{ToPrimitive, FromPrimitive};
 
 use crate::traits::*;
 use crate::signal::*;
+use crate::logging_facade::STRATEGY_LOGGER;
+use crate::log_info;
 // use crate::indicators::*;
 // use portfoliomanager::PortfolioState;
 use riskmanager::RiskLimits;
@@ -937,12 +939,24 @@ impl Strategy for AvellanedaStoikovStrategy {
         let liquidity_term = (2.0 / gamma) * (fee + latency) / k;  // Dimensionless
         let as_spread_raw = s * (variance_term + liquidity_term);  // Now in dollars, scaled to price
         
+        // Debug: Log first 5 spread calculations to diagnose fill issues
+        static SPREAD_DEBUG_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let debug_count = SPREAD_DEBUG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if debug_count < 5 {
+            let raw_spread_bps = (as_spread_raw / s) * 10000.0;
+            log_info!(STRATEGY_LOGGER, 
+                "A-S_SPREAD_CALC | gamma={:.4} sigma={:.4} t={:.6} k={:.2} fee={:.6} latency={:.4} | var_term={:.6} liq_term={:.6} | raw_spread_bps={:.2}",
+                gamma, sigma, t, k, fee, latency, variance_term, liquidity_term, raw_spread_bps);
+        }
+        
         // Phase 4: Use dynamic minimum spread based on volatility and flow
         let dynamic_min_spread_bps = self.calculate_dynamic_min_spread(ann_vol);
         let min_spread = s * dynamic_min_spread_bps / 10000.0;
         
-        // Cap spread to reasonable bounds (min 3 bps, max 50 bps of price)
-        let max_spread = s * 0.005;  // 0.5% max spread (50 bps)
+        // Cap spread to reasonable bounds
+        // Max spread should allow for volatile crypto markets (up to 200 bps = 2%)
+        // This prevents extreme spreads while still allowing realistic quotes
+        let max_spread = s * 0.02;  // 2% max spread (200 bps) - more realistic for crypto
         let as_spread = safe_clamp(as_spread_raw, min_spread, max_spread);
         let spread = as_spread.max(min_spread);
         

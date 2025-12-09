@@ -53,8 +53,9 @@ impl Chromosome for AvellanedaStoikovChromosome {
             // 0.1 bps (institutional) to 50 bps (retail altcoin exchanges)
             fee_rate: rng.gen_range(0.00001..0.005),
             
-            // Latency buffer multiplier for quote adjustment
-            latency_buffer: rng.gen_range(0.01..3.0),
+            // Latency buffer for slippage adjustment (as fraction)
+            // 0.001% to 0.1% - very small buffer for price adjustment
+            latency_buffer: rng.gen_range(0.00001..0.001),
             
             // Target inventory position (-1 = short bias, 0 = neutral, +1 = long bias)
             inventory_target: rng.gen_range(-1.0..1.0),
@@ -145,10 +146,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.fee_rate *= rng.gen_range(0.5..2.0);
             self.fee_rate = self.fee_rate.clamp(0.00001, 0.005);
         }
-        // Latency buffer: range 0.01-3.0
+        // Latency buffer: range 0.00001-0.001 (tiny slippage buffer)
         if rng.gen_bool(mutation_rate) {
-            self.latency_buffer += rng.gen_range(-0.3..0.3);
-            self.latency_buffer = self.latency_buffer.clamp(0.01, 3.0);
+            self.latency_buffer *= rng.gen_range(0.5..2.0);
+            self.latency_buffer = self.latency_buffer.clamp(0.00001, 0.001);
         }
         // Inventory target: range -1.0 to 1.0
         if rng.gen_bool(mutation_rate) {
@@ -220,7 +221,7 @@ impl Chromosome for AvellanedaStoikovChromosome {
         let d_window = ((self.window_ms as f64).ln() - (other.window_ms as f64).ln()).abs() / (1_800_000_f64.ln() - 1_000_f64.ln()).abs();
         let d_lifetime = ((self.min_quote_lifetime_ms as f64).ln() - (other.min_quote_lifetime_ms as f64).ln()).abs() / (60_000_f64.ln() - 10_f64.ln()).abs();
         let d_fee = ((self.fee_rate.ln() - other.fee_rate.ln()).abs()) / (0.005_f64.ln() - 0.00001_f64.ln()).abs();
-        let d_latency = (self.latency_buffer - other.latency_buffer).abs() / 2.99; // Range: 0.01-3.0
+        let d_latency = (self.latency_buffer - other.latency_buffer).abs() / 0.00099; // Range: 0.00001-0.001
         let d_inventory = (self.inventory_target - other.inventory_target).abs() / 2.0; // Range: -1.0 to 1.0
         let d_vol_cap = (self.volatility_cap - other.volatility_cap).abs() / 4.95; // Range: 0.05-5.0
         let d_horizon = ((self.time_horizon_minutes.ln() - other.time_horizon_minutes.ln()).abs()) / (60.0_f64.ln() - 0.167_f64.ln()).abs();
