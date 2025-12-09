@@ -30,6 +30,22 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Set up panic hook to log panics before crashing
+    std::panic::set_hook(Box::new(|panic_info| {
+        let location = panic_info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown location".to_string());
+        let message = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown panic payload".to_string()
+        };
+        eprintln!("🔥 PANIC at {}: {}", location, message);
+        // Also try to get backtrace
+        eprintln!("Backtrace:\n{:?}", std::backtrace::Backtrace::capture());
+    }));
+    
     println!("🚀 Backtesting Engine starting...");
 
     let cli = Cli::parse();

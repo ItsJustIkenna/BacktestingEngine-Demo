@@ -376,8 +376,8 @@ impl AvellanedaStoikovStrategy {
                 signal_type,
                 SignalStrength::Strong,
                 SignalReason::RiskManagement(format!("Take profit at {:.2}% gain", pnl_pct * 100.0)),
-            ).with_price(BigDecimal::from_f64(current_price).unwrap())
-             .with_quantity(BigDecimal::from_f64(position_size).unwrap()));
+            ).with_price(BigDecimal::from_f64(current_price).unwrap_or_default())
+             .with_quantity(BigDecimal::from_f64(position_size).unwrap_or_default()));
             
             // Reset entry price after exit
             self.avg_entry_price = None;
@@ -393,8 +393,8 @@ impl AvellanedaStoikovStrategy {
                 signal_type,
                 SignalStrength::Strong,
                 SignalReason::RiskManagement(format!("Stop loss at {:.2}% loss", pnl_pct.abs() * 100.0)),
-            ).with_price(BigDecimal::from_f64(current_price).unwrap())
-             .with_quantity(BigDecimal::from_f64(position_size).unwrap()));
+            ).with_price(BigDecimal::from_f64(current_price).unwrap_or_default())
+             .with_quantity(BigDecimal::from_f64(position_size).unwrap_or_default()));
             
             // Reset entry price after exit
             self.avg_entry_price = None;
@@ -964,14 +964,19 @@ impl Strategy for AvellanedaStoikovStrategy {
         self.record_trade();
         
     self.last_quote_time = Some(now);
-    self.last_bid = Some(BigDecimal::from_f64(bid).unwrap());
-    self.last_ask = Some(BigDecimal::from_f64(ask).unwrap());
+    self.last_bid = Some(BigDecimal::from_f64(bid).unwrap_or_default());
+    self.last_ask = Some(BigDecimal::from_f64(ask).unwrap_or_default());
 
         // 8. Phase 4: Calculate dynamic order size based on volatility and performance
         // Use mid price (average of bid/ask) for order size calculation
         let mid_price = (bid + ask) / 2.0;
         let available_balance = context.portfolio_state.balance.to_f64().unwrap_or(0.0);
         let order_size = self.calculate_order_size_dynamic(mid_price, available_balance, ann_vol);
+        
+        // Validate order size before creating signals
+        if order_size <= 0.0 || !order_size.is_finite() {
+            return Ok(vec![]);
+        }
         
         // 9. Generate bid and ask signals with percentage-based sizing
         let mut signals = Vec::new();
@@ -980,15 +985,15 @@ impl Strategy for AvellanedaStoikovStrategy {
             SignalType::Buy,
             SignalStrength::Medium,
             SignalReason::Custom("AvellanedaStoikov".to_string(), "Optimal bid quote".to_string()),
-        ).with_price(BigDecimal::from_f64(bid).unwrap())
-         .with_quantity(BigDecimal::from_f64(order_size).unwrap()));
+        ).with_price(BigDecimal::from_f64(bid).unwrap_or_default())
+         .with_quantity(BigDecimal::from_f64(order_size).unwrap_or_default()));
         signals.push(Signal::new(
             format!("as_ask_{}", now.timestamp_millis()),
             SignalType::Sell,
             SignalStrength::Medium,
             SignalReason::Custom("AvellanedaStoikov".to_string(), "Optimal ask quote".to_string()),
-        ).with_price(BigDecimal::from_f64(ask).unwrap())
-         .with_quantity(BigDecimal::from_f64(order_size).unwrap()));
+        ).with_price(BigDecimal::from_f64(ask).unwrap_or_default())
+         .with_quantity(BigDecimal::from_f64(order_size).unwrap_or_default()));
         Ok(signals)
     }
 

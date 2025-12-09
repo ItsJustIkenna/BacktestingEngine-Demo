@@ -998,6 +998,9 @@ impl Worker {
         
         // Create fitness function that evaluates chromosomes and returns equity curve for robustness analysis
         // THREAD SAFETY: We clone Arc references and create fresh state inside each async block
+        // Use static counter to track fitness evaluation progress
+        static FITNESS_EVAL_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        
         let fitness_fn: genetic::AsyncFitnessFn<AvellanedaStoikovChromosome> = Arc::new(move |chromosome: &AvellanedaStoikovChromosome| {
             let data = Arc::clone(&data_arc);
             let symbol = symbol.clone();
@@ -1005,6 +1008,11 @@ impl Worker {
             let chr = chromosome.clone(); // Clone the chromosome to move into async
             
             Box::pin(async move {
+                let eval_id = FITNESS_EVAL_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                log_info!(GENETIC_LOGGER, "FITNESS_EVAL #{} ENTER | data_len={} chr.risk_aversion={:.4}", 
+                    eval_id, data.len(), chr.risk_aversion);
+                let eval_start = std::time::Instant::now();
+                
                 // Each async block gets its own fresh state - no shared mutable state
                 let mut backtest_config = BacktestConfig::default();
                 backtest_config.trading.initial_capital = initial_capital;
@@ -1124,8 +1132,12 @@ impl Worker {
                 let strategy = AvellanedaStoikovStrategy::new(strategy_params);
                 let mut strategy_manager = StrategyManager::new();
                 if strategy_manager.register_strategy(strategy_config, strategy).is_err() {
+                    log_warn!(GENETIC_LOGGER, "FITNESS_EVAL #{} FAIL | strategy registration failed | elapsed={:.2}s", 
+                        eval_id, eval_start.elapsed().as_secs_f64());
                     return genetic::FitnessResult::failure();
                 }
+                
+                log_info!(GENETIC_LOGGER, "FITNESS_EVAL #{} | strategy registered, starting simulation...", eval_id);
                 
                 // Run ONLY core simulation (no Monte Carlo, no Walk-Forward)
                 match engine.run_core_simulation_direct(
@@ -1138,9 +1150,15 @@ impl Worker {
                     Ok(result) => {
                         // Use comprehensive fitness function that penalizes commission-heavy strategies
                         let fitness = calculate_comprehensive_fitness(&result, initial_capital);
+                        log_info!(GENETIC_LOGGER, "FITNESS_EVAL #{} SUCCESS | fitness={:.6} pnl={:.2} trades={} | elapsed={:.2}s", 
+                            eval_id, fitness, result.total_pnl, result.num_trades, eval_start.elapsed().as_secs_f64());
                         genetic::FitnessResult::new(fitness, result.equity_curve)
                     }
-                    Err(_) => genetic::FitnessResult::failure(),
+                    Err(e) => {
+                        log_warn!(GENETIC_LOGGER, "FITNESS_EVAL #{} ERROR | {} | elapsed={:.2}s", 
+                            eval_id, e, eval_start.elapsed().as_secs_f64());
+                        genetic::FitnessResult::failure()
+                    }
                 }
             })
         });

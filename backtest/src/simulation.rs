@@ -287,7 +287,19 @@ impl SimulationLoop {
     // Track current market price for unrealized P&L calculation
     let mut current_market_price: Option<BigDecimal> = None;
 
+    // Progress tracking for debugging stalls
+    let total_items = market_data.len();
+    let mut processed_count = 0_usize;
+    let sim_start = std::time::Instant::now();
+
     for data in market_data {
+            // Progress logging every 1000 items
+            processed_count += 1;
+            if processed_count % 1000 == 0 || processed_count == 1 {
+                log_debug!(BACKTEST_LOGGER, "SIM_PROGRESS | {}/{} items ({:.1}%) | elapsed={:.2}s", 
+                    processed_count, total_items, (processed_count as f64 / total_items as f64) * 100.0, sim_start.elapsed().as_secs_f64());
+            }
+            
             // 1. Update orderbook with new market data if needed
             #[cfg(feature = "postgres")]
             match &data {
