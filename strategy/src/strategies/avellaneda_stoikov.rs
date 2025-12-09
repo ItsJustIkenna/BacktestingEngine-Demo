@@ -16,6 +16,24 @@ use chrono::{DateTime, Utc, Duration};
 use bigdecimal::BigDecimal;
 use std::collections::HashMap;
 
+/// Safe clamp that handles floating point precision issues where min ≈ max
+/// Avoids panic when min > max due to floating point representation
+#[inline]
+fn safe_clamp(value: f64, min: f64, max: f64) -> f64 {
+    // Handle NaN cases
+    if value.is_nan() {
+        return min;
+    }
+    // If min > max due to floating point precision, use the average
+    let (actual_min, actual_max) = if min > max {
+        let avg = (min + max) / 2.0;
+        (avg, avg)
+    } else {
+        (min, max)
+    };
+    value.clamp(actual_min, actual_max)
+}
+
 /// Parameters for the Avellaneda-Stoikov strategy
 #[derive(Debug, Clone)]
 pub struct AvellanedaStoikovParams {
@@ -483,8 +501,8 @@ impl AvellanedaStoikovStrategy {
         // 3. Combine adjustments
         let dynamic_k = base_k * vol_adjustment * flow_adjustment;
         
-        // Clamp to configured bounds
-        dynamic_k.clamp(self.params.k_min, self.params.k_max)
+        // Clamp to configured bounds (use safe_clamp for floating point safety)
+        safe_clamp(dynamic_k, self.params.k_min, self.params.k_max)
     }
     
     /// Phase 4: Calculate dynamic time horizon based on volatility
@@ -513,7 +531,7 @@ impl AvellanedaStoikovStrategy {
         };
         
         let dynamic_t = base_t * vol_adjustment;
-        dynamic_t.clamp(self.params.time_horizon_min, self.params.time_horizon_max)
+        safe_clamp(dynamic_t, self.params.time_horizon_min, self.params.time_horizon_max)
     }
     
     /// Phase 4: Calculate dynamic minimum spread based on market conditions
@@ -543,7 +561,7 @@ impl AvellanedaStoikovStrategy {
         };
         
         let dynamic_spread = base_spread * vol_adjustment * flow_adjustment;
-        dynamic_spread.clamp(self.params.min_spread_min_bps, self.params.min_spread_max_bps)
+        safe_clamp(dynamic_spread, self.params.min_spread_min_bps, self.params.min_spread_max_bps)
     }
     
     /// Phase 4: Calculate dynamic order size based on performance (Kelly-inspired)
@@ -582,7 +600,7 @@ impl AvellanedaStoikovStrategy {
         };
         
         let dynamic_size = base_size * vol_adjustment * drawdown_adjustment.max(0.2) * streak_adjustment;
-        dynamic_size.clamp(self.params.size_min_pct, self.params.size_max_pct)
+        safe_clamp(dynamic_size, self.params.size_min_pct, self.params.size_max_pct)
     }
     
     /// Phase 4: Calculate dynamic rate limit based on volatility
@@ -606,7 +624,7 @@ impl AvellanedaStoikovStrategy {
         };
         
         let dynamic_rate = base_rate * vol_adjustment;
-        dynamic_rate.clamp(self.params.rate_min, self.params.rate_max)
+        safe_clamp(dynamic_rate, self.params.rate_min, self.params.rate_max)
     }
     
     /// Update equity tracking for drawdown calculations
@@ -654,7 +672,7 @@ impl AvellanedaStoikovStrategy {
         let dynamic_target = base_target + trend_bias + flow_bias;
         
         // Clamp to reasonable inventory limits
-        dynamic_target.clamp(-1.0, 1.0)
+        safe_clamp(dynamic_target, -1.0, 1.0)
     }
     
     /// Estimate trend from recent price action (simple linear regression on log prices)
@@ -907,7 +925,7 @@ impl Strategy for AvellanedaStoikovStrategy {
         let skew_factor = (normalized_inventory - q_star) * gamma * sigma * sigma * t;
         // Cap skew to prevent reservation price from going negative or too far from mid
         let max_skew = 0.10;  // Max 10% skew from mid price
-        let capped_skew = skew_factor.clamp(-max_skew, max_skew);
+        let capped_skew = safe_clamp(skew_factor, -max_skew, max_skew);
         let r = s * (1.0 - capped_skew);
         
         // Optimal spread from A-S formula (normalized to price)
@@ -925,7 +943,7 @@ impl Strategy for AvellanedaStoikovStrategy {
         
         // Cap spread to reasonable bounds (min 3 bps, max 50 bps of price)
         let max_spread = s * 0.005;  // 0.5% max spread (50 bps)
-        let as_spread = as_spread_raw.clamp(min_spread, max_spread);
+        let as_spread = safe_clamp(as_spread_raw, min_spread, max_spread);
         let spread = as_spread.max(min_spread);
         
         // Sanity check: bid and ask must be positive and form valid spread
