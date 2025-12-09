@@ -6,8 +6,6 @@ use num_traits::{ToPrimitive, FromPrimitive};
 
 use crate::traits::*;
 use crate::signal::*;
-use crate::log_info;
-use crate::logging_facade::STRATEGY_LOGGER;
 // use crate::indicators::*;
 // use portfoliomanager::PortfolioState;
 use riskmanager::RiskLimits;
@@ -632,15 +630,6 @@ impl Strategy for AvellanedaStoikovStrategy {
         let mid_price = (bid + ask) / 2.0;
         let available_balance = context.portfolio_state.balance.to_f64().unwrap_or(0.0);
         let order_size = self.calculate_order_size(mid_price, available_balance);
-        
-        // Debug: Log order size calculation (first 5 trades only to avoid log spam)
-        // Use sync logging to ensure it appears in logs immediately
-        if self.trades_this_minute <= 5 {
-            STRATEGY_LOGGER.info_sync(format!(
-                "Order size calc | balance=${:.2} initial_cap=${:.2} order_size_pct={:.4} mid_price=${:.2} => order_size={:.6} units (${:.2})",
-                available_balance, self.params.initial_capital, self.params.order_size_pct, 
-                mid_price, order_size, order_size * mid_price));
-        }
         
         // 9. Generate bid and ask signals with percentage-based sizing
         let mut signals = Vec::new();

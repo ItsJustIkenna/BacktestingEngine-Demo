@@ -379,18 +379,21 @@ impl BacktestEngine {
                     "Kraken".to_string(),
                     orderbook::OrderBookConfig::default()
                 );
-                let mut temp_portfolio = portfoliomanager::PortfolioState {
-                    balance: {
-                        use bigdecimal::FromPrimitive;
-                        bigdecimal::BigDecimal::from_f64(config.trading.initial_capital).unwrap_or_default()
-                    },
-                    net_position: 0.0,
-                    positions: Vec::new(),
-                    realized_pnl: bigdecimal::BigDecimal::from(0),
-                    unrealized_pnl: bigdecimal::BigDecimal::from(0),
-                    fees_paid: bigdecimal::BigDecimal::from(0),
-                    timestamp: chrono::Utc::now(),
-                };
+                
+                // Initialize portfolio with BOTH quote and base assets for proper market making
+                // Split capital: 50% as quote (USD), 50% as base asset (BTC/ETH)
+                use bigdecimal::FromPrimitive;
+                let inventory_pct = 0.5;
+                let quote_balance = initial_capital * (1.0 - inventory_pct);
+                let base_value = initial_capital * inventory_pct;
+                let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };
+                
+                let mut temp_portfolio = portfoliomanager::PortfolioState::with_inventory(
+                    "BTC/USD".to_string(),
+                    bigdecimal::BigDecimal::from_f64(quote_balance).unwrap_or_default(),
+                    base_quantity,
+                    bigdecimal::BigDecimal::from_f64(asset_price).unwrap_or_default(),
+                );
                 let mut temp_risk_manager = riskmanager::RiskManager::new();
                 
                 // Create strategy with chromosome parameters (including Phase 2 dynamic params)

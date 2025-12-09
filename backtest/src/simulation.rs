@@ -506,15 +506,18 @@ impl SimulationLoop {
                         .unwrap_or(0.0);
                     let exchange = orderbook.exchange.clone();
                     
-                    // Debug: Log first few order sizes from strategy
+                    // Debug: Log first few order sizes from strategy with full context
                     if self.total_order_count < 5 {
                         let order_value = order_price * order_size;
                         let expected_value_2pct = config.trading.initial_capital * 0.02; // Expected at 2%
                         // Calculate implied order_size_pct from actual order value
                         let implied_pct = if config.trading.initial_capital > 0.0 { order_value / config.trading.initial_capital * 100.0 } else { 0.0 };
+                        let portfolio_balance = portfolio.balance.to_f64().unwrap_or(0.0);
+                        let portfolio_position = portfolio.net_position;
                         log_info!(BACKTEST_LOGGER, 
-                            "Signal order | price=${:.2} size={:.6} units value=${:.2} implied_order_pct={:.2}% (expected ~${:.2} at 2% of ${:.0})",
-                            order_price, order_size, order_value, implied_pct, expected_value_2pct, config.trading.initial_capital);
+                            "ORDER_SIZE_DIAG | portfolio: balance=${:.2} position={:.6} | order: price=${:.2} size={:.6} value=${:.2} | config: initial_cap=${:.0} expected_2pct=${:.2} implied_pct={:.2}%",
+                            portfolio_balance, portfolio_position, order_price, order_size, order_value, 
+                            config.trading.initial_capital, expected_value_2pct, implied_pct);
                     }
                     
                     // Check if this specific order should be allowed

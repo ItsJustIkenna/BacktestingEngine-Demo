@@ -8,6 +8,7 @@ use orderbook::OrderBook;
 use portfoliomanager::PortfolioState;
 use riskmanager::RiskManager;
 use strategy::StrategyManager;
+use bigdecimal::{ToPrimitive, FromPrimitive};
 
 /// Fitness function: runs actual backtest with given chromosome parameters
 /// Returns a composite fitness score using weighted combination:
@@ -27,6 +28,9 @@ pub async fn avellaneda_stoikov_fitness(
     let params = AvellanedaStoikovParams {
         risk_aversion: chromo.risk_aversion,
         order_size: chromo.order_size,
+        order_size_pct: chromo.order_size_pct,                   // From chromosome (0.5-5%)
+        initial_capital: config.trading.initial_capital,         // Use config's capital
+        initial_inventory_pct: 0.5,                              // 50% inventory split
         window_ms: chromo.window_ms,
         min_quote_lifetime_ms: chromo.min_quote_lifetime_ms,
         fee_rate: chromo.fee_rate,
@@ -72,9 +76,31 @@ pub async fn avellaneda_stoikov_fitness(
     let orderbook_config = orderbook::OrderBookConfig::default();
     let mut orderbook = OrderBook::new("BTC/USD".to_string(), "backtest".to_string(), orderbook_config);
     
-    // Initialize portfolio with default (will be set to initial_capital in simulation)
-    let mut portfolio = PortfolioState::default();
-    portfolio.balance = bigdecimal::BigDecimal::from(config.trading.initial_capital as i64);
+    // Get initial price from market data for inventory calculation
+    let initial_price = market_data.first()
+        .and_then(|d| match d {
+            dataloader::MarketData::Trade(t) => t.price.to_f64(),
+            dataloader::MarketData::Candle(c) => c.close.to_f64(),
+            #[cfg(feature = "postgres")]
+            dataloader::MarketData::Snapshot(s) => s.mid_price().to_f64(),
+            #[cfg(feature = "postgres")]
+            dataloader::MarketData::Order(o) => o.price.to_f64(),
+        })
+        .unwrap_or(50000.0); // Fallback price
+    
+    // Initialize portfolio with BOTH quote and base assets for proper market making
+    // Split capital: 50% as quote (USD), 50% as base asset (BTC/ETH)
+    let inventory_pct = 0.5;
+    let quote_balance = config.trading.initial_capital * (1.0 - inventory_pct);
+    let base_value = config.trading.initial_capital * inventory_pct;
+    let base_quantity = if initial_price > 0.0 { base_value / initial_price } else { 0.0 };
+    
+    let mut portfolio = PortfolioState::with_inventory(
+        "BTC/USD".to_string(),
+        bigdecimal::BigDecimal::from_f64(quote_balance).unwrap_or_default(),
+        base_quantity,
+        bigdecimal::BigDecimal::from_f64(initial_price).unwrap_or_default(),
+    );
     
     let mut risk_manager = RiskManager::new();
     
