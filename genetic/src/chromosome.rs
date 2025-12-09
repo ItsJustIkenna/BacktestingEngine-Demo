@@ -38,8 +38,8 @@ impl Chromosome for AvellanedaStoikovChromosome {
             risk_aversion: rng.gen_range(0.0001..1.0),
             
             // Order size as percentage of capital
-            // 0.1% = tiny orders (microcaps, illiquid) to 25% = large orders (liquid majors)
-            order_size_pct: rng.gen_range(0.001..0.25),
+            // 0.5% = conservative to 5% = moderate (avoid excessive commission at higher sizes)
+            order_size_pct: rng.gen_range(0.005..0.05),
             
             // Volatility estimation window: 1s to 30 min
             // Short windows for HFT, long windows for swing trading
@@ -125,10 +125,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.risk_aversion *= rng.gen_range(0.5..2.0); // Multiplicative mutation for log-scale param
             self.risk_aversion = self.risk_aversion.clamp(0.0001, 1.0);
         }
-        // Order size: range 0.1%-25%
+        // Order size: range 0.5%-5% (reduced to avoid excessive commission)
         if rng.gen_bool(mutation_rate) {
             self.order_size_pct *= rng.gen_range(0.5..2.0);
-            self.order_size_pct = self.order_size_pct.clamp(0.001, 0.25);
+            self.order_size_pct = self.order_size_pct.clamp(0.005, 0.05);
         }
         // Window: range 1s-30min
         if rng.gen_bool(mutation_rate) {
@@ -216,7 +216,7 @@ impl Chromosome for AvellanedaStoikovChromosome {
         // Use log-scale normalization for parameters with wide multiplicative ranges
         
         let d_risk = ((self.risk_aversion.ln() - other.risk_aversion.ln()).abs()) / (1.0_f64.ln() - 0.0001_f64.ln()).abs();
-        let d_size = ((self.order_size_pct.ln() - other.order_size_pct.ln()).abs()) / (0.25_f64.ln() - 0.001_f64.ln()).abs();
+        let d_size = ((self.order_size_pct.ln() - other.order_size_pct.ln()).abs()) / (0.05_f64.ln() - 0.005_f64.ln()).abs();
         let d_window = ((self.window_ms as f64).ln() - (other.window_ms as f64).ln()).abs() / (1_800_000_f64.ln() - 1_000_f64.ln()).abs();
         let d_lifetime = ((self.min_quote_lifetime_ms as f64).ln() - (other.min_quote_lifetime_ms as f64).ln()).abs() / (60_000_f64.ln() - 10_f64.ln()).abs();
         let d_fee = ((self.fee_rate.ln() - other.fee_rate.ln()).abs()) / (0.005_f64.ln() - 0.00001_f64.ln()).abs();

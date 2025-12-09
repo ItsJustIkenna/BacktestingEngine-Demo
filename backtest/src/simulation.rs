@@ -868,20 +868,29 @@ impl SimulationLoop {
         // Diagnostic: Calculate average fill value from commission data
         // This helps identify if order sizes are as expected
         let total_fills = self.fills_by_tier_bps.values().sum::<u32>();
-        if total_fills > 0 && self.total_commission > 0.0 {
+        if total_fills > 0 {
             // Estimate average fill value by dividing commission by estimated fee rate
-            // Use the most common fee tier
-            if let Some((&tier_bps, _)) = self.fills_by_tier_bps.iter().max_by_key(|(_, count)| *count) {
-                let fee_rate = tier_bps as f64 / 10000.0;
-                if fee_rate > 0.0 {
-                    let estimated_total_fill_value = self.total_commission / fee_rate;
-                    let avg_fill_value = estimated_total_fill_value / total_fills as f64;
-                    let expected_order_value = config.trading.initial_capital * 0.02; // 2% of capital
-                    log_info!(BACKTEST_LOGGER, 
-                        "Order size diagnostic | total_fills={} commission=${:.2} fee_rate={:.4}% => estimated_fill_value=${:.2}/fill (expected ~${:.2} at 2% order_size_pct)",
-                        total_fills, self.total_commission, fee_rate * 100.0, avg_fill_value, expected_order_value);
+            // Use the most common fee tier, or fallback to config commission rate
+            let fee_rate = if let Some((&tier_bps, _)) = self.fills_by_tier_bps.iter().max_by_key(|(_, count)| *count) {
+                if tier_bps > 0 {
+                    tier_bps as f64 / 10000.0
+                } else {
+                    config.trading.commission_rate.max(0.001) // Fallback to 0.1% minimum
                 }
-            }
+            } else {
+                config.trading.commission_rate.max(0.001)
+            };
+            
+            let estimated_total_fill_value = if self.total_commission > 0.0 && fee_rate > 0.0 {
+                self.total_commission / fee_rate
+            } else {
+                0.0
+            };
+            let avg_fill_value = if total_fills > 0 { estimated_total_fill_value / total_fills as f64 } else { 0.0 };
+            let expected_order_value = config.trading.initial_capital * 0.02; // 2% of capital
+            log_info!(BACKTEST_LOGGER, 
+                "Order size diagnostic | total_fills={} commission=${:.2} fee_rate={:.4}% => estimated_fill_value=${:.2}/fill (expected ~${:.2} at 2% order_size_pct)",
+                total_fills, self.total_commission, fee_rate * 100.0, avg_fill_value, expected_order_value);
         }
 
         result

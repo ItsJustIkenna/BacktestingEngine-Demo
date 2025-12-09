@@ -462,11 +462,39 @@ impl BacktestEngine {
                         return genetic::FitnessResult::new(0.001, result.equity_curve);
                     }
                     let commission_ratio = commission / gross;
+                    
+                    // HARD REJECT: Commission ratio >= 80% means strategy is non-viable
                     if commission_ratio >= 0.80 {
                         let tiny_fitness = 0.001 * (1.0 - (commission_ratio - 0.80).min(0.5));
                         return genetic::FitnessResult::new(tiny_fitness, result.equity_curve);
                     }
+                    
+                    // GRADUATED PENALTY: Penalize commission ratios > 30%
+                    // This encourages the GA to find strategies with reasonable commission costs
+                    // Ideal market making: commission ratio < 30% of gross profit
+                    // Note: Additional penalty applied after base fitness calculation
                 }
+                
+                // Calculate commission penalty multiplier (used later)
+                let commission_penalty: f64 = if let (Some(gross_profit), Some(transaction_costs)) = 
+                    (&result.gross_profit, &result.transaction_costs) 
+                {
+                    let gross = *gross_profit;
+                    let commission = transaction_costs.total_commission;
+                    if gross > 0.0 {
+                        let ratio = commission / gross;
+                        if ratio > 0.30 {
+                            // Graduated penalty: 1.0 at 30%, 0.5 at 55%, 0.2 at 80%
+                            (1.0 - (ratio - 0.30) * 1.6).max(0.2)
+                        } else {
+                            1.0 // No penalty below 30%
+                        }
+                    } else {
+                        1.0
+                    }
+                } else {
+                    1.0
+                };
                 
                 // === Primary Metrics (weighted combination) ===
                 let sharpe = result.sharpe_ratio.unwrap_or(0.0);
@@ -500,21 +528,9 @@ impl BacktestEngine {
                     fitness *= dd_penalty;
                 }
                 
-                // === Soft Penalty for Moderate Commission Ratio (40-80%) ===
-                if let (Some(gross_profit), Some(transaction_costs)) = 
-                    (&result.gross_profit, &result.transaction_costs) 
-                {
-                    let gross = *gross_profit;
-                    let commission = transaction_costs.total_commission;
-                    
-                    if gross > 0.0 {
-                        let commission_ratio = commission / gross;
-                        if commission_ratio > 0.40 && commission_ratio < 0.80 {
-                            let penalty = 1.0 - (commission_ratio - 0.4) * 2.0;
-                            fitness *= penalty.max(0.2);
-                        }
-                    }
-                }
+                // === Apply Commission Penalty (calculated earlier) ===
+                // Graduated penalty: 1.0 at 30% ratio, 0.5 at 55%, 0.2 at 80%
+                fitness *= commission_penalty;
                 
                 // === Penalty: Poor Average Trade ===
                 if let (Some(avg_trade), Some(transaction_costs)) = 
