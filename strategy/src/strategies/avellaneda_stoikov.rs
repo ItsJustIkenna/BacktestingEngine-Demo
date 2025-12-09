@@ -896,7 +896,15 @@ impl Strategy for AvellanedaStoikovStrategy {
         let latency = self.params.latency_buffer;
 
         // Reservation price (skew)
-        let r = s - (q - q_star) * gamma * sigma * sigma * t;
+        // Note: Skew should be proportional to inventory value, not raw units
+        // Normalize inventory impact to prevent extreme skew
+        let inventory_value = q * s;  // Inventory in dollar terms
+        let normalized_inventory = inventory_value / self.params.initial_capital;  // As fraction of capital
+        let skew_factor = (normalized_inventory - q_star) * gamma * sigma * sigma * t;
+        // Cap skew to prevent reservation price from going negative or too far from mid
+        let max_skew = 0.10;  // Max 10% skew from mid price
+        let capped_skew = skew_factor.clamp(-max_skew, max_skew);
+        let r = s * (1.0 - capped_skew);
         
         // Optimal spread from A-S formula (normalized to price)
         // The classic A-S formula: spread = γσ²t + (2/γ)ln(1+γ/k)
@@ -905,15 +913,26 @@ impl Strategy for AvellanedaStoikovStrategy {
         // where all terms are now dimensionless fractions
         let variance_term = gamma * sigma * sigma * t;  // Dimensionless (vol is already annualized %)
         let liquidity_term = (2.0 / gamma) * (fee + latency) / k;  // Dimensionless
-        let as_spread = s * (variance_term + liquidity_term);  // Now in dollars, scaled to price
+        let as_spread_raw = s * (variance_term + liquidity_term);  // Now in dollars, scaled to price
         
         // Phase 4: Use dynamic minimum spread based on volatility and flow
         let dynamic_min_spread_bps = self.calculate_dynamic_min_spread(ann_vol);
         let min_spread = s * dynamic_min_spread_bps / 10000.0;
+        
+        // Cap spread to reasonable bounds (min 3 bps, max 100 bps of price)
+        let max_spread = s * 0.01;  // 1% max spread (100 bps)
+        let as_spread = as_spread_raw.clamp(min_spread, max_spread);
         let spread = as_spread.max(min_spread);
         
+        // Sanity check: bid and ask must be positive and within 5% of mid price
         let bid = r - spread / 2.0;
         let ask = r + spread / 2.0;
+        
+        // Validate quotes are sane before emitting
+        if bid <= 0.0 || ask <= 0.0 || bid > s * 1.05 || ask < s * 0.95 {
+            // Skip invalid quotes silently - the reservation price or spread is broken
+            return Ok(vec![]);
+        }
 
         // 5. Check for exit signals (take profit / stop loss)
         let exit_signals = self.check_exit_conditions(mid_price, now);
