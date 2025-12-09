@@ -939,14 +939,14 @@ impl Strategy for AvellanedaStoikovStrategy {
         let liquidity_term = (2.0 / gamma) * (fee + latency) / k;  // Dimensionless
         let as_spread_raw = s * (variance_term + liquidity_term);  // Now in dollars, scaled to price
         
-        // Debug: Log first 5 spread calculations to diagnose fill issues
+        // Debug: Log first 5 spread calculations to diagnose fill issues (use sync logging)
         static SPREAD_DEBUG_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let debug_count = SPREAD_DEBUG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if debug_count < 5 {
             let raw_spread_bps = (as_spread_raw / s) * 10000.0;
-            log_info!(STRATEGY_LOGGER, 
-                "A-S_SPREAD_CALC | gamma={:.4} sigma={:.4} t={:.6} k={:.2} fee={:.6} latency={:.4} | var_term={:.6} liq_term={:.6} | raw_spread_bps={:.2}",
-                gamma, sigma, t, k, fee, latency, variance_term, liquidity_term, raw_spread_bps);
+            STRATEGY_LOGGER.info_sync(format!(
+                "A-S_SPREAD_CALC | gamma={:.4} sigma={:.4} t={:.6} k={:.2} fee={:.6} latency={:.6} | var_term={:.6} liq_term={:.6} | raw_spread_bps={:.2}",
+                gamma, sigma, t, k, fee, latency, variance_term, liquidity_term, raw_spread_bps));
         }
         
         // Phase 4: Use dynamic minimum spread based on volatility and flow
