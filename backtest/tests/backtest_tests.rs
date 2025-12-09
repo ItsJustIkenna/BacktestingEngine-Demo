@@ -148,6 +148,8 @@ fn test_backtest_result_with_data() {
         data_quality: None,
         transaction_costs: None,
         market_impact: None,
+        inventory_metrics: None,
+        execution_metrics: None,
         risk_halt_reason: None,
     };
     
@@ -184,6 +186,8 @@ fn test_backtest_result_serialization() {
         data_quality: None,
         transaction_costs: None,
         market_impact: None,
+        inventory_metrics: None,
+        execution_metrics: None,
         risk_halt_reason: None,
     };
     

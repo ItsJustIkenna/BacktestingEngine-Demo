@@ -25,7 +25,7 @@ pub mod trade_stats;
 use serde::{Serialize, Deserialize};
 
 // Re-export commonly used functions for convenience
-pub use performance::{sharpe_ratio, profit_factor, net_profit, gross_profit, gross_loss, 
+pub use performance::{sharpe_ratio, sharpe_ratio_from_equity_curve, profit_factor, net_profit, gross_profit, gross_loss, 
                      average_trade_return, median_trade_return, number_of_trades};
 pub use risk::{max_drawdown, volatility};
 pub use trade_stats::{win_rate, average_trade_duration};

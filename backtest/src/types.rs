@@ -58,6 +58,8 @@ pub struct BacktestResult {
     pub data_quality: Option<DataQualityReport>,
     pub transaction_costs: Option<TransactionCostAnalysis>,
     pub market_impact: Option<MarketImpactAnalysis>,
+    pub inventory_metrics: Option<InventoryMetrics>,
+    pub execution_metrics: Option<ExecutionMetrics>,
     pub risk_halt_reason: Option<String>,
 }
 
@@ -104,6 +106,64 @@ pub struct TransactionCostAnalysis {
     pub costs_as_percentage_of_pnl: f64,
     pub avg_cost_per_trade: f64,
     pub commission_by_exchange: std::collections::HashMap<String, f64>,
+}
+
+/// Order lifecycle and execution quality metrics
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExecutionMetrics {
+    /// Total orders placed (quotes submitted)
+    pub orders_placed: usize,
+    /// Orders that received at least one fill
+    pub orders_filled: usize,
+    /// Orders cancelled before any fill
+    pub orders_cancelled: usize,
+    /// Total individual fills received (may exceed orders if partial fills)
+    pub total_fills: usize,
+    /// Fill rate: orders_filled / orders_placed
+    pub fill_rate: f64,
+    /// Cancellation rate: orders_cancelled / orders_placed
+    pub cancellation_rate: f64,
+    /// Average fills per filled order (1.0 = no partial fills)
+    pub avg_fills_per_order: f64,
+    /// Average time from order placement to first fill (seconds)
+    pub avg_time_to_fill_seconds: f64,
+    /// Median time to fill (seconds)
+    pub median_time_to_fill_seconds: f64,
+    /// Bid orders placed
+    pub bid_orders: usize,
+    /// Ask orders placed
+    pub ask_orders: usize,
+    /// Bid orders filled
+    pub bid_fills: usize,
+    /// Ask orders filled
+    pub ask_fills: usize,
+    /// Bid fill rate
+    pub bid_fill_rate: f64,
+    /// Ask fill rate
+    pub ask_fill_rate: f64,
+    /// Average quote spread at time of placement (bps)
+    pub avg_quote_spread_bps: f64,
+}
+
+/// Inventory management metrics for market making strategies
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InventoryMetrics {
+    /// Total volume traded (buy + sell) in quote currency (USD)
+    pub total_volume_traded: f64,
+    /// Average inventory value over the backtest period
+    pub avg_inventory_value: f64,
+    /// Inventory turnover per day (total_volume / avg_inventory / days)
+    pub turnover_per_day: f64,
+    /// Number of buy fills
+    pub buy_fills: usize,
+    /// Number of sell fills
+    pub sell_fills: usize,
+    /// Total buy volume in quote currency
+    pub buy_volume: f64,
+    /// Total sell volume in quote currency
+    pub sell_volume: f64,
+    /// Inventory imbalance ratio (buy_volume - sell_volume) / total_volume
+    pub imbalance_ratio: f64,
 }
 
 /// Market impact modeling results

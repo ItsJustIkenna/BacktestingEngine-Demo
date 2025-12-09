@@ -2,8 +2,16 @@
 //
 // Includes Sharpe ratio, profit factor, net/gross profit, average/median trade return, number of trades.
 
-/// Calculates the Sharpe ratio given returns and risk-free rate.
-pub fn sharpe_ratio(returns: &[f64], risk_free_rate: f64) -> Option<f64> {
+/// Calculates the annualized Sharpe ratio from periodic returns.
+/// 
+/// This function expects percentage returns (e.g., 0.01 for 1%) and an annual risk-free rate.
+/// It calculates the Sharpe ratio and annualizes it assuming 252 trading days per year.
+/// 
+/// For high-frequency data (ticks/trades), the returns should be aggregated to daily
+/// before calling this function, or use `sharpe_ratio_from_equity_curve` instead.
+/// 
+/// Formula: Sharpe = sqrt(periods_per_year) * (mean_return - rfr_per_period) / stddev
+pub fn sharpe_ratio(returns: &[f64], annual_risk_free_rate: f64) -> Option<f64> {
 	if returns.is_empty() {
 		return None;
 	}
@@ -12,7 +20,80 @@ pub fn sharpe_ratio(returns: &[f64], risk_free_rate: f64) -> Option<f64> {
 	if stddev == 0.0 {
 		return None;
 	}
-	Some((mean_return - risk_free_rate) / stddev)
+	
+	// For trade returns in dollars, we need to check if these look like percentages or dollars
+	// If mean is > 1 or < -1, these are likely dollar values, not percentages
+	// In that case, calculate a simple ratio without the RFR (which is a percentage)
+	if mean_return.abs() > 1.0 {
+		// Dollar returns - just calculate ratio of mean to stddev
+		// This is a simplified "reward to variability" ratio
+		return Some(mean_return / stddev);
+	}
+	
+	// Percentage returns - assume these are per-period returns
+	// Convert annual RFR to per-period (assume daily = 252 periods/year)
+	let daily_rfr = annual_risk_free_rate / 252.0;
+	
+	// Annualized Sharpe = sqrt(252) * (mean_daily - daily_rfr) / stddev_daily
+	let annualization_factor = 252.0_f64.sqrt();
+	Some(annualization_factor * (mean_return - daily_rfr) / stddev)
+}
+
+/// Calculates annualized Sharpe ratio from an equity curve.
+/// 
+/// This function calculates daily returns from equity values and computes
+/// a properly annualized Sharpe ratio.
+/// 
+/// # Arguments
+/// * `equity_curve` - Vector of portfolio values over time
+/// * `annual_risk_free_rate` - Annual risk-free rate (e.g., 0.02 for 2%)
+/// * `periods_per_day` - How many data points represent one trading day
+///                       (e.g., 1 for daily data, 390 for minute bars, etc.)
+pub fn sharpe_ratio_from_equity_curve(
+	equity_curve: &[f64],
+	annual_risk_free_rate: f64,
+	periods_per_day: usize,
+) -> Option<f64> {
+	if equity_curve.len() < 2 {
+		return None;
+	}
+	
+	// Calculate per-period returns
+	let period_returns: Vec<f64> = equity_curve.windows(2)
+		.filter_map(|w| if w[0] > 0.0 { Some((w[1] - w[0]) / w[0]) } else { None })
+		.collect();
+	
+	if period_returns.is_empty() {
+		return None;
+	}
+	
+	// Aggregate to daily returns if we have intraday data
+	let daily_returns = if periods_per_day > 1 {
+		// Sum returns within each day (approximation for small returns)
+		period_returns.chunks(periods_per_day)
+			.map(|chunk| chunk.iter().sum::<f64>())
+			.collect::<Vec<_>>()
+	} else {
+		period_returns
+	};
+	
+	if daily_returns.is_empty() {
+		return None;
+	}
+	
+	let mean_daily = mean(&daily_returns)?;
+	let stddev_daily = std_dev(&daily_returns)?;
+	
+	if stddev_daily == 0.0 {
+		return None;
+	}
+	
+	// Convert annual RFR to daily
+	let daily_rfr = annual_risk_free_rate / 252.0;
+	
+	// Annualized Sharpe = sqrt(252) * (mean_daily - daily_rfr) / stddev_daily
+	let annualization_factor = 252.0_f64.sqrt();
+	Some(annualization_factor * (mean_daily - daily_rfr) / stddev_daily)
 }
 
 /// Calculates the profit factor given gross profit and gross loss.

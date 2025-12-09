@@ -40,6 +40,8 @@ pub fn demo_enhanced_cli() {
         data_quality: None,
         transaction_costs: None,
         market_impact: None,
+        inventory_metrics: None,
+        execution_metrics: None,
         risk_halt_reason: None,
         trade_returns: vec![],
     };

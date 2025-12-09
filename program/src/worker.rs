@@ -9,7 +9,7 @@ use tokio::time::{sleep, Duration};
 use chrono::Utc;
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 
-use crate::job_queue::{BacktestJob, BacktestResult, JobQueue, JobStatus, MonteCarloSummary, WalkForwardSummary};
+use crate::job_queue::{BacktestJob, BacktestResult, JobQueue, JobStatus, MonteCarloSummary, WalkForwardSummary, InventorySummary, ExecutionSummary};
 
 // Logging infrastructure from the library crate
 use crate::logging_facade::{MAIN_LOGGER, GENETIC_LOGGER, WALKFORWARD_LOGGER, BACKTEST_LOGGER};
@@ -880,6 +880,34 @@ impl Worker {
             end_date: job.params.end_date.clone(),
             monte_carlo,
             walk_forward,
+            inventory_metrics: result.core.inventory_metrics.as_ref().map(|inv| InventorySummary {
+                total_volume: inv.total_volume_traded,
+                avg_inventory_value: inv.avg_inventory_value,
+                turnover_per_day: inv.turnover_per_day,
+                buy_fills: inv.buy_fills,
+                sell_fills: inv.sell_fills,
+                buy_volume: inv.buy_volume,
+                sell_volume: inv.sell_volume,
+                imbalance_ratio: inv.imbalance_ratio,
+            }),
+            execution_metrics: result.core.execution_metrics.as_ref().map(|ex| ExecutionSummary {
+                orders_placed: ex.orders_placed,
+                orders_filled: ex.orders_filled,
+                orders_cancelled: ex.orders_cancelled,
+                total_fills: ex.total_fills,
+                fill_rate: ex.fill_rate,
+                cancellation_rate: ex.cancellation_rate,
+                avg_fills_per_order: ex.avg_fills_per_order,
+                avg_time_to_fill_seconds: ex.avg_time_to_fill_seconds,
+                median_time_to_fill_seconds: ex.median_time_to_fill_seconds,
+                bid_orders: ex.bid_orders,
+                ask_orders: ex.ask_orders,
+                bid_fills: ex.bid_fills,
+                ask_fills: ex.ask_fills,
+                bid_fill_rate: ex.bid_fill_rate,
+                ask_fill_rate: ex.ask_fill_rate,
+                avg_quote_spread_bps: ex.avg_quote_spread_bps,
+            }),
             risk_halt_reason: None,
         };
         
@@ -1663,6 +1691,8 @@ impl Worker {
             end_date: job.params.end_date.clone(),
             monte_carlo: None, // Walk-forward uses aggregated OOS results
             walk_forward: None, // This IS the walk-forward result
+            inventory_metrics: None, // Not tracked for WF windows
+            execution_metrics: None, // Not tracked for WF windows
             risk_halt_reason: None,
         })
     }
@@ -1871,6 +1901,45 @@ impl Worker {
             String::new()
         };
 
+        // Build Inventory Metrics JSON section (for market making strategies)
+        let inv_json = if let Some(ref inv) = result.inventory_metrics {
+            format!(r#", "inventory": {{"turnover_per_day": {:.2}, "buy_volume": {:.2}, "sell_volume": {:.2}, "avg_value": {:.2}, "buy_fills": {}, "sell_fills": {}, "imbalance": {:.4}}}"#,
+                inv.turnover_per_day,
+                inv.buy_volume,
+                inv.sell_volume,
+                inv.avg_inventory_value,
+                inv.buy_fills,
+                inv.sell_fills,
+                inv.imbalance_ratio
+            )
+        } else {
+            String::new()
+        };
+
+        // Build Execution Metrics JSON section (order lifecycle tracking)
+        let exec_json = if let Some(ref ex) = result.execution_metrics {
+            format!(r#", "execution_detail": {{"orders_placed": {}, "orders_filled": {}, "orders_cancelled": {}, "total_fills": {}, "fill_rate_pct": {:.2}, "cancel_rate_pct": {:.2}, "avg_fills_per_order": {:.2}, "avg_time_to_fill_sec": {:.3}, "median_time_to_fill_sec": {:.3}, "bid_orders": {}, "ask_orders": {}, "bid_fills": {}, "ask_fills": {}, "bid_fill_rate_pct": {:.2}, "ask_fill_rate_pct": {:.2}, "avg_quote_spread_bps": {:.2}}}"#,
+                ex.orders_placed,
+                ex.orders_filled,
+                ex.orders_cancelled,
+                ex.total_fills,
+                ex.fill_rate * 100.0,
+                ex.cancellation_rate * 100.0,
+                ex.avg_fills_per_order,
+                ex.avg_time_to_fill_seconds,
+                ex.median_time_to_fill_seconds,
+                ex.bid_orders,
+                ex.ask_orders,
+                ex.bid_fills,
+                ex.ask_fills,
+                ex.bid_fill_rate * 100.0,
+                ex.ask_fill_rate * 100.0,
+                ex.avg_quote_spread_bps
+            )
+        } else {
+            String::new()
+        };
+
         // Log single structured JSON entry - Kibana can parse and index all fields
         // VaR values are in USD, calculate percentages for easier interpretation
         let var_95_usd = result.value_at_risk_95.unwrap_or(0.0);
@@ -1879,7 +1948,7 @@ impl Worker {
         let cvar_95_pct = if initial_capital > 0.0 { cvar_95_usd / initial_capital * 100.0 } else { 0.0 };
         
         log_info!(MAIN_LOGGER, 
-            r#"{{"event": "BACKTEST_RESULT", "job_id": "{}", "status": "{}", "initial_capital": {:.2}, "performance": {{"total_pnl": {:.2}, "gross_pnl": {:.2}, "sharpe_ratio": {:.4}, "max_drawdown_pct": {:.2}, "win_rate_pct": {:.2}, "profit_factor": {:.4}, "total_trades": {}}}, "returns": {{"annualized_pct": {:.2}, "volatility_pct": {:.2}, "sortino_ratio": {:.4}, "calmar_ratio": {:.4}}}, "trades": {{"avg_return": {:.4}, "avg_time_min": {:.1}, "best_trade": {:.2}, "worst_trade": {:.2}}}, "risk": {{"var_95_usd": {:.2}, "var_95_pct": {:.2}, "cvar_95_usd": {:.2}, "cvar_95_pct": {:.2}, "current_drawdown_pct": {:.2}, "avg_drawdown_pct": {:.2}, "max_dd_days": {}}}, "execution": {{"commission": {:.2}, "commission_ratio_pct": {:.1}, "avg_slippage_pct": {:.4}, "total_orders": {}, "filled_orders": {}, "cancelled_orders": {}, "fill_rate_pct": {:.1}}}{}{}}}"#,
+            r#"{{"event": "BACKTEST_RESULT", "job_id": "{}", "status": "{}", "initial_capital": {:.2}, "performance": {{"total_pnl": {:.2}, "gross_pnl": {:.2}, "sharpe_ratio": {:.4}, "max_drawdown_pct": {:.2}, "win_rate_pct": {:.2}, "profit_factor": {:.4}, "total_trades": {}}}, "returns": {{"annualized_pct": {:.2}, "volatility_pct": {:.2}, "sortino_ratio": {:.4}, "calmar_ratio": {:.4}}}, "trades": {{"avg_return": {:.4}, "avg_time_min": {:.1}, "best_trade": {:.2}, "worst_trade": {:.2}}}, "risk": {{"var_95_usd": {:.2}, "var_95_pct": {:.2}, "cvar_95_usd": {:.2}, "cvar_95_pct": {:.2}, "current_drawdown_pct": {:.2}, "avg_drawdown_pct": {:.2}, "max_dd_days": {}}}, "execution": {{"commission": {:.2}, "commission_ratio_pct": {:.1}, "avg_slippage_pct": {:.4}, "total_orders": {}, "filled_orders": {}, "cancelled_orders": {}, "fill_rate_pct": {:.1}}}{}{}{}{}}}"#,
             job_id,
             status,
             initial_capital,
@@ -1919,7 +1988,9 @@ impl Worker {
             fill_rate,
             // Optional sections
             mc_json,
-            wf_json
+            wf_json,
+            inv_json,
+            exec_json
         );
         
         // Log detailed per-trade economics for strategy improvement insights
@@ -2231,6 +2302,34 @@ impl Worker {
             end_date: None,
             monte_carlo: monte_carlo_summary,
             walk_forward: walk_forward_summary,
+            inventory_metrics: result.core.inventory_metrics.as_ref().map(|inv| InventorySummary {
+                total_volume: inv.total_volume_traded,
+                avg_inventory_value: inv.avg_inventory_value,
+                turnover_per_day: inv.turnover_per_day,
+                buy_fills: inv.buy_fills,
+                sell_fills: inv.sell_fills,
+                buy_volume: inv.buy_volume,
+                sell_volume: inv.sell_volume,
+                imbalance_ratio: inv.imbalance_ratio,
+            }),
+            execution_metrics: result.core.execution_metrics.as_ref().map(|ex| ExecutionSummary {
+                orders_placed: ex.orders_placed,
+                orders_filled: ex.orders_filled,
+                orders_cancelled: ex.orders_cancelled,
+                total_fills: ex.total_fills,
+                fill_rate: ex.fill_rate,
+                cancellation_rate: ex.cancellation_rate,
+                avg_fills_per_order: ex.avg_fills_per_order,
+                avg_time_to_fill_seconds: ex.avg_time_to_fill_seconds,
+                median_time_to_fill_seconds: ex.median_time_to_fill_seconds,
+                bid_orders: ex.bid_orders,
+                ask_orders: ex.ask_orders,
+                bid_fills: ex.bid_fills,
+                ask_fills: ex.ask_fills,
+                bid_fill_rate: ex.bid_fill_rate,
+                ask_fill_rate: ex.ask_fill_rate,
+                avg_quote_spread_bps: ex.avg_quote_spread_bps,
+            }),
             risk_halt_reason: None,
         })
     }
@@ -2388,6 +2487,8 @@ impl Worker {
             end_date: None,
             monte_carlo: None, // Chromosome evaluation doesn't run MC
             walk_forward: None, // Chromosome evaluation doesn't run WF
+            inventory_metrics: None, // Not tracked for chromosome eval
+            execution_metrics: None, // Not tracked for chromosome eval
             risk_halt_reason: None,
         })
     }

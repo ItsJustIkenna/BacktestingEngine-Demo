@@ -891,6 +891,8 @@ impl JobQueue for PostgresQueue {
                     start_date: None,
                     end_date: None,
                     risk_halt_reason: None, // Not stored in DB
+                    inventory_metrics: None, // Not stored in DB (legacy)
+                    execution_metrics: None, // Not stored in DB (legacy)
                 }))
             }
             None => Ok(None),

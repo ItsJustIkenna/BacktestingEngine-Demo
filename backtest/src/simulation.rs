@@ -11,11 +11,23 @@ use databaseschema::models::historical_order::HistoricalOrder;
 use portfoliomanager::PortfolioState;
 use riskmanager::{RiskManager, RiskMetrics, RiskAction};
 use dataloader::MarketData;
-use crate::types::{BacktestEvent, BacktestResult, TransactionCostAnalysis, MarketImpactAnalysis, LiquidityWarning};
+use crate::types::{BacktestEvent, BacktestResult, TransactionCostAnalysis, MarketImpactAnalysis, LiquidityWarning, InventoryMetrics, ExecutionMetrics};
 use crate::logging_facade::BACKTEST_LOGGER;
 use metrics::{performance, risk, trade_stats};
 use bigdecimal::{BigDecimal, ToPrimitive, FromPrimitive};
 use rustc_hash::FxHashMap;
+use chrono::{DateTime, Utc};
+
+/// Tracks individual order lifecycle for execution metrics
+struct OrderTracker {
+    order_id: String,
+    side: orderbook::BookSide,
+    placed_at: DateTime<Utc>,
+    price: f64,
+    filled: bool,
+    fill_count: usize,
+    first_fill_at: Option<DateTime<Utc>>,
+}
 
 pub struct SimulationLoop {
     // Track transaction costs
@@ -42,6 +54,19 @@ pub struct SimulationLoop {
     // Track rolling market volume for realistic market impact calculation
     market_volume_window: Vec<(chrono::DateTime<chrono::Utc>, f64)>, // (timestamp, trade_volume_usd)
     rolling_avg_volume: f64, // Average volume over rolling window
+    // Track inventory metrics for market making
+    buy_volume: f64,
+    sell_volume: f64,
+    buy_fills: usize,
+    sell_fills: usize,
+    inventory_value_samples: Vec<f64>, // For calculating average inventory
+    // Track order lifecycle for execution metrics
+    order_trackers: FxHashMap<String, OrderTracker>, // order_id -> tracker
+    orders_cancelled: usize,
+    time_to_fill_samples: Vec<f64>, // seconds from placement to first fill
+    bid_orders_placed: usize,
+    ask_orders_placed: usize,
+    quote_spreads_bps: Vec<f64>, // spread at time of quote placement
 }
 
 impl SimulationLoop {
@@ -64,6 +89,17 @@ impl SimulationLoop {
             active_order_ids: Vec::with_capacity(10),
             market_volume_window: Vec::with_capacity(1000), // Track last ~1000 trades
             rolling_avg_volume: 0.0,
+            buy_volume: 0.0,
+            sell_volume: 0.0,
+            buy_fills: 0,
+            sell_fills: 0,
+            inventory_value_samples: Vec::with_capacity(1000),
+            order_trackers: FxHashMap::default(),
+            orders_cancelled: 0,
+            time_to_fill_samples: Vec::with_capacity(1000),
+            bid_orders_placed: 0,
+            ask_orders_placed: 0,
+            quote_spreads_bps: Vec::with_capacity(1000),
         }
     }
     
@@ -149,6 +185,20 @@ impl SimulationLoop {
         } else {
             // Fallback to simple commission rate
             config.trading.commission_rate
+        }
+    }
+    
+    /// Track a fill for order lifecycle metrics
+    fn track_fill(&mut self, order_id: &str, fill_time: DateTime<Utc>) {
+        if let Some(tracker) = self.order_trackers.get_mut(order_id) {
+            if !tracker.filled {
+                tracker.filled = true;
+                tracker.first_fill_at = Some(fill_time);
+                // Calculate time to fill in seconds
+                let time_to_fill = (fill_time - tracker.placed_at).num_milliseconds() as f64 / 1000.0;
+                self.time_to_fill_samples.push(time_to_fill);
+            }
+            tracker.fill_count += 1;
         }
     }
     
@@ -281,19 +331,41 @@ impl SimulationLoop {
                         trade.timestamp,
                     );
                     
-                    // Track fill count for market fills
-                    let fill_count = trade_fills.len() as u32;
+                    // Filter fills to only include OUR strategy's orders
+                    // Historical market orders from the data feed should not generate commission/fills for us
+                    let our_fills: Vec<_> = trade_fills
+                        .into_iter()
+                        .filter(|fill| self.active_order_ids.contains(&fill.order_id))
+                        .collect();
+                    
+                    // Track fill count for market fills (only our orders)
+                    let fill_count = our_fills.len() as u32;
                     if fill_count > 0 {
                         self.total_order_count += 1;
                         self.total_fill_count += fill_count;
                         *self.fill_count_histogram.entry(fill_count).or_insert(0) += 1;
                     }
                     
-                    // Track commission for market fills (our resting orders getting filled)
-                    for fill in &trade_fills {
+                    // Track commission and inventory for market fills (our resting orders getting filled)
+                    for fill in &our_fills {
                         let fill_price = fill.price.to_f64().unwrap_or(0.0);
                         let fill_quantity = fill.quantity.to_f64().unwrap_or(0.0);
                         let fill_value = fill_price * fill_quantity;
+                        
+                        // Track order lifecycle
+                        self.track_fill(&fill.order_id, trade.timestamp);
+                        
+                        // Track inventory metrics (buy/sell volume)
+                        match fill.side {
+                            orderbook::BookSide::Bid => {
+                                self.buy_volume += fill_value;
+                                self.buy_fills += 1;
+                            }
+                            orderbook::BookSide::Ask => {
+                                self.sell_volume += fill_value;
+                                self.sell_fills += 1;
+                            }
+                        }
                         
                         // Our resting orders are MAKERS
                         let fee_rate = self.get_fee_rate(config, &exchange, true);
@@ -318,10 +390,15 @@ impl SimulationLoop {
                         *self.commission_by_exchange.entry(exchange.clone()).or_insert(0.0) += commission;
                     }
                     
-                    // Apply fills from incoming trades to portfolio
-                    if !trade_fills.is_empty() {
-                        if let Err(e) = portfolio.apply_fills(&trade_fills) {
+                    // Apply fills from incoming trades to portfolio (only our orders)
+                    if !our_fills.is_empty() {
+                        if let Err(e) = portfolio.apply_fills(&our_fills) {
                             log_error!(BACKTEST_LOGGER, "Error applying trade fills: {}", e);
+                        }
+                        
+                        // Remove filled orders from active list
+                        for fill in &our_fills {
+                            self.active_order_ids.retain(|id| id != &fill.order_id);
                         }
                     }
                 }
@@ -362,19 +439,41 @@ impl SimulationLoop {
                         trade.timestamp,
                     );
                     
-                    // Track fill count for market fills
-                    let fill_count = trade_fills.len() as u32;
+                    // Filter fills to only include OUR strategy's orders
+                    // Historical market orders from the data feed should not generate commission/fills for us
+                    let our_fills: Vec<_> = trade_fills
+                        .into_iter()
+                        .filter(|fill| self.active_order_ids.contains(&fill.order_id))
+                        .collect();
+                    
+                    // Track fill count for market fills (only our orders)
+                    let fill_count = our_fills.len() as u32;
                     if fill_count > 0 {
                         self.total_order_count += 1;
                         self.total_fill_count += fill_count;
                         *self.fill_count_histogram.entry(fill_count).or_insert(0) += 1;
                     }
                     
-                    // Track commission for market fills (our resting orders getting filled)
-                    for fill in &trade_fills {
+                    // Track commission and inventory for market fills (our resting orders getting filled)
+                    for fill in &our_fills {
                         let fill_price = fill.price.to_f64().unwrap_or(0.0);
                         let fill_quantity = fill.quantity.to_f64().unwrap_or(0.0);
                         let fill_value = fill_price * fill_quantity;
+                        
+                        // Track order lifecycle
+                        self.track_fill(&fill.order_id, trade.timestamp);
+                        
+                        // Track inventory metrics (buy/sell volume)
+                        match fill.side {
+                            orderbook::BookSide::Bid => {
+                                self.buy_volume += fill_value;
+                                self.buy_fills += 1;
+                            }
+                            orderbook::BookSide::Ask => {
+                                self.sell_volume += fill_value;
+                                self.sell_fills += 1;
+                            }
+                        }
                         
                         // Our resting orders are MAKERS
                         let fee_rate = self.get_fee_rate(config, &exchange, true);
@@ -399,10 +498,15 @@ impl SimulationLoop {
                         *self.commission_by_exchange.entry(exchange.clone()).or_insert(0.0) += commission;
                     }
                     
-                    // Apply fills from incoming trades to portfolio
-                    if !trade_fills.is_empty() {
-                        if let Err(e) = portfolio.apply_fills(&trade_fills) {
+                    // Apply fills from incoming trades to portfolio (only our orders)
+                    if !our_fills.is_empty() {
+                        if let Err(e) = portfolio.apply_fills(&our_fills) {
                             log_error!(BACKTEST_LOGGER, "Error applying trade fills: {}", e);
+                        }
+                        
+                        // Remove filled orders from active list
+                        for fill in &our_fills {
+                            self.active_order_ids.retain(|id| id != &fill.order_id);
                         }
                     }
                 }
@@ -466,6 +570,13 @@ impl SimulationLoop {
                 for order_id in &self.active_order_ids {
                     let cancel_event = OrderBookEvent::CancelOrder { order_id: order_id.clone(), timestamp };
                     let _ = orderbook.apply_event(cancel_event);
+                    // Track cancellation if order was never filled
+                    if let Some(tracker) = self.order_trackers.get(order_id) {
+                        if !tracker.filled {
+                            self.orders_cancelled += 1;
+                        }
+                    }
+                    self.order_trackers.remove(order_id);
                 }
                 self.active_order_ids.clear();
             }
@@ -575,6 +686,27 @@ impl SimulationLoop {
                     // Track this order ID for later cancellation
                     self.active_order_ids.push(signal.id.clone());
                     
+                    // Determine order side from signal type
+                    let order_side = match signal.signal_type {
+                        signal::SignalType::Buy | signal::SignalType::ScaleIn => orderbook::BookSide::Bid,
+                        _ => orderbook::BookSide::Ask,
+                    };
+                    
+                    // Track order placement for execution metrics
+                    self.order_trackers.insert(signal.id.clone(), OrderTracker {
+                        order_id: signal.id.clone(),
+                        side: order_side,
+                        placed_at: timestamp,
+                        price: order_price,
+                        filled: false,
+                        fill_count: 0,
+                        first_fill_at: None,
+                    });
+                    match order_side {
+                        orderbook::BookSide::Bid => self.bid_orders_placed += 1,
+                        orderbook::BookSide::Ask => self.ask_orders_placed += 1,
+                    }
+                    
                     // 4. Submit order to orderbook
                     let _ = orderbook.submit_order_from_signal(&signal, timestamp);
 
@@ -671,6 +803,12 @@ impl SimulationLoop {
             // Update unrealized P&L with current market price before collecting equity
             if let Some(ref price) = current_market_price {
                 portfolio.update_unrealized_pnl(price);
+                
+                // Sample inventory value for turnover calculation (position value only, not cash)
+                let inventory_value = portfolio.get_total_value().to_f64().unwrap_or(0.0) - portfolio.balance.to_f64().unwrap_or(0.0);
+                if inventory_value > 0.0 {
+                    self.inventory_value_samples.push(inventory_value);
+                }
             }
             
             // Collect TOTAL portfolio value (balance + unrealized P&L) at each step
@@ -715,15 +853,20 @@ impl SimulationLoop {
         // For Sharpe ratio, if we have very few closed trades but significant unrealized P&L,
         // use the equity curve returns instead for a more representative metric
         let use_equity_returns = trade_returns.len() < 10 && open_position_count > 0;
-        let sharpe_returns = if use_equity_returns {
-            // Calculate returns from equity curve for better Sharpe estimation
-            equity_curve.windows(2)
-                .filter_map(|w| if w[0] > 0.0 { Some((w[1] - w[0]) / w[0]) } else { None })
-                .collect::<Vec<_>>()
+        
+        // Calculate Sharpe ratio properly:
+        // - For equity curve returns: use the dedicated function with proper annualization
+        // - For trade returns: the function now handles dollar vs percentage returns
+        result.sharpe_ratio = if use_equity_returns {
+            // Use equity curve with proper annualization
+            // Assume high-frequency data: estimate ~1000 ticks per day for crypto
+            // This is approximate; actual periods_per_day depends on data frequency
+            let periods_per_day = (equity_curve.len() / 7).max(100); // Rough estimate for 1 week of data
+            performance::sharpe_ratio_from_equity_curve(&equity_curve, config.trading.risk_free_rate, periods_per_day)
         } else {
-            trade_returns.clone()
+            // Use trade returns (the function now handles dollar amounts properly)
+            performance::sharpe_ratio(&trade_returns, config.trading.risk_free_rate)
         };
-        result.sharpe_ratio = performance::sharpe_ratio(&sharpe_returns, config.trading.risk_free_rate);
         
         result.profit_factor = performance::profit_factor(
             result.gross_profit.unwrap_or(0.0),
@@ -774,15 +917,15 @@ impl SimulationLoop {
         
         // Calculate Sortino ratio using percentage returns (same as Sharpe for consistency)
         // Sortino uses downside deviation instead of total volatility
-        result.sortino_ratio = risk::sortino_ratio(&sharpe_returns, config.trading.risk_free_rate);
+        result.sortino_ratio = risk::sortino_ratio(&pct_returns, config.trading.risk_free_rate);
         
         // Calculate Calmar ratio (annualized return / max drawdown)
         // Uses percentage-based annualized return for proper ratio
         let max_dd = result.max_drawdown.to_f64().unwrap_or(0.0);
-        if !sharpe_returns.is_empty() && max_dd > 0.0 {
+        if !pct_returns.is_empty() && max_dd > 0.0 {
             // Calculate annualized return from percentage returns
             // Mean return per period * periods per year (assuming ~252 trading days)
-            let mean_return = sharpe_returns.iter().sum::<f64>() / sharpe_returns.len() as f64;
+            let mean_return = pct_returns.iter().sum::<f64>() / pct_returns.len() as f64;
             let annualized_return = mean_return * 252.0;  // Annualize the mean daily return
             result.calmar_ratio = risk::calmar_ratio(annualized_return, max_dd);
         }
@@ -822,6 +965,9 @@ impl SimulationLoop {
         
         result.total_pnl = final_portfolio_value - initial_capital_bd;
 
+        // Capture equity curve length before moving it
+        let equity_curve_len = equity_curve.len();
+        
         // Include equity curve data for visualization
         result.equity_curve = equity_curve;
         // Store individual trade returns for Monte Carlo simulation (actual trade-level P&L)
@@ -864,6 +1010,113 @@ impl SimulationLoop {
             total_impact_cost: self.total_market_impact,
             liquidity_warnings: self.liquidity_warnings.clone(),
         });
+        
+        // Generate inventory metrics for market making analysis
+        let total_volume = self.buy_volume + self.sell_volume;
+        let avg_inventory = if !self.inventory_value_samples.is_empty() {
+            self.inventory_value_samples.iter().sum::<f64>() / self.inventory_value_samples.len() as f64
+        } else {
+            // Fallback: use initial inventory value
+            config.trading.initial_capital * 0.5 // Assume 50% inventory
+        };
+        
+        // Calculate trading days from equity curve length (approximate)
+        // Assuming high-frequency data: ~1000-10000 data points per day
+        let data_points = equity_curve_len;
+        let estimated_days = (data_points as f64 / 5000.0).max(1.0); // Rough estimate
+        
+        let turnover_per_day = if avg_inventory > 0.0 && estimated_days > 0.0 {
+            total_volume / avg_inventory / estimated_days
+        } else {
+            0.0
+        };
+        
+        let imbalance_ratio = if total_volume > 0.0 {
+            (self.buy_volume - self.sell_volume) / total_volume
+        } else {
+            0.0
+        };
+        
+        result.inventory_metrics = Some(InventoryMetrics {
+            total_volume_traded: total_volume,
+            avg_inventory_value: avg_inventory,
+            turnover_per_day,
+            buy_fills: self.buy_fills,
+            sell_fills: self.sell_fills,
+            buy_volume: self.buy_volume,
+            sell_volume: self.sell_volume,
+            imbalance_ratio,
+        });
+        
+        // Calculate execution metrics for order lifecycle analysis
+        let orders_placed = self.bid_orders_placed + self.ask_orders_placed;
+        let orders_filled = self.order_trackers.values().filter(|t| t.filled).count();
+        let orders_with_fills = self.order_trackers.values().filter(|t| t.fill_count > 0).count();
+        let total_fills_from_trackers: usize = self.order_trackers.values().map(|t| t.fill_count).sum();
+        
+        let fill_rate = if orders_placed > 0 { orders_filled as f64 / orders_placed as f64 } else { 0.0 };
+        let cancellation_rate = if orders_placed > 0 { self.orders_cancelled as f64 / orders_placed as f64 } else { 0.0 };
+        let avg_fills_per_order = if orders_with_fills > 0 { total_fills_from_trackers as f64 / orders_with_fills as f64 } else { 0.0 };
+        
+        // Time to fill statistics
+        let avg_time_to_fill = if !self.time_to_fill_samples.is_empty() {
+            self.time_to_fill_samples.iter().sum::<f64>() / self.time_to_fill_samples.len() as f64
+        } else { 0.0 };
+        
+        let median_time_to_fill = if !self.time_to_fill_samples.is_empty() {
+            let mut sorted = self.time_to_fill_samples.clone();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let mid = sorted.len() / 2;
+            if sorted.len() % 2 == 0 && sorted.len() > 1 {
+                (sorted[mid - 1] + sorted[mid]) / 2.0
+            } else {
+                sorted[mid]
+            }
+        } else { 0.0 };
+        
+        // Bid/ask fill rates
+        let bid_fills_count = self.order_trackers.values()
+            .filter(|t| t.filled && matches!(t.side, orderbook::BookSide::Bid))
+            .count();
+        let ask_fills_count = self.order_trackers.values()
+            .filter(|t| t.filled && matches!(t.side, orderbook::BookSide::Ask))
+            .count();
+        let bid_fill_rate = if self.bid_orders_placed > 0 { bid_fills_count as f64 / self.bid_orders_placed as f64 } else { 0.0 };
+        let ask_fill_rate = if self.ask_orders_placed > 0 { ask_fills_count as f64 / self.ask_orders_placed as f64 } else { 0.0 };
+        
+        // Average quote spread (from tracked spreads)
+        let avg_quote_spread_bps = if !self.quote_spreads_bps.is_empty() {
+            self.quote_spreads_bps.iter().sum::<f64>() / self.quote_spreads_bps.len() as f64
+        } else { 0.0 };
+        
+        result.execution_metrics = Some(ExecutionMetrics {
+            orders_placed,
+            orders_filled,
+            orders_cancelled: self.orders_cancelled,
+            total_fills: total_fills_from_trackers,
+            fill_rate,
+            cancellation_rate,
+            avg_fills_per_order,
+            avg_time_to_fill_seconds: avg_time_to_fill,
+            median_time_to_fill_seconds: median_time_to_fill,
+            bid_orders: self.bid_orders_placed,
+            ask_orders: self.ask_orders_placed,
+            bid_fills: bid_fills_count,
+            ask_fills: ask_fills_count,
+            bid_fill_rate,
+            ask_fill_rate,
+            avg_quote_spread_bps,
+        });
+        
+        // Log execution metrics summary
+        log_info!(BACKTEST_LOGGER, "Execution metrics | orders_placed={} filled={} cancelled={} fill_rate={:.1}% cancel_rate={:.1}%",
+            orders_placed, orders_filled, self.orders_cancelled, fill_rate * 100.0, cancellation_rate * 100.0);
+        log_info!(BACKTEST_LOGGER, "Execution metrics | avg_time_to_fill={:.3}s median={:.3}s bid_fill_rate={:.1}% ask_fill_rate={:.1}%",
+            avg_time_to_fill, median_time_to_fill, bid_fill_rate * 100.0, ask_fill_rate * 100.0);
+        
+        // Log inventory metrics summary
+        log_info!(BACKTEST_LOGGER, "Inventory metrics | total_volume=${:.2} buy=${:.2} sell=${:.2} turnover/day={:.2} imbalance={:.2}%",
+            total_volume, self.buy_volume, self.sell_volume, turnover_per_day, imbalance_ratio * 100.0);
         
         // Log fee tier progression for debugging commission issues
         for (exchange, volume) in &self.current_30d_volume_by_exchange {
