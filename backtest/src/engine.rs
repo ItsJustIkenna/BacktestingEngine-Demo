@@ -398,6 +398,8 @@ impl BacktestEngine {
                     strategy::strategies::avellaneda_stoikov::AvellanedaStoikovParams {
                         risk_aversion: chromo.risk_aversion,
                         order_size: order_size_units,
+                        order_size_pct: chromo.order_size_pct,
+                        initial_capital,
                         window_ms: chromo.window_ms,
                         min_quote_lifetime_ms: chromo.min_quote_lifetime_ms,
                         fee_rate: chromo.fee_rate,

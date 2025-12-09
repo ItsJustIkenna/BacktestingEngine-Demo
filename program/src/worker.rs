@@ -693,6 +693,8 @@ impl Worker {
             risk_aversion: params.risk_aversion,
             inventory_target: params.inventory_target,
             order_size: params.order_size,
+            order_size_pct: params.order_size_pct,
+            initial_capital: params.initial_capital,
             ..Default::default()
         };
         
@@ -700,6 +702,8 @@ impl Worker {
         strategy_params_map.insert("risk_aversion".to_string(), config::ParameterValue::Float(params.risk_aversion));
         strategy_params_map.insert("inventory_target".to_string(), config::ParameterValue::Float(params.inventory_target));
         strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(params.order_size));
+        strategy_params_map.insert("order_size_pct".to_string(), config::ParameterValue::Float(params.order_size_pct));
+        strategy_params_map.insert("initial_capital".to_string(), config::ParameterValue::Float(params.initial_capital));
         
         let strategy_config = StrategyConfig {
             id: format!("backtest-{}", job.id),
@@ -987,6 +991,8 @@ impl Worker {
                     risk_aversion: chr.risk_aversion,
                     inventory_target: chr.inventory_target,
                     order_size: order_size_units,
+                    order_size_pct: chr.order_size_pct,
+                    initial_capital,
                     window_ms: chr.window_ms,
                     min_quote_lifetime_ms: chr.min_quote_lifetime_ms,
                     fee_rate: chr.fee_rate,

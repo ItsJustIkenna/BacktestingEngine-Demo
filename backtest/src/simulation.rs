@@ -782,6 +782,8 @@ impl SimulationLoop {
 
         // Include equity curve data for visualization
         result.equity_curve = equity_curve;
+        // Store individual trade returns for Monte Carlo simulation (actual trade-level P&L)
+        result.trade_returns = trade_returns;
         result.initial_capital = config.trading.initial_capital;
         
         // Generate transaction cost analysis

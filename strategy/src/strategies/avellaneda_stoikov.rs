@@ -20,7 +20,9 @@ use std::collections::HashMap;
 #[derive(Debug, Clone)]
 pub struct AvellanedaStoikovParams {
     pub risk_aversion: f64,         // γ: BASE risk aversion parameter (will be adjusted dynamically)
-    pub order_size: f64,            // Fixed order size (in base asset)
+    pub order_size: f64,            // Fixed order size (in base asset) - DEPRECATED, use order_size_pct
+    pub order_size_pct: f64,        // Order size as percentage of capital (e.g., 0.02 = 2%)
+    pub initial_capital: f64,       // Initial trading capital (used with order_size_pct)
     pub window_ms: u64,             // Rolling window for volatility estimation (milliseconds)
     pub min_quote_lifetime_ms: u64, // Minimum quote lifetime (milliseconds)
     pub fee_rate: f64,              // Exchange taker/maker fee (fraction)
@@ -45,7 +47,9 @@ impl Default for AvellanedaStoikovParams {
     fn default() -> Self {
         Self {
             risk_aversion: 0.1,             // Increased from 0.01 - wider spreads to cover costs
-            order_size: 0.001,              // Small order size to reduce commission impact
+            order_size: 0.001,              // DEPRECATED: Small order size fallback
+            order_size_pct: 0.02,           // 2% of capital per trade (default)
+            initial_capital: 100000.0,      // Default $100K capital
             window_ms: 60_000, // 60 seconds
             min_quote_lifetime_ms: 500,     // 500ms quote lifetime for responsive market making
             fee_rate: 0.0003,               // 3bps maker fee (typical for high-volume)
@@ -188,6 +192,30 @@ impl AvellanedaStoikovStrategy {
         self.trades_this_minute += 1;
     }
     
+    /// Calculate order size in asset units based on percentage of capital
+    /// This ensures each trade is a consistent percentage of available capital
+    /// order_size = (capital * order_size_pct) / current_price
+    fn calculate_order_size(&self, current_price: f64, available_balance: f64) -> f64 {
+        if current_price <= 0.0 {
+            return self.params.order_size; // Fallback to fixed size
+        }
+        
+        // Use available balance from portfolio if > 0, otherwise use initial_capital
+        let capital = if available_balance > 0.0 {
+            available_balance
+        } else {
+            self.params.initial_capital
+        };
+        
+        // Calculate order value as percentage of capital, then convert to asset units
+        let order_value_usd = capital * self.params.order_size_pct;
+        let order_size_units = order_value_usd / current_price;
+        
+        // Ensure order size is at least some minimum (avoid dust orders)
+        let min_order_size = 0.0001;
+        order_size_units.max(min_order_size)
+    }
+
     /// Check if we should exit current position (take profit or stop loss)
     fn check_exit_conditions(&mut self, current_price: f64, now: DateTime<Utc>) -> Vec<Signal> {
         let mut signals = Vec::new();
@@ -404,6 +432,14 @@ impl Strategy for AvellanedaStoikovStrategy {
         if let Some(ParameterValue::Float(size)) = parameters.get("order_size") {
             self.params.order_size = *size;
         }
+        // Order size as percentage of capital (preferred over fixed order_size)
+        if let Some(ParameterValue::Float(pct)) = parameters.get("order_size_pct") {
+            self.params.order_size_pct = *pct;
+        }
+        // Initial capital for percentage-based order sizing
+        if let Some(ParameterValue::Float(capital)) = parameters.get("initial_capital") {
+            self.params.initial_capital = *capital;
+        }
         if let Some(ParameterValue::Float(window_ms)) = parameters.get("window_ms") {
             self.params.window_ms = *window_ms as u64;
         }
@@ -587,7 +623,13 @@ impl Strategy for AvellanedaStoikovStrategy {
     self.last_bid = Some(BigDecimal::from_f64(bid).unwrap());
     self.last_ask = Some(BigDecimal::from_f64(ask).unwrap());
 
-        // 8. Generate bid and ask signals
+        // 8. Calculate dynamic order size based on percentage of capital
+        // Use mid price (average of bid/ask) for order size calculation
+        let mid_price = (bid + ask) / 2.0;
+        let available_balance = context.portfolio_state.balance.to_f64().unwrap_or(0.0);
+        let order_size = self.calculate_order_size(mid_price, available_balance);
+        
+        // 9. Generate bid and ask signals with percentage-based sizing
         let mut signals = Vec::new();
         signals.push(Signal::new(
             format!("as_bid_{}", now.timestamp_millis()),
@@ -595,14 +637,14 @@ impl Strategy for AvellanedaStoikovStrategy {
             SignalStrength::Medium,
             SignalReason::Custom("AvellanedaStoikov".to_string(), "Optimal bid quote".to_string()),
         ).with_price(BigDecimal::from_f64(bid).unwrap())
-         .with_quantity(BigDecimal::from_f64(self.params.order_size).unwrap()));
+         .with_quantity(BigDecimal::from_f64(order_size).unwrap()));
         signals.push(Signal::new(
             format!("as_ask_{}", now.timestamp_millis()),
             SignalType::Sell,
             SignalStrength::Medium,
             SignalReason::Custom("AvellanedaStoikov".to_string(), "Optimal ask quote".to_string()),
         ).with_price(BigDecimal::from_f64(ask).unwrap())
-         .with_quantity(BigDecimal::from_f64(self.params.order_size).unwrap()));
+         .with_quantity(BigDecimal::from_f64(order_size).unwrap()));
         Ok(signals)
     }
 

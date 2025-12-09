@@ -159,6 +159,8 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
     AvellanedaStoikovParams {
         risk_aversion: best_chromo.risk_aversion,
         order_size: order_size_units,
+        order_size_pct: best_chromo.order_size_pct,
+        initial_capital: 100000.0, // Default, will be overridden by job params
         window_ms: best_chromo.window_ms,
         min_quote_lifetime_ms: best_chromo.min_quote_lifetime_ms,
         fee_rate: best_chromo.fee_rate,
@@ -264,6 +266,8 @@ fn extract_best_parameters_from_walkforward(_wf_summary: &WalkForwardSummary) ->
     AvellanedaStoikovParams {
         risk_aversion: 0.1,
         order_size: 1000.0,
+        order_size_pct: 0.02, // 2% of capital per trade
+        initial_capital: 100000.0, // Default capital
         window_ms: 60000,
         min_quote_lifetime_ms: 1000,
         fee_rate: 0.0005,

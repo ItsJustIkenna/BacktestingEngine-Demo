@@ -41,6 +41,7 @@ pub fn demo_enhanced_cli() {
         transaction_costs: None,
         market_impact: None,
         risk_halt_reason: None,
+        trade_returns: vec![],
     };
     
     // Create and use the enhanced visualizer with configuration

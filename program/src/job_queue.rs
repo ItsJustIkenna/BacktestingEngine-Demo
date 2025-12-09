@@ -52,6 +52,9 @@ pub struct BacktestJobParams {
     pub inventory_target: f64,
     #[serde(default = "default_order_size")]
     pub order_size: f64,
+    /// Order size as percentage of capital (e.g., 0.02 = 2% of capital per trade)
+    #[serde(default = "default_order_size_pct")]
+    pub order_size_pct: f64,
     #[serde(default = "default_window_ms")]
     pub window_ms: u64,
     #[serde(default = "default_min_quote_lifetime")]
@@ -133,6 +136,7 @@ fn default_generations() -> usize { 20 }
 fn default_risk_aversion() -> f64 { 0.5 }
 fn default_inventory_target() -> f64 { 0.5 }
 fn default_order_size() -> f64 { 0.01 }
+fn default_order_size_pct() -> f64 { 0.02 }  // 2% of capital per trade
 fn default_window_ms() -> u64 { 5000 }
 fn default_min_quote_lifetime() -> u64 { 100 }
 fn default_latency_buffer() -> u64 { 10 }
@@ -173,6 +177,7 @@ impl Default for BacktestJobParams {
             risk_aversion: default_risk_aversion(),
             inventory_target: default_inventory_target(),
             order_size: default_order_size(),
+            order_size_pct: default_order_size_pct(),
             window_ms: default_window_ms(),
             min_quote_lifetime_ms: default_min_quote_lifetime(),
             fee_rate: 0.0,

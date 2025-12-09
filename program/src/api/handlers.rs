@@ -10,7 +10,7 @@ use serde::Serialize;
 use std::sync::Arc;
 
 use crate::job_queue::{BacktestJobParams, BacktestResult, JobQueue, JobStatus};
-// use crate::{log_info, log_error, log_warn};
+use crate::log_warn;
 // use crate::logging_facade::MAIN_LOGGER;
 
 /// API state shared across handlers
@@ -71,6 +71,18 @@ pub async fn submit_backtest(
     Json(mut params): Json<BacktestJobParams>,
 ) -> Result<Json<JobSubmitResponse>, AppError> {
     // log_info!(...)
+    
+    // Validate order_size_pct - must be between 0.001 (0.1%) and 0.25 (25%) of capital per trade
+    // This is the preferred way to specify order size - as a percentage of available capital
+    if params.order_size_pct < 0.001 {
+        log_warn!(crate::MAIN_LOGGER, "order_size_pct {} too small, setting to 0.1% minimum", 
+            params.order_size_pct * 100.0);
+        params.order_size_pct = 0.001;
+    } else if params.order_size_pct > 0.25 {
+        log_warn!(crate::MAIN_LOGGER, "order_size_pct {} too large (>25%), capping at 10%", 
+            params.order_size_pct * 100.0);
+        params.order_size_pct = 0.10;
+    }
     
     // Auto-populate commission rate if not provided
     if params.commission_rate == 0.0 || params.fee_rate == 0.0 {

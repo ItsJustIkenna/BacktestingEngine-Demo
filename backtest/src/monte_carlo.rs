@@ -134,21 +134,27 @@ fn run_monte_carlo_simulation_internal(
     num_runs: usize,
     progress_callback: Option<std::sync::Arc<dyn Fn(&str, usize, usize) + Send + Sync>>,
 ) -> anyhow::Result<MonteCarloResult> {
-    // Extract individual returns from equity curve (not closed trade returns)
-    // NOTE: This uses equity curve deltas which include BOTH realized and unrealized P&L.
-    // This is intentional for Monte Carlo - we're simulating portfolio value paths,
-    // not just closed trade outcomes. This may differ from the main win_rate which
-    // only considers closed positions.
-    let mut trade_returns: Vec<f64> = Vec::new();
+    // Extract individual returns from equity curve for portfolio path simulation
+    // These are period-by-period equity changes, used for drawdown and Sharpe calculation
+    let mut equity_deltas: Vec<f64> = Vec::new();
     if base_result.equity_curve.len() > 1 {
         for i in 1..base_result.equity_curve.len() {
             let ret = base_result.equity_curve[i] - base_result.equity_curve[i - 1];
-            trade_returns.push(ret);
+            equity_deltas.push(ret);
         }
     }
     
-    // If no trades, return default result
-    if trade_returns.is_empty() {
+    // Use actual trade returns for win_rate calculation (if available)
+    // This ensures Monte Carlo win_rate matches the trade-level win_rate metric
+    let actual_trade_returns: Vec<f64> = if !base_result.trade_returns.is_empty() {
+        base_result.trade_returns.clone()
+    } else {
+        // Fallback: use equity deltas (less accurate for win_rate)
+        equity_deltas.clone()
+    };
+    
+    // If no data, return default result
+    if equity_deltas.is_empty() {
         let mut percentiles = HashMap::new();
         percentiles.insert(5, PerformanceMetrics::default());
         percentiles.insert(25, PerformanceMetrics::default());
@@ -175,14 +181,24 @@ fn run_monte_carlo_simulation_internal(
     let bootstrap_runs = num_runs / 2; // Half bootstrap, half shuffle
     let shuffle_runs = num_runs - bootstrap_runs;
     
+    // Calculate base win rate from actual trades (used for shuffle method)
+    let base_win_rate = if !actual_trade_returns.is_empty() {
+        let wins = actual_trade_returns.iter().filter(|&&r| r > 0.0).count();
+        wins as f64 / actual_trade_returns.len() as f64
+    } else {
+        0.0
+    };
+    
     // Method 1: Trade order shuffling (PARALLEL with Rayon)
+    // Note: Shuffling doesn't change win_rate (same trades, different order)
+    // We use this for path-dependent metrics (drawdown, Sharpe)
     let shuffle_results: Vec<_> = (0..shuffle_runs)
         .into_par_iter()
         .map(|_i| {
             let mut rng = rand::thread_rng();
             
-            // Shuffle trade returns
-            let mut shuffled_returns = trade_returns.clone();
+            // Shuffle equity deltas for portfolio path simulation
+            let mut shuffled_returns = equity_deltas.clone();
             shuffled_returns.shuffle(&mut rng);
         
         // Reconstruct equity curve from shuffled returns
@@ -222,11 +238,8 @@ fn run_monte_carlo_simulation_internal(
             }
         }
         
-        // Calculate win rate
-        let wins = shuffled_returns.iter().filter(|&&r| r > 0.0).count();
-        let win_rate = wins as f64 / shuffled_returns.len() as f64;
-        
-        (net_profit, sharpe, max_dd, win_rate)
+        // Win rate is constant for shuffle (same trades, different order)
+        (net_profit, sharpe, max_dd, base_win_rate)
     }).collect();
     
     // Extract results from parallel computation
@@ -248,22 +261,36 @@ fn run_monte_carlo_simulation_internal(
     }
     
     // Method 2: Bootstrap resampling (PARALLEL with Rayon)
+    // Bootstrap on actual trade returns gives win_rate variation
     let bootstrap_results: Vec<_> = (0..bootstrap_runs)
         .into_par_iter()
         .map(|_i| {
             let mut rng = rand::thread_rng();
             
-            // Bootstrap sample: sample with replacement
-            let mut bootstrap_returns = Vec::with_capacity(trade_returns.len());
-        for _ in 0..trade_returns.len() {
-            let idx = rng.gen_range(0..trade_returns.len());
-            bootstrap_returns.push(trade_returns[idx]);
+            // Bootstrap sample equity deltas for portfolio path simulation
+            let mut bootstrap_equity_deltas = Vec::with_capacity(equity_deltas.len());
+        for _ in 0..equity_deltas.len() {
+            let idx = rng.gen_range(0..equity_deltas.len());
+            bootstrap_equity_deltas.push(equity_deltas[idx]);
         }
+        
+        // Bootstrap sample actual trade returns for win_rate calculation
+        let bootstrap_win_rate = if !actual_trade_returns.is_empty() {
+            let mut bootstrap_trades = Vec::with_capacity(actual_trade_returns.len());
+            for _ in 0..actual_trade_returns.len() {
+                let idx = rng.gen_range(0..actual_trade_returns.len());
+                bootstrap_trades.push(actual_trade_returns[idx]);
+            }
+            let wins = bootstrap_trades.iter().filter(|&&r| r > 0.0).count();
+            wins as f64 / bootstrap_trades.len() as f64
+        } else {
+            0.0
+        };
         
         // Reconstruct equity curve from bootstrap sample
         let mut equity = base_result.initial_capital;
         let mut equity_curve = vec![equity];
-        for ret in &bootstrap_returns {
+        for ret in &bootstrap_equity_deltas {
             equity += ret;
             equity_curve.push(equity);
         }
@@ -272,9 +299,9 @@ fn run_monte_carlo_simulation_internal(
         let net_profit = equity - base_result.initial_capital;
         
         // Calculate Sharpe ratio
-        let sharpe = if !bootstrap_returns.is_empty() {
-            let mean_ret = mean(&bootstrap_returns);
-            let std_ret = std_dev(&bootstrap_returns);
+        let sharpe = if !bootstrap_equity_deltas.is_empty() {
+            let mean_ret = mean(&bootstrap_equity_deltas);
+            let std_ret = std_dev(&bootstrap_equity_deltas);
             if std_ret > 0.0 {
                 mean_ret / std_ret * (252.0_f64.sqrt()) // Annualized
             } else {
@@ -297,11 +324,7 @@ fn run_monte_carlo_simulation_internal(
             }
         }
         
-        // Calculate win rate
-        let wins = bootstrap_returns.iter().filter(|&&r| r > 0.0).count();
-        let win_rate = wins as f64 / bootstrap_returns.len() as f64;
-        
-        (net_profit, sharpe, max_dd, win_rate)
+        (net_profit, sharpe, max_dd, bootstrap_win_rate)
     }).collect();
     
     // Extract bootstrap results
@@ -430,9 +453,9 @@ fn run_monte_carlo_simulation_internal(
         percentile_metrics: percentiles,
         var_95,
         cvar_95,
-        // Track data reliability
-        data_points: trade_returns.len(),
-        var_unreliable: trade_returns.len() < 30, // VaR needs at least ~30 samples to be meaningful
+        // Track data reliability - use actual trade count for win_rate reliability
+        data_points: actual_trade_returns.len(),
+        var_unreliable: actual_trade_returns.len() < 30, // VaR needs at least ~30 samples to be meaningful
     })
 }
 

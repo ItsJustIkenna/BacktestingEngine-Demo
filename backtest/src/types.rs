@@ -51,6 +51,9 @@ pub struct BacktestResult {
     pub gross_loss: Option<f64>,
     pub net_profit: Option<f64>,
     pub equity_curve: Vec<f64>,
+    /// Individual trade P&L values (realized) for Monte Carlo simulation
+    #[serde(default)]
+    pub trade_returns: Vec<f64>,
     pub initial_capital: f64,
     pub data_quality: Option<DataQualityReport>,
     pub transaction_costs: Option<TransactionCostAnalysis>,

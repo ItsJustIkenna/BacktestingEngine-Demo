@@ -251,6 +251,7 @@ impl PostgresQueue {
                 risk_aversion: f64::from_str(&record.risk_aversion.to_string())?,
                 inventory_target: f64::from_str(&record.inventory_target.to_string())?,
                 order_size: f64::from_str(&record.order_size.to_string())?,
+                order_size_pct: 0.02, // Default 2% of capital - not stored in DB yet
                 window_ms: 5000,
                 min_quote_lifetime_ms: 100,
                 fee_rate: f64::from_str(&record.commission_rate.to_string())?,
@@ -1051,6 +1052,7 @@ mod tests {
             risk_aversion: 0.5,
             inventory_target: 0.0,
             order_size: 0.1,
+            order_size_pct: 0.02, // 2% of capital per trade
             initial_capital: 100000.0,
             commission_rate: 0.001,
             start_date: None,
