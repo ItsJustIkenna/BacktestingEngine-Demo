@@ -42,12 +42,41 @@ pub struct AvellanedaStoikovParams {
     pub inventory_penalty_factor: f64,     // How much to increase γ with inventory (0.3 = 30% per unit deviation)
     pub trend_sensitivity: f64,            // How much to lean inventory target with trend (-0.5 to 0.5)
     pub flow_sensitivity: f64,             // How much to fade order flow imbalance (-0.2 to 0.2)
+    
+    // Phase 3: Dynamic k (market depth) parameters
+    pub k_volatility_sensitivity: f64,     // How much to reduce k (widen spread) when vol increases (0.3 = 30% reduction per vol ratio)
+    pub k_flow_sensitivity: f64,           // How much to adjust k based on order flow imbalance (0.2 = 20%)
+    pub k_min: f64,                         // Minimum k value (widest allowed spread)
+    pub k_max: f64,                         // Maximum k value (tightest allowed spread)
+    
+    // Phase 4: Dynamic time horizon parameters
+    pub time_horizon_vol_sensitivity: f64,  // How much to adjust t with volatility (0.5 = 50% per vol ratio)
+    pub time_horizon_min: f64,              // Minimum time horizon in minutes
+    pub time_horizon_max: f64,              // Maximum time horizon in minutes
+    
+    // Phase 4: Dynamic min spread parameters  
+    pub min_spread_vol_sensitivity: f64,    // How much to increase min spread with volatility
+    pub min_spread_flow_sensitivity: f64,   // How much to increase min spread with one-sided flow
+    pub min_spread_min_bps: f64,            // Absolute minimum spread (floor)
+    pub min_spread_max_bps: f64,            // Maximum spread cap
+    
+    // Phase 4: Dynamic order size parameters (Kelly-inspired)
+    pub size_vol_sensitivity: f64,          // How much to reduce size in high vol (0.3 = 30% reduction)
+    pub size_drawdown_sensitivity: f64,     // How much to reduce size on drawdown (0.5 = halve at 10% DD)
+    pub size_win_boost: f64,                // How much to increase size when winning (0.2 = 20% boost)
+    pub size_min_pct: f64,                  // Minimum order size as % of capital
+    pub size_max_pct: f64,                  // Maximum order size as % of capital
+    
+    // Phase 4: Dynamic rate limiting parameters
+    pub rate_vol_sensitivity: f64,          // How much to reduce rate in high vol
+    pub rate_min: f64,                       // Minimum trades per minute
+    pub rate_max: f64,                       // Maximum trades per minute
 }
 
 impl Default for AvellanedaStoikovParams {
     fn default() -> Self {
         Self {
-            risk_aversion: 0.1,             // Increased from 0.01 - wider spreads to cover costs
+            risk_aversion: 0.3,             // Moderate risk aversion for tighter spreads
             order_size: 0.001,              // DEPRECATED: Small order size fallback
             order_size_pct: 0.02,           // 2% of capital per trade (default)
             initial_capital: 100000.0,      // Default $100K capital
@@ -55,21 +84,50 @@ impl Default for AvellanedaStoikovParams {
             window_ms: 60_000, // 60 seconds
             min_quote_lifetime_ms: 500,     // 500ms quote lifetime for responsive market making
             fee_rate: 0.0003,               // 3bps maker fee (typical for high-volume)
-            latency_buffer: 0.3,            // Small buffer for slippage
+            latency_buffer: 0.0001,         // Tiny buffer for slippage (0.01% not 30%!)
             inventory_target: 0.0,
-            volatility_cap: 0.10, // 10% annualized
+            volatility_cap: 0.50,           // 50% annualized (crypto is volatile)
             time_horizon_minutes: 1.0,      // Short horizon for tighter spreads
             market_depth_k: 1.5,            // Higher k = tighter spreads, more fills
-            min_spread_bps: 15.0,           // Minimum 15bps spread (covers fees + small buffer)
+            min_spread_bps: 5.0,            // Minimum 5bps spread (reduced from 15 for more fills)
             max_trades_per_minute: 30.0,    // Max 30 trades per minute - allows active trading
             take_profit_pct: 0.005,         // 0.5% take profit (50bps)
             stop_loss_pct: 0.003,           // 0.3% stop loss (30bps) - tighter than TP for market making
             
             // Phase 2: Dynamic adjustment defaults
-            volatility_adjustment_factor: 0.8,  // Increased from 0.5 - more responsive to vol
-            inventory_penalty_factor: 0.5,      // Increased from 0.3 - stronger inventory control
-            trend_sensitivity: 0.3,             // Increased from 0.2 - more trend following
-            flow_sensitivity: -0.15,            // Increased from -0.1 - stronger fade
+            volatility_adjustment_factor: 0.2,  // Reduced - don't widen too much on vol
+            inventory_penalty_factor: 0.3,      // Moderate inventory control
+            trend_sensitivity: 0.2,             // Moderate trend following
+            flow_sensitivity: -0.1,             // Moderate fade
+            
+            // Phase 3: Dynamic k defaults
+            k_volatility_sensitivity: 0.3,      // Reduce k by 30% per vol ratio increase
+            k_flow_sensitivity: 0.2,            // Adjust k by 20% based on flow imbalance
+            k_min: 0.5,                         // Minimum k (widest spread)
+            k_max: 3.0,                         // Maximum k (tightest spread)
+            
+            // Phase 4: Dynamic time horizon defaults
+            time_horizon_vol_sensitivity: 0.5,  // Increase t by 50% per vol ratio
+            time_horizon_min: 0.25,             // Minimum 15 seconds
+            time_horizon_max: 5.0,              // Maximum 5 minutes
+            
+            // Phase 4: Dynamic min spread defaults
+            min_spread_vol_sensitivity: 0.3,    // Increase min spread 30% per vol ratio
+            min_spread_flow_sensitivity: 0.2,   // Increase 20% on one-sided flow
+            min_spread_min_bps: 3.0,            // Absolute floor of 3 bps
+            min_spread_max_bps: 50.0,           // Cap at 50 bps
+            
+            // Phase 4: Dynamic order size defaults
+            size_vol_sensitivity: 0.3,          // Reduce size 30% per vol ratio above baseline
+            size_drawdown_sensitivity: 0.5,     // Halve size at 10% drawdown
+            size_win_boost: 0.1,                // 10% size increase when on winning streak
+            size_min_pct: 0.005,                // Minimum 0.5% of capital
+            size_max_pct: 0.05,                 // Maximum 5% of capital
+            
+            // Phase 4: Dynamic rate limiting defaults
+            rate_vol_sensitivity: 0.4,          // Reduce rate 40% per vol ratio above baseline
+            rate_min: 5.0,                       // Minimum 5 trades per minute
+            rate_max: 60.0,                      // Maximum 60 trades per minute
         }
     }
 }
@@ -129,6 +187,16 @@ pub struct AvellanedaStoikovStrategy {
     sell_volume: f64,                        // Recent sell volume
     max_inventory: f64,                      // Maximum allowed inventory for penalty calculation
     
+    // Phase 3: Dynamic k state tracking
+    recent_spreads: Vec<f64>,                // Recent observed spreads for baseline
+    
+    // Phase 4: Performance tracking for dynamic sizing
+    peak_equity: f64,                        // Peak equity for drawdown calculation
+    current_equity: f64,                     // Current equity
+    recent_pnl: Vec<f64>,                    // Recent trade P&L for win/loss streak
+    consecutive_wins: u32,                    // Count of consecutive winning trades
+    consecutive_losses: u32,                  // Count of consecutive losing trades
+    
     // Trade rate limiting
     trades_this_minute: u32,                 // Count of trades in current minute
     current_minute_start: Option<DateTime<Utc>>, // Start of current minute window
@@ -144,6 +212,9 @@ impl AvellanedaStoikovStrategy {
         if let Err(e) = params.validate() {
             panic!("Invalid Avellaneda-Stoikov parameters: {}", e);
         }
+        
+        // Store initial capital before moving params
+        let initial_capital = params.initial_capital;
         
         Self {
             params,
@@ -162,6 +233,16 @@ impl AvellanedaStoikovStrategy {
             buy_volume: 0.0,
             sell_volume: 0.0,
             max_inventory: 10.0, // Default max inventory (will be calibrated)
+            
+            // Phase 3: Initialize dynamic k state
+            recent_spreads: Vec::new(),
+            
+            // Phase 4: Initialize performance tracking
+            peak_equity: initial_capital,
+            current_equity: initial_capital,
+            recent_pnl: Vec::new(),
+            consecutive_wins: 0,
+            consecutive_losses: 0,
             
             // Trade rate limiting
             trades_this_minute: 0,
@@ -185,8 +266,26 @@ impl AvellanedaStoikovStrategy {
             self.trades_this_minute = 0;
         }
         
-        // Check if under rate limit
+        // Check if under rate limit (use dynamic rate if provided)
         (self.trades_this_minute as f64) < self.params.max_trades_per_minute
+    }
+    
+    /// Check if we can trade with dynamic rate limit based on volatility
+    fn can_trade_dynamic(&mut self, now: DateTime<Utc>, current_volatility: f64) -> bool {
+        // Reset counter if we're in a new minute
+        if let Some(minute_start) = self.current_minute_start {
+            if now - minute_start >= Duration::seconds(60) {
+                self.current_minute_start = Some(now);
+                self.trades_this_minute = 0;
+            }
+        } else {
+            self.current_minute_start = Some(now);
+            self.trades_this_minute = 0;
+        }
+        
+        // Use dynamic rate limit based on volatility
+        let dynamic_rate = self.calculate_dynamic_rate_limit(current_volatility);
+        (self.trades_this_minute as f64) < dynamic_rate
     }
     
     /// Record a trade for rate limiting
@@ -211,6 +310,31 @@ impl AvellanedaStoikovStrategy {
         
         // Calculate order value as percentage of capital, then convert to asset units
         let order_value_usd = capital * self.params.order_size_pct;
+        let order_size_units = order_value_usd / current_price;
+        
+        // Ensure order size is at least some minimum (avoid dust orders)
+        let min_order_size = 0.0001;
+        order_size_units.max(min_order_size)
+    }
+    
+    /// Phase 4: Calculate order size with dynamic sizing based on volatility and performance
+    fn calculate_order_size_dynamic(&self, current_price: f64, available_balance: f64, current_volatility: f64) -> f64 {
+        if current_price <= 0.0 {
+            return self.params.order_size; // Fallback to fixed size
+        }
+        
+        // Use available balance from portfolio if > 0, otherwise use initial_capital
+        let capital = if available_balance > 0.0 {
+            available_balance
+        } else {
+            self.params.initial_capital
+        };
+        
+        // Use dynamic order size percentage based on volatility and performance
+        let dynamic_size_pct = self.calculate_dynamic_order_size_pct(current_volatility);
+        
+        // Calculate order value as percentage of capital, then convert to asset units
+        let order_value_usd = capital * dynamic_size_pct;
         let order_size_units = order_value_usd / current_price;
         
         // Ensure order size is at least some minimum (avoid dust orders)
@@ -314,6 +438,195 @@ impl AvellanedaStoikovStrategy {
         
         // Clamp to reasonable bounds
         dynamic_gamma.max(0.001).min(1.0)
+    }
+    
+    /// Phase 3: Calculate dynamic market depth parameter (k) based on market conditions
+    /// Higher k = tighter spreads, more aggressive quoting
+    /// Lower k = wider spreads, more conservative quoting
+    fn calculate_dynamic_k(&self, current_volatility: f64) -> f64 {
+        let base_k = self.params.market_depth_k;
+        
+        // 1. Volatility adjustment: reduce k (widen spread) when volatility is high
+        let vol_adjustment = if let Some(baseline) = self.baseline_volatility {
+            if baseline > 0.0 && current_volatility > baseline {
+                // Volatility above baseline -> reduce k (widen spread)
+                let vol_ratio = (current_volatility / baseline).min(3.0);
+                1.0 - (vol_ratio - 1.0) * self.params.k_volatility_sensitivity
+            } else if baseline > 0.0 && current_volatility < baseline {
+                // Volatility below baseline -> increase k (tighten spread)
+                let vol_ratio = baseline / current_volatility.max(0.001);
+                1.0 + (vol_ratio - 1.0) * self.params.k_volatility_sensitivity * 0.5 // Less aggressive tightening
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+        
+        // 2. Order flow adjustment: adjust k based on buy/sell imbalance
+        // If there's strong buying pressure, increase k on ask side (tighter ask)
+        // If there's strong selling pressure, increase k on bid side (tighter bid)
+        // For simplicity, we adjust overall k based on absolute imbalance
+        let total_volume = self.buy_volume + self.sell_volume;
+        let flow_adjustment = if total_volume > 0.0 {
+            let imbalance = ((self.buy_volume - self.sell_volume) / total_volume).abs();
+            // Higher imbalance -> slightly increase k (tighter spreads to capture flow)
+            1.0 + imbalance * self.params.k_flow_sensitivity
+        } else {
+            1.0
+        };
+        
+        // 3. Combine adjustments
+        let dynamic_k = base_k * vol_adjustment * flow_adjustment;
+        
+        // Clamp to configured bounds
+        dynamic_k.clamp(self.params.k_min, self.params.k_max)
+    }
+    
+    /// Phase 4: Calculate dynamic time horizon based on volatility
+    /// Shorter horizon = tighter spreads, faster mean reversion assumption
+    /// Longer horizon = wider spreads, more conservative
+    fn calculate_dynamic_time_horizon(&self, current_volatility: f64) -> f64 {
+        let base_t = self.params.time_horizon_minutes;
+        
+        // Increase time horizon when volatility is high (more conservative)
+        // Decrease when volatility is low (more aggressive)
+        let vol_adjustment = if let Some(baseline) = self.baseline_volatility {
+            if baseline > 0.0 {
+                let vol_ratio = current_volatility / baseline;
+                if vol_ratio > 1.0 {
+                    // High vol -> longer horizon
+                    1.0 + (vol_ratio - 1.0) * self.params.time_horizon_vol_sensitivity
+                } else {
+                    // Low vol -> shorter horizon
+                    1.0 - (1.0 - vol_ratio) * self.params.time_horizon_vol_sensitivity * 0.5
+                }
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+        
+        let dynamic_t = base_t * vol_adjustment;
+        dynamic_t.clamp(self.params.time_horizon_min, self.params.time_horizon_max)
+    }
+    
+    /// Phase 4: Calculate dynamic minimum spread based on market conditions
+    /// Higher in volatile/one-sided markets to protect against adverse selection
+    fn calculate_dynamic_min_spread(&self, current_volatility: f64) -> f64 {
+        let base_spread = self.params.min_spread_bps;
+        
+        // 1. Volatility adjustment: increase min spread in high vol
+        let vol_adjustment = if let Some(baseline) = self.baseline_volatility {
+            if baseline > 0.0 && current_volatility > baseline {
+                let vol_ratio = (current_volatility / baseline).min(3.0);
+                1.0 + (vol_ratio - 1.0) * self.params.min_spread_vol_sensitivity
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+        
+        // 2. Order flow adjustment: increase spread when flow is one-sided (adverse selection risk)
+        let total_volume = self.buy_volume + self.sell_volume;
+        let flow_adjustment = if total_volume > 0.0 {
+            let imbalance = ((self.buy_volume - self.sell_volume) / total_volume).abs();
+            1.0 + imbalance * self.params.min_spread_flow_sensitivity
+        } else {
+            1.0
+        };
+        
+        let dynamic_spread = base_spread * vol_adjustment * flow_adjustment;
+        dynamic_spread.clamp(self.params.min_spread_min_bps, self.params.min_spread_max_bps)
+    }
+    
+    /// Phase 4: Calculate dynamic order size based on performance (Kelly-inspired)
+    /// Reduce size on drawdown or high vol, increase slightly when winning
+    fn calculate_dynamic_order_size_pct(&self, current_volatility: f64) -> f64 {
+        let base_size = self.params.order_size_pct;
+        
+        // 1. Volatility adjustment: reduce size in high vol
+        let vol_adjustment = if let Some(baseline) = self.baseline_volatility {
+            if baseline > 0.0 && current_volatility > baseline {
+                let vol_ratio = (current_volatility / baseline).min(3.0);
+                1.0 - (vol_ratio - 1.0) * self.params.size_vol_sensitivity
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+        
+        // 2. Drawdown adjustment: reduce size on drawdown
+        let drawdown = if self.peak_equity > 0.0 {
+            (self.peak_equity - self.current_equity) / self.peak_equity
+        } else {
+            0.0
+        };
+        let drawdown_adjustment = 1.0 - drawdown * self.params.size_drawdown_sensitivity * 10.0; // 10x factor for sensitivity
+        
+        // 3. Win streak boost: slightly increase on winning streak
+        let streak_adjustment = if self.consecutive_wins > 2 {
+            1.0 + self.params.size_win_boost * (self.consecutive_wins.min(5) - 2) as f64 / 3.0
+        } else if self.consecutive_losses > 2 {
+            // Reduce on losing streak
+            1.0 - 0.1 * (self.consecutive_losses.min(5) - 2) as f64 / 3.0
+        } else {
+            1.0
+        };
+        
+        let dynamic_size = base_size * vol_adjustment * drawdown_adjustment.max(0.2) * streak_adjustment;
+        dynamic_size.clamp(self.params.size_min_pct, self.params.size_max_pct)
+    }
+    
+    /// Phase 4: Calculate dynamic rate limit based on volatility
+    /// Reduce trading frequency in high vol to avoid whipsaws
+    fn calculate_dynamic_rate_limit(&self, current_volatility: f64) -> f64 {
+        let base_rate = self.params.max_trades_per_minute;
+        
+        let vol_adjustment = if let Some(baseline) = self.baseline_volatility {
+            if baseline > 0.0 && current_volatility > baseline {
+                let vol_ratio = (current_volatility / baseline).min(3.0);
+                1.0 - (vol_ratio - 1.0) * self.params.rate_vol_sensitivity
+            } else if baseline > 0.0 && current_volatility < baseline {
+                // Low vol -> can trade more
+                let vol_ratio = baseline / current_volatility.max(0.001);
+                1.0 + (vol_ratio - 1.0) * self.params.rate_vol_sensitivity * 0.3 // Less aggressive increase
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+        
+        let dynamic_rate = base_rate * vol_adjustment;
+        dynamic_rate.clamp(self.params.rate_min, self.params.rate_max)
+    }
+    
+    /// Update equity tracking for drawdown calculations
+    fn update_equity(&mut self, new_equity: f64) {
+        self.current_equity = new_equity;
+        if new_equity > self.peak_equity {
+            self.peak_equity = new_equity;
+        }
+    }
+    
+    /// Track trade P&L for win/loss streaks
+    fn track_trade_pnl(&mut self, pnl: f64) {
+        self.recent_pnl.push(pnl);
+        if self.recent_pnl.len() > 20 {
+            self.recent_pnl.remove(0);
+        }
+        
+        if pnl > 0.0 {
+            self.consecutive_wins += 1;
+            self.consecutive_losses = 0;
+        } else if pnl < 0.0 {
+            self.consecutive_losses += 1;
+            self.consecutive_wins = 0;
+        }
     }
     
     /// Phase 2: Calculate dynamic inventory target based on market signals
@@ -572,11 +885,12 @@ impl Strategy for AvellanedaStoikovStrategy {
         let q = self.inventory;
         let s = mid.to_f64().unwrap_or(0.0);
         
-        // Use configurable time horizon (converted to years)
-        let t = self.params.time_horizon_minutes / 365.0 / 24.0 / 60.0;
+        // Phase 4: Use dynamic time horizon based on volatility
+        let dynamic_t_minutes = self.calculate_dynamic_time_horizon(ann_vol);
+        let t = dynamic_t_minutes / 365.0 / 24.0 / 60.0; // Convert to years
         
-        // Use configurable market depth parameter
-        let k = self.params.market_depth_k;
+        // Phase 3: Use dynamic market depth parameter based on volatility and order flow
+        let k = self.calculate_dynamic_k(ann_vol);
         
         let fee = self.params.fee_rate;
         let latency = self.params.latency_buffer;
@@ -587,9 +901,9 @@ impl Strategy for AvellanedaStoikovStrategy {
         // Optimal spread from A-S formula
         let as_spread = gamma * sigma * sigma * t + (2.0 / gamma) * (1.0 + fee + latency) / k;
         
-        // Enforce minimum spread to cover transaction costs
-        // min_spread_bps is in basis points, convert to price
-        let min_spread = s * self.params.min_spread_bps / 10000.0;
+        // Phase 4: Use dynamic minimum spread based on volatility and flow
+        let dynamic_min_spread_bps = self.calculate_dynamic_min_spread(ann_vol);
+        let min_spread = s * dynamic_min_spread_bps / 10000.0;
         let spread = as_spread.max(min_spread);
         
         let bid = r - spread / 2.0;
@@ -601,8 +915,8 @@ impl Strategy for AvellanedaStoikovStrategy {
             return Ok(exit_signals);
         }
 
-        // 6. Check trade rate limit
-        if !self.can_trade(now) {
+        // 6. Phase 4: Check trade rate limit with dynamic rate based on volatility
+        if !self.can_trade_dynamic(now, ann_vol) {
             return Ok(vec![]);
         }
 
@@ -625,11 +939,11 @@ impl Strategy for AvellanedaStoikovStrategy {
     self.last_bid = Some(BigDecimal::from_f64(bid).unwrap());
     self.last_ask = Some(BigDecimal::from_f64(ask).unwrap());
 
-        // 8. Calculate dynamic order size based on percentage of capital
+        // 8. Phase 4: Calculate dynamic order size based on volatility and performance
         // Use mid price (average of bid/ask) for order size calculation
         let mid_price = (bid + ask) / 2.0;
         let available_balance = context.portfolio_state.balance.to_f64().unwrap_or(0.0);
-        let order_size = self.calculate_order_size(mid_price, available_balance);
+        let order_size = self.calculate_order_size_dynamic(mid_price, available_balance, ann_vol);
         
         // 9. Generate bid and ask signals with percentage-based sizing
         let mut signals = Vec::new();
@@ -656,6 +970,11 @@ impl Strategy for AvellanedaStoikovStrategy {
         // Update inventory from portfolio state
         self.inventory = context.portfolio_state.net_position;
         
+        // Phase 4: Track equity for drawdown-based sizing
+        let current_equity = context.portfolio_state.balance.to_f64().unwrap_or(0.0) 
+            + context.portfolio_state.unrealized_pnl.to_f64().unwrap_or(0.0);
+        self.update_equity(current_equity);
+        
         // Track entry price when position is opened or increased
         if old_inventory.abs() < 1e-8 && self.inventory.abs() > 1e-8 {
             // New position opened - get current price as entry
@@ -668,8 +987,25 @@ impl Strategy for AvellanedaStoikovStrategy {
                 dataloader::MarketData::Order(o) => o.price_level.to_f64().unwrap_or(0.0),
             };
             self.avg_entry_price = Some(current_price);
-        } else if self.inventory.abs() < 1e-8 {
-            // Position closed
+        } else if self.inventory.abs() < 1e-8 && old_inventory.abs() > 1e-8 {
+            // Position just closed - track P&L for streak calculation
+            if let Some(entry_price) = self.avg_entry_price {
+                let exit_price = match market_data {
+                    dataloader::MarketData::Trade(t) => t.price.to_f64().unwrap_or(0.0),
+                    dataloader::MarketData::Candle(c) => c.close.to_f64().unwrap_or(0.0),
+                    #[cfg(feature = "postgres")]
+                    dataloader::MarketData::Snapshot(s) => s.price_level.to_f64().unwrap_or(0.0),
+                    #[cfg(feature = "postgres")]
+                    dataloader::MarketData::Order(o) => o.price_level.to_f64().unwrap_or(0.0),
+                };
+                // Calculate P&L (positive for profitable trades)
+                let pnl = if old_inventory > 0.0 {
+                    (exit_price - entry_price) * old_inventory.abs()
+                } else {
+                    (entry_price - exit_price) * old_inventory.abs()
+                };
+                self.track_trade_pnl(pnl);
+            }
             self.avg_entry_price = None;
         }
         

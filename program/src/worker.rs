@@ -1070,6 +1070,35 @@ impl Worker {
                     inventory_penalty_factor: chr.inventory_penalty_factor,
                     trend_sensitivity: chr.trend_sensitivity,
                     flow_sensitivity: chr.flow_sensitivity,
+                    
+                    // Phase 3: Dynamic k parameters
+                    k_volatility_sensitivity: 0.3,
+                    k_flow_sensitivity: 0.2,
+                    k_min: 0.5,
+                    k_max: 3.0,
+                    
+                    // Phase 4: Dynamic time horizon parameters
+                    time_horizon_vol_sensitivity: 0.5,
+                    time_horizon_min: 0.25,
+                    time_horizon_max: 5.0,
+                    
+                    // Phase 4: Dynamic min spread parameters
+                    min_spread_vol_sensitivity: 0.3,
+                    min_spread_flow_sensitivity: 0.2,
+                    min_spread_min_bps: 3.0,
+                    min_spread_max_bps: 50.0,
+                    
+                    // Phase 4: Dynamic order size parameters
+                    size_vol_sensitivity: 0.3,
+                    size_drawdown_sensitivity: 0.5,
+                    size_win_boost: 0.1,
+                    size_min_pct: 0.005,
+                    size_max_pct: 0.05,
+                    
+                    // Phase 4: Dynamic rate limiting parameters
+                    rate_vol_sensitivity: 0.4,
+                    rate_min: 5.0,
+                    rate_max: 60.0,
                 };
                 
                 let mut strategy_params_map = HashMap::new();
@@ -1459,6 +1488,35 @@ impl Worker {
                             stop_loss_pct: chr.stop_loss_pct,
                             min_spread_bps: chr.min_spread_bps,
                             max_trades_per_minute: chr.max_trades_per_minute,
+                            
+                            // Phase 3: Dynamic k parameters
+                            k_volatility_sensitivity: 0.3,
+                            k_flow_sensitivity: 0.2,
+                            k_min: 0.5,
+                            k_max: 3.0,
+                            
+                            // Phase 4: Dynamic time horizon parameters
+                            time_horizon_vol_sensitivity: 0.5,
+                            time_horizon_min: 0.25,
+                            time_horizon_max: 5.0,
+                            
+                            // Phase 4: Dynamic min spread parameters
+                            min_spread_vol_sensitivity: 0.3,
+                            min_spread_flow_sensitivity: 0.2,
+                            min_spread_min_bps: 3.0,
+                            min_spread_max_bps: 50.0,
+                            
+                            // Phase 4: Dynamic order size parameters
+                            size_vol_sensitivity: 0.3,
+                            size_drawdown_sensitivity: 0.5,
+                            size_win_boost: 0.1,
+                            size_min_pct: 0.005,
+                            size_max_pct: 0.05,
+                            
+                            // Phase 4: Dynamic rate limiting parameters
+                            rate_vol_sensitivity: 0.4,
+                            rate_min: 5.0,
+                            rate_max: 60.0,
                         };
                         
                         let mut strategy_params_map = HashMap::new();
@@ -2150,6 +2208,35 @@ impl Worker {
             inventory_penalty_factor: chromosome.inventory_penalty_factor,
             trend_sensitivity: chromosome.trend_sensitivity,
             flow_sensitivity: chromosome.flow_sensitivity,
+            
+            // Phase 3: Dynamic k parameters
+            k_volatility_sensitivity: 0.3,
+            k_flow_sensitivity: 0.2,
+            k_min: 0.5,
+            k_max: 3.0,
+            
+            // Phase 4: Dynamic time horizon parameters
+            time_horizon_vol_sensitivity: 0.5,
+            time_horizon_min: 0.25,
+            time_horizon_max: 5.0,
+            
+            // Phase 4: Dynamic min spread parameters
+            min_spread_vol_sensitivity: 0.3,
+            min_spread_flow_sensitivity: 0.2,
+            min_spread_min_bps: 3.0,
+            min_spread_max_bps: 50.0,
+            
+            // Phase 4: Dynamic order size parameters
+            size_vol_sensitivity: 0.3,
+            size_drawdown_sensitivity: 0.5,
+            size_win_boost: 0.1,
+            size_min_pct: 0.005,
+            size_max_pct: 0.05,
+            
+            // Phase 4: Dynamic rate limiting parameters
+            rate_vol_sensitivity: 0.4,
+            rate_min: 5.0,
+            rate_max: 60.0,
         };
         
         let mut strategy_params_map = HashMap::new();
@@ -2402,6 +2489,35 @@ impl Worker {
             stop_loss_pct: chromosome.stop_loss_pct,
             min_spread_bps: chromosome.min_spread_bps,
             max_trades_per_minute: chromosome.max_trades_per_minute,
+            
+            // Phase 3: Dynamic k parameters
+            k_volatility_sensitivity: 0.3,
+            k_flow_sensitivity: 0.2,
+            k_min: 0.5,
+            k_max: 3.0,
+            
+            // Phase 4: Dynamic time horizon parameters
+            time_horizon_vol_sensitivity: 0.5,
+            time_horizon_min: 0.25,
+            time_horizon_max: 5.0,
+            
+            // Phase 4: Dynamic min spread parameters
+            min_spread_vol_sensitivity: 0.3,
+            min_spread_flow_sensitivity: 0.2,
+            min_spread_min_bps: 3.0,
+            min_spread_max_bps: 50.0,
+            
+            // Phase 4: Dynamic order size parameters
+            size_vol_sensitivity: 0.3,
+            size_drawdown_sensitivity: 0.5,
+            size_win_boost: 0.1,
+            size_min_pct: 0.005,
+            size_max_pct: 0.05,
+            
+            // Phase 4: Dynamic rate limiting parameters
+            rate_vol_sensitivity: 0.4,
+            rate_min: 5.0,
+            rate_max: 60.0,
         };
         
         let mut strategy_params_map = HashMap::new();
