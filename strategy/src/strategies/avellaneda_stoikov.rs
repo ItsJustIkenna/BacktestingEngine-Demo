@@ -134,8 +134,8 @@ impl Default for AvellanedaStoikovParams {
             // Phase 4: Dynamic min spread defaults
             min_spread_vol_sensitivity: 0.3,    // Increase min spread 30% per vol ratio
             min_spread_flow_sensitivity: 0.2,   // Increase 20% on one-sided flow
-            min_spread_min_bps: 3.0,            // Absolute floor of 3 bps
-            min_spread_max_bps: 50.0,           // Cap at 50 bps
+            min_spread_min_bps: 1.0,            // Absolute floor of 1 bps (tight for liquid markets)
+            min_spread_max_bps: 20.0,           // Cap at 20 bps (was 50 - too wide for fills)
             
             // Phase 4: Dynamic order size defaults
             size_vol_sensitivity: 0.3,          // Reduce size 30% per vol ratio above baseline

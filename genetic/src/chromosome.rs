@@ -84,8 +84,9 @@ impl Chromosome for AvellanedaStoikovChromosome {
             stop_loss_pct: rng.gen_range(0.0005..0.05),
             
             // Minimum spread in basis points
-            // 1 bps (HFT on liquid markets) to 200 bps (illiquid altcoins)
-            min_spread_bps: rng.gen_range(1.0..200.0),
+            // 1 bps (HFT on liquid markets) to 30 bps (retail exchanges)
+            // Reduced from 200 - spreads > 30 bps rarely get fills
+            min_spread_bps: rng.gen_range(1.0..30.0),
             
             // Trade frequency: 0.01 to 60 trades per minute
             // 0.01 = 1 trade per 100 minutes (swing), 60 = 1 trade per second (HFT)
@@ -199,10 +200,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.stop_loss_pct *= rng.gen_range(0.5..2.0);
             self.stop_loss_pct = self.stop_loss_pct.clamp(0.0005, 0.05);
         }
-        // Min spread: range 1-200 bps
+        // Min spread: range 1-30 bps (tighter for fills)
         if rng.gen_bool(mutation_rate) {
             self.min_spread_bps *= rng.gen_range(0.5..2.0);
-            self.min_spread_bps = self.min_spread_bps.clamp(1.0, 200.0);
+            self.min_spread_bps = self.min_spread_bps.clamp(1.0, 30.0);
         }
         // Trade frequency: range 0.01-60 trades/min
         if rng.gen_bool(mutation_rate) {
