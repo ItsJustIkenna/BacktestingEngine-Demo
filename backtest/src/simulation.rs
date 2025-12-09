@@ -331,6 +331,19 @@ impl SimulationLoop {
                         trade.timestamp,
                     );
                     
+                    // Debug: Log first 5 trades vs our order prices to diagnose fill issues (postgres)
+                    static TRADE_DEBUG_COUNT_PG: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                    let debug_count = TRADE_DEBUG_COUNT_PG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if debug_count < 5 && !self.active_order_ids.is_empty() {
+                        let trade_price = trade.price.to_f64().unwrap_or(0.0);
+                        let best_bid = orderbook.best_bid().and_then(|p| p.to_f64());
+                        let best_ask = orderbook.best_ask().and_then(|p| p.to_f64());
+                        log_info!(BACKTEST_LOGGER, 
+                            "TRADE_VS_ORDERS | trade: ${:.2} side={} | our_orders: {} active | book: best_bid=${:.2} best_ask=${:.2} | fills={}",
+                            trade_price, trade.side, self.active_order_ids.len(),
+                            best_bid.unwrap_or(0.0), best_ask.unwrap_or(0.0), trade_fills.len());
+                    }
+                    
                     // Filter fills to only include OUR strategy's orders
                     // Historical market orders from the data feed should not generate commission/fills for us
                     let our_fills: Vec<_> = trade_fills
@@ -438,6 +451,19 @@ impl SimulationLoop {
                         trade.quantity.clone(),
                         trade.timestamp,
                     );
+                    
+                    // Debug: Log first 5 trades vs our order prices to diagnose fill issues (non-postgres)
+                    static TRADE_DEBUG_COUNT_NP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                    let debug_count = TRADE_DEBUG_COUNT_NP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if debug_count < 5 && !self.active_order_ids.is_empty() {
+                        let trade_price = trade.price.to_f64().unwrap_or(0.0);
+                        let best_bid = orderbook.best_bid().and_then(|p| p.to_f64());
+                        let best_ask = orderbook.best_ask().and_then(|p| p.to_f64());
+                        log_info!(BACKTEST_LOGGER, 
+                            "TRADE_VS_ORDERS | trade: ${:.2} side={} | our_orders: {} active | book: best_bid=${:.2} best_ask=${:.2} | fills={}",
+                            trade_price, trade.side, self.active_order_ids.len(),
+                            best_bid.unwrap_or(0.0), best_ask.unwrap_or(0.0), trade_fills.len());
+                    }
                     
                     // Filter fills to only include OUR strategy's orders
                     // Historical market orders from the data feed should not generate commission/fills for us
@@ -621,6 +647,10 @@ impl SimulationLoop {
             }
             
             for (_strategy_id, sigs) in signals {
+                // Track bid/ask prices for spread calculation
+                let mut last_bid_price: Option<f64> = None;
+                let mut last_ask_price: Option<f64> = None;
+                
                 for signal in sigs {
                     // Extract order details for cost calculation
                     let order_price = signal.price.as_ref()
@@ -630,6 +660,42 @@ impl SimulationLoop {
                         .and_then(|q| q.to_f64())
                         .unwrap_or(0.0);
                     let exchange = orderbook.exchange.clone();
+                    
+                    // Track bid/ask prices for spread calculation
+                    match signal.signal_type {
+                        signal::SignalType::Buy | signal::SignalType::ScaleIn => {
+                            last_bid_price = Some(order_price);
+                        }
+                        signal::SignalType::Sell | signal::SignalType::ScaleOut => {
+                            last_ask_price = Some(order_price);
+                        }
+                        _ => {}
+                    }
+                    
+                    // Calculate and store quote spread when we have both bid and ask
+                    if let (Some(bid), Some(ask)) = (last_bid_price, last_ask_price) {
+                        if bid > 0.0 && ask > 0.0 {
+                            let mid = (bid + ask) / 2.0;
+                            let spread_bps = (ask - bid) / mid * 10000.0;
+                            self.quote_spreads_bps.push(spread_bps);
+                            
+                            // Log quote vs market price for debugging (first 10 quotes)
+                            if self.quote_spreads_bps.len() <= 10 {
+                                let market_price = current_market_price.as_ref()
+                                    .and_then(|p| p.to_f64())
+                                    .unwrap_or(0.0);
+                                let bid_distance_bps = if market_price > 0.0 { (market_price - bid) / market_price * 10000.0 } else { 0.0 };
+                                let ask_distance_bps = if market_price > 0.0 { (ask - market_price) / market_price * 10000.0 } else { 0.0 };
+                                log_info!(BACKTEST_LOGGER, 
+                                    "QUOTE_DEBUG | market=${:.2} bid=${:.2} ask=${:.2} spread={:.1}bps bid_dist={:.1}bps ask_dist={:.1}bps",
+                                    market_price, bid, ask, spread_bps, bid_distance_bps, ask_distance_bps);
+                            }
+                            
+                            // Reset for next pair
+                            last_bid_price = None;
+                            last_ask_price = None;
+                        }
+                    }
                     
                     // Debug: Log first few order sizes from strategy with full context
                     if self.total_order_count < 5 {
