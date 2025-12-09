@@ -502,7 +502,7 @@ fn test_all_parameter_ranges() {
         assert!(c.window_ms >= 1_000 && c.window_ms <= 1_800_000);
         assert!(c.min_quote_lifetime_ms >= 10 && c.min_quote_lifetime_ms <= 60_000);
         assert!(c.fee_rate >= 0.00001 && c.fee_rate <= 0.005);
-        assert!(c.latency_buffer >= 0.01 && c.latency_buffer <= 3.0);
+        assert!(c.latency_buffer >= 0.00001 && c.latency_buffer <= 0.001);
         assert!(c.inventory_target >= -1.0 && c.inventory_target <= 1.0);
         assert!(c.volatility_cap >= 0.05 && c.volatility_cap <= 5.0);
         assert!(c.time_horizon_minutes >= 0.167 && c.time_horizon_minutes <= 60.0);
