@@ -676,10 +676,25 @@ impl Worker {
         // Create engine
         let engine = BacktestEngine::new(backtest_config);
         
-        // Initialize portfolio
-        let mut portfolio = PortfolioState::default();
-        portfolio.balance = BigDecimal::from_f64(params.initial_capital)
-            .ok_or("Invalid initial capital")?;
+        // Get initial price for inventory calculation
+        let initial_price = Self::get_reference_price(&data);
+        
+        // Initialize portfolio with BOTH quote and base assets for proper market making
+        // Split capital: 50% as quote (USD), 50% as base asset (BTC/ETH)
+        let inventory_pct = 0.5; // 50% of capital as base asset inventory
+        let quote_balance = params.initial_capital * (1.0 - inventory_pct);
+        let base_value = params.initial_capital * inventory_pct;
+        let base_quantity = if initial_price > 0.0 { base_value / initial_price } else { 0.0 };
+        
+        let mut portfolio = PortfolioState::with_inventory(
+            params.symbol.clone(),
+            BigDecimal::from_f64(quote_balance).unwrap_or_default(),
+            base_quantity,
+            BigDecimal::from_f64(initial_price).unwrap_or_default(),
+        );
+        
+        log_info!(BACKTEST_LOGGER, "Portfolio initialized: quote=${:.2} base={:.6} units @ ${:.2} (total=${:.2})",
+            quote_balance, base_quantity, initial_price, params.initial_capital);
         
         // Create orderbook
         let orderbook_config = OrderBookConfig::default();
@@ -970,8 +985,22 @@ impl Worker {
                 backtest_config.data.gap_detection.enabled = false;
                 
                 let engine = BacktestEngine::new(backtest_config);
-                let mut portfolio = PortfolioState::default();
-                portfolio.balance = BigDecimal::from_f64(initial_capital).unwrap_or_default();
+                
+                // Get initial price for inventory calculation
+                let asset_price = Self::get_reference_price(&data);
+                
+                // Initialize portfolio with BOTH quote and base assets for proper market making
+                let inventory_pct = 0.5;
+                let quote_balance = initial_capital * (1.0 - inventory_pct);
+                let base_value = initial_capital * inventory_pct;
+                let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };
+                
+                let mut portfolio = PortfolioState::with_inventory(
+                    symbol.clone(),
+                    BigDecimal::from_f64(quote_balance).unwrap_or_default(),
+                    base_quantity,
+                    BigDecimal::from_f64(asset_price).unwrap_or_default(),
+                );
                 
                 let orderbook_config = OrderBookConfig::default();
                 let mut orderbook = OrderBook::new(symbol.clone(), exchange.clone(), orderbook_config);
@@ -993,6 +1022,7 @@ impl Worker {
                     order_size: order_size_units,
                     order_size_pct: chr.order_size_pct,
                     initial_capital,
+                    initial_inventory_pct: 0.5,  // 50% of capital as base asset for market making
                     window_ms: chr.window_ms,
                     min_quote_lifetime_ms: chr.min_quote_lifetime_ms,
                     fee_rate: chr.fee_rate,
@@ -1348,8 +1378,22 @@ impl Worker {
                         backtest_config.data.gap_detection.enabled = false;
                         
                         let engine = BacktestEngine::new(backtest_config);
-                        let mut portfolio = PortfolioState::default();
-                        portfolio.balance = BigDecimal::from_f64(initial_capital).unwrap_or_default();
+                        
+                        // Get initial price for inventory calculation
+                        let asset_price = Self::get_reference_price(&data);
+                        
+                        // Initialize portfolio with BOTH quote and base assets for proper market making
+                        let inventory_pct = 0.5;
+                        let quote_balance = initial_capital * (1.0 - inventory_pct);
+                        let base_value = initial_capital * inventory_pct;
+                        let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };
+                        
+                        let mut portfolio = PortfolioState::with_inventory(
+                            symbol.clone(),
+                            BigDecimal::from_f64(quote_balance).unwrap_or_default(),
+                            base_quantity,
+                            BigDecimal::from_f64(asset_price).unwrap_or_default(),
+                        );
                         
                         let orderbook_config = OrderBookConfig::default();
                         let mut orderbook = OrderBook::new(symbol.clone(), exchange.clone(), orderbook_config);
@@ -1363,7 +1407,24 @@ impl Worker {
                             risk_aversion: chr.risk_aversion,
                             inventory_target: chr.inventory_target,
                             order_size: order_size_units,
-                            ..Default::default()
+                            order_size_pct: chr.order_size_pct,
+                            initial_capital,
+                            initial_inventory_pct: 0.5,  // 50% of capital as base asset for market making
+                            window_ms: chr.window_ms,
+                            min_quote_lifetime_ms: chr.min_quote_lifetime_ms,
+                            fee_rate: chr.fee_rate,
+                            latency_buffer: chr.latency_buffer,
+                            volatility_cap: chr.volatility_cap,
+                            time_horizon_minutes: chr.time_horizon_minutes,
+                            market_depth_k: chr.market_depth_k,
+                            volatility_adjustment_factor: chr.volatility_adjustment_factor,
+                            inventory_penalty_factor: chr.inventory_penalty_factor,
+                            trend_sensitivity: chr.trend_sensitivity,
+                            flow_sensitivity: chr.flow_sensitivity,
+                            take_profit_pct: chr.take_profit_pct,
+                            stop_loss_pct: chr.stop_loss_pct,
+                            min_spread_bps: chr.min_spread_bps,
+                            max_trades_per_minute: chr.max_trades_per_minute,
                         };
                         
                         let mut strategy_params_map = HashMap::new();
@@ -1938,28 +1999,62 @@ impl Worker {
             if walk_forward_enabled { " → Walk-Forward" } else { "" });
         
         let engine = BacktestEngine::new(backtest_config);
-        let mut portfolio = PortfolioState::default();
-        portfolio.balance = BigDecimal::from_f64(initial_capital).unwrap_or_default();
+        
+        // Get initial price for inventory calculation
+        let asset_price = Self::get_reference_price(data);
+        
+        // Initialize portfolio with BOTH quote and base assets for proper market making
+        let inventory_pct = 0.5;
+        let quote_balance = initial_capital * (1.0 - inventory_pct);
+        let base_value = initial_capital * inventory_pct;
+        let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };
+        
+        let mut portfolio = PortfolioState::with_inventory(
+            symbol.to_string(),
+            BigDecimal::from_f64(quote_balance).unwrap_or_default(),
+            base_quantity,
+            BigDecimal::from_f64(asset_price).unwrap_or_default(),
+        );
         
         let orderbook_config = OrderBookConfig::default();
         let mut orderbook = OrderBook::new(symbol.to_string(), exchange.to_string(), orderbook_config);
         let mut risk_manager = RiskManager::new();
         
         // Calculate order_size in asset units from percentage of capital
-        let asset_price = Self::get_reference_price(data);
         let order_size_units = (initial_capital * chromosome.order_size_pct) / asset_price;
         
+        // IMPORTANT: Explicitly set ALL parameters including order_size_pct and initial_capital
+        // Using ..Default::default() would use wrong initial_capital ($100K instead of job's capital)
         let strategy_params = AvellanedaStoikovParams {
             risk_aversion: chromosome.risk_aversion,
             inventory_target: chromosome.inventory_target,
             order_size: order_size_units,
-            ..Default::default()
+            order_size_pct: chromosome.order_size_pct,
+            initial_capital,  // Use the job's initial_capital, NOT the default $100K
+            initial_inventory_pct: 0.5,  // 50% of capital as base asset for market making
+            window_ms: chromosome.window_ms,
+            min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms,
+            fee_rate: chromosome.fee_rate,
+            latency_buffer: chromosome.latency_buffer,
+            volatility_cap: chromosome.volatility_cap,
+            time_horizon_minutes: chromosome.time_horizon_minutes,
+            market_depth_k: chromosome.market_depth_k,
+            min_spread_bps: chromosome.min_spread_bps,
+            max_trades_per_minute: chromosome.max_trades_per_minute,
+            take_profit_pct: chromosome.take_profit_pct,
+            stop_loss_pct: chromosome.stop_loss_pct,
+            volatility_adjustment_factor: chromosome.volatility_adjustment_factor,
+            inventory_penalty_factor: chromosome.inventory_penalty_factor,
+            trend_sensitivity: chromosome.trend_sensitivity,
+            flow_sensitivity: chromosome.flow_sensitivity,
         };
         
         let mut strategy_params_map = HashMap::new();
         strategy_params_map.insert("risk_aversion".to_string(), config::ParameterValue::Float(chromosome.risk_aversion));
         strategy_params_map.insert("inventory_target".to_string(), config::ParameterValue::Float(chromosome.inventory_target));
         strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(order_size_units));
+        strategy_params_map.insert("order_size_pct".to_string(), config::ParameterValue::Float(chromosome.order_size_pct));
+        strategy_params_map.insert("initial_capital".to_string(), config::ParameterValue::Float(initial_capital));
         
         let strategy_config = StrategyConfig {
             id: format!("full-analysis-{}", job_id),
@@ -2128,22 +2223,52 @@ impl Worker {
         // Don't use progress callback for final backtest - it spawns async tasks from spawn_blocking
         // which causes orphaned tasks that prevent job completion
         let engine = BacktestEngine::new(backtest_config);
-        let mut portfolio = PortfolioState::default();
-        portfolio.balance = BigDecimal::from_f64(initial_capital).unwrap_or_default();
+        
+        // Get initial price for inventory calculation
+        let asset_price = Self::get_reference_price(data);
+        
+        // Initialize portfolio with BOTH quote and base assets for proper market making
+        let inventory_pct = 0.5;
+        let quote_balance = initial_capital * (1.0 - inventory_pct);
+        let base_value = initial_capital * inventory_pct;
+        let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };
+        
+        let mut portfolio = PortfolioState::with_inventory(
+            symbol.to_string(),
+            BigDecimal::from_f64(quote_balance).unwrap_or_default(),
+            base_quantity,
+            BigDecimal::from_f64(asset_price).unwrap_or_default(),
+        );
         
         let orderbook_config = OrderBookConfig::default();
         let mut orderbook = OrderBook::new(symbol.to_string(), exchange.to_string(), orderbook_config);
         let mut risk_manager = RiskManager::new();
         
         // Calculate order_size in asset units from percentage of capital
-        let asset_price = Self::get_reference_price(data);
         let order_size_units = (initial_capital * chromosome.order_size_pct) / asset_price;
         
         let strategy_params = AvellanedaStoikovParams {
             risk_aversion: chromosome.risk_aversion,
             inventory_target: chromosome.inventory_target,
             order_size: order_size_units,
-            ..Default::default()
+            order_size_pct: chromosome.order_size_pct,
+            initial_capital,
+            initial_inventory_pct: 0.5,  // 50% of capital as base asset for market making
+            window_ms: chromosome.window_ms,
+            min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms,
+            fee_rate: chromosome.fee_rate,
+            latency_buffer: chromosome.latency_buffer,
+            volatility_cap: chromosome.volatility_cap,
+            time_horizon_minutes: chromosome.time_horizon_minutes,
+            market_depth_k: chromosome.market_depth_k,
+            volatility_adjustment_factor: chromosome.volatility_adjustment_factor,
+            inventory_penalty_factor: chromosome.inventory_penalty_factor,
+            trend_sensitivity: chromosome.trend_sensitivity,
+            flow_sensitivity: chromosome.flow_sensitivity,
+            take_profit_pct: chromosome.take_profit_pct,
+            stop_loss_pct: chromosome.stop_loss_pct,
+            min_spread_bps: chromosome.min_spread_bps,
+            max_trades_per_minute: chromosome.max_trades_per_minute,
         };
         
         let mut strategy_params_map = HashMap::new();

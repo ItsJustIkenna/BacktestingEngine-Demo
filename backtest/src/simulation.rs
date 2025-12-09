@@ -509,10 +509,12 @@ impl SimulationLoop {
                     // Debug: Log first few order sizes from strategy
                     if self.total_order_count < 5 {
                         let order_value = order_price * order_size;
-                        let expected_value = config.trading.initial_capital * 0.02; // Expected at 2%
+                        let expected_value_2pct = config.trading.initial_capital * 0.02; // Expected at 2%
+                        // Calculate implied order_size_pct from actual order value
+                        let implied_pct = if config.trading.initial_capital > 0.0 { order_value / config.trading.initial_capital * 100.0 } else { 0.0 };
                         log_info!(BACKTEST_LOGGER, 
-                            "Signal order | price=${:.2} size={:.6} units value=${:.2} (expected ~${:.2} at 2% of ${:.0})",
-                            order_price, order_size, order_value, expected_value, config.trading.initial_capital);
+                            "Signal order | price=${:.2} size={:.6} units value=${:.2} implied_order_pct={:.2}% (expected ~${:.2} at 2% of ${:.0})",
+                            order_price, order_size, order_value, implied_pct, expected_value_2pct, config.trading.initial_capital);
                     }
                     
                     // Check if this specific order should be allowed
@@ -868,6 +870,9 @@ impl SimulationLoop {
         // Diagnostic: Calculate average fill value from commission data
         // This helps identify if order sizes are as expected
         let total_fills = self.fills_by_tier_bps.values().sum::<u32>();
+        log_info!(BACKTEST_LOGGER, "Order size diagnostic START | total_fills={} total_commission=${:.2} fills_by_tier_count={}",
+            total_fills, self.total_commission, self.fills_by_tier_bps.len());
+        
         if total_fills > 0 {
             // Estimate average fill value by dividing commission by estimated fee rate
             // Use the most common fee tier, or fallback to config commission rate

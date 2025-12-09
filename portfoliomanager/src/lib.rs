@@ -55,12 +55,49 @@ pub enum PositionSide {
 }
 
 impl PortfolioState {
-    /// Create a new portfolio with an initial balance
+    /// Create a new portfolio with an initial balance (quote asset only)
     pub fn with_balance(balance: BigDecimal) -> Self {
         Self {
             balance,
             ..Default::default()
         }
+    }
+    
+    /// Create a new portfolio for market making with both quote and base assets
+    /// 
+    /// For proper market making, you need inventory on BOTH sides:
+    /// - quote_balance: USD/USDT to buy the base asset (fund bid orders)
+    /// - base_quantity: BTC/ETH to sell (fund ask orders)
+    /// 
+    /// Typically split 50/50 by value for neutral market making.
+    pub fn with_inventory(
+        symbol: String,
+        quote_balance: BigDecimal,
+        base_quantity: f64,
+        base_price: BigDecimal,
+    ) -> Self {
+        let mut portfolio = Self {
+            balance: quote_balance,
+            net_position: base_quantity,
+            ..Default::default()
+        };
+        
+        // Create initial long position for the base asset inventory
+        if base_quantity > 0.0 {
+            portfolio.positions.push(Position {
+                symbol,
+                side: PositionSide::Long,
+                quantity: base_quantity,
+                entry_price: base_price.clone(),
+                mark_price: Some(base_price),
+                realized_pnl: BigDecimal::from(0),
+                unrealized_pnl: BigDecimal::from(0),
+                open_time: Utc::now(),
+                close_time: None,
+            });
+        }
+        
+        portfolio
     }
 
     /// Apply multiple fills to the portfolio

@@ -25,6 +25,7 @@ pub struct AvellanedaStoikovParams {
     pub order_size: f64,            // Fixed order size (in base asset) - DEPRECATED, use order_size_pct
     pub order_size_pct: f64,        // Order size as percentage of capital (e.g., 0.02 = 2%)
     pub initial_capital: f64,       // Initial trading capital (used with order_size_pct)
+    pub initial_inventory_pct: f64, // Percentage of capital to hold as base asset inventory (0.5 = 50%)
     pub window_ms: u64,             // Rolling window for volatility estimation (milliseconds)
     pub min_quote_lifetime_ms: u64, // Minimum quote lifetime (milliseconds)
     pub fee_rate: f64,              // Exchange taker/maker fee (fraction)
@@ -52,6 +53,7 @@ impl Default for AvellanedaStoikovParams {
             order_size: 0.001,              // DEPRECATED: Small order size fallback
             order_size_pct: 0.02,           // 2% of capital per trade (default)
             initial_capital: 100000.0,      // Default $100K capital
+            initial_inventory_pct: 0.5,     // 50% of capital as base asset inventory (for market making)
             window_ms: 60_000, // 60 seconds
             min_quote_lifetime_ms: 500,     // 500ms quote lifetime for responsive market making
             fee_rate: 0.0003,               // 3bps maker fee (typical for high-volume)
