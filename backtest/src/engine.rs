@@ -388,11 +388,24 @@ impl BacktestEngine {
                 let base_value = initial_capital * inventory_pct;
                 let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };
                 
+                // Get first timestamp from market data
+                let first_timestamp = market_data.first()
+                    .map(|d| match d {
+                        dataloader::MarketData::Trade(t) => t.timestamp,
+                        dataloader::MarketData::Candle(c) => c.timestamp,
+                        #[cfg(feature = "postgres")]
+                        dataloader::MarketData::Snapshot(s) => s.timestamp,
+                        #[cfg(feature = "postgres")]
+                        dataloader::MarketData::Order(o) => o.timestamp,
+                    })
+                    .unwrap_or_else(chrono::Utc::now);
+                
                 let mut temp_portfolio = portfoliomanager::PortfolioState::with_inventory(
                     "BTC/USD".to_string(),
                     bigdecimal::BigDecimal::from_f64(quote_balance).unwrap_or_default(),
                     base_quantity,
                     bigdecimal::BigDecimal::from_f64(asset_price).unwrap_or_default(),
+                    first_timestamp,
                 );
                 let mut temp_risk_manager = riskmanager::RiskManager::new();
                 

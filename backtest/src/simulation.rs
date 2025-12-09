@@ -578,8 +578,19 @@ impl SimulationLoop {
                     // 4. Submit order to orderbook
                     let _ = orderbook.submit_order_from_signal(&signal, timestamp);
 
-                    // 5. Simulate order matching/fills with proper fee calculation
-                    let fills = orderbook.match_all_orders(timestamp);
+                    // 5. Simulate order matching/fills
+                    // For LIMIT orders (with price): DON'T immediately match - they rest on the book
+                    //   and only get filled when external market trades hit them via execute_trade_with_fills()
+                    // For MARKET orders (without price): Immediately match against resting orders
+                    let is_limit_order = signal.price.is_some();
+                    let fills = if is_limit_order {
+                        // Limit orders rest on the book - no immediate matching
+                        // They will be filled by market trades in the MarketData::Trade handler
+                        Vec::new()
+                    } else {
+                        // Market orders immediately sweep the book
+                        orderbook.match_all_orders(timestamp)
+                    };
                     
                     // Track fill count for this order
                     let fill_count = fills.len() as u32;
@@ -589,13 +600,16 @@ impl SimulationLoop {
                         *self.fill_count_histogram.entry(fill_count).or_insert(0) += 1;
                     }
                     
-                    // Debug: Log fill count and sizes for first few trades
-                    if self.total_commission < 200.0 && !fills.is_empty() {
-                        let total_fill_value: f64 = fills.iter()
-                            .map(|f| f.price.to_f64().unwrap_or(0.0) * f.quantity.to_f64().unwrap_or(0.0))
-                            .sum();
-                        log_info!(BACKTEST_LOGGER, "Order matched | signal_id={} fills={} total_value=${:.2} expected_order_value=${:.2}",
-                            signal.id, fills.len(), total_fill_value, order_size * order_price);
+                    // Debug: Log first 5 matched fills to understand fill sizes
+                    if self.total_fill_count <= 5 && !fills.is_empty() {
+                        for fill in &fills {
+                            let fill_price = fill.price.to_f64().unwrap_or(0.0);
+                            let fill_quantity = fill.quantity.to_f64().unwrap_or(0.0);
+                            let fill_value = fill_price * fill_quantity;
+                            log_info!(BACKTEST_LOGGER, 
+                                "MATCHED_FILL | order_id={} price=${:.2} qty={:.6} value=${:.2} signal_order_value=${:.2}",
+                                fill.order_id, fill_price, fill_quantity, fill_value, order_size * order_price);
+                        }
                     }
 
                     // Track commission and slippage costs from fills

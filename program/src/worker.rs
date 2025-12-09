@@ -685,12 +685,14 @@ impl Worker {
         let quote_balance = params.initial_capital * (1.0 - inventory_pct);
         let base_value = params.initial_capital * inventory_pct;
         let base_quantity = if initial_price > 0.0 { base_value / initial_price } else { 0.0 };
+        let first_timestamp = Self::get_first_timestamp(&data);
         
         let mut portfolio = PortfolioState::with_inventory(
             params.symbol.clone(),
             BigDecimal::from_f64(quote_balance).unwrap_or_default(),
             base_quantity,
             BigDecimal::from_f64(initial_price).unwrap_or_default(),
+            first_timestamp,
         );
         
         log_info!(BACKTEST_LOGGER, "Portfolio initialized: quote=${:.2} base={:.6} units @ ${:.2} (total=${:.2})",
@@ -994,12 +996,14 @@ impl Worker {
                 let quote_balance = initial_capital * (1.0 - inventory_pct);
                 let base_value = initial_capital * inventory_pct;
                 let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };
+                let first_timestamp = Self::get_first_timestamp(&data);
                 
                 let mut portfolio = PortfolioState::with_inventory(
                     symbol.clone(),
                     BigDecimal::from_f64(quote_balance).unwrap_or_default(),
                     base_quantity,
                     BigDecimal::from_f64(asset_price).unwrap_or_default(),
+                    first_timestamp,
                 );
                 
                 let orderbook_config = OrderBookConfig::default();
@@ -1387,12 +1391,14 @@ impl Worker {
                         let quote_balance = initial_capital * (1.0 - inventory_pct);
                         let base_value = initial_capital * inventory_pct;
                         let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };
+                        let first_timestamp = Self::get_first_timestamp(&data);
                         
                         let mut portfolio = PortfolioState::with_inventory(
                             symbol.clone(),
                             BigDecimal::from_f64(quote_balance).unwrap_or_default(),
                             base_quantity,
                             BigDecimal::from_f64(asset_price).unwrap_or_default(),
+                            first_timestamp,
                         );
                         
                         let orderbook_config = OrderBookConfig::default();
@@ -1723,6 +1729,30 @@ impl Worker {
         }).unwrap_or(100_000.0)
     }
     
+    /// Get the first timestamp from market data (for initializing portfolio open_time)
+    #[cfg(feature = "postgres")]
+    fn get_first_timestamp(data: &[MarketData]) -> chrono::DateTime<Utc> {
+        data.first().map(|d| {
+            match d {
+                MarketData::Candle(c) => c.timestamp,
+                MarketData::Order(o) => o.timestamp,
+                MarketData::Snapshot(s) => s.timestamp,
+                MarketData::Trade(t) => t.timestamp,
+            }
+        }).unwrap_or_else(Utc::now)
+    }
+    
+    /// Get the first timestamp from market data (for initializing portfolio open_time)
+    #[cfg(not(feature = "postgres"))]
+    fn get_first_timestamp(data: &[MarketData]) -> chrono::DateTime<Utc> {
+        data.first().map(|d| {
+            match d {
+                MarketData::Candle(c) => c.timestamp,
+                MarketData::Trade(t) => t.timestamp,
+            }
+        }).unwrap_or_else(Utc::now)
+    }
+    
     /// Get the timestamp from MarketData (candle, order, snapshot, or trade)
     #[cfg(feature = "postgres")]
     fn get_market_data_timestamp(&self, data: &MarketData) -> chrono::DateTime<Utc> {
@@ -2008,12 +2038,14 @@ impl Worker {
         let quote_balance = initial_capital * (1.0 - inventory_pct);
         let base_value = initial_capital * inventory_pct;
         let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };
+        let first_timestamp = Self::get_first_timestamp(data);
         
         let mut portfolio = PortfolioState::with_inventory(
             symbol.to_string(),
             BigDecimal::from_f64(quote_balance).unwrap_or_default(),
             base_quantity,
             BigDecimal::from_f64(asset_price).unwrap_or_default(),
+            first_timestamp,
         );
         
         let orderbook_config = OrderBookConfig::default();
@@ -2232,12 +2264,14 @@ impl Worker {
         let quote_balance = initial_capital * (1.0 - inventory_pct);
         let base_value = initial_capital * inventory_pct;
         let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };
+        let first_timestamp = Self::get_first_timestamp(data);
         
         let mut portfolio = PortfolioState::with_inventory(
             symbol.to_string(),
             BigDecimal::from_f64(quote_balance).unwrap_or_default(),
             base_quantity,
             BigDecimal::from_f64(asset_price).unwrap_or_default(),
+            first_timestamp,
         );
         
         let orderbook_config = OrderBookConfig::default();

@@ -88,6 +88,18 @@ pub async fn avellaneda_stoikov_fitness(
         })
         .unwrap_or(50000.0); // Fallback price
     
+    // Get first timestamp from market data for proper position tracking
+    let first_timestamp = market_data.first()
+        .map(|d| match d {
+            dataloader::MarketData::Trade(t) => t.timestamp,
+            dataloader::MarketData::Candle(c) => c.timestamp,
+            #[cfg(feature = "postgres")]
+            dataloader::MarketData::Snapshot(s) => s.timestamp,
+            #[cfg(feature = "postgres")]
+            dataloader::MarketData::Order(o) => o.timestamp,
+        })
+        .unwrap_or_else(chrono::Utc::now);
+    
     // Initialize portfolio with BOTH quote and base assets for proper market making
     // Split capital: 50% as quote (USD), 50% as base asset (BTC/ETH)
     let inventory_pct = 0.5;
@@ -100,6 +112,7 @@ pub async fn avellaneda_stoikov_fitness(
         bigdecimal::BigDecimal::from_f64(quote_balance).unwrap_or_default(),
         base_quantity,
         bigdecimal::BigDecimal::from_f64(initial_price).unwrap_or_default(),
+        first_timestamp,
     );
     
     let mut risk_manager = RiskManager::new();

@@ -75,6 +75,7 @@ impl PortfolioState {
         quote_balance: BigDecimal,
         base_quantity: f64,
         base_price: BigDecimal,
+        open_time: DateTime<Utc>,
     ) -> Self {
         let mut portfolio = Self {
             balance: quote_balance,
@@ -92,7 +93,7 @@ impl PortfolioState {
                 mark_price: Some(base_price),
                 realized_pnl: BigDecimal::from(0),
                 unrealized_pnl: BigDecimal::from(0),
-                open_time: Utc::now(),
+                open_time,
                 close_time: None,
             });
         }
