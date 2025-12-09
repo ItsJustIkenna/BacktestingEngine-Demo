@@ -6,6 +6,8 @@ use num_traits::{ToPrimitive, FromPrimitive};
 
 use crate::traits::*;
 use crate::signal::*;
+use crate::log_info;
+use crate::logging_facade::STRATEGY_LOGGER;
 // use crate::indicators::*;
 // use portfoliomanager::PortfolioState;
 use riskmanager::RiskLimits;
@@ -630,6 +632,16 @@ impl Strategy for AvellanedaStoikovStrategy {
         let mid_price = (bid + ask) / 2.0;
         let available_balance = context.portfolio_state.balance.to_f64().unwrap_or(0.0);
         let order_size = self.calculate_order_size(mid_price, available_balance);
+        
+        // Debug: Log first 5 quote generations to diagnose pricing issues
+        static QUOTE_GEN_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let gen_count = QUOTE_GEN_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if gen_count < 5 {
+            let spread_bps = (ask - bid) / s * 10000.0;
+            log_info!(STRATEGY_LOGGER, 
+                "AS_QUOTE_GEN | input_mid=${:.2} r=${:.2} spread=${:.2} ({}bps) | bid=${:.2} ask=${:.2} | gamma={:.4} sigma={:.4} t={:.6}",
+                s, r, spread, spread_bps, bid, ask, gamma, sigma, t);
+        }
         
         // 9. Generate bid and ask signals with percentage-based sizing
         let mut signals = Vec::new();
