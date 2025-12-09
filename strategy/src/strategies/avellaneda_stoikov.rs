@@ -928,19 +928,12 @@ impl Strategy for AvellanedaStoikovStrategy {
         let as_spread = as_spread_raw.clamp(min_spread, max_spread);
         let spread = as_spread.max(min_spread);
         
-        // Sanity check: bid and ask must be positive and reasonable
+        // Sanity check: bid and ask must be positive and form valid spread
         let bid = r - spread / 2.0;
         let ask = r + spread / 2.0;
         
-        // Validate quotes are sane before emitting:
-        // - Both prices must be positive
-        // - Bid must be less than ask (proper spread)
-        // - Neither should deviate more than 1% from mid (catches broken calculations)
-        let spread_valid = bid > 0.0 && ask > bid;
-        let bid_reasonable = bid >= s * 0.99 && bid <= s * 1.01;  // Within 1% of mid
-        let ask_reasonable = ask >= s * 0.99 && ask <= s * 1.01;  // Within 1% of mid
-        if !spread_valid || !bid_reasonable || !ask_reasonable {
-            // Skip invalid quotes silently - the reservation price or spread is broken
+        // Basic validation - just ensure prices are positive and bid < ask
+        if bid <= 0.0 || ask <= 0.0 || ask <= bid {
             return Ok(vec![]);
         }
 
