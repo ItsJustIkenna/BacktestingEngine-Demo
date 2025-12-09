@@ -334,15 +334,6 @@ impl SimulationLoop {
                     // Debug: Log first 5 trades vs our order prices to diagnose fill issues (postgres)
                     static TRADE_DEBUG_COUNT_PG: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
                     let debug_count = TRADE_DEBUG_COUNT_PG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if debug_count < 5 && !self.active_order_ids.is_empty() {
-                        let trade_price = trade.price.to_f64().unwrap_or(0.0);
-                        let best_bid = orderbook.best_bid().and_then(|p| p.to_f64());
-                        let best_ask = orderbook.best_ask().and_then(|p| p.to_f64());
-                        log_info!(BACKTEST_LOGGER, 
-                            "TRADE_VS_ORDERS | trade: ${:.2} side={} | our_orders: {} active | book: best_bid=${:.2} best_ask=${:.2} | fills={}",
-                            trade_price, trade.side, self.active_order_ids.len(),
-                            best_bid.unwrap_or(0.0), best_ask.unwrap_or(0.0), trade_fills.len());
-                    }
                     
                     // Filter fills to only include OUR strategy's orders
                     // Historical market orders from the data feed should not generate commission/fills for us
@@ -350,6 +341,27 @@ impl SimulationLoop {
                         .into_iter()
                         .filter(|fill| self.active_order_ids.contains(&fill.order_id))
                         .collect();
+                    
+                    if debug_count < 10 && !self.active_order_ids.is_empty() {
+                        let trade_price = trade.price.to_f64().unwrap_or(0.0);
+                        let best_bid = orderbook.best_bid().and_then(|p| p.to_f64());
+                        let best_ask = orderbook.best_ask().and_then(|p| p.to_f64());
+                        // Also find our strategy's bid/ask from the trackers
+                        let our_bid = self.order_trackers.values()
+                            .filter(|t| matches!(t.side, orderbook::BookSide::Bid))
+                            .map(|t| t.price)
+                            .reduce(f64::max);
+                        let our_ask = self.order_trackers.values()
+                            .filter(|t| matches!(t.side, orderbook::BookSide::Ask))
+                            .map(|t| t.price)
+                            .reduce(f64::min);
+                        log_info!(BACKTEST_LOGGER, 
+                            "TRADE_VS_ORDERS | trade=${:.2} side={} | our_bid=${:.2} our_ask=${:.2} | book_bid=${:.2} book_ask=${:.2} | our_fills={}",
+                            trade_price, trade.side,
+                            our_bid.unwrap_or(0.0), our_ask.unwrap_or(0.0),
+                            best_bid.unwrap_or(0.0), best_ask.unwrap_or(0.0), 
+                            our_fills.len());
+                    }
                     
                     // Track fill count for market fills (only our orders)
                     let fill_count = our_fills.len() as u32;
@@ -452,18 +464,9 @@ impl SimulationLoop {
                         trade.timestamp,
                     );
                     
-                    // Debug: Log first 5 trades vs our order prices to diagnose fill issues (non-postgres)
+                    // Debug: Log first 10 trades vs our order prices to diagnose fill issues (non-postgres)
                     static TRADE_DEBUG_COUNT_NP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
                     let debug_count = TRADE_DEBUG_COUNT_NP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if debug_count < 5 && !self.active_order_ids.is_empty() {
-                        let trade_price = trade.price.to_f64().unwrap_or(0.0);
-                        let best_bid = orderbook.best_bid().and_then(|p| p.to_f64());
-                        let best_ask = orderbook.best_ask().and_then(|p| p.to_f64());
-                        log_info!(BACKTEST_LOGGER, 
-                            "TRADE_VS_ORDERS | trade: ${:.2} side={} | our_orders: {} active | book: best_bid=${:.2} best_ask=${:.2} | fills={}",
-                            trade_price, trade.side, self.active_order_ids.len(),
-                            best_bid.unwrap_or(0.0), best_ask.unwrap_or(0.0), trade_fills.len());
-                    }
                     
                     // Filter fills to only include OUR strategy's orders
                     // Historical market orders from the data feed should not generate commission/fills for us
@@ -471,6 +474,27 @@ impl SimulationLoop {
                         .into_iter()
                         .filter(|fill| self.active_order_ids.contains(&fill.order_id))
                         .collect();
+                    
+                    if debug_count < 10 && !self.active_order_ids.is_empty() {
+                        let trade_price = trade.price.to_f64().unwrap_or(0.0);
+                        let best_bid = orderbook.best_bid().and_then(|p| p.to_f64());
+                        let best_ask = orderbook.best_ask().and_then(|p| p.to_f64());
+                        // Also find our strategy's bid/ask from the trackers
+                        let our_bid = self.order_trackers.values()
+                            .filter(|t| matches!(t.side, orderbook::BookSide::Bid))
+                            .map(|t| t.price)
+                            .reduce(f64::max);
+                        let our_ask = self.order_trackers.values()
+                            .filter(|t| matches!(t.side, orderbook::BookSide::Ask))
+                            .map(|t| t.price)
+                            .reduce(f64::min);
+                        log_info!(BACKTEST_LOGGER, 
+                            "TRADE_VS_ORDERS | trade=${:.2} side={} | our_bid=${:.2} our_ask=${:.2} | book_bid=${:.2} book_ask=${:.2} | our_fills={}",
+                            trade_price, trade.side,
+                            our_bid.unwrap_or(0.0), our_ask.unwrap_or(0.0),
+                            best_bid.unwrap_or(0.0), best_ask.unwrap_or(0.0), 
+                            our_fills.len());
+                    }
                     
                     // Track fill count for market fills (only our orders)
                     let fill_count = our_fills.len() as u32;
