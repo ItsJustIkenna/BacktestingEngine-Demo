@@ -2354,6 +2354,11 @@ impl Worker {
         let max_drawdown = result.core.max_drawdown.to_string().parse::<f64>()
             .map_err(|e| format!("Failed to parse max_drawdown: {}", e))?;
         
+        // Debug: Log core result values to trace why win_rate might be 0
+        log_info!(MAIN_LOGGER, "Job {} CORE_RESULT | win_rate={:?} num_trades={} closed={} open={} pnl={:.2} volatility={:?}",
+            job_id, result.core.win_rate, result.core.num_trades, result.core.closed_trades, 
+            result.core.open_positions, total_pnl, result.core.volatility);
+        
         // Convert Monte Carlo results if available
         let monte_carlo_summary = result.monte_carlo.as_ref().map(|mc| MonteCarloSummary {
             num_runs: mc.num_runs,

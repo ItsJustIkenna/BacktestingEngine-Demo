@@ -59,6 +59,8 @@ pub struct SimulationLoop {
     sell_volume: f64,
     buy_fills: usize,
     sell_fills: usize,
+    buy_qty: f64,  // Total quantity bought
+    sell_qty: f64, // Total quantity sold
     inventory_value_samples: Vec<f64>, // For calculating average inventory
     // Track order lifecycle for execution metrics
     order_trackers: FxHashMap<String, OrderTracker>, // order_id -> tracker
@@ -74,6 +76,15 @@ pub struct SimulationLoop {
     // Track market data trade direction distribution
     market_buy_trades: usize,
     market_sell_trades: usize,
+    // Track data timestamp range
+    first_trade_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    last_trade_timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    first_trade_price: Option<f64>,
+    last_trade_price: Option<f64>,
+    // Track inventory over time for position analysis
+    inventory_snapshots: Vec<(chrono::DateTime<chrono::Utc>, f64)>, // (timestamp, net_position_qty)
+    max_inventory: f64,
+    min_inventory: f64,
 }
 
 impl SimulationLoop {
@@ -100,6 +111,8 @@ impl SimulationLoop {
             sell_volume: 0.0,
             buy_fills: 0,
             sell_fills: 0,
+            buy_qty: 0.0,
+            sell_qty: 0.0,
             inventory_value_samples: Vec::with_capacity(1000),
             order_trackers: FxHashMap::default(),
             orders_cancelled: 0,
@@ -112,6 +125,13 @@ impl SimulationLoop {
             latency_rejections_ask: 0,
             market_buy_trades: 0,
             market_sell_trades: 0,
+            first_trade_timestamp: None,
+            last_trade_timestamp: None,
+            first_trade_price: None,
+            last_trade_price: None,
+            inventory_snapshots: Vec::with_capacity(1000),
+            max_inventory: 0.0,
+            min_inventory: 0.0,
         }
     }
     
@@ -330,6 +350,15 @@ impl SimulationLoop {
                     // Update current market price from trade
                     current_market_price = Some(trade.price.clone());
                     
+                    // Track first and last trade timestamps/prices
+                    let trade_price_f64 = trade.price.to_f64().unwrap_or(0.0);
+                    if self.first_trade_timestamp.is_none() {
+                        self.first_trade_timestamp = Some(trade.timestamp);
+                        self.first_trade_price = Some(trade_price_f64);
+                    }
+                    self.last_trade_timestamp = Some(trade.timestamp);
+                    self.last_trade_price = Some(trade_price_f64);
+                    
                     // Get exchange for fee tracking
                     let exchange = orderbook.exchange.clone();
                     
@@ -342,8 +371,14 @@ impl SimulationLoop {
                     // - "buy" means a buyer aggressed -> fills our ASK orders
                     // - "sell" means a seller aggressed -> fills our BID orders
                     let aggressor_side = match trade.side.to_lowercase().as_str() {
-                        "buy" | "b" => BookSide::Bid,   // Aggressor is buyer
-                        "sell" | "s" => BookSide::Ask,  // Aggressor is seller
+                        "buy" | "b" => {
+                            self.market_buy_trades += 1;
+                            BookSide::Bid   // Aggressor is buyer
+                        }
+                        "sell" | "s" => {
+                            self.market_sell_trades += 1;
+                            BookSide::Ask  // Aggressor is seller
+                        }
                         _ => continue, // Skip unknown side
                     };
                     
@@ -494,6 +529,15 @@ impl SimulationLoop {
                 MarketData::Trade(trade) => {
                     // Update current market price from trade
                     current_market_price = Some(trade.price.clone());
+                    
+                    // Track first and last trade timestamps/prices
+                    let trade_price_f64 = trade.price.to_f64().unwrap_or(0.0);
+                    if self.first_trade_timestamp.is_none() {
+                        self.first_trade_timestamp = Some(trade.timestamp);
+                        self.first_trade_price = Some(trade_price_f64);
+                    }
+                    self.last_trade_timestamp = Some(trade.timestamp);
+                    self.last_trade_price = Some(trade_price_f64);
                     
                     // Get exchange for fee tracking
                     let exchange = orderbook.exchange.clone();
@@ -1033,41 +1077,34 @@ impl SimulationLoop {
         let mm_round_trips = self.buy_fills.min(self.sell_fills);
         let total_fills = self.buy_fills + self.sell_fills;
         
+        // Store info for later win rate calculation (after total_pnl is calculated)
+        let is_market_making_mode = closed_position_count == 0 && total_fills > 0;
+        
+        log_info!(BACKTEST_LOGGER, "Market making mode check: closed={} total_fills={} is_mm_mode={}",
+            closed_position_count, total_fills, is_market_making_mode);
+        
         // Use market-making metrics if we have fills but no closed positions
         // This handles the case where market maker adjusts inventory without closing positions
-        if closed_position_count == 0 && total_fills > 0 {
+        if is_market_making_mode {
             // Market making mode: count fills as trades
             result.num_trades = mm_round_trips;
             
-            // Win rate for market making: positive PnL means winning
-            // Since each fill captures spread, calculate win rate from PnL
-            if result.total_pnl.to_f64().unwrap_or(0.0) > 0.0 {
-                // Profitable overall - estimate win rate based on PnL distribution
-                // For market making, if gross_pnl > commission, we're "winning"
-                let gross = result.total_pnl.to_f64().unwrap_or(0.0) + self.total_commission;
-                if gross > 0.0 && total_fills > 0 {
-                    // Estimate: if we made money after fees, most fills were profitable
-                    let estimated_win_rate = 0.5 + (result.total_pnl.to_f64().unwrap_or(0.0) / gross).min(0.5);
-                    result.win_rate = Some(estimated_win_rate);
-                } else {
-                    result.win_rate = Some(0.5); // Break-even assumption
-                }
-            } else {
-                result.win_rate = Some(0.0);
-            }
-            
             log_info!(BACKTEST_LOGGER, "Market making mode: using fills as trades | round_trips={} total_fills={} buy={} sell={}",
                 mm_round_trips, total_fills, self.buy_fills, self.sell_fills);
+            
+            // For market making, calculate metrics from fills rather than closed positions
+            // We'll populate these after total_pnl is calculated (below)
         } else {
             // Traditional mode: use closed positions
             result.num_trades = performance::number_of_trades(&trade_returns);
+            
+            // Traditional metrics from closed positions
+            result.gross_profit = Some(performance::gross_profit(&trade_returns));
+            result.gross_loss = Some(performance::gross_loss(&trade_returns));
+            result.net_profit = Some(performance::net_profit(&trade_returns));
+            result.avg_trade_return = performance::average_trade_return(&trade_returns);
+            result.median_trade_return = performance::median_trade_return(&trade_returns);
         }
-        
-        result.gross_profit = Some(performance::gross_profit(&trade_returns));
-        result.gross_loss = Some(performance::gross_loss(&trade_returns));
-        result.net_profit = Some(performance::net_profit(&trade_returns));
-        result.avg_trade_return = performance::average_trade_return(&trade_returns);
-        result.median_trade_return = performance::median_trade_return(&trade_returns);
         
         // For Sharpe ratio, if we have very few closed trades but significant unrealized P&L,
         // use the equity curve returns instead for a more representative metric
@@ -1185,6 +1222,68 @@ impl SimulationLoop {
         );
         
         result.total_pnl = final_portfolio_value - initial_capital_bd;
+
+        // Now calculate market-making win rate (after total_pnl is set)
+        if is_market_making_mode {
+            let total_pnl_f64 = result.total_pnl.to_f64().unwrap_or(0.0);
+            if total_pnl_f64 > 0.0 {
+                // Profitable overall - estimate win rate based on PnL distribution
+                // For market making, if gross_pnl > commission, we're "winning"
+                let gross = total_pnl_f64 + self.total_commission;
+                if gross > 0.0 && total_fills > 0 {
+                    // Estimate: if we made money after fees, most fills were profitable
+                    let estimated_win_rate = 0.5 + (total_pnl_f64 / gross).min(0.5);
+                    result.win_rate = Some(estimated_win_rate);
+                } else {
+                    result.win_rate = Some(0.5); // Break-even assumption
+                }
+            } else if total_pnl_f64 < 0.0 {
+                // Losing overall - estimate win rate below 50%
+                let gross = (-total_pnl_f64) + self.total_commission;
+                if gross > 0.0 {
+                    let estimated_win_rate = 0.5 - ((-total_pnl_f64) / gross).min(0.5);
+                    result.win_rate = Some(estimated_win_rate);
+                } else {
+                    result.win_rate = Some(0.5);
+                }
+            } else {
+                result.win_rate = Some(0.5); // Break-even
+            }
+            
+            log_info!(BACKTEST_LOGGER, "Market making win rate: pnl={:.2} commission={:.2} win_rate={:.1}%",
+                total_pnl_f64, self.total_commission, result.win_rate.unwrap_or(0.0) * 100.0);
+            
+            // Calculate market-making specific metrics
+            // For MM: gross_profit = spread captured (pnl + commission), gross_loss = commission paid
+            let gross_pnl = total_pnl_f64 + self.total_commission; // Total spread captured before fees
+            if gross_pnl > 0.0 {
+                result.gross_profit = Some(gross_pnl);
+                result.gross_loss = Some(self.total_commission);
+            } else {
+                // Lost money even before commission - adverse selection
+                result.gross_profit = Some(0.0);
+                result.gross_loss = Some(-total_pnl_f64); // Total loss
+            }
+            result.net_profit = Some(total_pnl_f64);
+            
+            // Avg return per round-trip
+            if mm_round_trips > 0 {
+                result.avg_trade_return = Some(total_pnl_f64 / mm_round_trips as f64);
+            }
+            
+            // Profit factor for MM: gross_profit / gross_loss
+            if self.total_commission > 0.0 && gross_pnl > 0.0 {
+                result.profit_factor = Some(gross_pnl / self.total_commission);
+            }
+            
+            log_info!(BACKTEST_LOGGER, "Market making metrics: gross_profit={:.2} gross_loss={:.2} net_profit={:.2} avg_return_per_rt={:.2} profit_factor={:.2}",
+                result.gross_profit.unwrap_or(0.0), result.gross_loss.unwrap_or(0.0), 
+                result.net_profit.unwrap_or(0.0), result.avg_trade_return.unwrap_or(0.0),
+                result.profit_factor.unwrap_or(0.0));
+                
+            log_info!(BACKTEST_LOGGER, "Final MM result: win_rate={:?} num_trades={}",
+                result.win_rate, result.num_trades);
+        }
 
         // Capture equity curve length before moving it
         let equity_curve_len = equity_curve.len();
@@ -1346,6 +1445,10 @@ impl SimulationLoop {
             config.trading.latency_ms, self.latency_rejections, 
             self.latency_rejections_bid, self.latency_rejections_ask, rejection_pct);
         
+        // Log average quoted spread - key diagnostic for fill rate
+        log_info!(BACKTEST_LOGGER, "Spread analysis | avg_quoted_spread_bps={:.2} samples={} | wider spreads = fewer fills but higher profit/fill",
+            avg_quote_spread_bps, self.quote_spreads_bps.len());
+        
         // Log market data trade direction distribution
         let total_market_trades = self.market_buy_trades + self.market_sell_trades;
         let buy_pct = if total_market_trades > 0 { self.market_buy_trades as f64 / total_market_trades as f64 * 100.0 } else { 0.0 };
@@ -1353,7 +1456,36 @@ impl SimulationLoop {
         log_info!(BACKTEST_LOGGER, "Market trades | total={} buys={} ({:.1}%) sells={} ({:.1}%) | buys->fill asks, sells->fill bids",
             total_market_trades, self.market_buy_trades, buy_pct, self.market_sell_trades, sell_pct);
         
+        // Log data date range and market trend
+        if let (Some(start_ts), Some(end_ts)) = (self.first_trade_timestamp, self.last_trade_timestamp) {
+            let duration = end_ts - start_ts;
+            let hours = duration.num_hours();
+            let minutes = duration.num_minutes() % 60;
+            log_info!(BACKTEST_LOGGER, "Data range | start={} end={} duration={}h {}m",
+                start_ts.format("%Y-%m-%d %H:%M:%S UTC"), 
+                end_ts.format("%Y-%m-%d %H:%M:%S UTC"),
+                hours, minutes);
+            
+            // Log market trend (price change during backtest)
+            if let (Some(start_price), Some(end_price)) = (self.first_trade_price, self.last_trade_price) {
+                let price_change = end_price - start_price;
+                let price_change_pct = (price_change / start_price) * 100.0;
+                let trend = if price_change_pct > 1.0 { "UPTREND" } 
+                           else if price_change_pct < -1.0 { "DOWNTREND" } 
+                           else { "SIDEWAYS" };
+                log_info!(BACKTEST_LOGGER, "Market trend | start_price=${:.2} end_price=${:.2} change={:.2}% ({}) | {} bids hit more, {} asks hit more",
+                    start_price, end_price, price_change_pct, trend,
+                    if price_change_pct > 0.0 { "uptrend" } else { "downtrend" },
+                    if price_change_pct > 0.0 { "downtrend" } else { "uptrend" });
+            }
+        } else {
+            log_info!(BACKTEST_LOGGER, "Data range | No trades processed in market data");
+        }
+        
         // Log inventory metrics summary
+        let final_inventory = self.buy_qty - self.sell_qty;
+        log_info!(BACKTEST_LOGGER, "Inventory position | final_qty={:.6} max_long={:.6} max_short={:.6} | asymmetric if not near zero",
+            final_inventory, self.max_inventory, self.min_inventory);
         log_info!(BACKTEST_LOGGER, "Inventory metrics | total_volume=${:.2} buy=${:.2} sell=${:.2} turnover/day={:.2} imbalance={:.2}%",
             total_volume, self.buy_volume, self.sell_volume, turnover_per_day, imbalance_ratio * 100.0);
         
