@@ -211,6 +211,10 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
         rate_vol_sensitivity: 0.4,
         rate_min: 5.0,
         rate_max: 60.0,
+        
+        // Inventory limits for market neutrality
+        max_inventory_pct: 0.15,
+        inventory_skew_multiplier: 3.0,
     }
 }
 
@@ -353,6 +357,10 @@ fn extract_best_parameters_from_walkforward(_wf_summary: &WalkForwardSummary) ->
         rate_vol_sensitivity: 0.4,
         rate_min: 5.0,
         rate_max: 60.0,
+        
+        // Inventory limits for market neutrality
+        max_inventory_pct: 0.15,
+        inventory_skew_multiplier: 3.0,
     }
 }
 

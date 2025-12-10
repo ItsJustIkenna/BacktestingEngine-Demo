@@ -49,6 +49,10 @@ pub async fn avellaneda_stoikov_fitness(
         take_profit_pct: chromo.take_profit_pct,
         stop_loss_pct: chromo.stop_loss_pct,
         
+        // Inventory limits for market neutrality
+        max_inventory_pct: 0.15,        // Hard limit: max 15% directional exposure
+        inventory_skew_multiplier: 3.0, // Aggressive skew when approaching limit
+        
         // Phase 2: Dynamic adjustment parameters
         volatility_adjustment_factor: chromo.volatility_adjustment_factor,
         inventory_penalty_factor: chromo.inventory_penalty_factor,
@@ -133,77 +137,120 @@ pub async fn avellaneda_stoikov_fitness(
         config,
     ).await;
     
-    // ========== COMPREHENSIVE FITNESS FUNCTION ==========
-    // Same logic as backtest/src/engine.rs for consistency
+    // ========== STARTUP MM FITNESS FUNCTION ==========
+    // Optimized for: Maximum capital efficiency with strict risk control
+    // Target profile: High turnover, low drawdown, consistent profits
     
     use bigdecimal::ToPrimitive;
     let initial_capital = config.trading.initial_capital;
     
-    // === Primary Metrics ===
+    // === Extract Metrics ===
     let sharpe = result.sharpe_ratio.unwrap_or(0.0);
     let sortino = result.sortino_ratio.unwrap_or(sharpe);
     let pf = result.profit_factor.unwrap_or(1.0);
     let win_rate = result.win_rate.unwrap_or(0.0);
-    let net_profit_pct = result.net_profit.unwrap_or(0.0) / initial_capital;
-    let calmar = result.calmar_ratio.unwrap_or(0.0);
+    let net_profit = result.net_profit.unwrap_or(0.0);
+    let net_profit_pct = net_profit / initial_capital;
     
-    // === Base Fitness (weights sum to 1.0) ===
-    let mut fitness = 
-        sortino * 0.25 +
-        sharpe * 0.15 +
-        (pf - 1.0).max(0.0) * 0.20 +
-        win_rate * 0.15 +
-        net_profit_pct * 0.15 +
-        calmar.min(3.0) * 0.10;
-    
-    // === Penalty: Insufficient Trades ===
-    if result.num_trades < 30 {
-        fitness *= (result.num_trades as f64 / 30.0).max(0.1);
-    }
-    
-    // === Penalty: Excessive Drawdown ===
     let dd_value = result.max_drawdown.to_f64().unwrap_or(0.0);
     let dd_pct = (dd_value / initial_capital).abs();
-    if dd_pct > 0.15 {
-        let dd_penalty = if dd_pct > 0.40 { 0.2 } else if dd_pct > 0.25 { 0.5 } else { 0.8 };
+    
+    let gross_profit = result.gross_profit.unwrap_or(0.0);
+    let total_commission = result.transaction_costs
+        .as_ref()
+        .map(|tc| tc.total_commission)
+        .unwrap_or(0.0);
+    
+    // Calculate round-trips (completed inventory cycles)
+    let (buy_fills, sell_fills) = result.inventory_metrics
+        .as_ref()
+        .map(|im| (im.buy_fills, im.sell_fills))
+        .unwrap_or((0, 0));
+    let round_trips = buy_fills.min(sell_fills);
+    
+    // Estimate trading days from data (rough: assume ~1000 ticks per day for HF data)
+    let data_points = result.equity_curve.len().max(1);
+    let trading_days = (data_points as f64 / 5000.0).max(1.0);
+    
+    // === 1. CAPITAL EFFICIENCY (40% weight) ===
+    // As a startup, you need MAX returns on LIMITED capital
+    // Return per unit of risk taken (drawdown-adjusted return)
+    let annualized_return = net_profit_pct * (252.0 / trading_days);
+    let capital_efficiency = if dd_pct > 0.001 {
+        (annualized_return / dd_pct).max(0.0).min(10.0)  // Cap to avoid outliers
+    } else if net_profit_pct > 0.0 {
+        5.0  // Good profit with minimal drawdown = excellent
+    } else {
+        0.0
+    };
+    let capital_efficiency_normalized = capital_efficiency / 10.0;  // Normalize to [0, 1]
+    
+    // === 2. TURNOVER BONUS (15% weight) ===
+    // More round-trips = more spread captured = better for limited capital
+    // Target: 50 round-trips per backtest period
+    let turnover_score = (round_trips as f64 / 50.0).min(1.0);
+    
+    // === 3. RISK-ADJUSTED RETURN (25% weight) ===
+    // Sortino is better than Sharpe for MM (we care about downside, not upside vol)
+    let sortino_capped = sortino.max(0.0).min(3.0) / 3.0;  // Normalize to [0, 1]
+    
+    // === 4. COMMISSION EFFICIENCY (10% weight) ===
+    // Critical for startup - every bps matters
+    let comm_efficiency = if gross_profit > 0.0 {
+        (1.0 - (total_commission / gross_profit).min(1.0)).max(0.0)
+    } else {
+        0.0
+    };
+    
+    // === 5. CONSISTENCY (10% weight) ===
+    // Limited capital = can't afford losing streaks
+    let consistency = if result.num_trades > 10 {
+        let win_component = win_rate.min(1.0) * 0.5;
+        let pf_component = (pf.min(3.0) / 3.0) * 0.5;
+        win_component + pf_component
+    } else {
+        0.0
+    };
+    
+    // === BASE FITNESS (weights sum to 1.0) ===
+    let mut fitness = 
+        capital_efficiency_normalized * 0.40 +
+        turnover_score * 0.15 +
+        sortino_capped * 0.25 +
+        comm_efficiency * 0.10 +
+        consistency * 0.10;
+    
+    // === HARD PENALTIES ===
+    
+    // Drawdown: Startup can't survive >10% drawdown
+    if dd_pct > 0.10 {
+        let dd_penalty = if dd_pct > 0.20 { 0.1 } else { 0.5 };
         fitness *= dd_penalty;
     }
     
-    // === Penalty: Commission Inefficiency ===
-    if let (Some(gross_profit), Some(transaction_costs)) = 
-        (&result.gross_profit, &result.transaction_costs) 
-    {
-        let gross = *gross_profit;
-        let commission = transaction_costs.total_commission;
-        
-        if gross > 0.0 {
-            let commission_ratio = commission / gross;
-            if commission_ratio > 0.40 {
-                let penalty = if commission_ratio >= 1.0 { 0.1 }
-                    else if commission_ratio >= 0.70 { 0.3 }
-                    else { 1.0 - (commission_ratio - 0.4) * 1.5 };
-                fitness *= penalty;
-            }
-        } else if gross <= 0.0 && commission > 0.0 {
-            fitness *= 0.05;
-        }
+    // Minimum activity: Need at least 20 trades for statistical significance
+    if result.num_trades < 20 {
+        fitness *= (result.num_trades as f64 / 20.0).max(0.1);
     }
     
-    // === Penalty: Poor Average Trade ===
-    if let (Some(avg_trade), Some(transaction_costs)) = 
-        (&result.avg_trade_return, &result.transaction_costs)
-    {
-        let avg_commission = if result.num_trades > 0 {
-            transaction_costs.total_commission / result.num_trades as f64
-        } else { 0.0 };
-        
-        if *avg_trade > 0.0 && *avg_trade < avg_commission * 2.0 {
-            fitness *= 0.7;
-        }
+    // Profit required: Negative strategies are worthless
+    if net_profit_pct <= 0.0 {
+        fitness *= 0.1;
     }
     
-    // === Bonus: Well-Rounded Strategy ===
-    if net_profit_pct > 0.05 && pf > 1.5 && win_rate > 0.50 && dd_pct < 0.15 {
+    // Commission disaster: If commission > gross profit, strategy is broken
+    if gross_profit > 0.0 && total_commission > gross_profit {
+        fitness *= 0.05;
+    }
+    
+    // === BONUS: IDEAL STARTUP MM PROFILE ===
+    // High turnover + low drawdown + positive = perfect
+    if round_trips > 30 && dd_pct < 0.08 && net_profit_pct > 0.03 {
+        fitness *= 1.3;
+    }
+    
+    // Extra bonus: Very high turnover with profitability (spread capture machine)
+    if round_trips > 50 && net_profit_pct > 0.02 && comm_efficiency > 0.6 {
         fitness *= 1.2;
     }
     

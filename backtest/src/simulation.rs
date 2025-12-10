@@ -1457,6 +1457,12 @@ impl SimulationLoop {
             total_market_trades, self.market_buy_trades, buy_pct, self.market_sell_trades, sell_pct);
         
         // Log data date range and market trend
+        // Add timestamps to result
+        result.first_trade_timestamp = self.first_trade_timestamp;
+        result.last_trade_timestamp = self.last_trade_timestamp;
+        result.first_trade_price = self.first_trade_price;
+        result.last_trade_price = self.last_trade_price;
+        
         if let (Some(start_ts), Some(end_ts)) = (self.first_trade_timestamp, self.last_trade_timestamp) {
             let duration = end_ts - start_ts;
             let hours = duration.num_hours();

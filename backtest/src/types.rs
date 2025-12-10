@@ -33,6 +33,14 @@ pub struct BacktestResult {
     pub closed_trades: usize,
     /// Number of positions still open at end of backtest - contribute to unrealized P&L
     pub open_positions: usize,
+    /// Timestamp of the first trade in the backtest data
+    pub first_trade_timestamp: Option<DateTime<Utc>>,
+    /// Timestamp of the last trade in the backtest data
+    pub last_trade_timestamp: Option<DateTime<Utc>>,
+    /// Price at the first trade
+    pub first_trade_price: Option<f64>,
+    /// Price at the last trade
+    pub last_trade_price: Option<f64>,
     /// Realized P&L from closed trades only
     pub realized_pnl: Option<f64>,
     /// Unrealized P&L from open positions (mark-to-market)

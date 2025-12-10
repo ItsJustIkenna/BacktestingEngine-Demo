@@ -52,8 +52,9 @@ impl Chromosome for AvellanedaStoikovChromosome {
             // fee_rate removed - use exchange maker fee from config instead
             // latency_buffer removed - latency now simulated in order matching
             
-            // Target inventory position (-1 = short bias, 0 = neutral, +1 = long bias)
-            inventory_target: rng.gen_range(-1.0..1.0),
+            // Target inventory position - constrained for reasonable market making
+            // Range (-0.3..0.3) allows mild directional lean without extreme bias
+            inventory_target: rng.gen_range(-0.3..0.3),
             
             // Volatility cap to prevent extreme spread widening
             volatility_cap: rng.gen_range(0.05..5.0),
@@ -70,8 +71,8 @@ impl Chromosome for AvellanedaStoikovChromosome {
             
             // Phase 2: Dynamic adjustment parameters
             volatility_adjustment_factor: rng.gen_range(0.0..2.0),  // 0-200% vol adjustment
-            inventory_penalty_factor: rng.gen_range(0.0..1.0),      // 0-100% penalty
-            trend_sensitivity: rng.gen_range(-1.0..1.0),            // Strong contrarian to strong trend-following
+            inventory_penalty_factor: rng.gen_range(0.2..1.0),      // Minimum 20% penalty for some inventory control
+            trend_sensitivity: rng.gen_range(-0.5..0.5),            // Moderate trend bias allowed
             flow_sensitivity: rng.gen_range(-1.0..1.0),             // Strong fade to strong follow
             
             // Exit and trading control parameters
@@ -141,10 +142,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
         }
         // fee_rate removed - use exchange config
         // latency_buffer removed - latency now simulated in order matching
-        // Inventory target: range -1.0 to 1.0
+        // Inventory target: constrained for reasonable market making
         if rng.gen_bool(mutation_rate) {
-            self.inventory_target += rng.gen_range(-0.3..0.3);
-            self.inventory_target = self.inventory_target.clamp(-1.0, 1.0);
+            self.inventory_target += rng.gen_range(-0.15..0.15);
+            self.inventory_target = self.inventory_target.clamp(-0.3, 0.3);  // Reasonable bounds
         }
         // Volatility cap: range 0.05-5.0
         if rng.gen_bool(mutation_rate) {
@@ -169,11 +170,11 @@ impl Chromosome for AvellanedaStoikovChromosome {
         }
         if rng.gen_bool(mutation_rate) {
             self.inventory_penalty_factor += rng.gen_range(-0.15..0.15);
-            self.inventory_penalty_factor = self.inventory_penalty_factor.clamp(0.0, 1.0);
+            self.inventory_penalty_factor = self.inventory_penalty_factor.clamp(0.2, 1.0);  // Min 20% for some control
         }
         if rng.gen_bool(mutation_rate) {
-            self.trend_sensitivity += rng.gen_range(-0.2..0.2);
-            self.trend_sensitivity = self.trend_sensitivity.clamp(-1.0, 1.0);
+            self.trend_sensitivity += rng.gen_range(-0.15..0.15);
+            self.trend_sensitivity = self.trend_sensitivity.clamp(-0.5, 0.5);  // Moderate bounds
         }
         if rng.gen_bool(mutation_rate) {
             self.flow_sensitivity += rng.gen_range(-0.2..0.2);

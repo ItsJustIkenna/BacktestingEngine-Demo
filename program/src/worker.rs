@@ -1113,6 +1113,10 @@ impl Worker {
                     rate_vol_sensitivity: 0.4,
                     rate_min: 5.0,
                     rate_max: 60.0,
+                    
+                    // Inventory risk limits
+                    max_inventory_pct: 0.15,
+                    inventory_skew_multiplier: 3.0,
                 };
                 
                 let mut strategy_params_map = HashMap::new();
@@ -1547,6 +1551,10 @@ impl Worker {
                             rate_vol_sensitivity: 0.4,
                             rate_min: 5.0,
                             rate_max: 60.0,
+                            
+                            // Inventory risk limits
+                            max_inventory_pct: 0.15,
+                            inventory_skew_multiplier: 3.0,
                         };
                         
                         let mut strategy_params_map = HashMap::new();
@@ -2272,6 +2280,10 @@ impl Worker {
             rate_vol_sensitivity: 0.4,
             rate_min: 5.0,
             rate_max: 60.0,
+            
+            // Inventory risk limits
+            max_inventory_pct: 0.15,
+            inventory_skew_multiplier: 3.0,
         };
         
         let mut strategy_params_map = HashMap::new();
@@ -2563,6 +2575,10 @@ impl Worker {
             rate_vol_sensitivity: 0.4,
             rate_min: 5.0,
             rate_max: 60.0,
+            
+            // Inventory risk limits
+            max_inventory_pct: 0.15,
+            inventory_skew_multiplier: 3.0,
         };
         
         let mut strategy_params_map = HashMap::new();

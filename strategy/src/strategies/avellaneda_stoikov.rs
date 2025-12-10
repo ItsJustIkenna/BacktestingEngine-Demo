@@ -58,6 +58,10 @@ pub struct AvellanedaStoikovParams {
     pub take_profit_pct: f64,       // Take profit percentage (close position when profit exceeds this)
     pub stop_loss_pct: f64,         // Stop loss percentage (close position when loss exceeds this)
     
+    // Inventory limits for market neutrality
+    pub max_inventory_pct: f64,     // Max inventory as % of capital (0.15 = 15% directional exposure max)
+    pub inventory_skew_multiplier: f64, // How aggressively to skew quotes when approaching inventory limit (2.0 = 2x normal skew)
+    
     // Phase 2: Dynamic adjustment parameters (optimized by genetic algorithm)
     pub volatility_adjustment_factor: f64, // How much to scale γ with volatility (0.5 = 50% increase per 1.0 vol ratio)
     pub inventory_penalty_factor: f64,     // How much to increase γ with inventory (0.3 = 30% per unit deviation)
@@ -116,10 +120,14 @@ impl Default for AvellanedaStoikovParams {
             take_profit_pct: 0.005,         // 0.5% take profit (50bps)
             stop_loss_pct: 0.003,           // 0.3% stop loss (30bps) - tighter than TP for market making
             
+            // Inventory limits for market neutrality - CRITICAL for preventing directional bias
+            max_inventory_pct: 0.15,        // Max 15% of capital as directional exposure
+            inventory_skew_multiplier: 3.0, // 3x normal skew when approaching inventory limit
+            
             // Phase 2: Dynamic adjustment defaults
             volatility_adjustment_factor: 0.2,  // Reduced - don't widen too much on vol
-            inventory_penalty_factor: 0.3,      // Moderate inventory control
-            trend_sensitivity: 0.2,             // Moderate trend following
+            inventory_penalty_factor: 0.5,      // INCREASED from 0.3 - stronger inventory control
+            trend_sensitivity: 0.0,             // CHANGED from 0.2 - disable trend following for market neutrality
             flow_sensitivity: -0.1,             // Moderate fade
             
             // Phase 3: Dynamic k defaults (k divides liquidity term, so higher = tighter spreads)
@@ -1020,22 +1028,56 @@ impl Strategy for AvellanedaStoikovStrategy {
             return Ok(vec![]);
         }
         
-        // 9. Generate bid and ask signals with percentage-based sizing
+        // 9. INVENTORY LIMIT ENFORCEMENT - prevent directional bias
+        // Calculate inventory as % of capital (in dollar terms)
+        let inventory_value = self.inventory.abs() * mid_price;
+        let inventory_pct = inventory_value / self.params.initial_capital;
+        let at_inventory_limit = inventory_pct >= self.params.max_inventory_pct;
+        
+        // Determine which sides to quote based on inventory
+        // If long (positive inventory), only quote asks to reduce position
+        // If short (negative inventory), only quote bids to reduce position
+        let quote_bids = if at_inventory_limit && self.inventory > 0.0 {
+            false  // Long and at limit - don't buy more
+        } else {
+            true
+        };
+        let quote_asks = if at_inventory_limit && self.inventory < 0.0 {
+            false  // Short and at limit - don't sell more
+        } else {
+            true
+        };
+        
+        // Log inventory limit warnings
+        if at_inventory_limit {
+            log_info!(STRATEGY_LOGGER, "INVENTORY_LIMIT | inv_pct={:.1}% max={:.1}% | inventory={:.4} | quote_bids={} quote_asks={}", 
+                inventory_pct * 100.0, self.params.max_inventory_pct * 100.0, 
+                self.inventory, quote_bids, quote_asks);
+        }
+        
+        // 10. Generate bid and ask signals with percentage-based sizing
         let mut signals = Vec::new();
-        signals.push(Signal::new(
-            format!("as_bid_{}", now.timestamp_millis()),
-            SignalType::Buy,
-            SignalStrength::Medium,
-            SignalReason::Custom("AvellanedaStoikov".to_string(), "Optimal bid quote".to_string()),
-        ).with_price(BigDecimal::from_f64(bid).unwrap_or_default())
-         .with_quantity(BigDecimal::from_f64(order_size).unwrap_or_default()));
-        signals.push(Signal::new(
-            format!("as_ask_{}", now.timestamp_millis()),
-            SignalType::Sell,
-            SignalStrength::Medium,
-            SignalReason::Custom("AvellanedaStoikov".to_string(), "Optimal ask quote".to_string()),
-        ).with_price(BigDecimal::from_f64(ask).unwrap_or_default())
-         .with_quantity(BigDecimal::from_f64(order_size).unwrap_or_default()));
+        
+        if quote_bids {
+            signals.push(Signal::new(
+                format!("as_bid_{}", now.timestamp_millis()),
+                SignalType::Buy,
+                SignalStrength::Medium,
+                SignalReason::Custom("AvellanedaStoikov".to_string(), "Optimal bid quote".to_string()),
+            ).with_price(BigDecimal::from_f64(bid).unwrap_or_default())
+             .with_quantity(BigDecimal::from_f64(order_size).unwrap_or_default()));
+        }
+        
+        if quote_asks {
+            signals.push(Signal::new(
+                format!("as_ask_{}", now.timestamp_millis()),
+                SignalType::Sell,
+                SignalStrength::Medium,
+                SignalReason::Custom("AvellanedaStoikov".to_string(), "Optimal ask quote".to_string()),
+            ).with_price(BigDecimal::from_f64(ask).unwrap_or_default())
+             .with_quantity(BigDecimal::from_f64(order_size).unwrap_or_default()));
+        }
+        
         Ok(signals)
     }
 
