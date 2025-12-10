@@ -2719,7 +2719,7 @@ impl Worker {
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
         use crate::streaming::OrderBookBatchLoader;
         
-        log_info!(MAIN_LOGGER, "Loading order events for {} on {}", symbol, exchange);
+        log_info!(MAIN_LOGGER, "Loading ALL order events for {} on {}", symbol, exchange);
         
         let pool = self.job_queue.get_pool()
             .ok_or("Database pool not available")?;
@@ -2730,15 +2730,13 @@ impl Worker {
             exchange.to_string(),
         );
         
-        // Load with limit to prevent OOM during genetic optimization
-        // 20K events is enough for meaningful backtesting while staying under memory limits
-        const MAX_EVENTS: usize = 20000;
+        // Load ALL available data - no artificial limits
+        // Memory usage scales with data size, but provides accurate backtesting
+        log_info!(MAIN_LOGGER, "Starting batch load of ALL available data");
         
-        log_info!(MAIN_LOGGER, "Starting batch load with limit {}", MAX_EVENTS);
+        let orders = loader.load_all().await?;
         
-        let orders = loader.load_with_limit(MAX_EVENTS).await?;
-        
-        log_info!(MAIN_LOGGER, "Loaded {} order events", orders.len());
+        log_info!(MAIN_LOGGER, "Loaded {} total events (orders + trades)", orders.len());
         Ok(orders)
     }
     

@@ -318,6 +318,53 @@ impl OrderBookBatchLoader {
         Ok(merged)
     }
     
+    /// Load ALL order events and trades without any limit
+    /// Use this for production backtesting where accuracy matters more than memory
+    pub async fn load_all(
+        &self,
+    ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        // Load ALL order events
+        let mut stream = OrderBookStreamIterator::new(
+            self.pool.clone(),
+            self.symbol.clone(),
+            self.exchange.clone(),
+        );
+        let order_events = stream.load_all().await?;
+        
+        // Load ALL trades
+        let trades = self.load_all_trades().await?;
+        
+        log_info!(MAIN_LOGGER, "Loaded {} order events and {} trades (no limit)", order_events.len(), trades.len());
+        
+        // Merge by timestamp
+        let mut merged = Vec::with_capacity(order_events.len() + trades.len());
+        merged.extend(order_events);
+        merged.extend(trades);
+        
+        // Sort by timestamp
+        merged.sort_by(|a, b| {
+            let ts_a = match a {
+                MarketData::Order(o) => o.timestamp,
+                MarketData::Trade(t) => t.timestamp,
+                MarketData::Candle(c) => c.timestamp,
+                #[cfg(feature = "postgres")]
+                MarketData::Snapshot(s) => s.timestamp,
+            };
+            let ts_b = match b {
+                MarketData::Order(o) => o.timestamp,
+                MarketData::Trade(t) => t.timestamp,
+                MarketData::Candle(c) => c.timestamp,
+                #[cfg(feature = "postgres")]
+                MarketData::Snapshot(s) => s.timestamp,
+            };
+            ts_a.cmp(&ts_b)
+        });
+        
+        log_info!(MAIN_LOGGER, "Total merged events: {} (ALL data)", merged.len());
+
+        Ok(merged)
+    }
+    
     /// Load trade events from trades table
     async fn load_trades(
         &self,
@@ -370,6 +417,80 @@ impl OrderBookBatchLoader {
         ).await
             .map_err(|_| "Query timeout loading trades")?
             .map_err(|e| format!("Failed to load trades: {}", e))?;
+        
+        let trades: Vec<MarketData> = results
+            .into_iter()
+            .map(|row| {
+                MarketData::Trade(TradeData {
+                    timestamp: DateTime::from_naive_utc_and_offset(row.created_at, Utc),
+                    symbol: row.symbol,
+                    exchange: row.exchange,
+                    trade_id: row.trade_id,
+                    side: row.side,
+                    price: row.price,
+                    quantity: row.quantity,
+                })
+            })
+            .collect();
+        
+        Ok(trades)
+    }
+    
+    /// Load ALL trade events without limit
+    async fn load_all_trades(
+        &self,
+    ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        use diesel::sql_types::{Timestamptz, Varchar, Numeric, Uuid as DieselUuid};
+        use dataloader::TradeData;
+        
+        #[derive(QueryableByName)]
+        struct TradeRow {
+            #[diesel(sql_type = Timestamptz)]
+            created_at: NaiveDateTime,
+            #[diesel(sql_type = Varchar)]
+            symbol: String,
+            #[diesel(sql_type = Varchar)]
+            exchange: String,
+            #[diesel(sql_type = Varchar)]
+            trade_id: String,
+            #[diesel(sql_type = DieselUuid)]
+            security_id: Uuid,
+            #[diesel(sql_type = DieselUuid)]
+            exchange_id: Uuid,
+            #[diesel(sql_type = Varchar)]
+            side: String,
+            #[diesel(sql_type = Numeric)]
+            price: BigDecimal,
+            #[diesel(sql_type = Numeric)]
+            quantity: BigDecimal,
+        }
+        
+        let mut conn = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.pool.get()
+        ).await
+            .map_err(|_| "Connection pool timeout loading trades")?
+            .map_err(|e| format!("Failed to get database connection: {}", e))?;
+        
+        // No LIMIT - load ALL trades
+        let query = format!(
+            "SELECT created_at, symbol, exchange, trade_id, security_id, exchange_id, side, price, quantity \
+             FROM trades \
+             WHERE symbol = '{}' AND exchange = '{}' \
+             ORDER BY created_at ASC",
+            self.symbol, self.exchange
+        );
+        
+        log_info!(MAIN_LOGGER, "Loading ALL trades for {} on {}", self.symbol, self.exchange);
+        
+        let results: Vec<TradeRow> = tokio::time::timeout(
+            std::time::Duration::from_secs(120), // Longer timeout for large datasets
+            diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn)
+        ).await
+            .map_err(|_| "Query timeout loading all trades (120s limit)")?
+            .map_err(|e| format!("Failed to load trades: {}", e))?;
+        
+        log_info!(MAIN_LOGGER, "Loaded {} trades", results.len());
         
         let trades: Vec<MarketData> = results
             .into_iter()
