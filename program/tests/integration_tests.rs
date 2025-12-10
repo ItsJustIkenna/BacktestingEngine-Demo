@@ -41,7 +41,7 @@ mod tests {
                 risk_free_rate: 0.02,
                 exchange_fees: None,
                 routing_mode: None,
-                latency_ms: 50,
+                latency_ms: 10,
             },
             data: DataConfig {
                 default_timeframe: "1h".to_string(),
@@ -126,7 +126,7 @@ mod tests {
                 risk_free_rate: 0.02,
                 exchange_fees: None,
                 routing_mode: None,
-                latency_ms: 50,
+                latency_ms: 10,
             },
             data: DataConfig {
                 default_timeframe: "1d".to_string(),
@@ -175,7 +175,7 @@ mod tests {
                 risk_free_rate: 0.025,
                 exchange_fees: None,
                 routing_mode: None,
-                latency_ms: 50,
+                latency_ms: 10,
             },
             data: DataConfig {
                 default_timeframe: "1h".to_string(),

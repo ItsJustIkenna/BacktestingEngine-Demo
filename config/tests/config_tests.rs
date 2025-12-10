@@ -82,7 +82,7 @@ fn test_trading_config_custom() {
         risk_free_rate: 0.02,
         exchange_fees: None,
         routing_mode: None,
-        latency_ms: 50, // Simulated network latency
+        latency_ms: 10, // Simulated network latency (realistic for co-located)
     };
     
     assert_eq!(config.initial_capital, 50000.0);

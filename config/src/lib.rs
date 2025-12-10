@@ -66,7 +66,7 @@ pub struct TradingConfig {
     pub latency_ms: u64,
 }
 
-fn default_latency_ms() -> u64 { 50 }
+fn default_latency_ms() -> u64 { 10 }
 
 /// Routing mode for multi-exchange strategies
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -631,7 +631,7 @@ impl Default for TradingConfig {
             risk_free_rate: 0.02,       // 2%
             exchange_fees: Some(ExchangeFeeConfig::default()), // Kraken at $5M volume
             routing_mode: None,         // Single exchange by default
-            latency_ms: 50,             // 50ms simulated latency
+            latency_ms: 10,             // 10ms simulated latency (realistic for co-located)
         }
     }
 }

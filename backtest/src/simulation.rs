@@ -67,6 +67,10 @@ pub struct SimulationLoop {
     bid_orders_placed: usize,
     ask_orders_placed: usize,
     quote_spreads_bps: Vec<f64>, // spread at time of quote placement
+    // Track latency rejections (orders that would have filled but were too new)
+    latency_rejections: usize,
+    latency_rejections_bid: usize,
+    latency_rejections_ask: usize,
 }
 
 impl SimulationLoop {
@@ -100,6 +104,9 @@ impl SimulationLoop {
             bid_orders_placed: 0,
             ask_orders_placed: 0,
             quote_spreads_bps: Vec::with_capacity(1000),
+            latency_rejections: 0,
+            latency_rejections_bid: 0,
+            latency_rejections_ask: 0,
         }
     }
     
@@ -352,6 +359,10 @@ impl SimulationLoop {
                     let latency_ms = config.trading.latency_ms as i64;
                     let latency_cutoff = trade.timestamp - chrono::Duration::milliseconds(latency_ms);
                     
+                    // Track latency rejections separately for debugging
+                    let mut latency_rejected_bid = 0usize;
+                    let mut latency_rejected_ask = 0usize;
+                    
                     let our_fills: Vec<_> = trade_fills
                         .into_iter()
                         .filter(|fill| {
@@ -362,12 +373,25 @@ impl SimulationLoop {
                             // Latency simulation: order must have been placed before the cutoff
                             // (i.e., order has had time to propagate to exchange)
                             if let Some(tracker) = self.order_trackers.get(&fill.order_id) {
-                                tracker.placed_at <= latency_cutoff
+                                if tracker.placed_at > latency_cutoff {
+                                    // Track latency rejection by side
+                                    match tracker.side {
+                                        orderbook::BookSide::Bid => latency_rejected_bid += 1,
+                                        orderbook::BookSide::Ask => latency_rejected_ask += 1,
+                                    }
+                                    return false;
+                                }
+                                true
                             } else {
                                 false // Can't find tracker, skip this fill
                             }
                         })
                         .collect();
+                    
+                    // Accumulate latency rejections
+                    self.latency_rejections += latency_rejected_bid + latency_rejected_ask;
+                    self.latency_rejections_bid += latency_rejected_bid;
+                    self.latency_rejections_ask += latency_rejected_ask;
                     
                     if debug_count < 10 && !self.active_order_ids.is_empty() {
                         let trade_price = trade.price.to_f64().unwrap_or(0.0);
@@ -383,11 +407,11 @@ impl SimulationLoop {
                             .map(|t| t.price)
                             .reduce(f64::min);
                         log_info!(BACKTEST_LOGGER, 
-                            "TRADE_VS_ORDERS | trade=${:.2} side={} | our_bid=${:.2} our_ask=${:.2} | book_bid=${:.2} book_ask=${:.2} | our_fills={}",
+                            "TRADE_VS_ORDERS | trade=${:.2} side={} | our_bid=${:.2} our_ask=${:.2} | book_bid=${:.2} book_ask=${:.2} | our_fills={} latency_rejected={}",
                             trade_price, trade.side,
                             our_bid.unwrap_or(0.0), our_ask.unwrap_or(0.0),
                             best_bid.unwrap_or(0.0), best_ask.unwrap_or(0.0), 
-                            our_fills.len());
+                            our_fills.len(), latency_rejected_bid + latency_rejected_ask);
                     }
                     
                     // Track fill count for market fills (only our orders)
@@ -500,6 +524,10 @@ impl SimulationLoop {
                     let latency_ms = config.trading.latency_ms as i64;
                     let latency_cutoff = trade.timestamp - chrono::Duration::milliseconds(latency_ms);
                     
+                    // Track latency rejections separately for debugging
+                    let mut latency_rejected_bid = 0usize;
+                    let mut latency_rejected_ask = 0usize;
+                    
                     let our_fills: Vec<_> = trade_fills
                         .into_iter()
                         .filter(|fill| {
@@ -510,12 +538,25 @@ impl SimulationLoop {
                             // Latency simulation: order must have been placed before the cutoff
                             // (i.e., order has had time to propagate to exchange)
                             if let Some(tracker) = self.order_trackers.get(&fill.order_id) {
-                                tracker.placed_at <= latency_cutoff
+                                if tracker.placed_at > latency_cutoff {
+                                    // Track latency rejection by side
+                                    match tracker.side {
+                                        orderbook::BookSide::Bid => latency_rejected_bid += 1,
+                                        orderbook::BookSide::Ask => latency_rejected_ask += 1,
+                                    }
+                                    return false;
+                                }
+                                true
                             } else {
                                 false // Can't find tracker, skip this fill
                             }
                         })
                         .collect();
+                    
+                    // Accumulate latency rejections
+                    self.latency_rejections += latency_rejected_bid + latency_rejected_ask;
+                    self.latency_rejections_bid += latency_rejected_bid;
+                    self.latency_rejections_ask += latency_rejected_ask;
                     
                     if debug_count < 10 && !self.active_order_ids.is_empty() {
                         let trade_price = trade.price.to_f64().unwrap_or(0.0);
@@ -531,11 +572,11 @@ impl SimulationLoop {
                             .map(|t| t.price)
                             .reduce(f64::min);
                         log_info!(BACKTEST_LOGGER, 
-                            "TRADE_VS_ORDERS | trade=${:.2} side={} | our_bid=${:.2} our_ask=${:.2} | book_bid=${:.2} book_ask=${:.2} | our_fills={}",
+                            "TRADE_VS_ORDERS | trade=${:.2} side={} | our_bid=${:.2} our_ask=${:.2} | book_bid=${:.2} book_ask=${:.2} | our_fills={} latency_rejected={}",
                             trade_price, trade.side,
                             our_bid.unwrap_or(0.0), our_ask.unwrap_or(0.0),
                             best_bid.unwrap_or(0.0), best_ask.unwrap_or(0.0), 
-                            our_fills.len());
+                            our_fills.len(), latency_rejected_bid + latency_rejected_ask);
                     }
                     
                     // Track fill count for market fills (only our orders)
@@ -1245,6 +1286,17 @@ impl SimulationLoop {
             orders_placed, orders_filled, self.orders_cancelled, fill_rate * 100.0, cancellation_rate * 100.0);
         log_info!(BACKTEST_LOGGER, "Execution metrics | avg_time_to_fill={:.3}s median={:.3}s bid_fill_rate={:.1}% ask_fill_rate={:.1}%",
             avg_time_to_fill, median_time_to_fill, bid_fill_rate * 100.0, ask_fill_rate * 100.0);
+        
+        // Always log latency simulation settings and rejection stats
+        let total_potential = orders_filled + self.latency_rejections;
+        let rejection_pct = if total_potential > 0 { 
+            self.latency_rejections as f64 / total_potential as f64 * 100.0 
+        } else { 
+            0.0 
+        };
+        log_info!(BACKTEST_LOGGER, "Latency simulation | latency_ms={} rejections={} (bid={} ask={}) rejection_rate={:.1}%",
+            config.trading.latency_ms, self.latency_rejections, 
+            self.latency_rejections_bid, self.latency_rejections_ask, rejection_pct);
         
         // Log inventory metrics summary
         log_info!(BACKTEST_LOGGER, "Inventory metrics | total_volume=${:.2} buy=${:.2} sell=${:.2} turnover/day={:.2} imbalance={:.2}%",
