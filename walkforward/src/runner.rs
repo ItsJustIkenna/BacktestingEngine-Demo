@@ -168,6 +168,7 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
         latency_buffer: best_chromo.latency_buffer,
         inventory_target: best_chromo.inventory_target,
         volatility_cap: best_chromo.volatility_cap,
+        volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start
         time_horizon_minutes: best_chromo.time_horizon_minutes,
         market_depth_k: best_chromo.market_depth_k,
         min_spread_bps: best_chromo.min_spread_bps,
@@ -305,6 +306,7 @@ fn extract_best_parameters_from_walkforward(_wf_summary: &WalkForwardSummary) ->
         latency_buffer: 0.5,
         inventory_target: 0.0,
         volatility_cap: 0.10,
+        volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start
         time_horizon_minutes: 1.0,
         market_depth_k: 1.5,
         min_spread_bps: 20.0,

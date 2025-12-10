@@ -37,6 +37,7 @@ pub async fn avellaneda_stoikov_fitness(
         latency_buffer: chromo.latency_buffer,
         inventory_target: chromo.inventory_target,
         volatility_cap: chromo.volatility_cap,
+        volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start
         time_horizon_minutes: chromo.time_horizon_minutes,
         market_depth_k: chromo.market_depth_k,
         min_spread_bps: chromo.min_spread_bps,

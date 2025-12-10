@@ -1068,6 +1068,7 @@ impl Worker {
                     fee_rate: chr.fee_rate,
                     latency_buffer: chr.latency_buffer,
                     volatility_cap: chr.volatility_cap,
+                    volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start
                     time_horizon_minutes: chr.time_horizon_minutes,
                     market_depth_k: chr.market_depth_k,
                     min_spread_bps: chr.min_spread_bps,
@@ -1496,6 +1497,7 @@ impl Worker {
                             fee_rate: chr.fee_rate,
                             latency_buffer: chr.latency_buffer,
                             volatility_cap: chr.volatility_cap,
+                            volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start
                             time_horizon_minutes: chr.time_horizon_minutes,
                             market_depth_k: chr.market_depth_k,
                             volatility_adjustment_factor: chr.volatility_adjustment_factor,
@@ -2216,6 +2218,7 @@ impl Worker {
             fee_rate: chromosome.fee_rate,
             latency_buffer: chromosome.latency_buffer,
             volatility_cap: chromosome.volatility_cap,
+            volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start
             time_horizon_minutes: chromosome.time_horizon_minutes,
             market_depth_k: chromosome.market_depth_k,
             min_spread_bps: chromosome.min_spread_bps,
@@ -2497,6 +2500,7 @@ impl Worker {
             fee_rate: chromosome.fee_rate,
             latency_buffer: chromosome.latency_buffer,
             volatility_cap: chromosome.volatility_cap,
+            volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start
             time_horizon_minutes: chromosome.time_horizon_minutes,
             market_depth_k: chromosome.market_depth_k,
             volatility_adjustment_factor: chromosome.volatility_adjustment_factor,

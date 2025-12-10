@@ -50,6 +50,7 @@ pub struct AvellanedaStoikovParams {
     pub latency_buffer: f64,        // Price buffer for latency/slippage
     pub inventory_target: f64,      // BASE target inventory (will be adjusted dynamically)
     pub volatility_cap: f64,        // Max allowed volatility (pause quoting above this)
+    pub volatility_floor: f64,      // Min volatility floor (use when EWMA is cold-starting)
     pub time_horizon_minutes: f64,  // t: time horizon for optimization (in minutes)
     pub market_depth_k: f64,        // k: market depth parameter (higher = tighter spread)
     pub min_spread_bps: f64,        // Minimum spread in basis points (to cover costs)
@@ -107,6 +108,7 @@ impl Default for AvellanedaStoikovParams {
             latency_buffer: 0.0001,         // Tiny buffer for slippage (0.01% not 30%!)
             inventory_target: 0.0,
             volatility_cap: 0.50,           // 50% annualized (crypto is volatile)
+            volatility_floor: 0.20,         // 20% annualized floor (use when EWMA cold-starting)
             time_horizon_minutes: 1.0,      // Short horizon for tighter spreads
             market_depth_k: 1.5,            // Higher k = tighter spreads, more fills
             min_spread_bps: 5.0,            // Minimum 5bps spread (reduced from 15 for more fills)
@@ -890,7 +892,11 @@ impl Strategy for AvellanedaStoikovStrategy {
         // Annualize volatility (252 trading days, assuming ~6.5 hour trading sessions for crypto)
         // For millisecond data: sqrt(252 * 24 * 60 * 60 * 1000) for continuous markets
         let annualization_factor = (252.0 * 24.0 * 60.0 * 60.0 * 1000.0 / self.params.window_ms as f64).sqrt();
-        let ann_vol = ewma_stdev * annualization_factor;
+        let ann_vol_raw = ewma_stdev * annualization_factor;
+        
+        // Apply volatility floor - EWMA starts at 0 and takes time to warm up
+        // Without a floor, spread is entirely driven by liquidity term (fee+latency)
+        let ann_vol = ann_vol_raw.max(self.params.volatility_floor);
 
         // 3. Pause quoting if volatility is too high
         if ann_vol > self.params.volatility_cap {
