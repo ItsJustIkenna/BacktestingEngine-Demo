@@ -993,6 +993,7 @@ impl Worker {
         let data_for_final = Arc::new(data); // Full data for final backtest
         let symbol = params.symbol.clone();
         let exchange = params.exchange.clone();
+        let exchange_for_logging = exchange.clone(); // Clone for use after the closure
         let initial_capital = params.initial_capital;
         let commission_rate = params.commission_rate;
         
@@ -1055,6 +1056,10 @@ impl Worker {
                 log_debug!(GENETIC_LOGGER, "Order size calc | capital=${:.0} order_size_pct={:.2}% asset_price=${:.2} => order_size={:.6} units = ${:.2}",
                     initial_capital, chr.order_size_pct * 100.0, asset_price, order_size_units, order_size_usd);
                 
+                // Get actual exchange maker fee instead of chromosome fee_rate
+                let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&exchange);
+                let maker_fee = exchange_fee_config.maker_fee;
+                
                 // Create strategy with ALL chromosome parameters (fixing incomplete mapping)
                 let strategy_params = AvellanedaStoikovParams {
                     risk_aversion: chr.risk_aversion,
@@ -1065,8 +1070,8 @@ impl Worker {
                     initial_inventory_pct: 0.5,  // 50% of capital as base asset for market making
                     window_ms: chr.window_ms,
                     min_quote_lifetime_ms: chr.min_quote_lifetime_ms,
-                    fee_rate: chr.fee_rate,
-                    latency_buffer: chr.latency_buffer,
+                    fee_rate: maker_fee,  // Use actual exchange maker fee, not chromosome
+                    // latency_buffer removed - latency simulated in order matching
                     volatility_cap: chr.volatility_cap,
                     volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start
                     time_horizon_minutes: chr.time_horizon_minutes,
@@ -1080,11 +1085,11 @@ impl Worker {
                     trend_sensitivity: chr.trend_sensitivity,
                     flow_sensitivity: chr.flow_sensitivity,
                     
-                    // Phase 3: Dynamic k parameters
+                    // Phase 3: Dynamic k parameters (k divides liquidity term)
                     k_volatility_sensitivity: 0.3,
                     k_flow_sensitivity: 0.2,
-                    k_min: 0.5,
-                    k_max: 3.0,
+                    k_min: 1.0,   // Floor for liquid markets
+                    k_max: 50.0,  // GA can explore tight spreads
                     
                     // Phase 4: Dynamic time horizon parameters
                     time_horizon_vol_sensitivity: 0.5,
@@ -1116,7 +1121,7 @@ impl Worker {
                 strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(order_size_units));
                 strategy_params_map.insert("order_size_pct".to_string(), config::ParameterValue::Float(chr.order_size_pct));
                 strategy_params_map.insert("window_ms".to_string(), config::ParameterValue::Float(chr.window_ms as f64));
-                strategy_params_map.insert("fee_rate".to_string(), config::ParameterValue::Float(chr.fee_rate));
+                strategy_params_map.insert("fee_rate".to_string(), config::ParameterValue::Float(maker_fee));  // Use exchange fee
                 strategy_params_map.insert("volatility_cap".to_string(), config::ParameterValue::Float(chr.volatility_cap));
                 
                 let strategy_config = StrategyConfig {
@@ -1202,16 +1207,17 @@ impl Worker {
             job.id, best_fitness, best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size_pct * 100.0);
         
         // Log ALL chromosome parameters for debugging unprofitable strategies
+        // Note: fee_rate is now from exchange config, not chromosome
+        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&exchange_for_logging);
         log_info!(MAIN_LOGGER, 
-            r#"{{"event": "STRATEGY_PARAMS", "job_id": "{}", "best_fitness": {:.6}, "params": {{"risk_aversion": {:.4}, "order_size_pct": {:.4}, "window_ms": {}, "min_quote_lifetime_ms": {}, "fee_rate": {:.6}, "latency_buffer": {:.2}, "inventory_target": {:.4}, "volatility_cap": {:.4}, "time_horizon_min": {:.2}, "market_depth_k": {:.2}, "min_spread_bps": {:.1}, "max_trades_per_min": {:.2}, "take_profit_pct": {:.4}, "stop_loss_pct": {:.4}, "vol_adj_factor": {:.2}, "inv_penalty_factor": {:.2}, "trend_sensitivity": {:.3}, "flow_sensitivity": {:.3}}}}}"#,
+            r#"{{"event": "STRATEGY_PARAMS", "job_id": "{}", "best_fitness": {:.6}, "exchange_maker_fee": {:.4}, "params": {{"risk_aversion": {:.4}, "order_size_pct": {:.4}, "window_ms": {}, "min_quote_lifetime_ms": {}, "inventory_target": {:.4}, "volatility_cap": {:.4}, "time_horizon_min": {:.2}, "market_depth_k": {:.2}, "min_spread_bps": {:.1}, "max_trades_per_min": {:.2}, "take_profit_pct": {:.4}, "stop_loss_pct": {:.4}, "vol_adj_factor": {:.2}, "inv_penalty_factor": {:.2}, "trend_sensitivity": {:.3}, "flow_sensitivity": {:.3}}}}}"#,
             job.id,
             best_fitness,
+            exchange_fee_config.maker_fee * 100.0,  // Convert to bps for logging
             best_chromosome.risk_aversion,
             best_chromosome.order_size_pct,
             best_chromosome.window_ms,
             best_chromosome.min_quote_lifetime_ms,
-            best_chromosome.fee_rate,
-            best_chromosome.latency_buffer,
             best_chromosome.inventory_target,
             best_chromosome.volatility_cap,
             best_chromosome.time_horizon_minutes,
@@ -1485,6 +1491,10 @@ impl Worker {
                         let asset_price = Self::get_reference_price(&data);
                         let order_size_units = (initial_capital * chr.order_size_pct) / asset_price;
                         
+                        // Get actual exchange maker fee
+                        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&exchange);
+                        let maker_fee = exchange_fee_config.maker_fee;
+                        
                         let strategy_params = AvellanedaStoikovParams {
                             risk_aversion: chr.risk_aversion,
                             inventory_target: chr.inventory_target,
@@ -1494,8 +1504,8 @@ impl Worker {
                             initial_inventory_pct: 0.5,  // 50% of capital as base asset for market making
                             window_ms: chr.window_ms,
                             min_quote_lifetime_ms: chr.min_quote_lifetime_ms,
-                            fee_rate: chr.fee_rate,
-                            latency_buffer: chr.latency_buffer,
+                            fee_rate: maker_fee,  // Use actual exchange maker fee
+                            // latency_buffer removed - latency simulated in order matching
                             volatility_cap: chr.volatility_cap,
                             volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start
                             time_horizon_minutes: chr.time_horizon_minutes,
@@ -1509,11 +1519,11 @@ impl Worker {
                             min_spread_bps: chr.min_spread_bps,
                             max_trades_per_minute: chr.max_trades_per_minute,
                             
-                            // Phase 3: Dynamic k parameters
+                            // Phase 3: Dynamic k parameters (k divides liquidity term)
                             k_volatility_sensitivity: 0.3,
                             k_flow_sensitivity: 0.2,
-                            k_min: 0.5,
-                            k_max: 3.0,
+                            k_min: 1.0,   // Floor for liquid markets
+                            k_max: 50.0,  // GA can explore tight spreads
                             
                             // Phase 4: Dynamic time horizon parameters
                             time_horizon_vol_sensitivity: 0.5,
@@ -2204,6 +2214,10 @@ impl Worker {
         // Calculate order_size in asset units from percentage of capital
         let order_size_units = (initial_capital * chromosome.order_size_pct) / asset_price;
         
+        // Get actual exchange maker fee
+        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(exchange);
+        let maker_fee = exchange_fee_config.maker_fee;
+        
         // IMPORTANT: Explicitly set ALL parameters including order_size_pct and initial_capital
         // Using ..Default::default() would use wrong initial_capital ($100K instead of job's capital)
         let strategy_params = AvellanedaStoikovParams {
@@ -2215,8 +2229,8 @@ impl Worker {
             initial_inventory_pct: 0.5,  // 50% of capital as base asset for market making
             window_ms: chromosome.window_ms,
             min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms,
-            fee_rate: chromosome.fee_rate,
-            latency_buffer: chromosome.latency_buffer,
+            fee_rate: maker_fee,  // Use actual exchange maker fee, not chromosome
+            // latency_buffer removed - latency simulated in order matching
             volatility_cap: chromosome.volatility_cap,
             volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start
             time_horizon_minutes: chromosome.time_horizon_minutes,
@@ -2230,11 +2244,11 @@ impl Worker {
             trend_sensitivity: chromosome.trend_sensitivity,
             flow_sensitivity: chromosome.flow_sensitivity,
             
-            // Phase 3: Dynamic k parameters
+            // Phase 3: Dynamic k parameters (k divides liquidity term)
             k_volatility_sensitivity: 0.3,
             k_flow_sensitivity: 0.2,
-            k_min: 0.5,
-            k_max: 3.0,
+            k_min: 1.0,   // Floor for liquid markets
+            k_max: 50.0,  // GA can explore tight spreads
             
             // Phase 4: Dynamic time horizon parameters
             time_horizon_vol_sensitivity: 0.5,
@@ -2488,6 +2502,10 @@ impl Worker {
         // Calculate order_size in asset units from percentage of capital
         let order_size_units = (initial_capital * chromosome.order_size_pct) / asset_price;
         
+        // Get actual exchange maker fee
+        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(exchange);
+        let maker_fee = exchange_fee_config.maker_fee;
+        
         let strategy_params = AvellanedaStoikovParams {
             risk_aversion: chromosome.risk_aversion,
             inventory_target: chromosome.inventory_target,
@@ -2497,8 +2515,8 @@ impl Worker {
             initial_inventory_pct: 0.5,  // 50% of capital as base asset for market making
             window_ms: chromosome.window_ms,
             min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms,
-            fee_rate: chromosome.fee_rate,
-            latency_buffer: chromosome.latency_buffer,
+            fee_rate: maker_fee,  // Use actual exchange maker fee
+            // latency_buffer removed - latency simulated in order matching
             volatility_cap: chromosome.volatility_cap,
             volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start
             time_horizon_minutes: chromosome.time_horizon_minutes,
@@ -2512,11 +2530,11 @@ impl Worker {
             min_spread_bps: chromosome.min_spread_bps,
             max_trades_per_minute: chromosome.max_trades_per_minute,
             
-            // Phase 3: Dynamic k parameters
+            // Phase 3: Dynamic k parameters (k divides liquidity term)
             k_volatility_sensitivity: 0.3,
             k_flow_sensitivity: 0.2,
-            k_min: 0.5,
-            k_max: 3.0,
+            k_min: 1.0,   // Floor for liquid markets
+            k_max: 50.0,  // GA can explore tight spreads
             
             // Phase 4: Dynamic time horizon parameters
             time_horizon_vol_sensitivity: 0.5,

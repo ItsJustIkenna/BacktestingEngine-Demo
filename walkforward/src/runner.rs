@@ -67,8 +67,6 @@ pub async fn run_walkforward_analysis(
                     "order_size": best_params.order_size,
                     "window_ms": best_params.window_ms,
                     "min_quote_lifetime_ms": best_params.min_quote_lifetime_ms,
-                    "fee_rate": best_params.fee_rate,
-                    "latency_buffer": best_params.latency_buffer,
                     "inventory_target": best_params.inventory_target,
                     "volatility_cap": best_params.volatility_cap,
                 }),
@@ -156,6 +154,10 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
     // The actual conversion happens in the worker with real capital/price
     let order_size_units = best_chromo.order_size_pct * 0.1; // Approximate for walkforward
     
+    // Get exchange maker fee from config (use kraken as default for walk-forward)
+    let exchange_fee_config = config::ExchangeFeeConfig::for_exchange("kraken");
+    let maker_fee = exchange_fee_config.maker_fee;
+    
     AvellanedaStoikovParams {
         risk_aversion: best_chromo.risk_aversion,
         order_size: order_size_units,
@@ -164,8 +166,7 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
         initial_inventory_pct: 0.5, // 50% of capital as base asset for market making
         window_ms: best_chromo.window_ms,
         min_quote_lifetime_ms: best_chromo.min_quote_lifetime_ms,
-        fee_rate: best_chromo.fee_rate,
-        latency_buffer: best_chromo.latency_buffer,
+        fee_rate: maker_fee,  // Use actual exchange maker fee, not chromosome
         inventory_target: best_chromo.inventory_target,
         volatility_cap: best_chromo.volatility_cap,
         volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start
@@ -185,8 +186,8 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
         // Phase 3: Dynamic k parameters
         k_volatility_sensitivity: 0.3,
         k_flow_sensitivity: 0.2,
-        k_min: 0.5,
-        k_max: 3.0,
+        k_min: 1.0,
+        k_max: 50.0,
         
         // Phase 4: Dynamic time horizon parameters
         time_horizon_vol_sensitivity: 0.5,
@@ -224,6 +225,7 @@ async fn run_backtest_with_params(_test_data: &[MarketData], params: &Avellaneda
     param_map.insert("risk_aversion".to_string(), config::ParameterValue::Float(params.risk_aversion));
     param_map.insert("order_size".to_string(), config::ParameterValue::Float(params.order_size));
     param_map.insert("inventory_target".to_string(), config::ParameterValue::Float(params.inventory_target));
+    // fee_rate comes from params (which was set from exchange config, not chromosome)
     param_map.insert("fee_rate".to_string(), config::ParameterValue::Float(params.fee_rate));
     let _ = strategy.initialize(param_map).await;
 
@@ -294,6 +296,10 @@ pub async fn run_walkforward_with_auto_export(
 fn extract_best_parameters_from_walkforward(_wf_summary: &WalkForwardSummary) -> AvellanedaStoikovParams {
     // Find window with highest Sharpe ratio
     // For now, using default parameters - in a real implementation you'd parse the JSON from best window
+    // Get exchange maker fee from config
+    let exchange_fee_config = config::ExchangeFeeConfig::for_exchange("kraken");
+    let maker_fee = exchange_fee_config.maker_fee;
+    
     AvellanedaStoikovParams {
         risk_aversion: 0.1,
         order_size: 1000.0,
@@ -302,8 +308,7 @@ fn extract_best_parameters_from_walkforward(_wf_summary: &WalkForwardSummary) ->
         initial_inventory_pct: 0.5, // 50% of capital as base asset for market making
         window_ms: 60000,
         min_quote_lifetime_ms: 1000,
-        fee_rate: 0.0005,
-        latency_buffer: 0.5,
+        fee_rate: maker_fee,  // Use actual exchange maker fee
         inventory_target: 0.0,
         volatility_cap: 0.10,
         volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start
@@ -323,8 +328,8 @@ fn extract_best_parameters_from_walkforward(_wf_summary: &WalkForwardSummary) ->
         // Phase 3: Dynamic k parameters
         k_volatility_sensitivity: 0.3,
         k_flow_sensitivity: 0.2,
-        k_min: 0.5,
-        k_max: 3.0,
+        k_min: 1.0,
+        k_max: 50.0,
         
         // Phase 4: Dynamic time horizon parameters
         time_horizon_vol_sensitivity: 0.5,

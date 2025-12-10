@@ -410,6 +410,10 @@ impl BacktestEngine {
                 let mut temp_risk_manager = riskmanager::RiskManager::new();
                 
                 // Create strategy with chromosome parameters (including Phase 2 dynamic params)
+                // Get exchange maker fee from config
+                let exchange_fee_config = config::ExchangeFeeConfig::for_exchange("kraken");
+                let maker_fee = exchange_fee_config.maker_fee;
+                
                 let strategy = strategy::strategies::avellaneda_stoikov::AvellanedaStoikovStrategy::new(
                     strategy::strategies::avellaneda_stoikov::AvellanedaStoikovParams {
                         risk_aversion: chromo.risk_aversion,
@@ -419,8 +423,7 @@ impl BacktestEngine {
                         initial_inventory_pct: 0.5, // 50% of capital as base asset for market making
                         window_ms: chromo.window_ms,
                         min_quote_lifetime_ms: chromo.min_quote_lifetime_ms,
-                        fee_rate: chromo.fee_rate,
-                        latency_buffer: chromo.latency_buffer,
+                        fee_rate: maker_fee,  // Use actual exchange maker fee, not chromosome
                         inventory_target: chromo.inventory_target,
                         volatility_cap: chromo.volatility_cap,
                         volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start
@@ -437,11 +440,11 @@ impl BacktestEngine {
                         trend_sensitivity: chromo.trend_sensitivity,
                         flow_sensitivity: chromo.flow_sensitivity,
                         
-                        // Phase 3: Dynamic k parameters (use defaults)
+                        // Phase 3: Dynamic k parameters (k divides liquidity term)
                         k_volatility_sensitivity: 0.3,
                         k_flow_sensitivity: 0.2,
-                        k_min: 0.5,
-                        k_max: 3.0,
+                        k_min: 1.0,   // Increased from 0.5 for tighter spreads
+                        k_max: 50.0,  // Increased for liquid markets - GA can explore tight spreads
                         
                         // Phase 4: Dynamic time horizon parameters
                         time_horizon_vol_sensitivity: 0.5,
@@ -624,14 +627,17 @@ impl BacktestEngine {
         
         // Convert chromosome to parameter map (Phase 2: all 14 parameters)
         // Note: order_size is stored in asset units, converted from percentage
+        // Get exchange maker fee from config for consistent fee handling
+        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange("kraken");
+        let maker_fee = exchange_fee_config.maker_fee;
+        
         let mut params = std::collections::HashMap::new();
         params.insert("risk_aversion".to_string(), config::ParameterValue::Float(best_chromo.risk_aversion));
         params.insert("order_size".to_string(), config::ParameterValue::Float(order_size_units));
         params.insert("order_size_pct".to_string(), config::ParameterValue::Float(best_chromo.order_size_pct));
         params.insert("window_ms".to_string(), config::ParameterValue::Float(best_chromo.window_ms as f64));
         params.insert("min_quote_lifetime_ms".to_string(), config::ParameterValue::Float(best_chromo.min_quote_lifetime_ms as f64));
-        params.insert("fee_rate".to_string(), config::ParameterValue::Float(best_chromo.fee_rate));
-        params.insert("latency_buffer".to_string(), config::ParameterValue::Float(best_chromo.latency_buffer));
+        params.insert("fee_rate".to_string(), config::ParameterValue::Float(maker_fee));  // Use exchange fee
         params.insert("inventory_target".to_string(), config::ParameterValue::Float(best_chromo.inventory_target));
         params.insert("volatility_cap".to_string(), config::ParameterValue::Float(best_chromo.volatility_cap));
         params.insert("time_horizon_minutes".to_string(), config::ParameterValue::Float(best_chromo.time_horizon_minutes));

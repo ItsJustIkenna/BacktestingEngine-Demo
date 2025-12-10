@@ -9,8 +9,8 @@ pub struct AvellanedaStoikovChromosome {
     pub order_size_pct: f64,  // Order size as percentage of capital (0.01 = 1%)
     pub window_ms: u64,
     pub min_quote_lifetime_ms: u64,
-    pub fee_rate: f64,
-    pub latency_buffer: f64,
+    // fee_rate removed - use exchange config instead
+    // latency_buffer removed - latency now simulated in order matching
     pub inventory_target: f64,
     pub volatility_cap: f64,
     pub time_horizon_minutes: f64,
@@ -49,13 +49,8 @@ impl Chromosome for AvellanedaStoikovChromosome {
             // Fast for HFT, slow for less active markets
             min_quote_lifetime_ms: rng.gen_range(10..60_000),
             
-            // Expected fee rate for spread calculation (informational)
-            // 0.1 bps (institutional) to 50 bps (retail altcoin exchanges)
-            fee_rate: rng.gen_range(0.00001..0.005),
-            
-            // Latency buffer for slippage adjustment (as fraction)
-            // 0.001% to 0.1% - very small buffer for price adjustment
-            latency_buffer: rng.gen_range(0.00001..0.001),
+            // fee_rate removed - use exchange maker fee from config instead
+            // latency_buffer removed - latency now simulated in order matching
             
             // Target inventory position (-1 = short bias, 0 = neutral, +1 = long bias)
             inventory_target: rng.gen_range(-1.0..1.0),
@@ -67,9 +62,11 @@ impl Chromosome for AvellanedaStoikovChromosome {
             // Short for scalping, long for position trading
             time_horizon_minutes: rng.gen_range(0.167..60.0),
             
-            // Market depth parameter (higher = tighter spreads)
-            // Low for illiquid markets, high for liquid markets
-            market_depth_k: rng.gen_range(0.1..10.0),
+            // Market depth parameter k (higher = tighter spreads, divides liquidity term)
+            // For liquid markets like BTC/USD, k should be 1-50
+            // Low k (1.0) = wider spreads; High k (50) = very tight spreads
+            // Range 1.0-50.0 for liquid crypto markets
+            market_depth_k: rng.gen_range(1.0..50.0),
             
             // Phase 2: Dynamic adjustment parameters
             volatility_adjustment_factor: rng.gen_range(0.0..2.0),  // 0-200% vol adjustment
@@ -84,9 +81,9 @@ impl Chromosome for AvellanedaStoikovChromosome {
             stop_loss_pct: rng.gen_range(0.0005..0.05),
             
             // Minimum spread in basis points
-            // 1 bps (HFT on liquid markets) to 30 bps (retail exchanges)
-            // Reduced from 200 - spreads > 30 bps rarely get fills
-            min_spread_bps: rng.gen_range(1.0..30.0),
+            // 1 bps (HFT on liquid markets) to 15 bps (less liquid)
+            // Reduced further - spreads > 15 bps rarely get fills on liquid markets
+            min_spread_bps: rng.gen_range(1.0..15.0),
             
             // Trade frequency: 0.01 to 60 trades per minute
             // 0.01 = 1 trade per 100 minutes (swing), 60 = 1 trade per second (HFT)
@@ -100,8 +97,8 @@ impl Chromosome for AvellanedaStoikovChromosome {
             order_size_pct: if rng.gen_bool(0.5) { self.order_size_pct } else { other.order_size_pct },
             window_ms: if rng.gen_bool(0.5) { self.window_ms } else { other.window_ms },
             min_quote_lifetime_ms: if rng.gen_bool(0.5) { self.min_quote_lifetime_ms } else { other.min_quote_lifetime_ms },
-            fee_rate: if rng.gen_bool(0.5) { self.fee_rate } else { other.fee_rate },
-            latency_buffer: if rng.gen_bool(0.5) { self.latency_buffer } else { other.latency_buffer },
+            // fee_rate removed - use exchange config
+            // latency_buffer removed - latency now simulated in order matching
             inventory_target: if rng.gen_bool(0.5) { self.inventory_target } else { other.inventory_target },
             volatility_cap: if rng.gen_bool(0.5) { self.volatility_cap } else { other.volatility_cap },
             time_horizon_minutes: if rng.gen_bool(0.5) { self.time_horizon_minutes } else { other.time_horizon_minutes },
@@ -142,16 +139,8 @@ impl Chromosome for AvellanedaStoikovChromosome {
             let factor = rng.gen_range(0.5..2.0);
             self.min_quote_lifetime_ms = ((self.min_quote_lifetime_ms as f64 * factor) as u64).clamp(10, 60_000);
         }
-        // Fee rate: range 0.001-50 bps
-        if rng.gen_bool(mutation_rate) {
-            self.fee_rate *= rng.gen_range(0.5..2.0);
-            self.fee_rate = self.fee_rate.clamp(0.00001, 0.005);
-        }
-        // Latency buffer: range 0.00001-0.001 (tiny slippage buffer)
-        if rng.gen_bool(mutation_rate) {
-            self.latency_buffer *= rng.gen_range(0.5..2.0);
-            self.latency_buffer = self.latency_buffer.clamp(0.00001, 0.001);
-        }
+        // fee_rate removed - use exchange config
+        // latency_buffer removed - latency now simulated in order matching
         // Inventory target: range -1.0 to 1.0
         if rng.gen_bool(mutation_rate) {
             self.inventory_target += rng.gen_range(-0.3..0.3);
@@ -167,10 +156,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.time_horizon_minutes *= rng.gen_range(0.5..2.0);
             self.time_horizon_minutes = self.time_horizon_minutes.clamp(0.167, 60.0);
         }
-        // Market depth: range 0.1-10.0
+        // Market depth: range 1.0-50.0
         if rng.gen_bool(mutation_rate) {
-            self.market_depth_k += rng.gen_range(-1.0..1.0);
-            self.market_depth_k = self.market_depth_k.clamp(0.1, 10.0);
+            self.market_depth_k += rng.gen_range(-5.0..5.0);
+            self.market_depth_k = self.market_depth_k.clamp(1.0, 50.0);
         }
         
         // Phase 2: Mutate dynamic adjustment parameters
@@ -200,10 +189,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.stop_loss_pct *= rng.gen_range(0.5..2.0);
             self.stop_loss_pct = self.stop_loss_pct.clamp(0.0005, 0.05);
         }
-        // Min spread: range 1-30 bps (tighter for fills)
+        // Min spread: range 1-15 bps (tight for fills)
         if rng.gen_bool(mutation_rate) {
             self.min_spread_bps *= rng.gen_range(0.5..2.0);
-            self.min_spread_bps = self.min_spread_bps.clamp(1.0, 30.0);
+            self.min_spread_bps = self.min_spread_bps.clamp(1.0, 15.0);
         }
         // Trade frequency: range 0.01-60 trades/min
         if rng.gen_bool(mutation_rate) {
@@ -221,12 +210,12 @@ impl Chromosome for AvellanedaStoikovChromosome {
         let d_size = ((self.order_size_pct.ln() - other.order_size_pct.ln()).abs()) / (0.05_f64.ln() - 0.005_f64.ln()).abs();
         let d_window = ((self.window_ms as f64).ln() - (other.window_ms as f64).ln()).abs() / (1_800_000_f64.ln() - 1_000_f64.ln()).abs();
         let d_lifetime = ((self.min_quote_lifetime_ms as f64).ln() - (other.min_quote_lifetime_ms as f64).ln()).abs() / (60_000_f64.ln() - 10_f64.ln()).abs();
-        let d_fee = ((self.fee_rate.ln() - other.fee_rate.ln()).abs()) / (0.005_f64.ln() - 0.00001_f64.ln()).abs();
-        let d_latency = (self.latency_buffer - other.latency_buffer).abs() / 0.00099; // Range: 0.00001-0.001
+        // d_fee removed - fee_rate is not in chromosome
+        // d_latency removed - latency_buffer is not in chromosome
         let d_inventory = (self.inventory_target - other.inventory_target).abs() / 2.0; // Range: -1.0 to 1.0
         let d_vol_cap = (self.volatility_cap - other.volatility_cap).abs() / 4.95; // Range: 0.05-5.0
         let d_horizon = ((self.time_horizon_minutes.ln() - other.time_horizon_minutes.ln()).abs()) / (60.0_f64.ln() - 0.167_f64.ln()).abs();
-        let d_depth = (self.market_depth_k - other.market_depth_k).abs() / 9.9; // Range: 0.1-10.0
+        let d_depth = (self.market_depth_k - other.market_depth_k).abs() / 49.0; // Range: 1.0-50.0
         
         // Phase 2: Dynamic parameter distances
         let d_vol_adj = (self.volatility_adjustment_factor - other.volatility_adjustment_factor).abs() / 2.0; // Range: 0-2.0
@@ -240,9 +229,9 @@ impl Chromosome for AvellanedaStoikovChromosome {
         let d_spread = ((self.min_spread_bps.ln() - other.min_spread_bps.ln()).abs()) / (200.0_f64.ln() - 1.0_f64.ln()).abs();
         let d_trades = ((self.max_trades_per_minute.ln() - other.max_trades_per_minute.ln()).abs()) / (60.0_f64.ln() - 0.01_f64.ln()).abs();
         
-        // Euclidean distance in 18D normalized space
+        // Euclidean distance in 16D normalized space (was 18D with fee_rate and latency_buffer)
         (d_risk.powi(2) + d_size.powi(2) + d_window.powi(2) + d_lifetime.powi(2) + 
-         d_fee.powi(2) + d_latency.powi(2) + d_inventory.powi(2) + d_vol_cap.powi(2) +
+         d_inventory.powi(2) + d_vol_cap.powi(2) +
          d_horizon.powi(2) + d_depth.powi(2) + d_vol_adj.powi(2) + d_inv_penalty.powi(2) +
          d_trend.powi(2) + d_flow.powi(2) + d_tp.powi(2) + d_sl.powi(2) +
          d_spread.powi(2) + d_trades.powi(2)).sqrt()

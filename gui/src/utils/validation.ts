@@ -166,7 +166,6 @@ export function validateBacktestParams(params: any): {
       { name: 'window_ms', min: 100, max: 60000 },
       { name: 'min_quote_lifetime_ms', min: 10, max: 10000 },
       { name: 'fee_rate', min: 0, max: 0.1 },
-      { name: 'latency_buffer', min: 0, max: 1000 },
       { name: 'volatility_cap', min: 0.001, max: 1 },
       { name: 'time_horizon_minutes', min: 1, max: 1440 },
       { name: 'market_depth_k', min: 0.1, max: 10 },

@@ -59,7 +59,14 @@ pub struct TradingConfig {
     pub risk_free_rate: f64,       // for Sharpe ratio calculation
     pub exchange_fees: Option<ExchangeFeeConfig>, // Maker/taker fee configuration
     pub routing_mode: Option<RoutingMode>, // Multi-exchange routing configuration
+    /// Simulated network/exchange latency in milliseconds
+    /// Orders placed within this time window of a trade won't be filled
+    /// This simulates realistic order propagation delay (default: 50ms)
+    #[serde(default = "default_latency_ms")]
+    pub latency_ms: u64,
 }
+
+fn default_latency_ms() -> u64 { 50 }
 
 /// Routing mode for multi-exchange strategies
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -624,6 +631,7 @@ impl Default for TradingConfig {
             risk_free_rate: 0.02,       // 2%
             exchange_fees: Some(ExchangeFeeConfig::default()), // Kraken at $5M volume
             routing_mode: None,         // Single exchange by default
+            latency_ms: 50,             // 50ms simulated latency
         }
     }
 }

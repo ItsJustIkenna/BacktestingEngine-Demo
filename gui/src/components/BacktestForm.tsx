@@ -31,7 +31,6 @@ interface BacktestFormData {
   window_ms: number;
   min_quote_lifetime_ms: number;
   fee_rate: number;
-  latency_buffer: number;
   volatility_cap: number;
   time_horizon_minutes: number;
   market_depth_k: number;
@@ -78,7 +77,6 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     window_ms: 5000,
     min_quote_lifetime_ms: 100,
     fee_rate: 0.001,
-    latency_buffer: 10,
     volatility_cap: 0.05,
     time_horizon_minutes: 60,
     market_depth_k: 1.5,
@@ -182,7 +180,6 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
         params.window_ms = formData.window_ms;
         params.min_quote_lifetime_ms = formData.min_quote_lifetime_ms;
         params.fee_rate = formData.fee_rate;
-        params.latency_buffer = formData.latency_buffer;
         params.volatility_cap = formData.volatility_cap;
         params.time_horizon_minutes = formData.time_horizon_minutes;
         params.market_depth_k = formData.market_depth_k;
@@ -731,22 +728,7 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
               </div>
 
               <div style={{ marginBottom: '15px' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px' }}>
-                  <div>
-                    <label htmlFor="latency_buffer" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
-                      Latency Buffer (ms)
-                    </label>
-                    <input
-                      type="number"
-                      id="latency_buffer"
-                      name="latency_buffer"
-                      value={formData.latency_buffer}
-                      onChange={handleChange}
-                      step="1"
-                      min="0"
-                      style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                    />
-                  </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
                   <div>
                     <label htmlFor="volatility_cap" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
                       Volatility Cap

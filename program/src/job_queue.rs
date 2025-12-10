@@ -61,8 +61,6 @@ pub struct BacktestJobParams {
     pub min_quote_lifetime_ms: u64,
     #[serde(default)]
     pub fee_rate: f64, // Will be auto-populated from exchange
-    #[serde(default = "default_latency_buffer")]
-    pub latency_buffer: u64,
     #[serde(default = "default_volatility_cap")]
     pub volatility_cap: f64,
     #[serde(default = "default_time_horizon")]
@@ -139,7 +137,6 @@ fn default_order_size() -> f64 { 0.01 }
 fn default_order_size_pct() -> f64 { 0.02 }  // 2% of capital per trade
 fn default_window_ms() -> u64 { 5000 }
 fn default_min_quote_lifetime() -> u64 { 100 }
-fn default_latency_buffer() -> u64 { 10 }
 fn default_volatility_cap() -> f64 { 0.05 }
 fn default_time_horizon() -> u64 { 60 }
 fn default_market_depth_k() -> f64 { 1.5 }
@@ -181,7 +178,6 @@ impl Default for BacktestJobParams {
             window_ms: default_window_ms(),
             min_quote_lifetime_ms: default_min_quote_lifetime(),
             fee_rate: 0.0,
-            latency_buffer: default_latency_buffer(),
             volatility_cap: default_volatility_cap(),
             time_horizon_minutes: default_time_horizon(),
             market_depth_k: default_market_depth_k(),

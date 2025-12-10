@@ -47,7 +47,7 @@ pub struct AvellanedaStoikovParams {
     pub window_ms: u64,             // Rolling window for volatility estimation (milliseconds)
     pub min_quote_lifetime_ms: u64, // Minimum quote lifetime (milliseconds)
     pub fee_rate: f64,              // Exchange taker/maker fee (fraction)
-    pub latency_buffer: f64,        // Price buffer for latency/slippage
+    // latency_buffer removed - latency now simulated in order matching via config.trading.latency_ms
     pub inventory_target: f64,      // BASE target inventory (will be adjusted dynamically)
     pub volatility_cap: f64,        // Max allowed volatility (pause quoting above this)
     pub volatility_floor: f64,      // Min volatility floor (use when EWMA is cold-starting)
@@ -105,7 +105,7 @@ impl Default for AvellanedaStoikovParams {
             window_ms: 60_000, // 60 seconds
             min_quote_lifetime_ms: 500,     // 500ms quote lifetime for responsive market making
             fee_rate: 0.0003,               // 3bps maker fee (typical for high-volume)
-            latency_buffer: 0.0001,         // Tiny buffer for slippage (0.01% not 30%!)
+            // latency_buffer removed - latency simulated in order matching
             inventory_target: 0.0,
             volatility_cap: 0.50,           // 50% annualized (crypto is volatile)
             volatility_floor: 0.20,         // 20% annualized floor (use when EWMA cold-starting)
@@ -122,11 +122,11 @@ impl Default for AvellanedaStoikovParams {
             trend_sensitivity: 0.2,             // Moderate trend following
             flow_sensitivity: -0.1,             // Moderate fade
             
-            // Phase 3: Dynamic k defaults
+            // Phase 3: Dynamic k defaults (k divides liquidity term, so higher = tighter spreads)
             k_volatility_sensitivity: 0.3,      // Reduce k by 30% per vol ratio increase
             k_flow_sensitivity: 0.2,            // Adjust k by 20% based on flow imbalance
-            k_min: 0.5,                         // Minimum k (widest spread)
-            k_max: 3.0,                         // Maximum k (tightest spread)
+            k_min: 1.0,                         // Minimum k (widest spread) - was 0.5
+            k_max: 50.0,                        // Maximum k (tightest spread) - GA can explore up to 50
             
             // Phase 4: Dynamic time horizon defaults
             time_horizon_vol_sensitivity: 0.5,  // Increase t by 50% per vol ratio
@@ -137,7 +137,7 @@ impl Default for AvellanedaStoikovParams {
             min_spread_vol_sensitivity: 0.3,    // Increase min spread 30% per vol ratio
             min_spread_flow_sensitivity: 0.2,   // Increase 20% on one-sided flow
             min_spread_min_bps: 1.0,            // Absolute floor of 1 bps (tight for liquid markets)
-            min_spread_max_bps: 20.0,           // Cap at 20 bps (was 50 - too wide for fills)
+            min_spread_max_bps: 10.0,           // Cap at 10 bps (tight for fills)
             
             // Phase 4: Dynamic order size defaults
             size_vol_sensitivity: 0.3,          // Reduce size 30% per vol ratio above baseline
@@ -172,9 +172,7 @@ impl AvellanedaStoikovParams {
         if self.fee_rate < 0.0 || self.fee_rate > 0.1 {
             return Err(format!("fee_rate must be in [0, 0.1], got {}", self.fee_rate));
         }
-        if self.latency_buffer < 0.0 {
-            return Err(format!("latency_buffer must be non-negative, got {}", self.latency_buffer));
-        }
+        // latency_buffer validation removed - not in struct anymore
         if self.volatility_cap <= 0.0 || self.volatility_cap > 10.0 {
             return Err(format!("volatility_cap must be in (0, 10], got {}", self.volatility_cap));
         }
@@ -790,9 +788,7 @@ impl Strategy for AvellanedaStoikovStrategy {
         if let Some(ParameterValue::Float(fee)) = parameters.get("fee_rate") {
             self.params.fee_rate = *fee;
         }
-        if let Some(ParameterValue::Float(buffer)) = parameters.get("latency_buffer") {
-            self.params.latency_buffer = *buffer;
-        }
+        // latency_buffer parameter handling removed - not in struct anymore
         if let Some(ParameterValue::Float(target)) = parameters.get("inventory_target") {
             self.params.inventory_target = *target;
         }
@@ -922,8 +918,15 @@ impl Strategy for AvellanedaStoikovStrategy {
         // Phase 3: Use dynamic market depth parameter based on volatility and order flow
         let k = self.calculate_dynamic_k(ann_vol);
         
+        // Use the maker fee from params (set from ExchangeFeeConfig)
+        // At $1M 30-day volume: maker fee = 0.06% (6 bps)
+        // At $10M+ volume: maker fee = 0.00% (0 bps - maker rebate tier)
+        // The fee_rate in params comes from ExchangeFeeConfig::for_exchange()
         let fee = self.params.fee_rate;
-        let latency = self.params.latency_buffer;
+        
+        // Note: latency_buffer is no longer used in spread calculation
+        // Latency is now simulated in the order matching logic instead
+        // This prevents artificially widening spreads
 
         // Reservation price (skew)
         // Note: Skew should be proportional to inventory value, not raw units
@@ -939,10 +942,11 @@ impl Strategy for AvellanedaStoikovStrategy {
         // Optimal spread from A-S formula (normalized to price)
         // The classic A-S formula: spread = γσ²t + (2/γ)ln(1+γ/k)
         // We use a simplified version that scales properly with price:
-        // spread = s × [γσ²t + (2/γ)(fee + latency)/k]
-        // where all terms are now dimensionless fractions
+        // spread = s × [γσ²t + coefficient × (2/γ)(fee)/k]
+        // Note: latency removed from formula - now simulated in order matching
         let variance_term = gamma * sigma * sigma * t;  // Dimensionless (vol is already annualized %)
-        let liquidity_term = (2.0 / gamma) * (fee + latency) / k;  // Dimensionless
+        let liquidity_coefficient = 0.5;  // Scale down liquidity term impact
+        let liquidity_term = liquidity_coefficient * (2.0 / gamma) * fee / k;  // Dimensionless
         let as_spread_raw = s * (variance_term + liquidity_term);  // Now in dollars, scaled to price
         
         // Debug: Log first 5 spread calculations to diagnose fill issues (use sync logging)
@@ -951,8 +955,8 @@ impl Strategy for AvellanedaStoikovStrategy {
         if debug_count < 5 {
             let raw_spread_bps = (as_spread_raw / s) * 10000.0;
             STRATEGY_LOGGER.info_sync(format!(
-                "A-S_SPREAD_CALC | gamma={:.4} sigma={:.4} t={:.6} k={:.2} fee={:.6} latency={:.6} | var_term={:.6} liq_term={:.6} | raw_spread_bps={:.2}",
-                gamma, sigma, t, k, fee, latency, variance_term, liquidity_term, raw_spread_bps));
+                "A-S_SPREAD_CALC | gamma={:.4} sigma={:.4} t={:.6} k={:.2} fee={:.6} | var_term={:.6} liq_term={:.6} | raw_spread_bps={:.2}",
+                gamma, sigma, t, k, fee, variance_term, liquidity_term, raw_spread_bps));
         }
         
         // Phase 4: Use dynamic minimum spread based on volatility and flow
@@ -1093,7 +1097,7 @@ impl Strategy for AvellanedaStoikovStrategy {
     params.insert("window_ms".to_string(), ParameterValue::Float(self.params.window_ms as f64));
     params.insert("min_quote_lifetime_ms".to_string(), ParameterValue::Float(self.params.min_quote_lifetime_ms as f64));
     params.insert("fee_rate".to_string(), ParameterValue::Float(self.params.fee_rate));
-    params.insert("latency_buffer".to_string(), ParameterValue::Float(self.params.latency_buffer));
+    // latency_buffer removed from params
     params.insert("inventory_target".to_string(), ParameterValue::Float(self.params.inventory_target));
     params.insert("volatility_cap".to_string(), ParameterValue::Float(self.params.volatility_cap));
         params

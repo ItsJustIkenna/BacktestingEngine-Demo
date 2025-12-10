@@ -131,7 +131,9 @@ mod tests {
         assert!(chromo1.risk_aversion >= 0.0001 && chromo1.risk_aversion <= 1.0);
         assert!(chromo1.order_size_pct >= 0.001 && chromo1.order_size_pct <= 0.25);
         assert!(chromo1.window_ms >= 1_000 && chromo1.window_ms <= 1_800_000);
-        assert!(chromo1.fee_rate >= 0.00001 && chromo1.fee_rate <= 0.005);
+        // fee_rate removed from chromosome - uses exchange config
+        // market_depth_k range is now 1.0-50.0
+        assert!(chromo1.market_depth_k >= 1.0 && chromo1.market_depth_k <= 50.0);
         
         // Test crossover
         let child = chromo1.crossover(&chromo2, &mut rng);

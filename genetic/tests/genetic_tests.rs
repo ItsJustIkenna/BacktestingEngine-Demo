@@ -36,8 +36,7 @@ fn test_chromosome_random_bounds() {
             "Risk aversion out of range: {}", chromosome.risk_aversion);
         assert!(chromosome.order_size_pct >= 0.001 && chromosome.order_size_pct <= 0.25,
             "Order size pct out of range: {}", chromosome.order_size_pct);
-        assert!(chromosome.fee_rate >= 0.00001 && chromosome.fee_rate <= 0.005,
-            "Fee rate out of range: {}", chromosome.fee_rate);
+        // fee_rate removed from chromosome - now uses exchange config
     }
 }
 
@@ -486,7 +485,7 @@ fn test_parameter_clamping() {
         // These should always be within bounds
         assert!(chromosome.risk_aversion >= 0.0001 && chromosome.risk_aversion <= 1.0);
         assert!(chromosome.order_size_pct >= 0.001 && chromosome.order_size_pct <= 0.25);
-        assert!(chromosome.fee_rate >= 0.00001 && chromosome.fee_rate <= 0.005);
+        // fee_rate removed from chromosome - now uses exchange config
     }
 }
 
@@ -501,12 +500,11 @@ fn test_all_parameter_ranges() {
         assert!(c.order_size_pct >= 0.001 && c.order_size_pct <= 0.25);
         assert!(c.window_ms >= 1_000 && c.window_ms <= 1_800_000);
         assert!(c.min_quote_lifetime_ms >= 10 && c.min_quote_lifetime_ms <= 60_000);
-        assert!(c.fee_rate >= 0.00001 && c.fee_rate <= 0.005);
-        assert!(c.latency_buffer >= 0.00001 && c.latency_buffer <= 0.001);
+        // fee_rate and latency_buffer removed from chromosome - uses exchange config and latency simulation
         assert!(c.inventory_target >= -1.0 && c.inventory_target <= 1.0);
         assert!(c.volatility_cap >= 0.05 && c.volatility_cap <= 5.0);
         assert!(c.time_horizon_minutes >= 0.167 && c.time_horizon_minutes <= 60.0);
-        assert!(c.market_depth_k >= 0.1 && c.market_depth_k <= 10.0);
+        assert!(c.market_depth_k >= 1.0 && c.market_depth_k <= 50.0);  // Updated range for liquid markets
     }
 }
 
@@ -609,8 +607,8 @@ fn test_full_evolution_simulation() {
     
     // Mock fitness function
     let fitness = |c: &AvellanedaStoikovChromosome| -> f64 {
-        // Reward certain parameter combinations
-        c.risk_aversion * 5.0 + c.order_size_pct * 10.0 - c.fee_rate * 50.0
+        // Reward certain parameter combinations (fee_rate removed from chromosome)
+        c.risk_aversion * 5.0 + c.order_size_pct * 10.0 + c.market_depth_k * 0.5
     };
     
     for _gen in 0..generations {

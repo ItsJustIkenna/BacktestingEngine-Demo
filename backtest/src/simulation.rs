@@ -348,10 +348,25 @@ impl SimulationLoop {
                     let debug_count = TRADE_DEBUG_COUNT_PG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     
                     // Filter fills to only include OUR strategy's orders
-                    // Historical market orders from the data feed should not generate commission/fills for us
+                    // Also apply latency simulation: orders placed within latency_ms can't be filled yet
+                    let latency_ms = config.trading.latency_ms as i64;
+                    let latency_cutoff = trade.timestamp - chrono::Duration::milliseconds(latency_ms);
+                    
                     let our_fills: Vec<_> = trade_fills
                         .into_iter()
-                        .filter(|fill| self.active_order_ids.contains(&fill.order_id))
+                        .filter(|fill| {
+                            // Must be our order
+                            if !self.active_order_ids.contains(&fill.order_id) {
+                                return false;
+                            }
+                            // Latency simulation: order must have been placed before the cutoff
+                            // (i.e., order has had time to propagate to exchange)
+                            if let Some(tracker) = self.order_trackers.get(&fill.order_id) {
+                                tracker.placed_at <= latency_cutoff
+                            } else {
+                                false // Can't find tracker, skip this fill
+                            }
+                        })
                         .collect();
                     
                     if debug_count < 10 && !self.active_order_ids.is_empty() {
@@ -481,10 +496,25 @@ impl SimulationLoop {
                     let debug_count = TRADE_DEBUG_COUNT_NP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     
                     // Filter fills to only include OUR strategy's orders
-                    // Historical market orders from the data feed should not generate commission/fills for us
+                    // Also apply latency simulation: orders placed within latency_ms can't be filled yet
+                    let latency_ms = config.trading.latency_ms as i64;
+                    let latency_cutoff = trade.timestamp - chrono::Duration::milliseconds(latency_ms);
+                    
                     let our_fills: Vec<_> = trade_fills
                         .into_iter()
-                        .filter(|fill| self.active_order_ids.contains(&fill.order_id))
+                        .filter(|fill| {
+                            // Must be our order
+                            if !self.active_order_ids.contains(&fill.order_id) {
+                                return false;
+                            }
+                            // Latency simulation: order must have been placed before the cutoff
+                            // (i.e., order has had time to propagate to exchange)
+                            if let Some(tracker) = self.order_trackers.get(&fill.order_id) {
+                                tracker.placed_at <= latency_cutoff
+                            } else {
+                                false // Can't find tracker, skip this fill
+                            }
+                        })
                         .collect();
                     
                     if debug_count < 10 && !self.active_order_ids.is_empty() {

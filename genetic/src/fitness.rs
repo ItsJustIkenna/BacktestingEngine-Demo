@@ -24,6 +24,11 @@ pub async fn avellaneda_stoikov_fitness(
     market_data: Vec<dataloader::MarketData>,
     config: &config::BacktestConfig,
 ) -> f64 {
+    // Get exchange maker fee from config or use default
+    let exchange = "kraken"; // Default exchange for backtesting
+    let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(exchange);
+    let maker_fee = exchange_fee_config.maker_fee;
+    
     // Convert chromosome to strategy parameters (Phase 2: all 14 parameters)
     let params = AvellanedaStoikovParams {
         risk_aversion: chromo.risk_aversion,
@@ -33,8 +38,7 @@ pub async fn avellaneda_stoikov_fitness(
         initial_inventory_pct: 0.5,                              // 50% inventory split
         window_ms: chromo.window_ms,
         min_quote_lifetime_ms: chromo.min_quote_lifetime_ms,
-        fee_rate: chromo.fee_rate,
-        latency_buffer: chromo.latency_buffer,
+        fee_rate: maker_fee,  // Use actual exchange maker fee, not chromosome
         inventory_target: chromo.inventory_target,
         volatility_cap: chromo.volatility_cap,
         volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start

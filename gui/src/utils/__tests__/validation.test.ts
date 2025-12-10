@@ -175,7 +175,7 @@ describe('Validation Utilities', () => {
       expect(result.errors.some(e => e.includes('Population size'))).toBe(true);
     });
 
-    test('validates manual parameters', () => {
+    test('accepts valid manual parameters', () => {
       const manualParams = {
         symbol: 'ETH/USD',
         exchange: 'COINBASE',
@@ -188,7 +188,6 @@ describe('Validation Utilities', () => {
         window_ms: 5000,
         min_quote_lifetime_ms: 100,
         fee_rate: 0.001,
-        latency_buffer: 10,
         volatility_cap: 0.05,
         time_horizon_minutes: 60,
         market_depth_k: 1.5,
@@ -216,7 +215,6 @@ describe('Validation Utilities', () => {
         window_ms: 5000,
         min_quote_lifetime_ms: 100,
         fee_rate: 0.001,
-        latency_buffer: 10,
         volatility_cap: 0.05,
         time_horizon_minutes: 60,
         market_depth_k: 1.5,
