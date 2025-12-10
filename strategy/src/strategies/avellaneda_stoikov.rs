@@ -179,8 +179,8 @@ impl AvellanedaStoikovParams {
         if self.time_horizon_minutes <= 0.0 || self.time_horizon_minutes > 60.0 {
             return Err(format!("time_horizon_minutes must be in (0, 60], got {}", self.time_horizon_minutes));
         }
-        if self.market_depth_k <= 0.0 || self.market_depth_k > 10.0 {
-            return Err(format!("market_depth_k must be in (0, 10], got {}", self.market_depth_k));
+        if self.market_depth_k <= 0.0 || self.market_depth_k > 50.0 {
+            return Err(format!("market_depth_k must be in (0, 50], got {}", self.market_depth_k));
         }
         Ok(())
     }
