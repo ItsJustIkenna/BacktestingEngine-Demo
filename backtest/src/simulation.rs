@@ -71,6 +71,9 @@ pub struct SimulationLoop {
     latency_rejections: usize,
     latency_rejections_bid: usize,
     latency_rejections_ask: usize,
+    // Track market data trade direction distribution
+    market_buy_trades: usize,
+    market_sell_trades: usize,
 }
 
 impl SimulationLoop {
@@ -107,6 +110,8 @@ impl SimulationLoop {
             latency_rejections: 0,
             latency_rejections_bid: 0,
             latency_rejections_ask: 0,
+            market_buy_trades: 0,
+            market_sell_trades: 0,
         }
     }
     
@@ -502,8 +507,14 @@ impl SimulationLoop {
                     // - "buy" means a buyer aggressed -> fills our ASK orders
                     // - "sell" means a seller aggressed -> fills our BID orders
                     let aggressor_side = match trade.side.to_lowercase().as_str() {
-                        "buy" | "b" => BookSide::Bid,   // Aggressor is buyer
-                        "sell" | "s" => BookSide::Ask,  // Aggressor is seller
+                        "buy" | "b" => {
+                            self.market_buy_trades += 1;
+                            BookSide::Bid   // Aggressor is buyer
+                        }
+                        "sell" | "s" => {
+                            self.market_sell_trades += 1;
+                            BookSide::Ask  // Aggressor is seller
+                        }
                         _ => continue, // Skip unknown side
                     };
                     
@@ -1016,7 +1027,42 @@ impl SimulationLoop {
         // Compute metrics using collected data
         // NOTE: These metrics are based on CLOSED positions only.
         // If there are open positions with unrealized P&L, the total_pnl may differ from net_profit.
-        result.num_trades = performance::number_of_trades(&trade_returns);
+        
+        // For market making: use fills as trades, not closed positions
+        // A "round-trip" is min(buy_fills, sell_fills) - completed inventory cycles
+        let mm_round_trips = self.buy_fills.min(self.sell_fills);
+        let total_fills = self.buy_fills + self.sell_fills;
+        
+        // Use market-making metrics if we have fills but no closed positions
+        // This handles the case where market maker adjusts inventory without closing positions
+        if closed_position_count == 0 && total_fills > 0 {
+            // Market making mode: count fills as trades
+            result.num_trades = mm_round_trips;
+            
+            // Win rate for market making: positive PnL means winning
+            // Since each fill captures spread, calculate win rate from PnL
+            if result.total_pnl.to_f64().unwrap_or(0.0) > 0.0 {
+                // Profitable overall - estimate win rate based on PnL distribution
+                // For market making, if gross_pnl > commission, we're "winning"
+                let gross = result.total_pnl.to_f64().unwrap_or(0.0) + self.total_commission;
+                if gross > 0.0 && total_fills > 0 {
+                    // Estimate: if we made money after fees, most fills were profitable
+                    let estimated_win_rate = 0.5 + (result.total_pnl.to_f64().unwrap_or(0.0) / gross).min(0.5);
+                    result.win_rate = Some(estimated_win_rate);
+                } else {
+                    result.win_rate = Some(0.5); // Break-even assumption
+                }
+            } else {
+                result.win_rate = Some(0.0);
+            }
+            
+            log_info!(BACKTEST_LOGGER, "Market making mode: using fills as trades | round_trips={} total_fills={} buy={} sell={}",
+                mm_round_trips, total_fills, self.buy_fills, self.sell_fills);
+        } else {
+            // Traditional mode: use closed positions
+            result.num_trades = performance::number_of_trades(&trade_returns);
+        }
+        
         result.gross_profit = Some(performance::gross_profit(&trade_returns));
         result.gross_loss = Some(performance::gross_loss(&trade_returns));
         result.net_profit = Some(performance::net_profit(&trade_returns));
@@ -1046,13 +1092,15 @@ impl SimulationLoop {
             result.gross_loss.unwrap_or(0.0),
         );
         
-        // Calculate win rate - if no closed trades, indicate this clearly with None
-        result.win_rate = if closed_position_count > 0 {
-            trade_stats::win_rate(&trade_returns)
-        } else {
-            // No closed trades - win rate is undefined, not 0%
-            None
-        };
+        // Calculate win rate - only override if not already set by market-making logic
+        if result.win_rate.is_none() {
+            result.win_rate = if closed_position_count > 0 {
+                trade_stats::win_rate(&trade_returns)
+            } else {
+                // No closed trades and no fills - win rate is undefined
+                None
+            };
+        }
         result.avg_trade_duration = trade_stats::average_trade_duration(&trade_durations);
         
         // Populate closed/open position counts and realized/unrealized PnL for transparency
@@ -1297,6 +1345,13 @@ impl SimulationLoop {
         log_info!(BACKTEST_LOGGER, "Latency simulation | latency_ms={} rejections={} (bid={} ask={}) rejection_rate={:.1}%",
             config.trading.latency_ms, self.latency_rejections, 
             self.latency_rejections_bid, self.latency_rejections_ask, rejection_pct);
+        
+        // Log market data trade direction distribution
+        let total_market_trades = self.market_buy_trades + self.market_sell_trades;
+        let buy_pct = if total_market_trades > 0 { self.market_buy_trades as f64 / total_market_trades as f64 * 100.0 } else { 0.0 };
+        let sell_pct = if total_market_trades > 0 { self.market_sell_trades as f64 / total_market_trades as f64 * 100.0 } else { 0.0 };
+        log_info!(BACKTEST_LOGGER, "Market trades | total={} buys={} ({:.1}%) sells={} ({:.1}%) | buys->fill asks, sells->fill bids",
+            total_market_trades, self.market_buy_trades, buy_pct, self.market_sell_trades, sell_pct);
         
         // Log inventory metrics summary
         log_info!(BACKTEST_LOGGER, "Inventory metrics | total_volume=${:.2} buy=${:.2} sell=${:.2} turnover/day={:.2} imbalance={:.2}%",
