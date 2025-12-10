@@ -49,8 +49,9 @@ spec:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          # Use image's default CMD: /bin/server serve
-          # Worker mode doesn't expose ports, only processes background tasks
+          # Run in worker mode - processes background jobs, no HTTP server
+          command: ["/bin/server"]
+          args: ["worker", "--threads", "2"]
           env:
             - name: DATABASE_PASSWORD
               valueFrom:

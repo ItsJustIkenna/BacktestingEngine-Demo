@@ -16,7 +16,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the API server and worker
+    /// Start the API server only (no workers)
     Serve {
         /// Host to bind to
         #[arg(long, default_value = "0.0.0.0")]
@@ -25,6 +25,12 @@ enum Commands {
         /// Port to bind to
         #[arg(long, default_value = "8080")]
         port: u16,
+    },
+    /// Start background workers only (no API server)
+    Worker {
+        /// Number of worker threads
+        #[arg(long, default_value = "4")]
+        threads: usize,
     },
 }
 
@@ -60,14 +66,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("Failed to connect: {}", e))?;
             let job_queue: Arc<dyn JobQueue> = Arc::new(postgres_queue);
 
-            // Spawn worker tasks
-            for i in 0..4 {
-                let queue = Arc::clone(&job_queue);
-                tokio::spawn(async move {
-                    let worker = worker::Worker::new(i, queue);
-                    worker.run().await;
-                });
-            }
+            // API-only mode: no workers spawned here
+            // Workers run in separate pods using the 'worker' command
+            println!("📡 API-only mode (workers run in separate pods)");
 
             // Build and start the API server
             let app = api::build_router(Arc::clone(&job_queue));
@@ -76,6 +77,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             println!("✅ Server ready at http://{}", bind_addr);
             axum::serve(listener, app).await?;
+        }
+        
+        Commands::Worker { threads } => {
+            let database_url = std::env::var("DATABASE_URL")
+                .expect("DATABASE_URL must be set");
+
+            println!("📦 Connecting to database...");
+            let postgres_queue = PostgresQueue::new(&database_url)
+                .map_err(|e| format!("Failed to connect: {}", e))?;
+            let job_queue: Arc<dyn JobQueue> = Arc::new(postgres_queue);
+
+            println!("👷 Starting {} worker threads...", threads);
+            
+            // Spawn worker tasks
+            let mut handles = Vec::with_capacity(threads);
+            for i in 0..threads {
+                let queue = Arc::clone(&job_queue);
+                let handle = tokio::spawn(async move {
+                    let worker = worker::Worker::new(i, queue);
+                    worker.run().await;
+                });
+                handles.push(handle);
+            }
+            
+            println!("✅ Workers running");
+            
+            // Wait for all workers (they run forever)
+            for handle in handles {
+                let _ = handle.await;
+            }
         }
     }
 
