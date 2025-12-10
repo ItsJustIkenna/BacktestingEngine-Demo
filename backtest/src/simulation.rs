@@ -76,6 +76,11 @@ pub struct SimulationLoop {
     // Track market data trade direction distribution
     market_buy_trades: usize,
     market_sell_trades: usize,
+    // Track missed fill opportunities (for diagnosing fill imbalance)
+    missed_bid_opportunities: usize,  // Sell trades where we had a bid but it was too low
+    missed_ask_opportunities: usize,  // Buy trades where we had an ask but it was too high
+    bid_price_gap_sum: f64,           // Sum of (trade_price - our_bid) for missed bids
+    ask_price_gap_sum: f64,           // Sum of (our_ask - trade_price) for missed asks
     // Track data timestamp range
     first_trade_timestamp: Option<chrono::DateTime<chrono::Utc>>,
     last_trade_timestamp: Option<chrono::DateTime<chrono::Utc>>,
@@ -125,6 +130,10 @@ impl SimulationLoop {
             latency_rejections_ask: 0,
             market_buy_trades: 0,
             market_sell_trades: 0,
+            missed_bid_opportunities: 0,
+            missed_ask_opportunities: 0,
+            bid_price_gap_sum: 0.0,
+            ask_price_gap_sum: 0.0,
             first_trade_timestamp: None,
             last_trade_timestamp: None,
             first_trade_price: None,
@@ -382,6 +391,39 @@ impl SimulationLoop {
                         _ => continue, // Skip unknown side
                     };
                     
+                    // Track missed fill opportunities BEFORE matching
+                    // This helps diagnose why we might have 0 bid fills or 0 ask fills
+                    let trade_price_for_tracking = trade.price.to_f64().unwrap_or(0.0);
+                    if matches!(aggressor_side, BookSide::Ask) {
+                        // Sell trade - could fill our bids if trade_price <= bid_price
+                        // Find our best bid from trackers
+                        if let Some(our_best_bid) = self.order_trackers.values()
+                            .filter(|t| matches!(t.side, orderbook::BookSide::Bid))
+                            .map(|t| t.price)
+                            .reduce(f64::max) 
+                        {
+                            if trade_price_for_tracking > our_best_bid {
+                                // Trade happened above our bid - missed opportunity
+                                self.missed_bid_opportunities += 1;
+                                self.bid_price_gap_sum += trade_price_for_tracking - our_best_bid;
+                            }
+                        }
+                    } else {
+                        // Buy trade - could fill our asks if trade_price >= ask_price
+                        // Find our best ask from trackers
+                        if let Some(our_best_ask) = self.order_trackers.values()
+                            .filter(|t| matches!(t.side, orderbook::BookSide::Ask))
+                            .map(|t| t.price)
+                            .reduce(f64::min) 
+                        {
+                            if trade_price_for_tracking < our_best_ask {
+                                // Trade happened below our ask - missed opportunity
+                                self.missed_ask_opportunities += 1;
+                                self.ask_price_gap_sum += our_best_ask - trade_price_for_tracking;
+                            }
+                        }
+                    }
+                    
                     // Execute the trade against our resting orders and get fills
                     let trade_fills = orderbook.execute_trade_with_fills(
                         aggressor_side,
@@ -393,6 +435,9 @@ impl SimulationLoop {
                     // Debug: Log first 5 trades vs our order prices to diagnose fill issues (postgres)
                     static TRADE_DEBUG_COUNT_PG: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
                     let debug_count = TRADE_DEBUG_COUNT_PG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    
+                    // Get trade price early for missed opportunity tracking
+                    let trade_price = trade.price.to_f64().unwrap_or(0.0);
                     
                     // Filter fills to only include OUR strategy's orders
                     // Also apply latency simulation: orders placed within latency_ms can't be filled yet
@@ -562,6 +607,39 @@ impl SimulationLoop {
                         _ => continue, // Skip unknown side
                     };
                     
+                    // Track missed fill opportunities BEFORE matching
+                    // This helps diagnose why we might have 0 bid fills or 0 ask fills
+                    let trade_price_for_tracking = trade.price.to_f64().unwrap_or(0.0);
+                    if matches!(aggressor_side, BookSide::Ask) {
+                        // Sell trade - could fill our bids if trade_price <= bid_price
+                        // Find our best bid from trackers
+                        if let Some(our_best_bid) = self.order_trackers.values()
+                            .filter(|t| matches!(t.side, orderbook::BookSide::Bid))
+                            .map(|t| t.price)
+                            .reduce(f64::max) 
+                        {
+                            if trade_price_for_tracking > our_best_bid {
+                                // Trade happened above our bid - missed opportunity
+                                self.missed_bid_opportunities += 1;
+                                self.bid_price_gap_sum += trade_price_for_tracking - our_best_bid;
+                            }
+                        }
+                    } else {
+                        // Buy trade - could fill our asks if trade_price >= ask_price
+                        // Find our best ask from trackers
+                        if let Some(our_best_ask) = self.order_trackers.values()
+                            .filter(|t| matches!(t.side, orderbook::BookSide::Ask))
+                            .map(|t| t.price)
+                            .reduce(f64::min) 
+                        {
+                            if trade_price_for_tracking < our_best_ask {
+                                // Trade happened below our ask - missed opportunity
+                                self.missed_ask_opportunities += 1;
+                                self.ask_price_gap_sum += our_best_ask - trade_price_for_tracking;
+                            }
+                        }
+                    }
+                    
                     // Execute the trade against our resting orders and get fills
                     let trade_fills = orderbook.execute_trade_with_fills(
                         aggressor_side,
@@ -573,6 +651,9 @@ impl SimulationLoop {
                     // Debug: Log first 10 trades vs our order prices to diagnose fill issues (non-postgres)
                     static TRADE_DEBUG_COUNT_NP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
                     let debug_count = TRADE_DEBUG_COUNT_NP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    
+                    // Get trade price early for missed opportunity tracking
+                    let trade_price = trade.price.to_f64().unwrap_or(0.0);
                     
                     // Filter fills to only include OUR strategy's orders
                     // Also apply latency simulation: orders placed within latency_ms can't be filled yet
@@ -1455,6 +1536,32 @@ impl SimulationLoop {
         let sell_pct = if total_market_trades > 0 { self.market_sell_trades as f64 / total_market_trades as f64 * 100.0 } else { 0.0 };
         log_info!(BACKTEST_LOGGER, "Market trades | total={} buys={} ({:.1}%) sells={} ({:.1}%) | buys->fill asks, sells->fill bids",
             total_market_trades, self.market_buy_trades, buy_pct, self.market_sell_trades, sell_pct);
+        
+        // Log missed opportunity analysis - KEY DIAGNOSTIC for fill rate issues
+        let avg_bid_gap = if self.missed_bid_opportunities > 0 { 
+            self.bid_price_gap_sum / self.missed_bid_opportunities as f64 
+        } else { 0.0 };
+        let avg_ask_gap = if self.missed_ask_opportunities > 0 { 
+            self.ask_price_gap_sum / self.missed_ask_opportunities as f64 
+        } else { 0.0 };
+        log_info!(BACKTEST_LOGGER, 
+            "MISSED_FILLS | bid_opportunities_missed={} avg_gap=${:.4} | ask_opportunities_missed={} avg_gap=${:.4}",
+            self.missed_bid_opportunities, avg_bid_gap, 
+            self.missed_ask_opportunities, avg_ask_gap);
+        
+        // Calculate what percentage of sell trades we could have captured if our bids were higher
+        let potential_bid_fills = self.market_sell_trades;
+        let missed_bid_pct = if potential_bid_fills > 0 {
+            self.missed_bid_opportunities as f64 / potential_bid_fills as f64 * 100.0
+        } else { 0.0 };
+        let captured_bid_fills = result.execution_metrics.as_ref().map(|m| m.bid_fills).unwrap_or(0);
+        let captured_bid_pct = if potential_bid_fills > 0 {
+            captured_bid_fills as f64 / potential_bid_fills as f64 * 100.0
+        } else { 0.0 };
+        log_info!(BACKTEST_LOGGER,
+            "BID_FILL_RATE | sell_trades={} captured={} ({:.2}%) missed={} ({:.2}%) | avg_gap=${:.4} = how much higher bid needs to be",
+            potential_bid_fills, captured_bid_fills, captured_bid_pct, 
+            self.missed_bid_opportunities, missed_bid_pct, avg_bid_gap);
         
         // Log data date range and market trend
         // Add timestamps to result

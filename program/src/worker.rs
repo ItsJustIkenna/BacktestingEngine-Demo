@@ -964,16 +964,21 @@ impl Worker {
         
         log_info!(GENETIC_LOGGER, "Job {} loaded {} market data points", job.id, data.len());
         
-        // Subsample data for faster optimization (full data used for final backtest)
-        const MAX_OPTIMIZATION_SAMPLES: usize = 5000;
+        // Subsample data for faster GA optimization
+        // 500K events (~8 days) provides enough diversity while keeping each evaluation fast
+        // Full data is used for final backtest validation after GA completes
+        const MAX_OPTIMIZATION_SAMPLES: usize = 500_000;
         let optimization_data: Vec<MarketData> = if data.len() > MAX_OPTIMIZATION_SAMPLES {
+            // Use stratified sampling: take evenly spaced samples across the entire dataset
+            // This ensures we get data from all time periods, not just the beginning
             let step = data.len() / MAX_OPTIMIZATION_SAMPLES;
             data.iter().step_by(step).take(MAX_OPTIMIZATION_SAMPLES).cloned().collect()
         } else {
             data.clone()
         };
         
-        log_info!(GENETIC_LOGGER, "Job {} using {} samples for optimization", job.id, optimization_data.len());
+        log_info!(GENETIC_LOGGER, "Job {} using {} samples for GA optimization (full {} for final validation)", 
+            job.id, optimization_data.len(), data.len());
         
         // Create genetic config
         let config = GeneticConfig {
