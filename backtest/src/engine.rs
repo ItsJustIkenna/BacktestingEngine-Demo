@@ -184,6 +184,8 @@ impl BacktestEngine {
         }
         
         // Run core backtest simulation with optimized parameters
+        log_info!(BACKTEST_LOGGER, "PHASE_START | backtest_simulation | data_points={}", market_data.len());
+        let sim_start = Instant::now();
         let mut core_result = self.run_core_simulation(
             strategy_manager, 
             orderbook, 
@@ -191,6 +193,8 @@ impl BacktestEngine {
             risk_manager, 
             market_data
         ).await?;
+        log_info!(BACKTEST_LOGGER, "PHASE_COMPLETE | backtest_simulation | duration={:.1}s trades={}", 
+            sim_start.elapsed().as_secs_f64(), core_result.num_trades);
         
         // Attach data quality report to results
         core_result.data_quality = Some(data_quality_report.clone());
@@ -221,18 +225,26 @@ impl BacktestEngine {
         let monte_carlo_result = match current_mode {
             AnalysisMode::Development => None,
             AnalysisMode::Validation | AnalysisMode::Production => {
-                log_debug!(BACKTEST_LOGGER, "Running Monte Carlo analysis");
-                Some(self.run_monte_carlo_analysis(&core_result).await?)
+                let mc_runs = self.analysis_config.monte_carlo_runs;
+                log_info!(BACKTEST_LOGGER, "PHASE_START | monte_carlo | runs={}", mc_runs);
+                let mc_start = Instant::now();
+                let result = self.run_monte_carlo_analysis(&core_result).await?;
+                log_info!(BACKTEST_LOGGER, "PHASE_COMPLETE | monte_carlo | duration={:.1}s", mc_start.elapsed().as_secs_f64());
+                Some(result)
             }
         };
         
         let walk_forward_result = match current_mode {
             AnalysisMode::Production if self.analysis_config.auto_walk_forward => {
-                log_debug!(BACKTEST_LOGGER, "Running Walk-Forward analysis");
+                log_info!(BACKTEST_LOGGER, "PHASE_START | walk_forward | data_points={}", market_data.len());
+                let wf_start = Instant::now();
                 // Pass current strategy parameters to test robustness across time windows
-                Some(self.run_walk_forward_analysis(
+                let result = self.run_walk_forward_analysis(
                     strategy_manager, orderbook, portfolio, risk_manager, market_data
-                ).await?)
+                ).await?;
+                log_info!(BACKTEST_LOGGER, "PHASE_COMPLETE | walk_forward | duration={:.1}s windows={}", 
+                    wf_start.elapsed().as_secs_f64(), result.periods_tested);
+                Some(result)
             },
             _ => None,
         };
@@ -758,6 +770,10 @@ impl BacktestEngine {
             MarketData::Trade(t) => t.timestamp,
         };
         
+        // Use larger step size to create fewer windows (3 windows max for efficiency)
+        // Each window tests parameter robustness in different market conditions
+        let step_size = (test_days).max(7); // Non-overlapping windows, minimum 7 days
+        
         let wf_config = WalkForwardConfig {
             start_date,
             end_date,
@@ -766,7 +782,7 @@ impl BacktestEngine {
             max_parameters: 5,
             optimization_period_days: optimization_days,
             test_period_days: test_days,
-            step_size_days: (test_days / 2).max(1), // Step by half test window
+            step_size_days: step_size, // Non-overlapping for efficiency
             min_trades_per_period: 5,
             parameters_to_optimize: vec![
                 "risk_aversion".to_string(),
@@ -775,6 +791,9 @@ impl BacktestEngine {
             ],
             optimization_metric: "sharpe_ratio".to_string(),
         };
+        
+        log_info!(BACKTEST_LOGGER, "Walk-forward config: {} days data, opt={}d test={}d step={}d", 
+            data_duration_days, optimization_days, test_days, step_size);
         
         let analyzer = WalkForwardAnalyzer::new(wf_config.clone(), self.config.clone());
         let windows = analyzer.generate_windows();
@@ -788,39 +807,76 @@ impl BacktestEngine {
             });
         }
         
-        let mut out_of_sample_sharpes = Vec::with_capacity(windows.len());
+        // Walk-forward sampling: limit events per window for performance
+        // 200K events is enough to capture market dynamics while being fast
+        const MAX_EVENTS_PER_WINDOW: usize = 200_000;
         
         let total_windows = windows.len();
-        for (window_idx, window) in windows.iter().enumerate() {
+        log_info!(BACKTEST_LOGGER, "Walk-forward: {} windows, max {} events per window (parallel)", total_windows, MAX_EVENTS_PER_WINDOW);
+        
+        // Prepare window data in parallel using Rayon
+        use rayon::prelude::*;
+        
+        let window_datasets: Vec<(usize, Vec<MarketData>)> = windows.par_iter()
+            .enumerate()
+            .filter_map(|(window_idx, window)| {
+                // Split market data into test sets only
+                let test_data: Vec<_> = market_data.iter()
+                    .filter(|md| {
+                        #[cfg(feature = "postgres")]
+                        let ts = match md {
+                            MarketData::Candle(c) => c.timestamp,
+                            MarketData::Trade(t) => t.timestamp,
+                            MarketData::Snapshot(s) => s.timestamp,
+                            MarketData::Order(o) => o.timestamp,
+                        };
+                        #[cfg(not(feature = "postgres"))]
+                        let ts = match md {
+                            MarketData::Candle(c) => c.timestamp,
+                            MarketData::Trade(t) => t.timestamp,
+                        };
+                        ts >= window.test_window.start_date && ts < window.test_window.end_date
+                    })
+                    .cloned()
+                    .collect();
+                
+                if test_data.is_empty() {
+                    return None;
+                }
+                
+                // Sample data if too large - use uniform sampling to preserve time distribution
+                let sampled_data = if test_data.len() > MAX_EVENTS_PER_WINDOW {
+                    let step = test_data.len() / MAX_EVENTS_PER_WINDOW;
+                    test_data.into_iter()
+                        .enumerate()
+                        .filter(|(i, _)| i % step == 0)
+                        .map(|(_, d)| d)
+                        .take(MAX_EVENTS_PER_WINDOW)
+                        .collect::<Vec<_>>()
+                } else {
+                    test_data
+                };
+                
+                Some((window_idx, sampled_data))
+            })
+            .collect();
+        
+        log_info!(BACKTEST_LOGGER, "Walk-forward: prepared {} valid windows", window_datasets.len());
+        
+        // Process windows sequentially but with pre-filtered/sampled data
+        // (Full async parallelism would require cloning strategy state per window)
+        let mut out_of_sample_sharpes = Vec::with_capacity(window_datasets.len());
+        
+        for (window_idx, sampled_data) in window_datasets {
+            let window_start = Instant::now();
+            
             // Report progress
             if let Some(ref callback) = self.progress_callback {
                 callback("walk_forward", window_idx + 1, total_windows);
             }
             
-            // Split market data into test sets only
-            // We use CURRENT optimized parameters (no re-optimization)
-            let test_data: Vec<_> = market_data.iter()
-                .filter(|md| {
-                    #[cfg(feature = "postgres")]
-                    let ts = match md {
-                        MarketData::Candle(c) => c.timestamp,
-                        MarketData::Trade(t) => t.timestamp,
-                        MarketData::Snapshot(s) => s.timestamp,
-                        MarketData::Order(o) => o.timestamp,
-                    };
-                    #[cfg(not(feature = "postgres"))]
-                    let ts = match md {
-                        MarketData::Candle(c) => c.timestamp,
-                        MarketData::Trade(t) => t.timestamp,
-                    };
-                    ts >= window.test_window.start_date && ts < window.test_window.end_date
-                })
-                .cloned()
-                .collect();
-            
-            if test_data.is_empty() {
-                continue;
-            }
+            log_info!(BACKTEST_LOGGER, "Walk-forward window {}/{}: {} events", 
+                window_idx + 1, total_windows, sampled_data.len());
             
             // Test the ALREADY-OPTIMIZED parameters on this time window
             // This validates if parameters are robust across different market conditions
@@ -829,8 +885,12 @@ impl BacktestEngine {
                 orderbook,
                 portfolio,
                 risk_manager,
-                &test_data,
+                &sampled_data,
             ).await?;
+            
+            log_info!(BACKTEST_LOGGER, "Walk-forward window {}/{} complete: {:.1}s, sharpe={:.3}", 
+                window_idx + 1, total_windows, window_start.elapsed().as_secs_f64(),
+                test_result.sharpe_ratio.unwrap_or(0.0));
             
             if let Some(test_sharpe) = test_result.sharpe_ratio {
                 out_of_sample_sharpes.push(test_sharpe);

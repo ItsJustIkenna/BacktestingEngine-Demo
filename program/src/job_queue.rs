@@ -150,7 +150,7 @@ fn default_min_spread_bps() -> f64 { 15.0 }    // 15 basis points minimum spread
 fn default_max_trades_per_minute() -> f64 { 30.0 }  // 30 trades per minute max
 fn default_monte_carlo_enabled() -> bool { true }
 fn default_monte_carlo_runs() -> usize { 1000 }
-fn default_walk_forward_enabled() -> bool { true }
+fn default_walk_forward_enabled() -> bool { true } // Re-enabled - now uses sampled data (200K events/window max)
 fn default_auto_save_enabled() -> bool { true }
 fn default_min_sharpe_ratio() -> f64 { 1.0 }
 fn default_min_profit_factor() -> f64 { 1.2 }
