@@ -572,7 +572,7 @@ pub async fn cleanup_old_backtests(
             .collect();
         
         if !result_ids.is_empty() {
-            let result_count = diesel::delete(
+            let _result_count = diesel::delete(
                 backtest_results::table.filter(backtest_results::id.eq_any(&result_ids))
             )
             .execute(&mut conn)

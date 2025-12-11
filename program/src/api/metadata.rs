@@ -28,6 +28,7 @@ pub struct MetadataResponse<T> {
 #[cfg(feature = "postgres")]
 #[derive(Queryable, Selectable)]
 #[diesel(table_name = securities)]
+#[allow(dead_code)]
 struct SecurityRow {
     symbol: String,
 }
@@ -35,6 +36,7 @@ struct SecurityRow {
 #[cfg(feature = "postgres")]
 #[derive(Queryable, Selectable)]
 #[diesel(table_name = exchanges)]
+#[allow(dead_code)]
 struct ExchangeRow {
     exchange: String,
 }

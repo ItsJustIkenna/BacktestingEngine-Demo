@@ -544,7 +544,7 @@ impl Worker {
                 status_result?;
                 
                 // Check profitability and save strategy if criteria are met
-                if let Some(ref pool) = self.db_pool {
+                if let Some(ref _pool) = self.db_pool {
                     self.save_if_profitable(&result, &job).await;
                 }
                 
@@ -822,7 +822,7 @@ impl Worker {
                 let trading_days = minutes / (6.5 * 60.0); // ~6.5 hours of trading per day
                 if trading_days > 0.0 {
                     // Annualize: (1 + total_return)^(252/trading_days) - 1
-                    let annualized = ((1.0 + total_return).powf(252.0 / trading_days) - 1.0);
+                    let annualized = (1.0 + total_return).powf(252.0 / trading_days) - 1.0;
                     Some(annualized)
                 } else {
                     Some(total_return)
@@ -2818,34 +2818,30 @@ impl Worker {
     }
     
     /// Load order book events (new, cancel, modify) for market making strategies
-    /// Uses sampling to reduce memory footprint for genetic optimization
+    /// Uses PARALLEL streaming to load FULL dataset ~10x faster than sequential
     #[cfg(feature = "postgres")]
     async fn load_order_events(
         &self,
         symbol: &str,
         exchange: &str,
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
-        use crate::streaming::OrderBookBatchLoader;
+        use crate::streaming::ParallelDataLoader;
         
-        log_info!(MAIN_LOGGER, "Loading ALL order events for {} on {}", symbol, exchange);
+        log_info!(MAIN_LOGGER, "Loading ALL market data for {} on {} using PARALLEL loader (10 workers)", symbol, exchange);
         
         let pool = self.job_queue.get_pool()
             .ok_or("Database pool not available")?;
         
-        let loader = OrderBookBatchLoader::new(
-            pool,
-            symbol.to_string(),
-            exchange.to_string(),
-        );
+        // Use parallel loader with 10 concurrent connections
+        // Divides data into 10 time-based partitions and loads them concurrently
+        // ~10x faster than sequential loading
+        const NUM_WORKERS: usize = 10;
+        let loader = ParallelDataLoader::new(pool, NUM_WORKERS);
         
-        // Load ALL available data - no artificial limits
-        // Memory usage scales with data size, but provides accurate backtesting
-        log_info!(MAIN_LOGGER, "Starting batch load of ALL available data");
+        let merged = loader.load_all(symbol, exchange).await?;
         
-        let orders = loader.load_all().await?;
-        
-        log_info!(MAIN_LOGGER, "Loaded {} total events (orders + trades)", orders.len());
-        Ok(orders)
+        log_info!(MAIN_LOGGER, "Loaded {} total events (orders + trades) using parallel streaming", merged.len());
+        Ok(merged)
     }
     
     #[cfg(not(feature = "postgres"))]

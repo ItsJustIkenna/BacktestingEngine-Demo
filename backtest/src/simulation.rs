@@ -19,6 +19,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use chrono::{DateTime, Utc};
 
 /// Tracks individual order lifecycle for execution metrics
+#[allow(dead_code)]
 struct OrderTracker {
     order_id: String,
     side: orderbook::BookSide,
@@ -88,6 +89,7 @@ pub struct SimulationLoop {
     first_trade_price: Option<f64>,
     last_trade_price: Option<f64>,
     // Track inventory over time for position analysis
+    #[allow(dead_code)]
     inventory_snapshots: Vec<(chrono::DateTime<chrono::Utc>, f64)>, // (timestamp, net_position_qty)
     max_inventory: f64,
     min_inventory: f64,

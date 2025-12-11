@@ -274,6 +274,7 @@ pub struct AvellanedaStoikovStrategy {
     max_inventory: f64,                      // Maximum allowed inventory for penalty calculation
     
     // Phase 3: Dynamic k state tracking
+    #[allow(dead_code)]
     recent_spreads: Vec<f64>,                // Recent observed spreads for baseline
     
     // Phase 4: Performance tracking for dynamic sizing
@@ -295,7 +296,9 @@ pub struct AvellanedaStoikovStrategy {
     regime_history: Vec<(DateTime<Utc>, MarketRegime)>, // History for regime persistence
     
     // Phase 5: Order book microstructure state
+    #[allow(dead_code)]
     last_bid_depth: f64,                     // Last observed bid-side depth
+    #[allow(dead_code)]
     last_ask_depth: f64,                     // Last observed ask-side depth
     orderbook_imbalance: f64,                // Current (bid_depth - ask_depth) / (bid_depth + ask_depth)
     
@@ -366,6 +369,7 @@ impl AvellanedaStoikovStrategy {
     }
     
     /// Check if we can trade (rate limiting)
+    #[allow(dead_code)]
     fn can_trade(&mut self, now: DateTime<Utc>) -> bool {
         // Reset counter if we're in a new minute
         if let Some(minute_start) = self.current_minute_start {
@@ -408,6 +412,7 @@ impl AvellanedaStoikovStrategy {
     /// Calculate order size in asset units based on percentage of capital
     /// This ensures each trade is a consistent percentage of available capital
     /// order_size = (capital * order_size_pct) / current_price
+    #[allow(dead_code)]
     fn calculate_order_size(&self, current_price: f64, available_balance: f64) -> f64 {
         if current_price <= 0.0 {
             return self.params.order_size; // Fallback to fixed size
@@ -927,9 +932,10 @@ impl AvellanedaStoikovStrategy {
     }
     
     // ========== PHASE 5: ORDER BOOK MICROSTRUCTURE ==========
-    
+
     /// Update order book imbalance tracking
     /// δQ = (Σbids - Σasks) / (Σbids + Σasks)
+    #[allow(dead_code)]
     fn update_orderbook_imbalance(&mut self, bid_depth: f64, ask_depth: f64) {
         self.last_bid_depth = bid_depth;
         self.last_ask_depth = ask_depth;

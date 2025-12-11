@@ -4,7 +4,10 @@
 //! HTML, CSV, JSON, and PDF for backtesting analysis and visualization.
 
 use crate::PerformanceMetrics;
+// Logging imports available when needed
+#[allow(unused_imports)]
 use crate::logging_facade::METRICS_LOGGER;
+#[allow(unused_imports)]
 use crate::{log_info, log_warn, log_error};
 use config::{ReportConfig, ReportFormat};
 use anyhow::{Result, anyhow};

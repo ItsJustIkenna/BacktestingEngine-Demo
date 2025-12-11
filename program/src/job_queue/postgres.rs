@@ -517,6 +517,7 @@ impl JobQueue for PostgresQueue {
         // DECIMAL(10,2) = max 8 digits before decimal = 99999999.99
         const MAX_VALUE_20_8: f64 = 999_999_999_999.0; // For DECIMAL(20,8)
         const MAX_VALUE_10_8: f64 = 99.0;              // For DECIMAL(10,8) - slippage, rates
+        #[allow(dead_code)]
         const MAX_VALUE_10_6: f64 = 9999.0;            // For DECIMAL(10,6) - beta, correlations
         const MAX_VALUE_10_2: f64 = 99_999_999.0;      // For DECIMAL(10,2) - time in trade
         

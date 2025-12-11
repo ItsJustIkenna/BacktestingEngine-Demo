@@ -156,8 +156,8 @@ impl HiddenMarkovModel {
             return Err("Need at least 10 observations to fit HMM".to_string());
         }
         
-        let n = self.config.num_regimes;
-        let t = observations.len();
+        let _n = self.config.num_regimes;
+        let _t = observations.len();
         
         // Initialize emissions based on data quantiles
         self.initialize_emissions_from_data(observations);

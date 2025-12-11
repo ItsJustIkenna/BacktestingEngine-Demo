@@ -3,7 +3,7 @@
 //! Exports successful strategies for live trading with minimal configuration.
 
 use crate::logging_facade::STRATEGY_LOGGER;
-use crate::{log_info, log_error, log_warn};
+use crate::log_info;
 use anyhow::Result;
 use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
