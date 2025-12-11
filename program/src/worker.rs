@@ -973,9 +973,10 @@ impl Worker {
         log_info!(GENETIC_LOGGER, "Job {} loaded {} market data points", job.id, data.len());
         
         // Subsample data for faster GA optimization
-        // 500K events (~8 days) provides enough diversity while keeping each evaluation fast
+        // 50K events (~12 hours of tick data) provides enough diversity for GA exploration
+        // Each chromosome evaluation should complete in under 60 seconds
         // Full data is used for final backtest validation after GA completes
-        const MAX_OPTIMIZATION_SAMPLES: usize = 500_000;
+        const MAX_OPTIMIZATION_SAMPLES: usize = 50_000;
         let optimization_data: Vec<MarketData> = if data.len() > MAX_OPTIMIZATION_SAMPLES {
             // Use stratified sampling: take evenly spaced samples across the entire dataset
             // This ensures we get data from all time periods, not just the beginning
