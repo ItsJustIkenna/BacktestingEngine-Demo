@@ -354,12 +354,13 @@ livenessProbe:
 readinessProbe:
   enabled: true
   # Use exec probe for worker mode (no HTTP server)
-  # Checks if the main process is running
+  # Check if PID 1 is running (main container process) via /proc
+  # This works in minimal containers without pgrep/ps
   exec:
     command:
       - /bin/sh
       - -c
-      - pgrep -f "server worker" > /dev/null
+      - test -d /proc/1
   # httpGet is used for API mode (commented out for worker deployments)
   # httpGet:
   #   path: /health
