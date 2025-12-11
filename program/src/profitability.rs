@@ -486,6 +486,7 @@ mod tests {
             inventory_metrics: None,
             execution_metrics: None,
             risk_halt_reason: None,
+            metrics_profile: None,
         }
     }
     
