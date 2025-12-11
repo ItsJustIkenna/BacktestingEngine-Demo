@@ -14,7 +14,10 @@ pub mod config;
 pub mod logging_facade;
 
 // Re-export main types for convenience
-pub use traits::{Strategy, StrategyContext, StrategyError, StrategyResult, StrategyMetrics};
+pub use traits::{
+    Strategy, StrategyContext, StrategyError, StrategyResult, StrategyMetrics,
+    DataRequirements, StrategyCategory,
+};
 pub use signal::{Signal, SignalType, SignalStrength, SignalReason};
 pub use indicators::{IndicatorValue};
 pub use simple_export::{

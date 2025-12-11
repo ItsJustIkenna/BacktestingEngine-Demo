@@ -1455,4 +1455,10 @@ impl Strategy for AvellanedaStoikovStrategy {
             ..Default::default()
         }
     }
+    
+    fn data_requirements(&self) -> crate::traits::DataRequirements {
+        // Market making strategies need order flow and trade data
+        // NOT candle data - we need tick-level precision for optimal quoting
+        crate::traits::DataRequirements::market_making()
+    }
 }

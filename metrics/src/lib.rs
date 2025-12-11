@@ -28,6 +28,9 @@ pub mod advanced;
 /// Fractional Kelly with drawdown constraints for robust position sizing
 pub mod fractional_kelly;
 
+/// Strategy-specific metrics profiles for filtered display
+pub mod strategy_metrics;
+
 use serde::{Serialize, Deserialize};
 
 // Re-export commonly used functions for convenience
@@ -46,6 +49,11 @@ pub use fractional_kelly::{
     FractionalKellyConfig, FractionalKellyCalculator, KellyPositionResult,
     PositionAdjustments, RiskAssessment, RiskLevel, ReductionCurve,
     calculate_fractional_kelly, find_optimal_kelly_fraction, OptimalFractionResult,
+};
+
+pub use strategy_metrics::{
+    StrategyType, MetricCategory, MetricDefinition, MetricsProfile,
+    FilteredMetrics, MetricValue, MetricStatus,
 };
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

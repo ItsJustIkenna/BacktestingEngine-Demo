@@ -110,6 +110,149 @@ pub enum SessionType {
     Closed,
 }
 
+/// Strategy category for data loading optimization
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StrategyCategory {
+    /// Market making strategies need tick-level data (orders, trades, orderbook)
+    MarketMaking,
+    /// Momentum/trend strategies work best with candle data
+    Momentum,
+    /// Arbitrage strategies need real-time data from multiple sources
+    Arbitrage,
+    /// Statistical arbitrage using mean reversion
+    StatisticalArbitrage,
+    /// Custom strategy with explicit data requirements
+    Custom,
+}
+
+/// Data requirements for a strategy
+/// 
+/// Strategies declare what data they need, and the data loader
+/// intelligently fetches the appropriate data types.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataRequirements {
+    /// Strategy category (determines default data types)
+    pub category: StrategyCategory,
+    
+    /// Whether strategy needs historical order flow data
+    pub needs_order_flow: bool,
+    
+    /// Whether strategy needs trade/tick data
+    pub needs_trades: bool,
+    
+    /// Whether strategy needs orderbook snapshots
+    pub needs_orderbook_snapshots: bool,
+    
+    /// Whether strategy needs OHLCV candle data
+    pub needs_candles: bool,
+    
+    /// Primary candle timeframe if candles needed (e.g., "1m", "5m", "1h")
+    pub primary_timeframe: Option<String>,
+    
+    /// Additional timeframes for multi-timeframe analysis
+    pub additional_timeframes: Vec<String>,
+    
+    /// Minimum lookback window (number of data points)
+    pub lookback_window: usize,
+    
+    /// Whether strategy needs real-time orderbook depth
+    pub needs_depth: bool,
+    
+    /// Maximum data age in seconds (for freshness requirements)
+    pub max_data_age_secs: Option<u64>,
+}
+
+impl DataRequirements {
+    /// Create requirements for a market-making strategy
+    /// Market makers need order flow, trades, and orderbook data
+    pub fn market_making() -> Self {
+        Self {
+            category: StrategyCategory::MarketMaking,
+            needs_order_flow: true,
+            needs_trades: true,
+            needs_orderbook_snapshots: true,
+            needs_candles: false,
+            primary_timeframe: None,
+            additional_timeframes: vec![],
+            lookback_window: 1000,
+            needs_depth: true,
+            max_data_age_secs: Some(60), // Market making needs fresh data
+        }
+    }
+    
+    /// Create requirements for a momentum/trend strategy
+    /// Momentum strategies work with candle data
+    pub fn momentum(timeframe: &str) -> Self {
+        Self {
+            category: StrategyCategory::Momentum,
+            needs_order_flow: false,
+            needs_trades: false,
+            needs_orderbook_snapshots: false,
+            needs_candles: true,
+            primary_timeframe: Some(timeframe.to_string()),
+            additional_timeframes: vec![],
+            lookback_window: 200,
+            needs_depth: false,
+            max_data_age_secs: None,
+        }
+    }
+    
+    /// Create requirements for multi-timeframe momentum strategy
+    pub fn multi_timeframe_momentum(primary: &str, additional: Vec<&str>) -> Self {
+        Self {
+            category: StrategyCategory::Momentum,
+            needs_order_flow: false,
+            needs_trades: false,
+            needs_orderbook_snapshots: false,
+            needs_candles: true,
+            primary_timeframe: Some(primary.to_string()),
+            additional_timeframes: additional.into_iter().map(String::from).collect(),
+            lookback_window: 200,
+            needs_depth: false,
+            max_data_age_secs: None,
+        }
+    }
+    
+    /// Create requirements for an arbitrage strategy
+    pub fn arbitrage() -> Self {
+        Self {
+            category: StrategyCategory::Arbitrage,
+            needs_order_flow: true,
+            needs_trades: true,
+            needs_orderbook_snapshots: true,
+            needs_candles: false,
+            primary_timeframe: None,
+            additional_timeframes: vec![],
+            lookback_window: 100,
+            needs_depth: true,
+            max_data_age_secs: Some(1), // Arbitrage needs real-time data
+        }
+    }
+    
+    /// Create requirements for statistical arbitrage
+    pub fn stat_arb(timeframe: &str) -> Self {
+        Self {
+            category: StrategyCategory::StatisticalArbitrage,
+            needs_order_flow: false,
+            needs_trades: true,
+            needs_orderbook_snapshots: false,
+            needs_candles: true,
+            primary_timeframe: Some(timeframe.to_string()),
+            additional_timeframes: vec![],
+            lookback_window: 500,
+            needs_depth: false,
+            max_data_age_secs: None,
+        }
+    }
+}
+
+impl Default for DataRequirements {
+    fn default() -> Self {
+        // Default to market making since that's the current use case
+        Self::market_making()
+    }
+}
+
 /// Core strategy trait that all trading strategies must implement
 #[async_trait]
 pub trait Strategy: Send + Sync + Debug {
@@ -164,6 +307,15 @@ pub trait Strategy: Send + Sync + Debug {
     /// Get required data window size (number of historical data points needed)
     fn required_data_window(&self) -> usize {
         100 // Default window size
+    }
+    
+    /// Get data requirements for this strategy
+    /// 
+    /// This tells the data loader what types of data the strategy needs.
+    /// Market-making strategies need order flow and trades; momentum strategies need candles.
+    fn data_requirements(&self) -> DataRequirements {
+        // Default to market making requirements (order flow + trades)
+        DataRequirements::market_making()
     }
     
     /// Get strategy performance metrics (if available)

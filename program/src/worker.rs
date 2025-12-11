@@ -916,6 +916,7 @@ impl Worker {
                 avg_pnl_per_round_trip: ex.avg_pnl_per_round_trip,
             }),
             risk_halt_reason: None,
+            metrics_profile: Some(Self::build_metrics_profile(&job.params.strategy_type)),
         };
         
         log_info!(BACKTEST_LOGGER, "Job {} backtest complete | pnl={:.2} sharpe={:.3} trades={}", 
@@ -1839,6 +1840,7 @@ impl Worker {
             inventory_metrics: None, // Not tracked for WF windows
             execution_metrics: None, // Not tracked for WF windows
             risk_halt_reason: None,
+            metrics_profile: Some(Self::build_metrics_profile(&job.params.strategy_type)),
         })
     }
     
@@ -2544,6 +2546,7 @@ impl Worker {
                 avg_pnl_per_round_trip: ex.avg_pnl_per_round_trip,
             }),
             risk_halt_reason: None,
+            metrics_profile: Some(Self::build_metrics_profile("market_making")),
         })
     }
     /// Used for fitness evaluation and walk-forward window testing
@@ -2760,10 +2763,16 @@ impl Worker {
             inventory_metrics: None, // Not tracked for chromosome eval
             execution_metrics: None, // Not tracked for chromosome eval
             risk_halt_reason: None,
+            metrics_profile: Some(Self::build_metrics_profile("market_making")),
         })
     }
     
     /// Load market data intelligently based on strategy type
+    /// 
+    /// This function determines what data to load based on strategy requirements:
+    /// - Market making strategies need order flow + trades (tick-level data)
+    /// - Momentum strategies need OHLCV candles
+    /// - Arbitrage strategies need both real-time data sources
     async fn load_market_data_for_strategy(
         &self,
         symbol: &str,
@@ -2773,30 +2782,35 @@ impl Worker {
         log_info!(GENETIC_LOGGER, "ENTER load_market_data_for_strategy | type='{}' sym={} ex={}", 
             strategy_type, symbol, exchange);
         
-        match strategy_type {
-            "market_making" => {
-                log_info!(GENETIC_LOGGER, "Using order events loader for market_making strategy");
-                // For market making, load order events to reconstruct order book
-                self.load_order_events(symbol, exchange).await
-            }
-            _ => {
-                log_info!(GENETIC_LOGGER, "Using candle loader for '{}' strategy", strategy_type);
-                // Try to load candles first
-                match self.load_market_data(symbol, exchange).await {
-                    Ok(data) if !data.is_empty() => {
-                        log_info!(GENETIC_LOGGER, "Successfully loaded {} candles", data.len());
-                        Ok(data)
-                    }
-                    Ok(_) => {
-                        log_warn!(GENETIC_LOGGER, "No candle data found, falling back to order events for {} on {}", symbol, exchange);
-                        // Fall back to order events if no candles
-                        self.load_order_events(symbol, exchange).await
-                    }
-                    Err(e) => {
-                        log_warn!(GENETIC_LOGGER, "Failed to load candles ({}), falling back to order events", e);
-                        // Fall back to order events if candle query fails (e.g., view doesn't exist)
-                        self.load_order_events(symbol, exchange).await
-                    }
+        // Determine data requirements based on strategy type
+        // This maps string types to DataRequirements for intelligent loading
+        let needs_order_flow = matches!(
+            strategy_type.to_lowercase().as_str(),
+            "market_making" | "avellaneda_stoikov" | "avellaneda-stoikov" | 
+            "marketmaking" | "mm" | "arbitrage"
+        );
+        
+        if needs_order_flow {
+            log_info!(GENETIC_LOGGER, "Strategy '{}' requires order flow data (tick-level)", strategy_type);
+            // For market making, load historical orders and trades
+            self.load_order_events(symbol, exchange).await
+        } else {
+            log_info!(GENETIC_LOGGER, "Strategy '{}' requires candle data", strategy_type);
+            // For momentum/trend strategies, try candles first
+            match self.load_market_data(symbol, exchange).await {
+                Ok(data) if !data.is_empty() => {
+                    log_info!(GENETIC_LOGGER, "Successfully loaded {} candles", data.len());
+                    Ok(data)
+                }
+                Ok(_) => {
+                    log_warn!(GENETIC_LOGGER, "No candle data found, falling back to order events for {} on {}", symbol, exchange);
+                    // Fall back to order events if no candles
+                    self.load_order_events(symbol, exchange).await
+                }
+                Err(e) => {
+                    log_warn!(GENETIC_LOGGER, "Failed to load candles ({}), falling back to order events", e);
+                    // Fall back to order events if candle query fails (e.g., view doesn't exist)
+                    self.load_order_events(symbol, exchange).await
                 }
             }
         }
@@ -2958,6 +2972,36 @@ impl Worker {
             log_error!(MAIN_LOGGER, "PostgreSQL feature not enabled - cannot load market data");
             Err("PostgreSQL feature not enabled".into())
         }
+    }
+    
+    /// Build a metrics profile JSON for a given strategy type
+    /// 
+    /// This determines which metrics are shown in the UI based on strategy type.
+    /// Market making shows inventory metrics; momentum shows trend metrics, etc.
+    fn build_metrics_profile(strategy_type: &str) -> serde_json::Value {
+        let profile = metrics::MetricsProfile::for_strategy(
+            metrics::StrategyType::from_str(strategy_type)
+        );
+        
+        serde_json::json!({
+            "strategy_type": format!("{:?}", profile.strategy_type),
+            "primary_metrics": profile.primary_metrics,
+            "secondary_metrics": profile.secondary_metrics,
+            "hidden_metrics": profile.hidden_metrics,
+            // Include definitions so the frontend knows how to render each metric
+            "metric_definitions": profile.metric_definitions.iter().map(|(id, def)| {
+                (id.clone(), serde_json::json!({
+                    "name": def.name,
+                    "description": def.description,
+                    "category": format!("{:?}", def.category),
+                    "unit": def.unit,
+                    "decimals": def.decimals,
+                    "higher_is_better": def.higher_is_better,
+                    "warning_threshold": def.warning_threshold,
+                    "critical_threshold": def.critical_threshold,
+                }))
+            }).collect::<std::collections::HashMap<_, _>>(),
+        })
     }
 }
 

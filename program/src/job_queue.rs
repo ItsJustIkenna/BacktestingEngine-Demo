@@ -452,6 +452,11 @@ pub struct BacktestResult {
     // Warning/halt reason (e.g., "NOT_VIABLE: Commission costs exceeded 80%")
     #[serde(default)]
     pub risk_halt_reason: Option<String>,
+    
+    // Strategy-specific metrics profile (determines which metrics to show in UI)
+    // Contains primary and secondary metrics relevant to this strategy type
+    #[serde(default)]
+    pub metrics_profile: Option<serde_json::Value>,
 }
 
 /// Job queue interface
