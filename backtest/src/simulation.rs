@@ -342,6 +342,11 @@ impl SimulationLoop {
     let total_items = market_data.len();
     let mut processed_count = 0_usize;
     let sim_start = std::time::Instant::now();
+    
+    // Early stopping for GA fitness - abort clearly failing strategies
+    let early_stop_threshold = config.trading.initial_capital * 0.5; // Stop if 50% loss
+    let early_stop_check_interval = 5000_usize; // Check every 5000 events
+    let mut _early_stopped = false;
 
     for data in market_data {
             // Progress logging every 1000 items
@@ -349,6 +354,17 @@ impl SimulationLoop {
             if processed_count % 1000 == 0 || processed_count == 1 {
                 log_debug!(BACKTEST_LOGGER, "SIM_PROGRESS | {}/{} items ({:.1}%) | elapsed={:.2}s", 
                     processed_count, total_items, (processed_count as f64 / total_items as f64) * 100.0, sim_start.elapsed().as_secs_f64());
+            }
+            
+            // Early stopping check for failing strategies (speeds up GA)
+            if processed_count % early_stop_check_interval == 0 && !equity_curve.is_empty() {
+                let current_equity = *equity_curve.last().unwrap_or(&config.trading.initial_capital);
+                if current_equity < early_stop_threshold {
+                    log_debug!(BACKTEST_LOGGER, "EARLY_STOP | equity={:.2} < threshold={:.2} | processed {}/{}", 
+                        current_equity, early_stop_threshold, processed_count, total_items);
+                    _early_stopped = true;
+                    break;
+                }
             }
             
             // 1. Update orderbook with new market data if needed

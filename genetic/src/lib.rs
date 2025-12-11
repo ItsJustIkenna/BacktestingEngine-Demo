@@ -123,13 +123,14 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
             log_info!("{}Gen {}/{}: Starting fitness evaluation for {} chromosomes", 
                 job_tag, generation + 1, self.config.generations, population.len());
             
-            // Evaluate fitness with controlled parallelism (prevent OOM)
-            // Process in batches of 4 to limit memory usage while still parallelizing
+            // Evaluate fitness with controlled parallelism
+            // Process in batches of 10 for better throughput while controlling memory
             let mut futures = FuturesUnordered::new();
             let mut fitness_results = Vec::with_capacity(population.len());
             let batch_start = std::time::Instant::now();
+            const BATCH_SIZE: usize = 10;
 
-            for (chunk_idx, chunk) in population.chunks(4).enumerate() {
+            for (chunk_idx, chunk) in population.chunks(BATCH_SIZE).enumerate() {
                 // Queue up fitness evaluations for this batch
                 for chromo in chunk {
                     futures.push((self.fitness_fn)(chromo));
@@ -139,8 +140,8 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
                     fitness_results.push(result);
                 }
                 
-                // Log every 3 batches with timing
-                if chunk_idx % 3 == 0 {
+                // Log every 2 batches with timing
+                if chunk_idx % 2 == 0 {
                     let elapsed = batch_start.elapsed().as_secs_f64();
                     let rate = fitness_results.len() as f64 / elapsed.max(0.001);
                     log_info!("{}Gen {}: batch {} done, {}/{} chromosomes, {:.1}s elapsed, {:.1}/s", 
