@@ -353,10 +353,18 @@ livenessProbe:
 
 readinessProbe:
   enabled: true
-  httpGet:
-    path: /health
-    port: 8080
-  initialDelaySeconds: 30
+  # Use exec probe for worker mode (no HTTP server)
+  # Checks if the main process is running
+  exec:
+    command:
+      - /bin/sh
+      - -c
+      - pgrep -f "server worker" > /dev/null
+  # httpGet is used for API mode (commented out for worker deployments)
+  # httpGet:
+  #   path: /health
+  #   port: 8080
+  initialDelaySeconds: 10
   periodSeconds: 10
   timeoutSeconds: 5
   failureThreshold: 3
