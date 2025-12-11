@@ -28,8 +28,46 @@ interface WalkForwardSummary {
   out_of_sample_degradation: number;
 }
 
+interface InventorySummary {
+  total_volume: number;
+  avg_inventory_value: number;
+  turnover_per_day: number;
+  buy_fills: number;
+  sell_fills: number;
+  buy_volume: number;
+  sell_volume: number;
+  imbalance_ratio: number;
+}
+
+interface ExecutionSummary {
+  orders_placed: number;
+  orders_filled: number;
+  orders_cancelled: number;
+  total_fills: number;
+  fill_rate: number;
+  cancellation_rate: number;
+  avg_fills_per_order: number;
+  avg_time_to_fill_seconds: number;
+  median_time_to_fill_seconds: number;
+  bid_orders: number;
+  ask_orders: number;
+  bid_fills: number;
+  ask_fills: number;
+  bid_fill_rate: number;
+  ask_fill_rate: number;
+  avg_quote_spread_bps: number;
+  // Market-Making Specific Win Rate Metrics
+  round_trip_win_rate?: number;
+  total_round_trips?: number;
+  profitable_round_trips?: number;
+  spread_capture_rate?: number;
+  adverse_selection_rate?: number;
+  avg_pnl_per_round_trip?: number;
+}
+
 interface BacktestResult {
   job_id?: string;
+  strategy_type?: string;  // "market_making", "mean_reversion", "momentum", "arbitrage"
   symbol?: string;
   exchange?: string;
   sharpe_ratio?: number;
@@ -43,6 +81,14 @@ interface BacktestResult {
   strategy_metrics?: any;
   monte_carlo?: MonteCarloSummary;
   walk_forward?: WalkForwardSummary;
+  inventory_metrics?: InventorySummary;
+  execution_metrics?: ExecutionSummary;
+  
+  // Trade breakdown
+  closed_trades?: number;
+  open_positions?: number;
+  realized_pnl?: number;
+  unrealized_pnl?: number;
   
   // Date range for equity curve x-axis display
   start_date?: string;
@@ -65,7 +111,7 @@ interface BacktestResult {
   current_drawdown?: number;
   avg_drawdown?: number;
   
-  // Execution metrics
+  // Execution metrics (legacy)
   total_orders?: number;
   filled_orders?: number;
   cancelled_orders?: number;
@@ -74,6 +120,9 @@ interface BacktestResult {
   
   // Strategy parameters
   strategy_params?: any;
+  
+  // Risk halt reason
+  risk_halt_reason?: string;
 }
 
 interface JobStatus {
@@ -114,6 +163,23 @@ const safeToFixed = (value: number | undefined | null, decimals: number = 2): st
     return 'N/A';
   }
   return value.toFixed(decimals);
+};
+
+// Helper function to format large numbers (K, M, B)
+const formatLargeNumber = (value: number): string => {
+  if (value === undefined || value === null || isNaN(value)) {
+    return 'N/A';
+  }
+  if (Math.abs(value) >= 1_000_000_000) {
+    return `${(value / 1_000_000_000).toFixed(2)}B`;
+  }
+  if (Math.abs(value) >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(2)}M`;
+  }
+  if (Math.abs(value) >= 1_000) {
+    return `${(value / 1_000).toFixed(2)}K`;
+  }
+  return value.toFixed(2);
 };
 
 export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({ 
@@ -1161,11 +1227,15 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
           boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
           marginBottom: '20px',
         }}>
-          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>🎯 Optimized Strategy Parameters</h3>
+          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>🎯 Optimized Strategy Parameters (Avellaneda-Stoikov Market Making)</h3>
+          
+          {/* Core Parameters */}
+          <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Core Parameters</h4>
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
             gap: '15px',
+            marginBottom: '20px',
           }}>
             {result.strategy_params.risk_aversion !== undefined && (
               <MetricCard
@@ -1183,12 +1253,821 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
             )}
             {result.strategy_params.order_size !== undefined && (
               <MetricCard
-                title="Order Size"
-                value={safeToFixed(parseFloat(result.strategy_params.order_size), 4)}
+                title="Order Size (units)"
+                value={safeToFixed(parseFloat(result.strategy_params.order_size), 6)}
+                color="#6f42c1"
+              />
+            )}
+            {result.strategy_params.order_size_pct !== undefined && (
+              <MetricCard
+                title="Order Size (%)"
+                value={`${safeToFixed(parseFloat(result.strategy_params.order_size_pct) * 100, 2)}%`}
+                color="#6f42c1"
+              />
+            )}
+            {result.strategy_params.market_depth_k !== undefined && (
+              <MetricCard
+                title="Market Depth (k)"
+                value={safeToFixed(parseFloat(result.strategy_params.market_depth_k), 2)}
+                color="#6f42c1"
+              />
+            )}
+            {result.strategy_params.time_horizon_minutes !== undefined && (
+              <MetricCard
+                title="Time Horizon"
+                value={`${safeToFixed(parseFloat(result.strategy_params.time_horizon_minutes), 1)} min`}
+                color="#6f42c1"
+              />
+            )}
+            {result.strategy_params.initial_capital !== undefined && (
+              <MetricCard
+                title="Initial Capital"
+                value={`$${formatLargeNumber(parseFloat(result.strategy_params.initial_capital))}`}
+                color="#6f42c1"
+              />
+            )}
+            {result.strategy_params.max_inventory_pct !== undefined && (
+              <MetricCard
+                title="Max Inventory"
+                value={`${safeToFixed(parseFloat(result.strategy_params.max_inventory_pct) * 100, 1)}%`}
+                color="#6f42c1"
+              />
+            )}
+            {result.strategy_params.inventory_skew_multiplier !== undefined && (
+              <MetricCard
+                title="Inv Skew Mult"
+                value={`${safeToFixed(parseFloat(result.strategy_params.inventory_skew_multiplier), 2)}x`}
                 color="#6f42c1"
               />
             )}
           </div>
+          
+          {/* Spread & Volatility Parameters */}
+          <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Spread & Volatility</h4>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: '15px',
+            marginBottom: '20px',
+          }}>
+            {result.strategy_params.min_spread_bps !== undefined && (
+              <MetricCard
+                title="Min Spread"
+                value={`${safeToFixed(parseFloat(result.strategy_params.min_spread_bps), 1)} bps`}
+                color="#17a2b8"
+              />
+            )}
+            {result.strategy_params.volatility_cap !== undefined && (
+              <MetricCard
+                title="Volatility Cap"
+                value={`${safeToFixed(parseFloat(result.strategy_params.volatility_cap) * 100, 1)}%`}
+                color="#17a2b8"
+              />
+            )}
+            {result.strategy_params.volatility_adjustment_factor !== undefined && (
+              <MetricCard
+                title="Vol Adjustment"
+                value={safeToFixed(parseFloat(result.strategy_params.volatility_adjustment_factor), 2)}
+                color="#17a2b8"
+              />
+            )}
+            {result.strategy_params.fee_rate !== undefined && (
+              <MetricCard
+                title="Fee Rate"
+                value={`${safeToFixed(parseFloat(result.strategy_params.fee_rate) * 100, 3)}%`}
+                color="#17a2b8"
+              />
+            )}
+          </div>
+          
+          {/* Dynamic Adjustment Parameters */}
+          {(result.strategy_params.inventory_penalty_factor !== undefined || 
+            result.strategy_params.trend_sensitivity !== undefined ||
+            result.strategy_params.flow_sensitivity !== undefined) && (
+            <>
+              <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Dynamic Adjustments (Phase 2)</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '15px',
+                marginBottom: '20px',
+              }}>
+                {result.strategy_params.inventory_penalty_factor !== undefined && (
+                  <MetricCard
+                    title="Inventory Penalty"
+                    value={safeToFixed(parseFloat(result.strategy_params.inventory_penalty_factor), 2)}
+                    color="#fd7e14"
+                  />
+                )}
+                {result.strategy_params.trend_sensitivity !== undefined && (
+                  <MetricCard
+                    title="Trend Sensitivity"
+                    value={safeToFixed(parseFloat(result.strategy_params.trend_sensitivity), 2)}
+                    color="#fd7e14"
+                  />
+                )}
+                {result.strategy_params.flow_sensitivity !== undefined && (
+                  <MetricCard
+                    title="Flow Sensitivity"
+                    value={safeToFixed(parseFloat(result.strategy_params.flow_sensitivity), 2)}
+                    color="#fd7e14"
+                  />
+                )}
+              </div>
+            </>
+          )}
+          
+          {/* Phase 3: Dynamic K Parameters */}
+          {(result.strategy_params.k_volatility_sensitivity !== undefined || 
+            result.strategy_params.k_min !== undefined) && (
+            <>
+              <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Dynamic K (Phase 3)</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '15px',
+                marginBottom: '20px',
+              }}>
+                {result.strategy_params.k_volatility_sensitivity !== undefined && (
+                  <MetricCard
+                    title="K Vol Sensitivity"
+                    value={safeToFixed(parseFloat(result.strategy_params.k_volatility_sensitivity), 2)}
+                    color="#ff6b6b"
+                  />
+                )}
+                {result.strategy_params.k_flow_sensitivity !== undefined && (
+                  <MetricCard
+                    title="K Flow Sensitivity"
+                    value={safeToFixed(parseFloat(result.strategy_params.k_flow_sensitivity), 2)}
+                    color="#ff6b6b"
+                  />
+                )}
+                {result.strategy_params.k_min !== undefined && (
+                  <MetricCard
+                    title="K Min"
+                    value={safeToFixed(parseFloat(result.strategy_params.k_min), 2)}
+                    color="#ff6b6b"
+                  />
+                )}
+                {result.strategy_params.k_max !== undefined && (
+                  <MetricCard
+                    title="K Max"
+                    value={safeToFixed(parseFloat(result.strategy_params.k_max), 2)}
+                    color="#ff6b6b"
+                  />
+                )}
+              </div>
+            </>
+          )}
+          
+          {/* Phase 4: Dynamic Time Horizon */}
+          {(result.strategy_params.time_horizon_vol_sensitivity !== undefined || 
+            result.strategy_params.time_horizon_min !== undefined) && (
+            <>
+              <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Dynamic Time Horizon (Phase 4)</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '15px',
+                marginBottom: '20px',
+              }}>
+                {result.strategy_params.time_horizon_vol_sensitivity !== undefined && (
+                  <MetricCard
+                    title="T Vol Sensitivity"
+                    value={safeToFixed(parseFloat(result.strategy_params.time_horizon_vol_sensitivity), 2)}
+                    color="#4ecdc4"
+                  />
+                )}
+                {result.strategy_params.time_horizon_min !== undefined && (
+                  <MetricCard
+                    title="T Min (min)"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.time_horizon_min), 2)}`}
+                    color="#4ecdc4"
+                  />
+                )}
+                {result.strategy_params.time_horizon_max !== undefined && (
+                  <MetricCard
+                    title="T Max (min)"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.time_horizon_max), 2)}`}
+                    color="#4ecdc4"
+                  />
+                )}
+              </div>
+            </>
+          )}
+          
+          {/* Phase 4: Dynamic Min Spread */}
+          {(result.strategy_params.min_spread_vol_sensitivity !== undefined || 
+            result.strategy_params.min_spread_min_bps !== undefined) && (
+            <>
+              <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Dynamic Min Spread (Phase 4)</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '15px',
+                marginBottom: '20px',
+              }}>
+                {result.strategy_params.min_spread_vol_sensitivity !== undefined && (
+                  <MetricCard
+                    title="Spread Vol Sensitivity"
+                    value={safeToFixed(parseFloat(result.strategy_params.min_spread_vol_sensitivity), 2)}
+                    color="#95e1d3"
+                  />
+                )}
+                {result.strategy_params.min_spread_flow_sensitivity !== undefined && (
+                  <MetricCard
+                    title="Spread Flow Sensitivity"
+                    value={safeToFixed(parseFloat(result.strategy_params.min_spread_flow_sensitivity), 2)}
+                    color="#95e1d3"
+                  />
+                )}
+                {result.strategy_params.min_spread_min_bps !== undefined && (
+                  <MetricCard
+                    title="Spread Floor"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.min_spread_min_bps), 1)} bps`}
+                    color="#95e1d3"
+                  />
+                )}
+                {result.strategy_params.min_spread_max_bps !== undefined && (
+                  <MetricCard
+                    title="Spread Cap"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.min_spread_max_bps), 1)} bps`}
+                    color="#95e1d3"
+                  />
+                )}
+              </div>
+            </>
+          )}
+          
+          {/* Phase 4: Dynamic Order Size */}
+          {(result.strategy_params.size_vol_sensitivity !== undefined || 
+            result.strategy_params.size_min_pct !== undefined) && (
+            <>
+              <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Dynamic Order Size (Phase 4)</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '15px',
+                marginBottom: '20px',
+              }}>
+                {result.strategy_params.size_vol_sensitivity !== undefined && (
+                  <MetricCard
+                    title="Size Vol Sensitivity"
+                    value={safeToFixed(parseFloat(result.strategy_params.size_vol_sensitivity), 2)}
+                    color="#f9ca24"
+                  />
+                )}
+                {result.strategy_params.size_drawdown_sensitivity !== undefined && (
+                  <MetricCard
+                    title="Size DD Sensitivity"
+                    value={safeToFixed(parseFloat(result.strategy_params.size_drawdown_sensitivity), 2)}
+                    color="#f9ca24"
+                  />
+                )}
+                {result.strategy_params.size_win_boost !== undefined && (
+                  <MetricCard
+                    title="Win Boost"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.size_win_boost) * 100, 1)}%`}
+                    color="#f9ca24"
+                  />
+                )}
+                {result.strategy_params.size_min_pct !== undefined && (
+                  <MetricCard
+                    title="Size Min"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.size_min_pct) * 100, 2)}%`}
+                    color="#f9ca24"
+                  />
+                )}
+                {result.strategy_params.size_max_pct !== undefined && (
+                  <MetricCard
+                    title="Size Max"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.size_max_pct) * 100, 2)}%`}
+                    color="#f9ca24"
+                  />
+                )}
+              </div>
+            </>
+          )}
+          
+          {/* Phase 4: Dynamic Rate Limiting */}
+          {(result.strategy_params.rate_vol_sensitivity !== undefined || 
+            result.strategy_params.rate_min !== undefined) && (
+            <>
+              <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Dynamic Rate Limiting (Phase 4)</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '15px',
+                marginBottom: '20px',
+              }}>
+                {result.strategy_params.rate_vol_sensitivity !== undefined && (
+                  <MetricCard
+                    title="Rate Vol Sensitivity"
+                    value={safeToFixed(parseFloat(result.strategy_params.rate_vol_sensitivity), 2)}
+                    color="#a29bfe"
+                  />
+                )}
+                {result.strategy_params.rate_min !== undefined && (
+                  <MetricCard
+                    title="Rate Min"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.rate_min), 0)}/min`}
+                    color="#a29bfe"
+                  />
+                )}
+                {result.strategy_params.rate_max !== undefined && (
+                  <MetricCard
+                    title="Rate Max"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.rate_max), 0)}/min`}
+                    color="#a29bfe"
+                  />
+                )}
+              </div>
+            </>
+          )}
+          
+          {/* Timing Parameters */}
+          {(result.strategy_params.window_ms !== undefined || 
+            result.strategy_params.min_quote_lifetime_ms !== undefined ||
+            result.strategy_params.max_trades_per_minute !== undefined) && (
+            <>
+              <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Timing & Rate Limits</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '15px',
+                marginBottom: '20px',
+              }}>
+                {result.strategy_params.window_ms !== undefined && (
+                  <MetricCard
+                    title="EWMA Window"
+                    value={`${parseFloat(result.strategy_params.window_ms) / 1000}s`}
+                    color="#20c997"
+                  />
+                )}
+                {result.strategy_params.min_quote_lifetime_ms !== undefined && (
+                  <MetricCard
+                    title="Min Quote Life"
+                    value={`${parseFloat(result.strategy_params.min_quote_lifetime_ms)}ms`}
+                    color="#20c997"
+                  />
+                )}
+                {result.strategy_params.max_trades_per_minute !== undefined && (
+                  <MetricCard
+                    title="Max Trades/Min"
+                    value={safeToFixed(parseFloat(result.strategy_params.max_trades_per_minute), 0)}
+                    color="#20c997"
+                  />
+                )}
+              </div>
+            </>
+          )}
+          
+          {/* Risk Limits */}
+          {(result.strategy_params.take_profit_pct !== undefined || 
+            result.strategy_params.stop_loss_pct !== undefined) && (
+            <>
+              <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Risk Limits</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '15px',
+              }}>
+                {result.strategy_params.take_profit_pct !== undefined && (
+                  <MetricCard
+                    title="Take Profit"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.take_profit_pct) * 100, 2)}%`}
+                    color="#28a745"
+                  />
+                )}
+                {result.strategy_params.stop_loss_pct !== undefined && (
+                  <MetricCard
+                    title="Stop Loss"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.stop_loss_pct) * 100, 2)}%`}
+                    color="#dc3545"
+                  />
+                )}
+              </div>
+            </>
+          )}
+          
+          {/* Phase 5: Regime Detection */}
+          {(result.strategy_params.regime_vol_threshold_high !== undefined || 
+            result.strategy_params.regime_high_vol_spread_mult !== undefined) && (
+            <>
+              <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>🌡️ Regime Detection (Phase 5)</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '15px',
+                marginBottom: '20px',
+              }}>
+                {result.strategy_params.regime_vol_threshold_high !== undefined && (
+                  <MetricCard
+                    title="High Vol Threshold"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.regime_vol_threshold_high), 2)}x`}
+                    color="#e83e8c"
+                  />
+                )}
+                {result.strategy_params.regime_vol_threshold_low !== undefined && (
+                  <MetricCard
+                    title="Low Vol Threshold"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.regime_vol_threshold_low), 2)}x`}
+                    color="#e83e8c"
+                  />
+                )}
+                {result.strategy_params.regime_trend_threshold !== undefined && (
+                  <MetricCard
+                    title="Trend Threshold"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.regime_trend_threshold) * 100, 1)}%`}
+                    color="#e83e8c"
+                  />
+                )}
+                {result.strategy_params.regime_high_vol_spread_mult !== undefined && (
+                  <MetricCard
+                    title="High Vol Spread Mult"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.regime_high_vol_spread_mult), 2)}x`}
+                    color="#e83e8c"
+                  />
+                )}
+                {result.strategy_params.regime_low_vol_spread_mult !== undefined && (
+                  <MetricCard
+                    title="Low Vol Spread Mult"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.regime_low_vol_spread_mult), 2)}x`}
+                    color="#e83e8c"
+                  />
+                )}
+                {result.strategy_params.regime_trending_inv_mult !== undefined && (
+                  <MetricCard
+                    title="Trending Inv Mult"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.regime_trending_inv_mult), 2)}x`}
+                    color="#e83e8c"
+                  />
+                )}
+              </div>
+            </>
+          )}
+          
+          {/* Phase 5: Order Book Microstructure */}
+          {(result.strategy_params.orderbook_imbalance_sensitivity !== undefined || 
+            result.strategy_params.orderbook_depth_levels !== undefined) && (
+            <>
+              <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>📚 Orderbook Microstructure (Phase 5)</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '15px',
+                marginBottom: '20px',
+              }}>
+                {result.strategy_params.orderbook_imbalance_sensitivity !== undefined && (
+                  <MetricCard
+                    title="Imbalance Sensitivity"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.orderbook_imbalance_sensitivity) * 100, 1)}%`}
+                    color="#6610f2"
+                  />
+                )}
+                {result.strategy_params.orderbook_depth_levels !== undefined && (
+                  <MetricCard
+                    title="Depth Levels"
+                    value={safeToFixed(parseFloat(result.strategy_params.orderbook_depth_levels), 0)}
+                    color="#6610f2"
+                  />
+                )}
+                {result.strategy_params.imbalance_skew_factor !== undefined && (
+                  <MetricCard
+                    title="Imbalance Skew"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.imbalance_skew_factor) * 100, 1)}%`}
+                    color="#6610f2"
+                  />
+                )}
+              </div>
+            </>
+          )}
+          
+          {/* Phase 5: Adverse Selection */}
+          {(result.strategy_params.adverse_selection_multiplier !== undefined || 
+            result.strategy_params.toxic_flow_threshold !== undefined) && (
+            <>
+              <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>🛡️ Adverse Selection (Phase 5)</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                gap: '15px',
+              }}>
+                {result.strategy_params.informed_trader_prob_window_ms !== undefined && (
+                  <MetricCard
+                    title="Detection Window"
+                    value={`${parseFloat(result.strategy_params.informed_trader_prob_window_ms) / 1000}s`}
+                    color="#d63384"
+                  />
+                )}
+                {result.strategy_params.adverse_selection_multiplier !== undefined && (
+                  <MetricCard
+                    title="Adverse Sel. Mult"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.adverse_selection_multiplier), 2)}x`}
+                    color="#d63384"
+                  />
+                )}
+                {result.strategy_params.toxic_flow_threshold !== undefined && (
+                  <MetricCard
+                    title="Toxic Flow Threshold"
+                    value={`${safeToFixed(parseFloat(result.strategy_params.toxic_flow_threshold) * 100, 1)}%`}
+                    color="#d63384"
+                  />
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Market Making Inventory Metrics */}
+      {result.inventory_metrics && (
+        <div style={{
+          backgroundColor: 'white',
+          padding: '20px',
+          borderRadius: '8px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          marginBottom: '20px',
+        }}>
+          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>📦 Inventory Metrics (Market Making)</h3>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: '15px',
+          }}>
+            <MetricCard
+              title="Total Volume"
+              value={`$${formatLargeNumber(result.inventory_metrics.total_volume)}`}
+              color="#007bff"
+            />
+            <MetricCard
+              title="Avg Inventory"
+              value={`$${formatLargeNumber(result.inventory_metrics.avg_inventory_value)}`}
+              color="#6c757d"
+            />
+            <MetricCard
+              title="Turnover/Day"
+              value={`${safeToFixed(result.inventory_metrics.turnover_per_day, 2)}x`}
+              color={result.inventory_metrics.turnover_per_day > 1 ? '#28a745' : '#ffc107'}
+            />
+            <MetricCard
+              title="Buy Fills"
+              value={result.inventory_metrics.buy_fills.toString()}
+              color="#28a745"
+            />
+            <MetricCard
+              title="Sell Fills"
+              value={result.inventory_metrics.sell_fills.toString()}
+              color="#dc3545"
+            />
+            <MetricCard
+              title="Buy Volume"
+              value={`$${formatLargeNumber(result.inventory_metrics.buy_volume)}`}
+              color="#28a745"
+            />
+            <MetricCard
+              title="Sell Volume"
+              value={`$${formatLargeNumber(result.inventory_metrics.sell_volume)}`}
+              color="#dc3545"
+            />
+            <MetricCard
+              title="Imbalance Ratio"
+              value={`${safeToFixed(result.inventory_metrics.imbalance_ratio * 100, 2)}%`}
+              color={Math.abs(result.inventory_metrics.imbalance_ratio) < 0.1 ? '#28a745' : Math.abs(result.inventory_metrics.imbalance_ratio) < 0.25 ? '#ffc107' : '#dc3545'}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Comprehensive Execution Metrics */}
+      {result.execution_metrics && (
+        <div style={{
+          backgroundColor: 'white',
+          padding: '20px',
+          borderRadius: '8px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          marginBottom: '20px',
+        }}>
+          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>⚡ Execution Quality Metrics</h3>
+          
+          {/* Order Lifecycle */}
+          <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Order Lifecycle</h4>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: '15px',
+            marginBottom: '20px',
+          }}>
+            <MetricCard
+              title="Orders Placed"
+              value={result.execution_metrics.orders_placed.toString()}
+              color="#007bff"
+            />
+            <MetricCard
+              title="Orders Filled"
+              value={result.execution_metrics.orders_filled.toString()}
+              color="#28a745"
+            />
+            <MetricCard
+              title="Orders Cancelled"
+              value={result.execution_metrics.orders_cancelled.toString()}
+              color={result.execution_metrics.orders_cancelled === 0 ? '#28a745' : '#ffc107'}
+            />
+            <MetricCard
+              title="Total Fills"
+              value={result.execution_metrics.total_fills.toString()}
+              color="#17a2b8"
+            />
+            <MetricCard
+              title="Fill Rate"
+              value={`${safeToFixed(result.execution_metrics.fill_rate * 100, 1)}%`}
+              color={result.execution_metrics.fill_rate > 0.8 ? '#28a745' : result.execution_metrics.fill_rate > 0.5 ? '#ffc107' : '#dc3545'}
+            />
+            <MetricCard
+              title="Cancel Rate"
+              value={`${safeToFixed(result.execution_metrics.cancellation_rate * 100, 1)}%`}
+              color={result.execution_metrics.cancellation_rate < 0.2 ? '#28a745' : result.execution_metrics.cancellation_rate < 0.5 ? '#ffc107' : '#dc3545'}
+            />
+          </div>
+          
+          {/* Timing Metrics */}
+          <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Timing & Speed</h4>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: '15px',
+            marginBottom: '20px',
+          }}>
+            <MetricCard
+              title="Avg Fills/Order"
+              value={safeToFixed(result.execution_metrics.avg_fills_per_order, 2)}
+              color="#6f42c1"
+            />
+            <MetricCard
+              title="Avg Time to Fill"
+              value={`${safeToFixed(result.execution_metrics.avg_time_to_fill_seconds, 1)}s`}
+              color={result.execution_metrics.avg_time_to_fill_seconds < 10 ? '#28a745' : result.execution_metrics.avg_time_to_fill_seconds < 60 ? '#ffc107' : '#dc3545'}
+            />
+            <MetricCard
+              title="Median Time to Fill"
+              value={`${safeToFixed(result.execution_metrics.median_time_to_fill_seconds, 1)}s`}
+              color={result.execution_metrics.median_time_to_fill_seconds < 5 ? '#28a745' : result.execution_metrics.median_time_to_fill_seconds < 30 ? '#ffc107' : '#dc3545'}
+            />
+            <MetricCard
+              title="Avg Quote Spread"
+              value={`${safeToFixed(result.execution_metrics.avg_quote_spread_bps, 1)} bps`}
+              color="#17a2b8"
+            />
+          </div>
+          
+          {/* Bid/Ask Breakdown */}
+          <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Bid/Ask Breakdown</h4>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: '15px',
+          }}>
+            <MetricCard
+              title="Bid Orders"
+              value={result.execution_metrics.bid_orders.toString()}
+              color="#28a745"
+            />
+            <MetricCard
+              title="Ask Orders"
+              value={result.execution_metrics.ask_orders.toString()}
+              color="#dc3545"
+            />
+            <MetricCard
+              title="Bid Fills"
+              value={result.execution_metrics.bid_fills.toString()}
+              color="#28a745"
+            />
+            <MetricCard
+              title="Ask Fills"
+              value={result.execution_metrics.ask_fills.toString()}
+              color="#dc3545"
+            />
+            <MetricCard
+              title="Bid Fill Rate"
+              value={`${safeToFixed(result.execution_metrics.bid_fill_rate * 100, 1)}%`}
+              color={result.execution_metrics.bid_fill_rate > 0.7 ? '#28a745' : '#ffc107'}
+            />
+            <MetricCard
+              title="Ask Fill Rate"
+              value={`${safeToFixed(result.execution_metrics.ask_fill_rate * 100, 1)}%`}
+              color={result.execution_metrics.ask_fill_rate > 0.7 ? '#28a745' : '#ffc107'}
+            />
+          </div>
+          
+          {/* Market-Making Win Rate Metrics (Round-Trip Analysis) */}
+          {result.execution_metrics.round_trip_win_rate !== undefined && (
+            <>
+              <h4 style={{ margin: '20px 0 10px 0', fontSize: '14px', color: '#666' }}>🎯 Round-Trip Win Rate (Market Making)</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                gap: '15px',
+              }}>
+                <MetricCard
+                  title="Round-Trip Win Rate"
+                  value={`${safeToFixed((result.execution_metrics.round_trip_win_rate ?? 0) * 100, 1)}%`}
+                  color={(result.execution_metrics.round_trip_win_rate ?? 0) > 0.6 ? '#28a745' : (result.execution_metrics.round_trip_win_rate ?? 0) > 0.5 ? '#ffc107' : '#dc3545'}
+                />
+                <MetricCard
+                  title="Total Round-Trips"
+                  value={(result.execution_metrics.total_round_trips ?? 0).toString()}
+                  color="#007bff"
+                />
+                <MetricCard
+                  title="Profitable RTs"
+                  value={(result.execution_metrics.profitable_round_trips ?? 0).toString()}
+                  color="#28a745"
+                />
+                {result.execution_metrics.avg_pnl_per_round_trip !== undefined && (
+                  <MetricCard
+                    title="Avg P&L per RT"
+                    value={`$${safeToFixed(result.execution_metrics.avg_pnl_per_round_trip, 4)}`}
+                    color={result.execution_metrics.avg_pnl_per_round_trip >= 0 ? '#28a745' : '#dc3545'}
+                  />
+                )}
+                {result.execution_metrics.spread_capture_rate !== undefined && (
+                  <MetricCard
+                    title="Spread Capture"
+                    value={`${safeToFixed(result.execution_metrics.spread_capture_rate * 100, 1)}%`}
+                    color={result.execution_metrics.spread_capture_rate > 0.7 ? '#28a745' : result.execution_metrics.spread_capture_rate > 0.5 ? '#ffc107' : '#dc3545'}
+                  />
+                )}
+                {result.execution_metrics.adverse_selection_rate !== undefined && (
+                  <MetricCard
+                    title="Adverse Selection"
+                    value={`${safeToFixed(result.execution_metrics.adverse_selection_rate * 100, 1)}%`}
+                    color={result.execution_metrics.adverse_selection_rate < 0.3 ? '#28a745' : result.execution_metrics.adverse_selection_rate < 0.5 ? '#ffc107' : '#dc3545'}
+                  />
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Trade Breakdown (for Market Making) */}
+      {(result.closed_trades !== undefined || result.open_positions !== undefined) && (
+        <div style={{
+          backgroundColor: 'white',
+          padding: '20px',
+          borderRadius: '8px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          marginBottom: '20px',
+        }}>
+          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>📊 Trade Breakdown</h3>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: '15px',
+          }}>
+            {result.closed_trades !== undefined && (
+              <MetricCard
+                title="Closed Trades"
+                value={result.closed_trades.toString()}
+                color="#28a745"
+              />
+            )}
+            {result.open_positions !== undefined && (
+              <MetricCard
+                title="Open Positions"
+                value={result.open_positions.toString()}
+                color={result.open_positions === 0 ? '#28a745' : '#ffc107'}
+              />
+            )}
+            {result.realized_pnl !== undefined && (
+              <MetricCard
+                title="Realized P&L"
+                value={`$${safeToFixed(result.realized_pnl, 2)}`}
+                color={result.realized_pnl >= 0 ? '#28a745' : '#dc3545'}
+              />
+            )}
+            {result.unrealized_pnl !== undefined && (
+              <MetricCard
+                title="Unrealized P&L"
+                value={`$${safeToFixed(result.unrealized_pnl, 2)}`}
+                color={result.unrealized_pnl >= 0 ? '#28a745' : '#dc3545'}
+              />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Risk Halt Warning */}
+      {result.risk_halt_reason && (
+        <div style={{
+          backgroundColor: '#fff3cd',
+          padding: '15px 20px',
+          borderRadius: '8px',
+          border: '1px solid #ffc107',
+          marginBottom: '20px',
+        }}>
+          <h4 style={{ margin: '0 0 10px 0', color: '#856404' }}>⚠️ Risk Management Alert</h4>
+          <p style={{ margin: 0, color: '#856404' }}>{result.risk_halt_reason}</p>
         </div>
       )}
 

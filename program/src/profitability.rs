@@ -446,6 +446,7 @@ mod tests {
     fn create_test_result(sharpe: f64, pnl: f64, drawdown: f64, trades: usize) -> BacktestResult {
         BacktestResult {
             job_id: "test-job".to_string(),
+            strategy_type: Some("market_making".to_string()),
             total_pnl: pnl,
             sharpe_ratio: sharpe,
             max_drawdown: drawdown,

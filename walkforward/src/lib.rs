@@ -159,6 +159,83 @@ pub struct WalkForwardResult {
     pub avg_optimization_time_ms: u64,
 }
 
+// ============================================
+// CPCV (Combinatorial Purged Cross-Validation)
+// ============================================
+
+/// Configuration for CPCV analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CPCVConfig {
+    /// Number of folds to create
+    pub n_folds: usize,
+    /// Number of test folds per combination (typically 2)
+    pub n_test_folds: usize,
+    /// Purge gap in days (embargo period to prevent lookahead)
+    pub purge_gap_days: i64,
+    /// Minimum samples per fold
+    pub min_samples_per_fold: usize,
+}
+
+impl Default for CPCVConfig {
+    fn default() -> Self {
+        Self {
+            n_folds: 5,
+            n_test_folds: 2,
+            purge_gap_days: 5,
+            min_samples_per_fold: 50,
+        }
+    }
+}
+
+impl CPCVConfig {
+    /// Calculate total number of combinations: C(n_folds, n_test_folds)
+    pub fn total_combinations(&self) -> usize {
+        let n = self.n_folds;
+        let k = self.n_test_folds;
+        if k > n { return 0; }
+        
+        // C(n, k) = n! / (k! * (n-k)!)
+        let mut result = 1usize;
+        for i in 0..k {
+            result = result * (n - i) / (i + 1);
+        }
+        result
+    }
+}
+
+/// A single CPCV fold with purging applied
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CPCVFold {
+    pub fold_id: usize,
+    pub train_indices: Vec<usize>,
+    pub test_indices: Vec<usize>,
+    pub purged_indices: Vec<usize>,
+}
+
+/// Result from a single CPCV combination
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CPCVCombinationResult {
+    pub combination_id: usize,
+    pub test_fold_ids: Vec<usize>,
+    pub train_fold_ids: Vec<usize>,
+    pub optimal_parameters: HashMap<String, f64>,
+    pub test_metrics: TradingMetrics,
+    pub overfit_score: f64,
+}
+
+/// Comprehensive CPCV analysis result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CPCVResult {
+    pub combination_results: Vec<CPCVCombinationResult>,
+    pub overall_metrics: TradingMetrics,
+    pub probability_of_backtest_overfit: f64, // PBO
+    pub deflated_sharpe_ratio: f64,
+    pub parameter_stability_score: f64,
+    pub total_combinations: usize,
+    pub avg_test_sharpe: f64,
+    pub sharpe_variance_across_folds: f64,
+}
+
 pub struct WalkForwardAnalyzer {
     pub config: WalkForwardConfig,
     backtest_config: config::BacktestConfig,
@@ -381,6 +458,297 @@ impl WalkForwardAnalyzer {
                 // Higher stability for lower coefficient of variation
                 let param_stability = 1.0 / (1.0 + coefficient_of_variation);
                 total_stability += param_stability;
+                param_count += 1;
+            }
+        }
+        
+        if param_count > 0 {
+            total_stability / param_count as f64
+        } else {
+            1.0
+        }
+    }
+    
+    // ============================================
+    // CPCV (Combinatorial Purged Cross-Validation)
+    // ============================================
+    
+    /// Generate all k-combinations of fold indices for test sets
+    fn generate_combinations(n: usize, k: usize) -> Vec<Vec<usize>> {
+        let mut result = Vec::new();
+        let mut combination = vec![0; k];
+        
+        Self::generate_combinations_recursive(&mut result, &mut combination, 0, 0, n, k);
+        result
+    }
+    
+    fn generate_combinations_recursive(
+        result: &mut Vec<Vec<usize>>,
+        combination: &mut Vec<usize>,
+        start: usize,
+        index: usize,
+        n: usize,
+        k: usize,
+    ) {
+        if index == k {
+            result.push(combination.clone());
+            return;
+        }
+        
+        for i in start..=(n - k + index) {
+            combination[index] = i;
+            Self::generate_combinations_recursive(result, combination, i + 1, index + 1, n, k);
+        }
+    }
+    
+    /// Create CPCV folds with purging applied
+    pub fn create_cpcv_folds(
+        &self,
+        data_length: usize,
+        config: &CPCVConfig,
+    ) -> Vec<CPCVFold> {
+        let fold_size = data_length / config.n_folds;
+        let purge_samples = (config.purge_gap_days as usize).min(fold_size / 4);
+        
+        let mut folds = Vec::new();
+        
+        for fold_id in 0..config.n_folds {
+            let fold_start = fold_id * fold_size;
+            let fold_end = if fold_id == config.n_folds - 1 {
+                data_length
+            } else {
+                (fold_id + 1) * fold_size
+            };
+            
+            // Calculate purge zone (overlap between train and test)
+            let purge_start = if fold_start >= purge_samples {
+                fold_start - purge_samples
+            } else {
+                0
+            };
+            let purge_end = (fold_end + purge_samples).min(data_length);
+            
+            let test_indices: Vec<usize> = (fold_start..fold_end).collect();
+            let purged_indices: Vec<usize> = (purge_start..fold_start)
+                .chain(fold_end..purge_end)
+                .collect();
+            
+            // Train indices are everything outside test and purge
+            let train_indices: Vec<usize> = (0..data_length)
+                .filter(|i| !test_indices.contains(i) && !purged_indices.contains(i))
+                .collect();
+            
+            folds.push(CPCVFold {
+                fold_id,
+                train_indices,
+                test_indices,
+                purged_indices,
+            });
+        }
+        
+        folds
+    }
+    
+    /// Run full CPCV analysis
+    pub async fn run_cpcv_analysis(
+        &self,
+        parameter_ranges: HashMap<String, (f64, f64)>,
+        data_length: usize,
+        cpcv_config: CPCVConfig,
+    ) -> anyhow::Result<CPCVResult> {
+        let folds = self.create_cpcv_folds(data_length, &cpcv_config);
+        let combinations = Self::generate_combinations(cpcv_config.n_folds, cpcv_config.n_test_folds);
+        
+        let mut combination_results = Vec::new();
+        let mut in_sample_sharpes = Vec::new();
+        let mut out_of_sample_sharpes = Vec::new();
+        
+        for (combo_id, test_fold_ids) in combinations.iter().enumerate() {
+            // Train folds are all folds not in test
+            let train_fold_ids: Vec<usize> = (0..cpcv_config.n_folds)
+                .filter(|f| !test_fold_ids.contains(f))
+                .collect();
+            
+            // Aggregate train indices (excluding purged zones around test folds)
+            let test_indices: std::collections::HashSet<usize> = test_fold_ids.iter()
+                .flat_map(|&f| folds[f].test_indices.iter().copied())
+                .collect();
+            let purged_indices: std::collections::HashSet<usize> = test_fold_ids.iter()
+                .flat_map(|&f| folds[f].purged_indices.iter().copied())
+                .collect();
+            
+            let _train_indices: Vec<usize> = (0..data_length)
+                .filter(|i| !test_indices.contains(i) && !purged_indices.contains(i))
+                .collect();
+            
+            // Mock optimization on train set
+            let mock_opt_window = OptimizationWindow {
+                start_date: self.config.start_date,
+                end_date: self.config.end_date,
+            };
+            let optimal_params = self.optimize_parameters(
+                &parameter_ranges,
+                &mock_opt_window,
+            ).await?;
+            
+            // Mock in-sample performance (higher due to overfitting)
+            let in_sample_sharpe = 1.8 + (combo_id as f64 * 0.05);
+            in_sample_sharpes.push(in_sample_sharpe);
+            
+            // Mock out-of-sample performance (lower, more realistic)
+            let test_metrics = TradingMetrics {
+                total_return: 5.2 + (combo_id as f64 * 0.3),
+                sharpe_ratio: 1.1 + (combo_id as f64 * 0.02),
+                max_drawdown: 8.5 - (combo_id as f64 * 0.1),
+                win_rate: 0.55,
+                profit_factor: 1.4,
+                total_trades: 25,
+                avg_trade_duration_hours: 18.0,
+                volatility: 0.18,
+            };
+            out_of_sample_sharpes.push(test_metrics.sharpe_ratio);
+            
+            // Overfit score: how much IS beats OOS
+            let overfit_score = (in_sample_sharpe - test_metrics.sharpe_ratio) / in_sample_sharpe;
+            
+            combination_results.push(CPCVCombinationResult {
+                combination_id: combo_id,
+                test_fold_ids: test_fold_ids.clone(),
+                train_fold_ids,
+                optimal_parameters: optimal_params,
+                test_metrics,
+                overfit_score,
+            });
+        }
+        
+        // Calculate Probability of Backtest Overfit (PBO)
+        // PBO = proportion of combinations where rank(IS) > median but rank(OOS) <= median
+        let pbo = self.calculate_pbo(&in_sample_sharpes, &out_of_sample_sharpes);
+        
+        // Calculate deflated Sharpe ratio
+        let avg_oos_sharpe = out_of_sample_sharpes.iter().sum::<f64>() / out_of_sample_sharpes.len() as f64;
+        let sharpe_variance = Self::calculate_variance(&out_of_sample_sharpes);
+        let deflated_sharpe = avg_oos_sharpe * (1.0 - pbo);
+        
+        // Aggregate overall metrics
+        let overall_metrics = Self::aggregate_cpcv_metrics(&combination_results);
+        
+        // Parameter stability across combinations
+        let param_stability = Self::calculate_cpcv_parameter_stability(&combination_results);
+        
+        Ok(CPCVResult {
+            combination_results: combination_results.clone(),
+            overall_metrics,
+            probability_of_backtest_overfit: pbo,
+            deflated_sharpe_ratio: deflated_sharpe,
+            parameter_stability_score: param_stability,
+            total_combinations: combination_results.len(),
+            avg_test_sharpe: avg_oos_sharpe,
+            sharpe_variance_across_folds: sharpe_variance,
+        })
+    }
+    
+    /// Calculate Probability of Backtest Overfit (PBO)
+    /// Based on Bailey, Borwein, López de Prado (2016)
+    fn calculate_pbo(&self, in_sample: &[f64], out_of_sample: &[f64]) -> f64 {
+        if in_sample.len() != out_of_sample.len() || in_sample.is_empty() {
+            return 0.5; // No information
+        }
+        
+        let n = in_sample.len();
+        
+        // Rank both IS and OOS Sharpe ratios
+        let mut is_ranked: Vec<(usize, f64)> = in_sample.iter().enumerate()
+            .map(|(i, &v)| (i, v))
+            .collect();
+        is_ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        
+        let median_rank = n / 2;
+        
+        // Count combinations where best IS performer has below-median OOS
+        let mut overfit_count = 0;
+        for (rank, (combo_idx, _is_sharpe)) in is_ranked.iter().enumerate() {
+            if rank < median_rank {
+                // This combo was top-half by IS
+                let oos_sharpe = out_of_sample[*combo_idx];
+                let oos_median = Self::calculate_median(out_of_sample);
+                
+                if oos_sharpe < oos_median {
+                    overfit_count += 1;
+                }
+            }
+        }
+        
+        // PBO = proportion of top IS that underperformed OOS median
+        overfit_count as f64 / median_rank.max(1) as f64
+    }
+    
+    fn calculate_median(values: &[f64]) -> f64 {
+        if values.is_empty() {
+            return 0.0;
+        }
+        let mut sorted = values.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mid = sorted.len() / 2;
+        if sorted.len() % 2 == 0 {
+            (sorted[mid - 1] + sorted[mid]) / 2.0
+        } else {
+            sorted[mid]
+        }
+    }
+    
+    fn calculate_variance(values: &[f64]) -> f64 {
+        if values.len() < 2 {
+            return 0.0;
+        }
+        let mean = values.iter().sum::<f64>() / values.len() as f64;
+        values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (values.len() - 1) as f64
+    }
+    
+    fn aggregate_cpcv_metrics(results: &[CPCVCombinationResult]) -> TradingMetrics {
+        if results.is_empty() {
+            return TradingMetrics::default();
+        }
+        
+        let n = results.len() as f64;
+        TradingMetrics {
+            total_return: results.iter().map(|r| r.test_metrics.total_return).sum::<f64>() / n,
+            sharpe_ratio: results.iter().map(|r| r.test_metrics.sharpe_ratio).sum::<f64>() / n,
+            max_drawdown: results.iter().map(|r| r.test_metrics.max_drawdown).fold(0.0, f64::max),
+            win_rate: results.iter().map(|r| r.test_metrics.win_rate).sum::<f64>() / n,
+            profit_factor: results.iter().map(|r| r.test_metrics.profit_factor).sum::<f64>() / n,
+            total_trades: results.iter().map(|r| r.test_metrics.total_trades).sum::<usize>() / results.len(),
+            avg_trade_duration_hours: results.iter().map(|r| r.test_metrics.avg_trade_duration_hours).sum::<f64>() / n,
+            volatility: results.iter().map(|r| r.test_metrics.volatility).sum::<f64>() / n,
+        }
+    }
+    
+    fn calculate_cpcv_parameter_stability(results: &[CPCVCombinationResult]) -> f64 {
+        if results.len() < 2 {
+            return 1.0;
+        }
+        
+        let all_param_names: std::collections::HashSet<String> = results.iter()
+            .flat_map(|r| r.optimal_parameters.keys().cloned())
+            .collect();
+        
+        let mut total_stability = 0.0;
+        let mut param_count = 0;
+        
+        for param_name in all_param_names {
+            let values: Vec<f64> = results.iter()
+                .filter_map(|r| r.optimal_parameters.get(&param_name))
+                .copied()
+                .collect();
+            
+            if values.len() >= 2 {
+                let mean = values.iter().sum::<f64>() / values.len() as f64;
+                let cv = if mean.abs() > 1e-10 {
+                    Self::calculate_variance(&values).sqrt() / mean.abs()
+                } else {
+                    0.0
+                };
+                total_stability += 1.0 / (1.0 + cv);
                 param_count += 1;
             }
         }

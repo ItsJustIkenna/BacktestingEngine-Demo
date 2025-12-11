@@ -18,6 +18,28 @@ use chrono::{DateTime, Utc, Duration};
 use bigdecimal::BigDecimal;
 use std::collections::HashMap;
 
+/// Market regime detected from volatility and trend analysis
+/// Used for regime-aware strategy adjustments
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarketRegime {
+    /// Normal market conditions (baseline volatility, no strong trend)
+    Normal,
+    /// High volatility regime - widen spreads, reduce size
+    HighVolatility,
+    /// Low volatility regime - tighten spreads, increase size
+    LowVolatility,
+    /// Trending market - reduce inventory tolerance, lean with trend
+    Trending,
+    /// Crisis/extreme volatility - halt or severely limit trading
+    Crisis,
+}
+
+impl Default for MarketRegime {
+    fn default() -> Self {
+        MarketRegime::Normal
+    }
+}
+
 /// Safe clamp that handles floating point precision issues where min ≈ max
 /// Avoids panic when min > max due to floating point representation
 #[inline]
@@ -96,6 +118,24 @@ pub struct AvellanedaStoikovParams {
     pub rate_vol_sensitivity: f64,          // How much to reduce rate in high vol
     pub rate_min: f64,                       // Minimum trades per minute
     pub rate_max: f64,                       // Maximum trades per minute
+    
+    // Phase 5: Regime detection parameters
+    pub regime_vol_threshold_high: f64,     // Volatility ratio above which = high-vol regime (1.5 = 50% above baseline)
+    pub regime_vol_threshold_low: f64,      // Volatility ratio below which = low-vol regime (0.7 = 30% below baseline)
+    pub regime_trend_threshold: f64,        // Absolute trend strength for trending regime (0.3 = 30% trend signal)
+    pub regime_high_vol_spread_mult: f64,   // Spread multiplier in high-vol regime (1.5 = 50% wider)
+    pub regime_low_vol_spread_mult: f64,    // Spread multiplier in low-vol regime (0.8 = 20% tighter)
+    pub regime_trending_inv_mult: f64,      // Inventory tolerance multiplier in trending regime (0.5 = 50% less tolerance)
+    
+    // Phase 5: Order book microstructure parameters
+    pub orderbook_imbalance_sensitivity: f64, // How much to adjust spread based on order book imbalance (0.3 = 30%)
+    pub orderbook_depth_levels: usize,        // Number of depth levels to consider for imbalance
+    pub imbalance_skew_factor: f64,           // How much to skew quotes toward stronger side (0.5 = 50%)
+    
+    // Phase 5: Adverse selection modeling
+    pub informed_trader_prob_window_ms: u64,  // Window for estimating informed trader probability
+    pub adverse_selection_multiplier: f64,    // How much to widen spread on detected informed flow (2.0 = 2x)
+    pub toxic_flow_threshold: f64,            // Order flow toxicity threshold (0.6 = 60%)
 }
 
 impl Default for AvellanedaStoikovParams {
@@ -158,6 +198,24 @@ impl Default for AvellanedaStoikovParams {
             rate_vol_sensitivity: 0.4,          // Reduce rate 40% per vol ratio above baseline
             rate_min: 5.0,                       // Minimum 5 trades per minute
             rate_max: 60.0,                      // Maximum 60 trades per minute
+            
+            // Phase 5: Regime detection defaults
+            regime_vol_threshold_high: 1.5,     // 50% above baseline = high-vol regime
+            regime_vol_threshold_low: 0.7,      // 30% below baseline = low-vol regime
+            regime_trend_threshold: 0.3,        // 30% trend strength for trending regime
+            regime_high_vol_spread_mult: 1.5,   // 50% wider spreads in high-vol
+            regime_low_vol_spread_mult: 0.8,    // 20% tighter spreads in low-vol
+            regime_trending_inv_mult: 0.5,      // 50% less inventory tolerance when trending
+            
+            // Phase 5: Order book microstructure defaults
+            orderbook_imbalance_sensitivity: 0.3, // 30% adjustment based on order book imbalance
+            orderbook_depth_levels: 5,            // Consider top 5 levels of depth
+            imbalance_skew_factor: 0.5,           // 50% skew toward stronger side
+            
+            // Phase 5: Adverse selection defaults
+            informed_trader_prob_window_ms: 5000, // 5 second window for detecting informed flow
+            adverse_selection_multiplier: 2.0,    // Double spread on toxic flow
+            toxic_flow_threshold: 0.6,            // 60% threshold for toxic flow detection
         }
     }
 }
@@ -231,6 +289,19 @@ pub struct AvellanedaStoikovStrategy {
     
     // Position exit tracking
     avg_entry_price: Option<f64>,            // Average entry price for current position
+    
+    // Phase 5: Regime detection state
+    current_regime: MarketRegime,            // Current detected market regime
+    regime_history: Vec<(DateTime<Utc>, MarketRegime)>, // History for regime persistence
+    
+    // Phase 5: Order book microstructure state
+    last_bid_depth: f64,                     // Last observed bid-side depth
+    last_ask_depth: f64,                     // Last observed ask-side depth
+    orderbook_imbalance: f64,                // Current (bid_depth - ask_depth) / (bid_depth + ask_depth)
+    
+    // Phase 5: Adverse selection tracking
+    recent_trade_directions: Vec<(DateTime<Utc>, bool)>, // (timestamp, is_buy) for detecting informed flow
+    adverse_selection_score: f64,            // Current estimated probability of informed trading
 }
 
 impl AvellanedaStoikovStrategy {
@@ -278,6 +349,19 @@ impl AvellanedaStoikovStrategy {
             
             // Position exit tracking
             avg_entry_price: None,
+            
+            // Phase 5: Initialize regime detection state
+            current_regime: MarketRegime::Normal,
+            regime_history: Vec::new(),
+            
+            // Phase 5: Initialize order book microstructure state
+            last_bid_depth: 0.0,
+            last_ask_depth: 0.0,
+            orderbook_imbalance: 0.0,
+            
+            // Phase 5: Initialize adverse selection tracking
+            recent_trade_directions: Vec::new(),
+            adverse_selection_score: 0.0,
         }
     }
     
@@ -735,7 +819,8 @@ impl AvellanedaStoikovStrategy {
         match market_data {
             dataloader::MarketData::Trade(trade) => {
                 let volume = trade.quantity.to_f64().unwrap_or(0.0);
-                if trade.side == "buy" {
+                let is_buy = trade.side == "buy";
+                if is_buy {
                     self.buy_volume += volume;
                 } else {
                     self.sell_volume += volume;
@@ -749,8 +834,188 @@ impl AvellanedaStoikovStrategy {
                 if self.recent_fills.len() > 100 {
                     self.recent_fills.remove(0);
                 }
+                
+                // Phase 5: Track trade direction for adverse selection
+                self.recent_trade_directions.push((trade.timestamp, is_buy));
+                // Keep only trades within the informed trader detection window
+                let cutoff = trade.timestamp - Duration::milliseconds(self.params.informed_trader_prob_window_ms as i64);
+                self.recent_trade_directions.retain(|(ts, _)| *ts >= cutoff);
             },
             _ => {},
+        }
+    }
+    
+    // ========== PHASE 5: REGIME DETECTION ==========
+    
+    /// Detect current market regime based on volatility and trend
+    /// Returns the detected regime and updates internal state
+    fn detect_market_regime(&mut self, current_volatility: f64, now: DateTime<Utc>) -> MarketRegime {
+        // Calculate volatility ratio vs baseline
+        let vol_ratio = if let Some(baseline) = self.baseline_volatility {
+            if baseline > 0.0 {
+                current_volatility / baseline
+            } else {
+                1.0
+            }
+        } else {
+            1.0
+        };
+        
+        // Get current trend strength
+        let trend_strength = self.estimate_trend().abs();
+        
+        // Determine regime based on thresholds
+        let new_regime = if vol_ratio > 3.0 {
+            // Extreme volatility - crisis mode
+            MarketRegime::Crisis
+        } else if vol_ratio > self.params.regime_vol_threshold_high {
+            // High volatility regime
+            MarketRegime::HighVolatility
+        } else if vol_ratio < self.params.regime_vol_threshold_low {
+            // Low volatility regime
+            MarketRegime::LowVolatility
+        } else if trend_strength > self.params.regime_trend_threshold {
+            // Trending market
+            MarketRegime::Trending
+        } else {
+            // Normal conditions
+            MarketRegime::Normal
+        };
+        
+        // Update regime history for persistence analysis
+        self.regime_history.push((now, new_regime));
+        if self.regime_history.len() > 100 {
+            self.regime_history.remove(0);
+        }
+        
+        // Apply regime persistence (require 3 consecutive observations to switch)
+        let regime_to_apply = if self.regime_history.len() >= 3 {
+            let last_three: Vec<_> = self.regime_history.iter().rev().take(3).collect();
+            if last_three.iter().all(|(_, r)| *r == new_regime) {
+                new_regime
+            } else {
+                self.current_regime // Keep current regime
+            }
+        } else {
+            new_regime
+        };
+        
+        self.current_regime = regime_to_apply;
+        regime_to_apply
+    }
+    
+    /// Get spread multiplier based on current regime
+    fn get_regime_spread_multiplier(&self) -> f64 {
+        match self.current_regime {
+            MarketRegime::Normal => 1.0,
+            MarketRegime::HighVolatility => self.params.regime_high_vol_spread_mult,
+            MarketRegime::LowVolatility => self.params.regime_low_vol_spread_mult,
+            MarketRegime::Trending => 1.2, // Slightly wider in trending
+            MarketRegime::Crisis => 3.0,   // Much wider in crisis
+        }
+    }
+    
+    /// Get inventory tolerance multiplier based on current regime
+    fn get_regime_inventory_multiplier(&self) -> f64 {
+        match self.current_regime {
+            MarketRegime::Normal => 1.0,
+            MarketRegime::HighVolatility => 0.7,  // 30% less inventory tolerance
+            MarketRegime::LowVolatility => 1.3,   // 30% more tolerance
+            MarketRegime::Trending => self.params.regime_trending_inv_mult,
+            MarketRegime::Crisis => 0.2,          // 80% less tolerance
+        }
+    }
+    
+    // ========== PHASE 5: ORDER BOOK MICROSTRUCTURE ==========
+    
+    /// Update order book imbalance tracking
+    /// δQ = (Σbids - Σasks) / (Σbids + Σasks)
+    fn update_orderbook_imbalance(&mut self, bid_depth: f64, ask_depth: f64) {
+        self.last_bid_depth = bid_depth;
+        self.last_ask_depth = ask_depth;
+        
+        let total_depth = bid_depth + ask_depth;
+        if total_depth > 0.0 {
+            self.orderbook_imbalance = (bid_depth - ask_depth) / total_depth;
+        } else {
+            self.orderbook_imbalance = 0.0;
+        }
+    }
+    
+    /// Calculate spread adjustment based on order book imbalance
+    /// Positive imbalance (more bids) -> tighter ask, wider bid (to capture buying pressure)
+    /// Negative imbalance (more asks) -> tighter bid, wider ask (to capture selling pressure)
+    fn calculate_imbalance_spread_adjustment(&self) -> (f64, f64) {
+        let imbalance = self.orderbook_imbalance;
+        let sensitivity = self.params.orderbook_imbalance_sensitivity;
+        
+        // bid_adjustment: multiplier for bid spread (>1 = wider)
+        // ask_adjustment: multiplier for ask spread (>1 = wider)
+        let bid_adjustment = 1.0 + imbalance * sensitivity;  // Positive imbalance -> wider bid
+        let ask_adjustment = 1.0 - imbalance * sensitivity;  // Positive imbalance -> tighter ask
+        
+        (bid_adjustment.max(0.5).min(2.0), ask_adjustment.max(0.5).min(2.0))
+    }
+    
+    /// Calculate quote skew based on order book imbalance
+    /// Returns how much to move the mid price (positive = up, negative = down)
+    fn calculate_imbalance_skew(&self, mid_price: f64) -> f64 {
+        // Skew toward the stronger side
+        let skew_pct = self.orderbook_imbalance * self.params.imbalance_skew_factor * 0.001; // Max 0.05% skew
+        mid_price * skew_pct
+    }
+    
+    // ========== PHASE 5: ADVERSE SELECTION MODELING ==========
+    
+    /// Calculate adverse selection score (probability of informed trading)
+    /// Uses VPIN-like approach: consecutive trades in same direction indicate informed flow
+    fn calculate_adverse_selection_score(&mut self) -> f64 {
+        if self.recent_trade_directions.len() < 5 {
+            return 0.0; // Not enough data
+        }
+        
+        // Count buy and sell trades in recent window
+        let buys = self.recent_trade_directions.iter().filter(|(_, is_buy)| *is_buy).count();
+        let sells = self.recent_trade_directions.len() - buys;
+        
+        // Calculate order imbalance (absolute)
+        let total = buys + sells;
+        let imbalance = (buys as f64 - sells as f64).abs() / total as f64;
+        
+        // High imbalance suggests informed trading
+        // Also check for consecutive same-direction trades (momentum)
+        let mut max_consecutive = 1;
+        let mut current_consecutive = 1;
+        let mut last_direction = None;
+        
+        for (_, is_buy) in &self.recent_trade_directions {
+            if Some(*is_buy) == last_direction {
+                current_consecutive += 1;
+                max_consecutive = max_consecutive.max(current_consecutive);
+            } else {
+                current_consecutive = 1;
+            }
+            last_direction = Some(*is_buy);
+        }
+        
+        // Consecutive score: 5+ consecutive trades = high toxicity signal
+        let consecutive_score = (max_consecutive as f64 - 2.0).max(0.0) / 5.0;
+        
+        // Combined adverse selection score
+        let score = (imbalance * 0.6 + consecutive_score * 0.4).min(1.0);
+        self.adverse_selection_score = score;
+        
+        score
+    }
+    
+    /// Get spread multiplier based on adverse selection (informed trader probability)
+    fn get_adverse_selection_spread_multiplier(&self) -> f64 {
+        if self.adverse_selection_score > self.params.toxic_flow_threshold {
+            // Toxic flow detected - widen spreads significantly
+            1.0 + (self.adverse_selection_score - self.params.toxic_flow_threshold) 
+                * self.params.adverse_selection_multiplier
+        } else {
+            1.0
         }
     }
 }
@@ -909,6 +1174,21 @@ impl Strategy for AvellanedaStoikovStrategy {
         } else {
             self.paused = false;
         }
+        
+        // Phase 5: Detect market regime and get regime-based adjustments
+        let regime = self.detect_market_regime(ann_vol, now);
+        let regime_spread_mult = self.get_regime_spread_multiplier();
+        let regime_inv_mult = self.get_regime_inventory_multiplier();
+        
+        // Phase 5: Calculate adverse selection score and get adjustment
+        let _adverse_score = self.calculate_adverse_selection_score();
+        let adverse_spread_mult = self.get_adverse_selection_spread_multiplier();
+        
+        // Phase 5: Crisis regime - halt trading entirely
+        if regime == MarketRegime::Crisis {
+            self.paused = true;
+            return Ok(vec![]);
+        }
 
         // 4. Calculate optimal spread and skew (Avellaneda-Stoikov formulas)
         // Phase 2: Use dynamic parameters instead of static
@@ -939,13 +1219,18 @@ impl Strategy for AvellanedaStoikovStrategy {
         // Reservation price (skew)
         // Note: Skew should be proportional to inventory value, not raw units
         // Normalize inventory impact to prevent extreme skew
+        // Phase 5: Apply regime-based inventory tolerance adjustment
         let inventory_value = q * s;  // Inventory in dollar terms
         let normalized_inventory = inventory_value / self.params.initial_capital;  // As fraction of capital
-        let skew_factor = (normalized_inventory - q_star) * gamma * sigma * sigma * t;
+        let adjusted_q_star = q_star * regime_inv_mult; // Adjust target based on regime
+        let skew_factor = (normalized_inventory - adjusted_q_star) * gamma * sigma * sigma * t;
         // Cap skew to prevent reservation price from going negative or too far from mid
         let max_skew = 0.10;  // Max 10% skew from mid price
         let capped_skew = safe_clamp(skew_factor, -max_skew, max_skew);
-        let r = s * (1.0 - capped_skew);
+        
+        // Phase 5: Apply order book imbalance skew
+        let imbalance_skew = self.calculate_imbalance_skew(s);
+        let r = s * (1.0 - capped_skew) + imbalance_skew;
         
         // Optimal spread from A-S formula (normalized to price)
         // The classic A-S formula: spread = γσ²t + (2/γ)ln(1+γ/k)
@@ -957,14 +1242,17 @@ impl Strategy for AvellanedaStoikovStrategy {
         let liquidity_term = liquidity_coefficient * (2.0 / gamma) * fee / k;  // Dimensionless
         let as_spread_raw = s * (variance_term + liquidity_term);  // Now in dollars, scaled to price
         
+        // Phase 5: Apply regime and adverse selection spread multipliers
+        let as_spread_adjusted = as_spread_raw * regime_spread_mult * adverse_spread_mult;
+        
         // Debug: Log first 5 spread calculations to diagnose fill issues (use sync logging)
         static SPREAD_DEBUG_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let debug_count = SPREAD_DEBUG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if debug_count < 5 {
-            let raw_spread_bps = (as_spread_raw / s) * 10000.0;
+            let raw_spread_bps = (as_spread_adjusted / s) * 10000.0;
             STRATEGY_LOGGER.info_sync(format!(
-                "A-S_SPREAD_CALC | gamma={:.4} sigma={:.4} t={:.6} k={:.2} fee={:.6} | var_term={:.6} liq_term={:.6} | raw_spread_bps={:.2}",
-                gamma, sigma, t, k, fee, variance_term, liquidity_term, raw_spread_bps));
+                "A-S_SPREAD_CALC | gamma={:.4} sigma={:.4} t={:.6} k={:.2} fee={:.6} | var_term={:.6} liq_term={:.6} | raw_spread_bps={:.2} | regime={:?} adv_sel={:.2}",
+                gamma, sigma, t, k, fee, variance_term, liquidity_term, raw_spread_bps, regime, self.adverse_selection_score));
         }
         
         // Phase 4: Use dynamic minimum spread based on volatility and flow
@@ -975,12 +1263,17 @@ impl Strategy for AvellanedaStoikovStrategy {
         // Max spread should allow for volatile crypto markets (up to 200 bps = 2%)
         // This prevents extreme spreads while still allowing realistic quotes
         let max_spread = s * 0.02;  // 2% max spread (200 bps) - more realistic for crypto
-        let as_spread = safe_clamp(as_spread_raw, min_spread, max_spread);
+        let as_spread = safe_clamp(as_spread_adjusted, min_spread, max_spread);
         let spread = as_spread.max(min_spread);
         
+        // Phase 5: Apply asymmetric spread adjustment based on order book imbalance
+        let (bid_spread_mult, ask_spread_mult) = self.calculate_imbalance_spread_adjustment();
+        let bid_spread = (spread / 2.0) * bid_spread_mult;
+        let ask_spread = (spread / 2.0) * ask_spread_mult;
+        
         // Sanity check: bid and ask must be positive and form valid spread
-        let bid = r - spread / 2.0;
-        let ask = r + spread / 2.0;
+        let bid = r - bid_spread;
+        let ask = r + ask_spread;
         
         // Basic validation - just ensure prices are positive and bid < ask
         if bid <= 0.0 || ask <= 0.0 || ask <= bid {

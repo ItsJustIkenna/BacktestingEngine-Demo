@@ -329,12 +329,38 @@ pub struct ExecutionSummary {
     pub ask_fill_rate: f64,
     /// Average quote spread at time of placement (bps)
     pub avg_quote_spread_bps: f64,
+    
+    // Market-Making Specific Win Rate Metrics
+    /// Round-trip win rate: profitable_round_trips / total_round_trips
+    /// A round-trip is a buy fill matched with a sell fill
+    #[serde(default)]
+    pub round_trip_win_rate: Option<f64>,
+    /// Total round-trips completed (buy+sell pairs)
+    #[serde(default)]
+    pub total_round_trips: usize,
+    /// Profitable round-trips (spread captured > fees)
+    #[serde(default)]
+    pub profitable_round_trips: usize,
+    /// Spread capture rate: actual_spread / theoretical_spread
+    /// How much of the quoted spread was actually captured after adverse selection
+    #[serde(default)]
+    pub spread_capture_rate: Option<f64>,
+    /// Adverse selection rate: % of fills where price moved against us
+    /// Higher = more informed flow, worse execution quality
+    #[serde(default)]
+    pub adverse_selection_rate: Option<f64>,
+    /// Average P&L per round-trip in quote currency
+    #[serde(default)]
+    pub avg_pnl_per_round_trip: Option<f64>,
 }
 
 /// Backtest results
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BacktestResult {
     pub job_id: String,
+    /// Strategy type: "market_making", "mean_reversion", "momentum", "arbitrage"
+    #[serde(default)]
+    pub strategy_type: Option<String>,
     pub total_pnl: f64,
     pub sharpe_ratio: f64,
     pub max_drawdown: f64,

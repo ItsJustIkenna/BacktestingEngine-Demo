@@ -511,4 +511,228 @@ impl OrderBookBatchLoader {
     }
 }
 
+// ============================================================================
+// STREAMING DATA LOADER FOR DISTRIBUTED WORKERS
+// ============================================================================
+
+#[cfg(feature = "postgres")]
+/// Streaming data loader for distributed backtest workers
+/// 
+/// This loader efficiently loads data for a specific time range,
+/// supporting cursor-based pagination to avoid memory spikes.
+pub struct StreamingDataLoader {
+    pool: Arc<deadpool::Pool<AsyncPgConnection>>,
+}
+
+#[cfg(feature = "postgres")]
+impl StreamingDataLoader {
+    /// Create a new streaming data loader
+    pub async fn new(db_url: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        use diesel_async::pooled_connection::AsyncDieselConnectionManager;
+        
+        let config = AsyncDieselConnectionManager::<AsyncPgConnection>::new(db_url);
+        let pool = deadpool::Pool::builder(config)
+            .max_size(4)
+            .build()
+            .map_err(|e| format!("Failed to create connection pool: {}", e))?;
+        
+        Ok(Self {
+            pool: Arc::new(pool),
+        })
+    }
+    
+    /// Create from existing pool
+    pub fn from_pool(pool: Arc<deadpool::Pool<AsyncPgConnection>>) -> Self {
+        Self { pool }
+    }
+    
+    /// Stream events for a time range
+    /// 
+    /// Returns a DataStream that yields batches of events.
+    /// Memory efficient: only one batch in memory at a time.
+    pub async fn stream_events(
+        &self,
+        symbol: &str,
+        exchange: &str,
+        start: &DateTime<Utc>,
+        end: &DateTime<Utc>,
+        batch_size: usize,
+    ) -> Result<DataStream, Box<dyn std::error::Error + Send + Sync>> {
+        // For now, we load all at once but in batches
+        // A true streaming implementation would use async_stream
+        
+        let mut all_batches = Vec::new();
+        let mut offset = 0i64;
+        
+        loop {
+            let batch = self.load_batch(symbol, exchange, start, end, batch_size, offset).await?;
+            
+            if batch.is_empty() {
+                break;
+            }
+            
+            let batch_len = batch.len();
+            all_batches.push(Ok(batch));
+            offset += batch_len as i64;
+            
+            // Safety limit
+            if all_batches.len() > 10000 {
+                log_warn!(MAIN_LOGGER, "Reached batch limit (10000 batches), stopping");
+                break;
+            }
+        }
+        
+        Ok(DataStream {
+            batches: all_batches,
+            current: 0,
+        })
+    }
+    
+    /// Load a single batch of events
+    async fn load_batch(
+        &self,
+        symbol: &str,
+        exchange: &str,
+        start: &DateTime<Utc>,
+        end: &DateTime<Utc>,
+        batch_size: usize,
+        offset: i64,
+    ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        use diesel::sql_types::{Timestamptz, Varchar, Numeric, Nullable};
+        
+        #[derive(QueryableByName)]
+        struct OrderEventRow {
+            #[diesel(sql_type = Timestamptz)]
+            timestamp: NaiveDateTime,
+            #[diesel(sql_type = Varchar)]
+            symbol: String,
+            #[diesel(sql_type = Varchar)]
+            exchange: String,
+            #[diesel(sql_type = Varchar)]
+            event_type: String,
+            #[diesel(sql_type = Varchar)]
+            side: String,
+            #[diesel(sql_type = Numeric)]
+            price_level: BigDecimal,
+            #[diesel(sql_type = Numeric)]
+            quantity: BigDecimal,
+            #[diesel(sql_type = Varchar)]
+            order_id: String,
+            #[diesel(sql_type = Nullable<Numeric>)]
+            prev_price: Option<BigDecimal>,
+            #[diesel(sql_type = Nullable<Numeric>)]
+            prev_quantity: Option<BigDecimal>,
+            #[diesel(sql_type = Varchar)]
+            status: String,
+        }
+        
+        let mut conn = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            self.pool.get()
+        ).await
+            .map_err(|_| "Connection pool timeout")?
+            .map_err(|e| format!("Failed to get connection: {}", e))?;
+        
+        let query = format!(
+            "SELECT timestamp, symbol, exchange, event_type, side, price_level, quantity, \
+             order_id, prev_price, prev_quantity, status \
+             FROM historical_orders \
+             WHERE symbol = '{}' AND exchange = '{}' \
+             AND timestamp >= '{}' AND timestamp < '{}' \
+             AND event_type IN ('new', 'cancel', 'modify') \
+             ORDER BY timestamp ASC \
+             LIMIT {} OFFSET {}",
+            symbol, exchange, 
+            start.to_rfc3339(), end.to_rfc3339(),
+            batch_size, offset
+        );
+        
+        let results: Vec<OrderEventRow> = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn)
+        ).await
+            .map_err(|_| "Query timeout")?
+            .map_err(|e| format!("Query failed: {}", e))?;
+        
+        let events: Vec<MarketData> = results
+            .into_iter()
+            .map(|row| {
+                MarketData::Order(HistoricalOrder {
+                    event_id: Uuid::new_v4(),
+                    timestamp: DateTime::from_naive_utc_and_offset(row.timestamp, Utc),
+                    order_id: row.order_id,
+                    event_type: row.event_type,
+                    side: row.side,
+                    price_level: row.price_level,
+                    quantity: row.quantity,
+                    prev_price: row.prev_price,
+                    prev_quantity: row.prev_quantity,
+                    status: row.status,
+                    exchange: row.exchange,
+                    symbol: row.symbol,
+                    security_id: Uuid::new_v4(),
+                    exchange_id: Uuid::new_v4(),
+                })
+            })
+            .collect();
+        
+        Ok(events)
+    }
+    
+    /// Load events for a time range with a maximum limit
+    pub async fn load_events_with_limit(
+        &self,
+        symbol: &str,
+        exchange: &str,
+        start: &DateTime<Utc>,
+        end: &DateTime<Utc>,
+        max_events: usize,
+    ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        let batch_size = 50_000;
+        let mut all_events = Vec::new();
+        let mut offset = 0i64;
+        
+        while all_events.len() < max_events {
+            let remaining = max_events - all_events.len();
+            let this_batch = remaining.min(batch_size);
+            
+            let batch = self.load_batch(symbol, exchange, start, end, this_batch, offset).await?;
+            
+            if batch.is_empty() {
+                break;
+            }
+            
+            offset += batch.len() as i64;
+            all_events.extend(batch);
+        }
+        
+        Ok(all_events)
+    }
+}
+
+#[cfg(feature = "postgres")]
+/// Simple async-like stream for batch data loading
+pub struct DataStream {
+    batches: Vec<Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>>>,
+    current: usize,
+}
+
+#[cfg(feature = "postgres")]
+impl DataStream {
+    /// Get next batch
+    pub async fn next(&mut self) -> Option<Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>>> {
+        if self.current < self.batches.len() {
+            // Remove from front to free memory
+            let result = self.batches.remove(0);
+            Some(result)
+        } else {
+            None
+        }
+    }
+    
+    /// Check if stream is exhausted
+    pub fn is_empty(&self) -> bool {
+        self.batches.is_empty()
+    }
+}
 

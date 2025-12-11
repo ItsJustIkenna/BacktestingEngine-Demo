@@ -2,6 +2,12 @@
 //! 
 //! Performs Monte Carlo analysis by randomizing trade sequences to assess
 //! strategy robustness and generate confidence intervals for performance metrics.
+//! 
+//! Methods:
+//! - Shuffle: Randomize trade order to test path dependency
+//! - Bootstrap: Sample with replacement for variance estimation
+//! - Block Bootstrap: Preserve autocorrelation in trade sequences
+//! - Regime-Aware: Sample from similar market conditions
 
 use crate::BacktestResult;
 use metrics::PerformanceMetrics;
@@ -25,6 +31,97 @@ pub struct MonteCarloResult {
     /// True if VaR/CVaR should be considered unreliable due to insufficient data
     #[serde(default)]
     pub var_unreliable: bool,
+}
+
+// ============================================
+// Block Bootstrap Configuration
+// ============================================
+
+/// Configuration for block bootstrap Monte Carlo
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockBootstrapConfig {
+    /// Block size for preserving autocorrelation (typically 5-20 trades)
+    pub block_size: usize,
+    /// Whether to use overlapping blocks (circular block bootstrap)
+    pub overlapping: bool,
+    /// Minimum block size (auto-adjusts if data is too short)
+    pub min_block_size: usize,
+}
+
+impl Default for BlockBootstrapConfig {
+    fn default() -> Self {
+        Self {
+            block_size: 10,
+            overlapping: true,
+            min_block_size: 3,
+        }
+    }
+}
+
+impl BlockBootstrapConfig {
+    /// Optimal block size based on data length (Politis & White rule of thumb)
+    pub fn optimal_block_size(data_length: usize) -> usize {
+        // Rule of thumb: block_size ≈ n^(1/3)
+        let optimal = (data_length as f64).powf(1.0 / 3.0).ceil() as usize;
+        optimal.max(3).min(data_length / 4).max(1)
+    }
+}
+
+// ============================================
+// Regime-Aware Sampling Configuration
+// ============================================
+
+/// Market regime classification for regime-aware sampling
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MarketRegimeClass {
+    LowVolatility,
+    NormalVolatility,
+    HighVolatility,
+    Crisis,
+}
+
+/// Configuration for regime-aware Monte Carlo
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegimeAwareConfig {
+    /// Lookback window for volatility calculation
+    pub volatility_lookback: usize,
+    /// Current volatility level (for regime detection)
+    pub current_volatility: f64,
+    /// Regime similarity weight (0.0 = random, 1.0 = only same regime)
+    pub regime_weight: f64,
+    /// Volatility thresholds: [low/normal, normal/high, high/crisis]
+    pub volatility_thresholds: [f64; 3],
+}
+
+impl Default for RegimeAwareConfig {
+    fn default() -> Self {
+        Self {
+            volatility_lookback: 20,
+            current_volatility: 0.02,
+            regime_weight: 0.7,
+            volatility_thresholds: [0.01, 0.025, 0.05], // 1%, 2.5%, 5% daily vol
+        }
+    }
+}
+
+impl RegimeAwareConfig {
+    /// Classify volatility into regime
+    pub fn classify_regime(&self, volatility: f64) -> MarketRegimeClass {
+        if volatility < self.volatility_thresholds[0] {
+            MarketRegimeClass::LowVolatility
+        } else if volatility < self.volatility_thresholds[1] {
+            MarketRegimeClass::NormalVolatility
+        } else if volatility < self.volatility_thresholds[2] {
+            MarketRegimeClass::HighVolatility
+        } else {
+            MarketRegimeClass::Crisis
+        }
+    }
+    
+    /// Get regime for current conditions
+    pub fn current_regime(&self) -> MarketRegimeClass {
+        self.classify_regime(self.current_volatility)
+    }
 }
 
 /// Helper functions for aggregation
@@ -459,3 +556,380 @@ fn run_monte_carlo_simulation_internal(
     })
 }
 
+// ============================================
+// Block Bootstrap Monte Carlo
+// ============================================
+
+/// Run block bootstrap Monte Carlo simulation
+/// 
+/// Preserves autocorrelation in trade sequences by sampling blocks of consecutive trades
+/// rather than individual trades. This is important for strategies where trade outcomes
+/// are correlated (e.g., trend following).
+pub fn run_block_bootstrap_simulation(
+    base_result: &BacktestResult,
+    num_runs: usize,
+    config: BlockBootstrapConfig,
+) -> anyhow::Result<MonteCarloResult> {
+    // Extract equity deltas
+    let mut equity_deltas: Vec<f64> = Vec::new();
+    if base_result.equity_curve.len() > 1 {
+        for i in 1..base_result.equity_curve.len() {
+            equity_deltas.push(base_result.equity_curve[i] - base_result.equity_curve[i - 1]);
+        }
+    }
+    
+    if equity_deltas.is_empty() {
+        return run_monte_carlo_simulation(base_result, num_runs);
+    }
+    
+    // Determine effective block size
+    let block_size = config.block_size
+        .max(config.min_block_size)
+        .min(equity_deltas.len() / 2)
+        .max(1);
+    
+    let n = equity_deltas.len();
+    
+    // Run block bootstrap in parallel
+    let results: Vec<(f64, f64, f64)> = (0..num_runs)
+        .into_par_iter()
+        .map(|_| {
+            let mut rng = rand::thread_rng();
+            
+            // Sample blocks to reconstruct sequence
+            let mut bootstrap_sample = Vec::with_capacity(n);
+            
+            while bootstrap_sample.len() < n {
+                // Random starting point for block
+                let start_idx = if config.overlapping {
+                    rng.gen_range(0..n)
+                } else {
+                    rng.gen_range(0..n.saturating_sub(block_size).max(1))
+                };
+                
+                // Extract block (with wrap-around for circular bootstrap)
+                for offset in 0..block_size {
+                    if bootstrap_sample.len() >= n {
+                        break;
+                    }
+                    let idx = if config.overlapping {
+                        (start_idx + offset) % n // Circular
+                    } else {
+                        (start_idx + offset).min(n - 1)
+                    };
+                    bootstrap_sample.push(equity_deltas[idx]);
+                }
+            }
+            
+            // Truncate to exact length
+            bootstrap_sample.truncate(n);
+            
+            // Calculate metrics
+            let net_profit: f64 = bootstrap_sample.iter().sum();
+            
+            let mean_ret = if !bootstrap_sample.is_empty() {
+                bootstrap_sample.iter().sum::<f64>() / bootstrap_sample.len() as f64
+            } else {
+                0.0
+            };
+            
+            let std_ret = if bootstrap_sample.len() > 1 {
+                let variance = bootstrap_sample.iter()
+                    .map(|x| (x - mean_ret).powi(2))
+                    .sum::<f64>() / (bootstrap_sample.len() - 1) as f64;
+                variance.sqrt()
+            } else {
+                0.0
+            };
+            
+            let sharpe = if std_ret > 0.0 {
+                mean_ret / std_ret * 252.0_f64.sqrt()
+            } else {
+                0.0
+            };
+            
+            // Max drawdown
+            let mut equity = base_result.initial_capital;
+            let mut peak = equity;
+            let mut max_dd = 0.0;
+            for ret in &bootstrap_sample {
+                equity += ret;
+                if equity > peak {
+                    peak = equity;
+                }
+                let dd = (peak - equity) / peak;
+                if dd > max_dd {
+                    max_dd = dd;
+                }
+            }
+            
+            (net_profit, sharpe, max_dd)
+        })
+        .collect();
+    
+    // Aggregate results
+    let all_net_profits: Vec<f64> = results.iter().map(|r| r.0).collect();
+    let all_sharpes: Vec<f64> = results.iter().map(|r| r.1).collect();
+    let all_drawdowns: Vec<f64> = results.iter().map(|r| r.2).collect();
+    
+    // Build result using helper functions
+    build_monte_carlo_result(
+        base_result,
+        num_runs,
+        all_net_profits,
+        all_sharpes,
+        all_drawdowns,
+    )
+}
+
+// ============================================
+// Regime-Aware Monte Carlo
+// ============================================
+
+/// Run regime-aware Monte Carlo simulation
+/// 
+/// Samples trades from similar market regimes to provide more realistic
+/// expectations for current conditions. Uses volatility-based regime classification.
+pub fn run_regime_aware_simulation(
+    base_result: &BacktestResult,
+    num_runs: usize,
+    config: RegimeAwareConfig,
+    volatility_per_trade: &[f64], // Volatility at each trade
+) -> anyhow::Result<MonteCarloResult> {
+    // Extract equity deltas
+    let mut equity_deltas: Vec<f64> = Vec::new();
+    if base_result.equity_curve.len() > 1 {
+        for i in 1..base_result.equity_curve.len() {
+            equity_deltas.push(base_result.equity_curve[i] - base_result.equity_curve[i - 1]);
+        }
+    }
+    
+    if equity_deltas.is_empty() {
+        return run_monte_carlo_simulation(base_result, num_runs);
+    }
+    
+    // Classify each trade into a regime
+    let trade_regimes: Vec<MarketRegimeClass> = volatility_per_trade.iter()
+        .map(|&vol| config.classify_regime(vol))
+        .collect();
+    
+    // If volatility data doesn't match, use uniform regime
+    let trade_regimes = if trade_regimes.len() != equity_deltas.len() {
+        vec![MarketRegimeClass::NormalVolatility; equity_deltas.len()]
+    } else {
+        trade_regimes
+    };
+    
+    let current_regime = config.current_regime();
+    let regime_weight = config.regime_weight.clamp(0.0, 1.0);
+    
+    // Group trades by regime
+    let mut regime_indices: HashMap<MarketRegimeClass, Vec<usize>> = HashMap::new();
+    for (idx, &regime) in trade_regimes.iter().enumerate() {
+        regime_indices.entry(regime).or_default().push(idx);
+    }
+    
+    let n = equity_deltas.len();
+    
+    // Run regime-aware sampling in parallel
+    let results: Vec<(f64, f64, f64)> = (0..num_runs)
+        .into_par_iter()
+        .map(|_| {
+            let mut rng = rand::thread_rng();
+            let mut bootstrap_sample = Vec::with_capacity(n);
+            
+            for _ in 0..n {
+                // Weighted selection: prefer same regime with probability regime_weight
+                let use_same_regime = rng.gen::<f64>() < regime_weight;
+                
+                let selected_idx = if use_same_regime {
+                    // Sample from same regime
+                    if let Some(indices) = regime_indices.get(&current_regime) {
+                        if !indices.is_empty() {
+                            indices[rng.gen_range(0..indices.len())]
+                        } else {
+                            rng.gen_range(0..n)
+                        }
+                    } else {
+                        rng.gen_range(0..n)
+                    }
+                } else {
+                    // Random sample from any regime
+                    rng.gen_range(0..n)
+                };
+                
+                bootstrap_sample.push(equity_deltas[selected_idx]);
+            }
+            
+            // Calculate metrics
+            let net_profit: f64 = bootstrap_sample.iter().sum();
+            
+            let mean_ret = if !bootstrap_sample.is_empty() {
+                bootstrap_sample.iter().sum::<f64>() / bootstrap_sample.len() as f64
+            } else {
+                0.0
+            };
+            
+            let std_ret = if bootstrap_sample.len() > 1 {
+                let variance = bootstrap_sample.iter()
+                    .map(|x| (x - mean_ret).powi(2))
+                    .sum::<f64>() / (bootstrap_sample.len() - 1) as f64;
+                variance.sqrt()
+            } else {
+                0.0
+            };
+            
+            let sharpe = if std_ret > 0.0 {
+                mean_ret / std_ret * 252.0_f64.sqrt()
+            } else {
+                0.0
+            };
+            
+            // Max drawdown
+            let mut equity = base_result.initial_capital;
+            let mut peak = equity;
+            let mut max_dd = 0.0;
+            for ret in &bootstrap_sample {
+                equity += ret;
+                if equity > peak {
+                    peak = equity;
+                }
+                let dd = (peak - equity) / peak;
+                if dd > max_dd {
+                    max_dd = dd;
+                }
+            }
+            
+            (net_profit, sharpe, max_dd)
+        })
+        .collect();
+    
+    // Aggregate results
+    let all_net_profits: Vec<f64> = results.iter().map(|r| r.0).collect();
+    let all_sharpes: Vec<f64> = results.iter().map(|r| r.1).collect();
+    let all_drawdowns: Vec<f64> = results.iter().map(|r| r.2).collect();
+    
+    build_monte_carlo_result(
+        base_result,
+        num_runs,
+        all_net_profits,
+        all_sharpes,
+        all_drawdowns,
+    )
+}
+
+/// Helper to build MonteCarloResult from simulation outputs
+fn build_monte_carlo_result(
+    base_result: &BacktestResult,
+    num_runs: usize,
+    all_net_profits: Vec<f64>,
+    all_sharpes: Vec<f64>,
+    all_drawdowns: Vec<f64>,
+) -> anyhow::Result<MonteCarloResult> {
+    let mean_net_profit = mean(&all_net_profits);
+    let std_net_profit = std_dev(&all_net_profits);
+    let mean_sharpe = mean(&all_sharpes);
+    let std_sharpe = std_dev(&all_sharpes);
+    let mean_dd = mean(&all_drawdowns);
+    let std_dd = std_dev(&all_drawdowns);
+    
+    // Win rate from base result
+    let base_win_rate = base_result.win_rate.unwrap_or(0.0);
+    
+    // Calculate percentiles
+    let mut percentiles = HashMap::new();
+    for &p in &[5, 25, 50, 75, 95] {
+        let mut profits_copy = all_net_profits.clone();
+        let mut sharpe_copy = all_sharpes.clone();
+        let mut dd_copy = all_drawdowns.clone();
+        
+        percentiles.insert(p, PerformanceMetrics {
+            net_profit: percentile(&mut profits_copy, p as f64),
+            sharpe_ratio: percentile(&mut sharpe_copy, p as f64),
+            max_drawdown: percentile(&mut dd_copy, p as f64),
+            win_rate: base_win_rate,
+            gross_profit: 0.0,
+            gross_loss: 0.0,
+            profit_factor: 0.0,
+            average_trade_return: 0.0,
+            median_trade_return: 0.0,
+            number_of_trades: base_result.num_trades,
+            volatility: base_result.volatility.unwrap_or(0.0),
+            average_trade_duration: base_result.avg_trade_duration.unwrap_or(0.0),
+            total_commission: 0.0,
+            total_slippage: 0.0,
+            total_market_impact: 0.0,
+            transaction_costs_percentage: 0.0,
+        });
+    }
+    
+    // VaR and CVaR
+    let mut sorted_profits = all_net_profits.clone();
+    sorted_profits.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let var_95_index = (0.05 * sorted_profits.len() as f64) as usize;
+    let percentile_5_profit = sorted_profits[var_95_index];
+    
+    let var_95 = if percentile_5_profit < 0.0 {
+        -percentile_5_profit
+    } else {
+        0.0
+    };
+    
+    let losses_beyond_var: Vec<f64> = sorted_profits.iter()
+        .take(var_95_index)
+        .copied()
+        .collect();
+    let cvar_95 = if !losses_beyond_var.is_empty() {
+        let avg_worst = mean(&losses_beyond_var);
+        if avg_worst < 0.0 { -avg_worst } else { 0.0 }
+    } else {
+        var_95
+    };
+    
+    let data_points = base_result.equity_curve.len().saturating_sub(1);
+    
+    Ok(MonteCarloResult {
+        num_runs,
+        mean_metrics: PerformanceMetrics {
+            net_profit: mean_net_profit,
+            gross_profit: base_result.gross_profit.unwrap_or(0.0),
+            gross_loss: base_result.gross_loss.unwrap_or(0.0),
+            sharpe_ratio: mean_sharpe,
+            max_drawdown: mean_dd,
+            win_rate: base_win_rate,
+            profit_factor: base_result.profit_factor.unwrap_or(0.0),
+            average_trade_return: base_result.avg_trade_return.unwrap_or(0.0),
+            median_trade_return: base_result.median_trade_return.unwrap_or(0.0),
+            number_of_trades: base_result.num_trades,
+            volatility: base_result.volatility.unwrap_or(0.0),
+            average_trade_duration: base_result.avg_trade_duration.unwrap_or(0.0),
+            total_commission: base_result.transaction_costs.as_ref().map(|tc| tc.total_commission).unwrap_or(0.0),
+            total_slippage: base_result.transaction_costs.as_ref().map(|tc| tc.total_slippage).unwrap_or(0.0),
+            total_market_impact: base_result.transaction_costs.as_ref().map(|tc| tc.total_market_impact).unwrap_or(0.0),
+            transaction_costs_percentage: base_result.transaction_costs.as_ref().map(|tc| tc.costs_as_percentage_of_pnl).unwrap_or(0.0),
+        },
+        stddev_metrics: PerformanceMetrics {
+            net_profit: std_net_profit,
+            gross_profit: 0.0,
+            gross_loss: 0.0,
+            sharpe_ratio: std_sharpe,
+            max_drawdown: std_dd,
+            win_rate: 0.0,
+            profit_factor: 0.0,
+            average_trade_return: 0.0,
+            median_trade_return: 0.0,
+            number_of_trades: 0,
+            volatility: 0.0,
+            average_trade_duration: 0.0,
+            total_commission: 0.0,
+            total_slippage: 0.0,
+            total_market_impact: 0.0,
+            transaction_costs_percentage: 0.0,
+        },
+        percentile_metrics: percentiles,
+        var_95,
+        cvar_95,
+        data_points,
+        var_unreliable: data_points < 30,
+    })
+}

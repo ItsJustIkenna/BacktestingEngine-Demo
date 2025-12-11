@@ -62,6 +62,7 @@ fn test_risk_limits_all_none() {
         max_drawdown: None,
         stop_loss_pct: None,
         max_daily_loss: None,
+        ..Default::default()
     };
     
     // All limits disabled
@@ -420,6 +421,7 @@ fn test_risk_manager_check_no_limits() {
         max_drawdown: None,
         stop_loss_pct: None,
         max_daily_loss: None,
+        ..Default::default()
     });
     
     // Even extreme values should pass when limits are disabled
@@ -517,6 +519,7 @@ fn test_risk_metrics_serialization() {
         current_drawdown: 0.10,
         unrealized_pnl: 100.0,
         daily_pnl: 50.0,
+        ..Default::default()
     };
     
     // Should be serializable

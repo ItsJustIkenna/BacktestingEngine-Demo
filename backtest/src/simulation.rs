@@ -15,7 +15,7 @@ use crate::types::{BacktestEvent, BacktestResult, TransactionCostAnalysis, Marke
 use crate::logging_facade::BACKTEST_LOGGER;
 use metrics::{performance, risk, trade_stats};
 use bigdecimal::{BigDecimal, ToPrimitive, FromPrimitive};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use chrono::{DateTime, Utc};
 
 /// Tracks individual order lifecycle for execution metrics
@@ -50,7 +50,8 @@ pub struct SimulationLoop {
     trade_history_by_exchange: FxHashMap<String, Vec<(chrono::DateTime<chrono::Utc>, f64)>>, // exchange -> (timestamp, volume_usd)
     current_30d_volume_by_exchange: FxHashMap<String, f64>,
     // Track current active order IDs to cancel before placing new orders
-    active_order_ids: Vec<String>,
+    // Using HashSet for O(1) contains() check instead of O(n) Vec lookup
+    active_order_ids: FxHashSet<String>,
     // Track rolling market volume for realistic market impact calculation
     market_volume_window: Vec<(chrono::DateTime<chrono::Utc>, f64)>, // (timestamp, trade_volume_usd)
     rolling_avg_volume: f64, // Average volume over rolling window
@@ -90,6 +91,10 @@ pub struct SimulationLoop {
     inventory_snapshots: Vec<(chrono::DateTime<chrono::Utc>, f64)>, // (timestamp, net_position_qty)
     max_inventory: f64,
     min_inventory: f64,
+    // Track round-trip profitability for market-making win rate
+    buy_fill_prices: Vec<f64>,   // Price of each buy fill
+    sell_fill_prices: Vec<f64>,  // Price of each sell fill
+    fee_rate: f64,               // Commission rate for profit calculation
 }
 
 impl SimulationLoop {
@@ -109,7 +114,7 @@ impl SimulationLoop {
             liquidity_warnings: Vec::with_capacity(100),
             trade_history_by_exchange: FxHashMap::default(),
             current_30d_volume_by_exchange: FxHashMap::default(),
-            active_order_ids: Vec::with_capacity(10),
+            active_order_ids: FxHashSet::default(),
             market_volume_window: Vec::with_capacity(1000), // Track last ~1000 trades
             rolling_avg_volume: 0.0,
             buy_volume: 0.0,
@@ -141,6 +146,9 @@ impl SimulationLoop {
             inventory_snapshots: Vec::with_capacity(1000),
             max_inventory: 0.0,
             min_inventory: 0.0,
+            buy_fill_prices: Vec::with_capacity(1000),
+            sell_fill_prices: Vec::with_capacity(1000),
+            fee_rate: 0.0,
         }
     }
     
@@ -433,11 +441,13 @@ impl SimulationLoop {
                     );
                     
                     // Debug: Log first 5 trades vs our order prices to diagnose fill issues (postgres)
+                    #[cfg(feature = "debug_logging")]
                     static TRADE_DEBUG_COUNT_PG: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                    #[cfg(feature = "debug_logging")]
                     let debug_count = TRADE_DEBUG_COUNT_PG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     
                     // Get trade price early for missed opportunity tracking
-                    let trade_price = trade.price.to_f64().unwrap_or(0.0);
+                    let _trade_price = trade.price.to_f64().unwrap_or(0.0);
                     
                     // Filter fills to only include OUR strategy's orders
                     // Also apply latency simulation: orders placed within latency_ms can't be filled yet
@@ -478,11 +488,13 @@ impl SimulationLoop {
                     self.latency_rejections_bid += latency_rejected_bid;
                     self.latency_rejections_ask += latency_rejected_ask;
                     
+                    // Debug logging - only with debug_logging feature (postgres path)
+                    #[cfg(feature = "debug_logging")]
                     if debug_count < 10 && !self.active_order_ids.is_empty() {
                         let trade_price = trade.price.to_f64().unwrap_or(0.0);
                         let best_bid = orderbook.best_bid().and_then(|p| p.to_f64());
                         let best_ask = orderbook.best_ask().and_then(|p| p.to_f64());
-                        // Also find our strategy's bid/ask from the trackers
+                        // Strategy's bid/ask from the trackers
                         let our_bid = self.order_trackers.values()
                             .filter(|t| matches!(t.side, orderbook::BookSide::Bid))
                             .map(|t| t.price)
@@ -649,11 +661,13 @@ impl SimulationLoop {
                     );
                     
                     // Debug: Log first 10 trades vs our order prices to diagnose fill issues (non-postgres)
+                    #[cfg(feature = "debug_logging")]
                     static TRADE_DEBUG_COUNT_NP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                    #[cfg(feature = "debug_logging")]
                     let debug_count = TRADE_DEBUG_COUNT_NP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     
                     // Get trade price early for missed opportunity tracking
-                    let trade_price = trade.price.to_f64().unwrap_or(0.0);
+                    let _trade_price = trade.price.to_f64().unwrap_or(0.0);
                     
                     // Filter fills to only include OUR strategy's orders
                     // Also apply latency simulation: orders placed within latency_ms can't be filled yet
@@ -694,11 +708,13 @@ impl SimulationLoop {
                     self.latency_rejections_bid += latency_rejected_bid;
                     self.latency_rejections_ask += latency_rejected_ask;
                     
+                    // Debug logging - only with debug_logging feature (non-postgres path)
+                    #[cfg(feature = "debug_logging")]
                     if debug_count < 10 && !self.active_order_ids.is_empty() {
                         let trade_price = trade.price.to_f64().unwrap_or(0.0);
                         let best_bid = orderbook.best_bid().and_then(|p| p.to_f64());
                         let best_ask = orderbook.best_ask().and_then(|p| p.to_f64());
-                        // Also find our strategy's bid/ask from the trackers
+                        // Strategy's bid/ask from the trackers
                         let our_bid = self.order_trackers.values()
                             .filter(|t| matches!(t.side, orderbook::BookSide::Bid))
                             .map(|t| t.price)
@@ -773,9 +789,9 @@ impl SimulationLoop {
                             log_error!(BACKTEST_LOGGER, "Error applying trade fills: {}", e);
                         }
                         
-                        // Remove filled orders from active list
+                        // Remove filled orders from active set (O(1) per removal with HashSet)
                         for fill in &our_fills {
-                            self.active_order_ids.retain(|id| id != &fill.order_id);
+                            self.active_order_ids.remove(&fill.order_id);
                         }
                     }
                 }
@@ -879,6 +895,15 @@ impl SimulationLoop {
                     .map(|p| p.unrealized_pnl.to_f64().unwrap_or(0.0))
                     .sum(),
                 daily_pnl: current_equity - config.trading.initial_capital,
+                // VaR metrics - defaults for simulation
+                current_var: 0.0,
+                current_cvar: 0.0,
+                // Correlation metrics
+                correlated_exposure: 0.0,
+                sector_exposures: std::collections::HashMap::new(),
+                // Volatility regime
+                volatility_regime: riskmanager::VolatilityRegime::Normal,
+                baseline_volatility: 0.0,
             };
             
             // Check global risk limits before processing signals
@@ -966,6 +991,13 @@ impl SimulationLoop {
                                 continue; // Skip this order entirely
                             }
                         }
+                        RiskAction::ScalePosition(scale_factor, reason) => {
+                            log_info!(BACKTEST_LOGGER, "Risk: scaling position by {:.2}x - {}", scale_factor, reason);
+                            order_size *= scale_factor;
+                            if order_size <= 0.0 {
+                                continue; // Skip this order entirely
+                            }
+                        }
                         RiskAction::RejectOrder(reason) => {
                             log_info!(BACKTEST_LOGGER, "Risk: rejecting order - {}", reason);
                             continue;
@@ -992,8 +1024,8 @@ impl SimulationLoop {
                     let avg_volume = self.get_avg_volume();
                     let _impact_cost = self.calculate_market_impact(order_size, order_price, avg_volume, config, timestamp);
                     
-                    // Track this order ID for later cancellation
-                    self.active_order_ids.push(signal.id.clone());
+                    // Track this order ID for later cancellation (O(1) insert with HashSet)
+                    self.active_order_ids.insert(signal.id.clone());
                     
                     // Determine order side from signal type
                     let order_side = match signal.signal_type {
@@ -1490,6 +1522,73 @@ impl SimulationLoop {
             self.quote_spreads_bps.iter().sum::<f64>() / self.quote_spreads_bps.len() as f64
         } else { 0.0 };
         
+        // Calculate round-trip win rate metrics for market making
+        // A round-trip is a buy fill matched with a sell fill
+        // Profitable round-trip: sell_price - buy_price > 2 * fee_rate * avg_price
+        let total_round_trips = self.buy_fill_prices.len().min(self.sell_fill_prices.len());
+        let mut profitable_round_trips = 0_usize;
+        let mut total_round_trip_pnl = 0.0_f64;
+        
+        // Sort prices for FIFO matching: oldest buys matched with oldest sells
+        // Actually, for market making, we match buy fills with sell fills in order
+        // Each round-trip: bought at buy_price, sold at sell_price
+        // Profit = (sell_price - buy_price) - fee_rate * (buy_price + sell_price)
+        let fee_rate = if self.fee_rate > 0.0 { self.fee_rate } else { config.trading.commission_rate };
+        
+        for i in 0..total_round_trips {
+            let buy_price = self.buy_fill_prices[i];
+            let sell_price = self.sell_fill_prices[i];
+            let gross_pnl = sell_price - buy_price;
+            let fees = fee_rate * (buy_price + sell_price);
+            let net_pnl = gross_pnl - fees;
+            total_round_trip_pnl += net_pnl;
+            if net_pnl > 0.0 {
+                profitable_round_trips += 1;
+            }
+        }
+        
+        let round_trip_win_rate = if total_round_trips > 0 {
+            Some(profitable_round_trips as f64 / total_round_trips as f64)
+        } else {
+            None
+        };
+        
+        let avg_pnl_per_round_trip = if total_round_trips > 0 {
+            Some(total_round_trip_pnl / total_round_trips as f64)
+        } else {
+            None
+        };
+        
+        // Spread capture rate: actual avg spread captured / quoted spread
+        // If we quoted 10 bps but only captured 5 bps on average, capture rate = 50%
+        let spread_capture_rate = if total_round_trips > 0 && avg_quote_spread_bps > 0.0 {
+            // Average spread captured in bps
+            let avg_price = (self.buy_fill_prices.iter().sum::<f64>() + self.sell_fill_prices.iter().sum::<f64>()) 
+                / (self.buy_fill_prices.len() + self.sell_fill_prices.len()) as f64;
+            let avg_spread_captured_bps = if avg_price > 0.0 {
+                (total_round_trip_pnl / total_round_trips as f64) / avg_price * 10000.0
+            } else { 0.0 };
+            Some((avg_spread_captured_bps / avg_quote_spread_bps).clamp(0.0, 2.0))
+        } else {
+            None
+        };
+        
+        // Adverse selection rate: % of round-trips where price moved against us
+        // (i.e., we bought and price went down, or we sold and price went up before completing the round-trip)
+        // Simplified: % of round-trips that were unprofitable
+        let adverse_selection_rate = if total_round_trips > 0 {
+            Some((total_round_trips - profitable_round_trips) as f64 / total_round_trips as f64)
+        } else {
+            None
+        };
+        
+        log_info!(BACKTEST_LOGGER, "Round-trip metrics | total={} profitable={} win_rate={:.1}% avg_pnl=${:.4} spread_capture={:.1}% adverse_sel={:.1}%",
+            total_round_trips, profitable_round_trips, 
+            round_trip_win_rate.unwrap_or(0.0) * 100.0,
+            avg_pnl_per_round_trip.unwrap_or(0.0),
+            spread_capture_rate.unwrap_or(0.0) * 100.0,
+            adverse_selection_rate.unwrap_or(0.0) * 100.0);
+        
         result.execution_metrics = Some(ExecutionMetrics {
             orders_placed,
             orders_filled,
@@ -1507,6 +1606,13 @@ impl SimulationLoop {
             bid_fill_rate,
             ask_fill_rate,
             avg_quote_spread_bps,
+            // Market-making specific win rate metrics
+            round_trip_win_rate,
+            total_round_trips,
+            profitable_round_trips,
+            spread_capture_rate,
+            adverse_selection_rate,
+            avg_pnl_per_round_trip,
         });
         
         // Log execution metrics summary

@@ -1,0 +1,49 @@
+{{- if and .Values.distributedWorker.enabled .Values.distributedWorker.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "backtesting-engine.fullname" . }}-distributed-worker
+  labels:
+    {{- include "backtesting-engine.labels" . | nindent 4 }}
+    app.kubernetes.io/component: distributed-worker
+  namespace: {{ .Release.Namespace | quote }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "backtesting-engine.fullname" . }}-distributed-worker
+  minReplicas: {{ .Values.distributedWorker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.distributedWorker.autoscaling.maxReplicas }}
+  metrics:
+    # Scale based on CPU usage
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.distributedWorker.autoscaling.targetCPUUtilizationPercentage }}
+    # Scale based on memory usage
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.distributedWorker.autoscaling.targetMemoryUtilizationPercentage | default 80 }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # Wait 5 minutes before scaling down
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30  # Scale up quickly
+      policies:
+        - type: Pods
+          value: 4
+          periodSeconds: 30
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+      selectPolicy: Max
+{{- end }}

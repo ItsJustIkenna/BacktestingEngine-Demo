@@ -6,6 +6,9 @@ edition = "2021"
 [features]
 default = []
 postgres = ["dataloader/postgres", "strategy/postgres", "walkforward/postgres", "databaseschema"]
+# Enable verbose debug logging in hot paths (trades, fills, etc.)
+# Only enable for debugging - impacts performance
+debug_logging = []
 
 [dependencies]
 # External dependencies

@@ -387,6 +387,48 @@ cronjob:
     activeDeadlineSeconds: 3600  # 1 hour
     backoffLimit: 3
 
+# =============================================================================
+# Distributed Worker Configuration
+# =============================================================================
+# Distributed workers process chunks in parallel across multiple pods
+# This enables scaling backtests from millions to billions of events
+
+distributedWorker:
+  # Enable distributed worker deployment
+  enabled: false
+  
+  # Number of worker replicas
+  replicaCount: 4
+  
+  # Number of threads per worker pod
+  threads: 4
+  
+  # MessageBrokerEngine address (leave empty for in-process mode)
+  brokerAddress: ""
+  
+  # Resource limits for distributed workers
+  # Workers process 200K events per chunk, need less memory than full backtest
+  resources:
+    limits:
+      cpu: "2000m"
+      memory: "4Gi"
+    requests:
+      cpu: "1000m"
+      memory: "2Gi"
+  
+  # Autoscaling configuration
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 16
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  
+  # Node selection for distributed workers
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # Pod annotations
 podAnnotations: {}
 
@@ -395,3 +437,4 @@ podLabels: {}
 
 # Deployment annotations
 annotations: {}
+

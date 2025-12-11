@@ -9,6 +9,7 @@ postgres = []
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 # Logging
 ultra-logger = { path = "../../LoggingEngine/ultra-logger" }

@@ -17,6 +17,7 @@ pub mod worker;
 pub mod streaming; // Memory-efficient data loading
 pub mod progress_broadcaster; // Real-time progress streaming via broadcast channels
 pub mod profitability; // Profitability criteria for saving strategies to database
+pub mod distributed; // Distributed backtesting architecture using MessageBrokerEngine
 
 // Re-export logging components for easy access
 pub use logging_facade::{
@@ -34,6 +35,13 @@ pub use job_broker::{JobBroker, JobMessage, JobReceiver, JobPriority, get_job_br
 
 // Re-export profitability criteria for strategy evaluation
 pub use profitability::{ProfitabilityCriteria, ProfitabilityResult, save_profitable_strategy};
+
+// Re-export distributed backtesting components
+pub use distributed::{
+    DistributedCoordinator, DistributedWorker, ResultAggregator,
+    BacktestBrokerClient, ChunkCalculator, ChunkingStrategy,
+    DEFAULT_CHUNK_SIZE, MAX_CHUNKS_PER_JOB,
+};
 
 
 

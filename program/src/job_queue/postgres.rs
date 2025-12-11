@@ -853,6 +853,7 @@ impl JobQueue for PostgresQueue {
                 
                 Ok(Some(BacktestResult {
                     job_id: job_id.to_string(),
+                    strategy_type: None, // Not stored in legacy DB schema
                     total_pnl: bd_to_f64(&total_return),
                     sharpe_ratio: opt_bd_to_f64(&sharpe_ratio).unwrap_or(0.0),
                     max_drawdown: bd_to_f64(&max_drawdown),

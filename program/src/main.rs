@@ -5,6 +5,7 @@ use std::sync::Arc;
 use program::job_queue::{JobQueue, PostgresQueue};
 use program::worker;
 use program::api;
+use program::distributed::{DistributedWorker, broker_client::get_broker_client};
 
 #[derive(Parser)]
 #[command(name = "backtesting-engine")]
@@ -26,11 +27,35 @@ enum Commands {
         #[arg(long, default_value = "8080")]
         port: u16,
     },
-    /// Start background workers only (no API server)
+    /// Start background workers only (no API server) - polls database for jobs
     Worker {
         /// Number of worker threads
         #[arg(long, default_value = "4")]
         threads: usize,
+    },
+    /// Start distributed workers that process chunks via message broker
+    DistributedWorker {
+        /// Number of distributed workers to spawn
+        #[arg(long, default_value = "4")]
+        workers: usize,
+        
+        /// Worker ID prefix
+        #[arg(long, default_value = "distributed")]
+        prefix: String,
+    },
+    /// Start as coordinator for distributed backtesting
+    Coordinator {
+        /// Host to bind API to
+        #[arg(long, default_value = "0.0.0.0")]
+        host: String,
+
+        /// Port to bind API to
+        #[arg(long, default_value = "8080")]
+        port: u16,
+        
+        /// Enable distributed mode (use message broker for job distribution)
+        #[arg(long, default_value = "true")]
+        distributed: bool,
     },
 }
 
@@ -108,8 +133,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = handle.await;
             }
         }
+        
+        Commands::DistributedWorker { workers, prefix } => {
+            let database_url = std::env::var("DATABASE_URL")
+                .expect("DATABASE_URL must be set");
+
+            println!("🌐 Starting {} distributed workers (prefix: {})...", workers, prefix);
+            
+            let broker = get_broker_client();
+            
+            // Spawn distributed worker tasks
+            let mut handles = Vec::with_capacity(workers);
+            for i in 0..workers {
+                let worker_id = format!("{}-{}", prefix, i);
+                let db_url = database_url.clone();
+                let broker_clone = Arc::clone(&broker);
+                
+                let handle = tokio::spawn(async move {
+                    let mut worker = DistributedWorker::with_broker(
+                        worker_id,
+                        db_url,
+                        broker_clone,
+                    );
+                    worker.run().await;
+                });
+                handles.push(handle);
+            }
+            
+            println!("✅ Distributed workers running");
+            println!("   Workers subscribe to: backtest.chunks.*");
+            println!("   Results published to: backtest.results.{{job_id}}");
+            
+            // Wait for all workers
+            for handle in handles {
+                let _ = handle.await;
+            }
+        }
+        
+        Commands::Coordinator { host, port, distributed } => {
+            let database_url = std::env::var("DATABASE_URL")
+                .expect("DATABASE_URL must be set");
+
+            println!("📦 Connecting to database...");
+            let postgres_queue = PostgresQueue::new(&database_url)
+                .map_err(|e| format!("Failed to connect: {}", e))?;
+            let job_queue: Arc<dyn JobQueue> = Arc::new(postgres_queue);
+
+            if distributed {
+                println!("🌐 Coordinator mode with distributed processing");
+                println!("   Chunks published to: backtest.chunks.{{job_id}}");
+                println!("   Results collected from: backtest.results.{{job_id}}");
+            } else {
+                println!("📡 Coordinator mode with local processing");
+            }
+
+            // Build and start the API server with coordinator support
+            let app = api::build_router(Arc::clone(&job_queue));
+            let bind_addr = format!("{}:{}", host, port);
+            let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+            
+            println!("✅ Coordinator ready at http://{}", bind_addr);
+            axum::serve(listener, app).await?;
+        }
     }
 
     Ok(())
 }
-

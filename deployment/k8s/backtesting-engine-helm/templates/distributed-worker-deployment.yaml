@@ -1,0 +1,145 @@
+{{- if .Values.distributedWorker.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "backtesting-engine.fullname" . }}-distributed-worker
+  labels:
+    {{- include "backtesting-engine.labels" . | nindent 4 }}
+    app.kubernetes.io/component: distributed-worker
+  namespace: {{ .Release.Namespace | quote }}
+spec:
+  replicas: {{ .Values.distributedWorker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "backtesting-engine.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: distributed-worker
+  template:
+    metadata:
+      labels:
+        {{- include "backtesting-engine.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: distributed-worker
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "backtesting-engine.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: wait-for-postgresql
+          image: "postgres:15-alpine"
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h {{ include "backtesting-engine.postgresql.servicename" . }} -p {{ include "backtesting-engine.postgresql.port" . }} -U {{ include "backtesting-engine.postgresql.username" . }}; do
+                echo "Waiting for PostgreSQL to be ready..."
+                sleep 2
+              done
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
+                  key: database-password
+      containers:
+        - name: {{ .Chart.Name }}-distributed-worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Run in distributed-worker mode - processes chunks from message broker
+          command: ["/bin/server"]
+          args: 
+            - "distributed-worker"
+            - "--threads"
+            - "{{ .Values.distributedWorker.threads }}"
+            {{- if .Values.distributedWorker.brokerAddress }}
+            - "--broker-address"
+            - "{{ .Values.distributedWorker.brokerAddress }}"
+            {{- end }}
+          env:
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
+                  key: database-password
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
+                  key: DATABASE_URL
+            
+            # Worker identification
+            - name: WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            
+            # MessageBrokerEngine configuration
+            {{- if .Values.distributedWorker.brokerAddress }}
+            - name: BROKER_ADDRESS
+              value: "{{ .Values.distributedWorker.brokerAddress }}"
+            {{- end }}
+            
+            # Elasticsearch logging configuration
+            {{- if .Values.secrets.elasticsearch.enabled }}
+            - name: USE_ELASTICSEARCH_LOGGING
+              value: "true"
+            - name: ELASTIC_CLOUD_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
+                  key: ELASTIC_CLOUD_ENDPOINT
+            - name: ELASTIC_CLOUD_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
+                  key: ELASTIC_CLOUD_USERNAME
+            - name: ELASTIC_CLOUD_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
+                  key: ELASTIC_CLOUD_PASSWORD
+            {{- end }}
+          resources:
+            {{- toYaml .Values.distributedWorker.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/config
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "backtesting-engine.fullname" . }}-config
+      {{- with .Values.distributedWorker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.distributedWorker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.distributedWorker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # Allow spreading workers across nodes
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "backtesting-engine.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: distributed-worker
+{{- end }}

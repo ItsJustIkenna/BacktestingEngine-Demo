@@ -151,6 +151,20 @@ pub struct ExecutionMetrics {
     pub ask_fill_rate: f64,
     /// Average quote spread at time of placement (bps)
     pub avg_quote_spread_bps: f64,
+    
+    // Market-Making Specific Win Rate Metrics
+    /// Round-trip win rate: profitable_round_trips / total_round_trips
+    pub round_trip_win_rate: Option<f64>,
+    /// Total round-trips completed (buy+sell pairs)
+    pub total_round_trips: usize,
+    /// Profitable round-trips (spread captured > fees)
+    pub profitable_round_trips: usize,
+    /// Spread capture rate: actual_spread / theoretical_spread
+    pub spread_capture_rate: Option<f64>,
+    /// Adverse selection rate: % of fills where price moved against us
+    pub adverse_selection_rate: Option<f64>,
+    /// Average P&L per round-trip in quote currency
+    pub avg_pnl_per_round_trip: Option<f64>,
 }
 
 /// Inventory management metrics for market making strategies

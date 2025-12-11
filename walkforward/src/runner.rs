@@ -215,6 +215,24 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
         // Inventory limits for market neutrality
         max_inventory_pct: 0.15,
         inventory_skew_multiplier: 3.0,
+        
+        // Phase 5: Regime detection parameters
+        regime_vol_threshold_high: 1.5,
+        regime_vol_threshold_low: 0.7,
+        regime_trend_threshold: 0.3,
+        regime_high_vol_spread_mult: 1.5,
+        regime_low_vol_spread_mult: 0.8,
+        regime_trending_inv_mult: 0.5,
+        
+        // Phase 5: Order book microstructure parameters
+        orderbook_imbalance_sensitivity: 0.3,
+        orderbook_depth_levels: 5,
+        imbalance_skew_factor: 0.5,
+        
+        // Phase 5: Adverse selection parameters
+        informed_trader_prob_window_ms: 5000,
+        adverse_selection_multiplier: 2.0,
+        toxic_flow_threshold: 0.6,
     }
 }
 
@@ -361,6 +379,24 @@ fn extract_best_parameters_from_walkforward(_wf_summary: &WalkForwardSummary) ->
         // Inventory limits for market neutrality
         max_inventory_pct: 0.15,
         inventory_skew_multiplier: 3.0,
+        
+        // Phase 5: Regime detection parameters
+        regime_vol_threshold_high: 1.5,
+        regime_vol_threshold_low: 0.7,
+        regime_trend_threshold: 0.3,
+        regime_high_vol_spread_mult: 1.5,
+        regime_low_vol_spread_mult: 0.8,
+        regime_trending_inv_mult: 0.5,
+        
+        // Phase 5: Order book microstructure parameters
+        orderbook_imbalance_sensitivity: 0.3,
+        orderbook_depth_levels: 5,
+        imbalance_skew_factor: 0.5,
+        
+        // Phase 5: Adverse selection parameters
+        informed_trader_prob_window_ms: 5000,
+        adverse_selection_multiplier: 2.0,
+        toxic_flow_threshold: 0.6,
     }
 }
 

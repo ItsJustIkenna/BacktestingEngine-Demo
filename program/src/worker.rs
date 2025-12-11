@@ -836,6 +836,7 @@ impl Worker {
         
         let backtest_result = BacktestResult {
             job_id: job.id.clone(),
+            strategy_type: Some(job.params.strategy_type.clone()),
             total_pnl,
             sharpe_ratio: result.core.sharpe_ratio.unwrap_or(0.0),
             max_drawdown,
@@ -907,6 +908,12 @@ impl Worker {
                 bid_fill_rate: ex.bid_fill_rate,
                 ask_fill_rate: ex.ask_fill_rate,
                 avg_quote_spread_bps: ex.avg_quote_spread_bps,
+                round_trip_win_rate: ex.round_trip_win_rate,
+                total_round_trips: ex.total_round_trips,
+                profitable_round_trips: ex.profitable_round_trips,
+                spread_capture_rate: ex.spread_capture_rate,
+                adverse_selection_rate: ex.adverse_selection_rate,
+                avg_pnl_per_round_trip: ex.avg_pnl_per_round_trip,
             }),
             risk_halt_reason: None,
         };
@@ -1122,6 +1129,24 @@ impl Worker {
                     // Inventory risk limits
                     max_inventory_pct: 0.15,
                     inventory_skew_multiplier: 3.0,
+                    
+                    // Phase 5: Regime detection parameters
+                    regime_vol_threshold_high: 1.5,
+                    regime_vol_threshold_low: 0.7,
+                    regime_trend_threshold: 0.3,
+                    regime_high_vol_spread_mult: 1.5,
+                    regime_low_vol_spread_mult: 0.8,
+                    regime_trending_inv_mult: 0.5,
+                    
+                    // Phase 5: Order book microstructure parameters
+                    orderbook_imbalance_sensitivity: 0.3,
+                    orderbook_depth_levels: 5,
+                    imbalance_skew_factor: 0.5,
+                    
+                    // Phase 5: Adverse selection parameters
+                    informed_trader_prob_window_ms: 5000,
+                    adverse_selection_multiplier: 2.0,
+                    toxic_flow_threshold: 0.6,
                 };
                 
                 let mut strategy_params_map = HashMap::new();
@@ -1560,6 +1585,24 @@ impl Worker {
                             // Inventory risk limits
                             max_inventory_pct: 0.15,
                             inventory_skew_multiplier: 3.0,
+                            
+                            // Phase 5: Regime detection parameters
+                            regime_vol_threshold_high: 1.5,
+                            regime_vol_threshold_low: 0.7,
+                            regime_trend_threshold: 0.3,
+                            regime_high_vol_spread_mult: 1.5,
+                            regime_low_vol_spread_mult: 0.8,
+                            regime_trending_inv_mult: 0.5,
+                            
+                            // Phase 5: Order book microstructure parameters
+                            orderbook_imbalance_sensitivity: 0.3,
+                            orderbook_depth_levels: 5,
+                            imbalance_skew_factor: 0.5,
+                            
+                            // Phase 5: Adverse selection parameters
+                            informed_trader_prob_window_ms: 5000,
+                            adverse_selection_multiplier: 2.0,
+                            toxic_flow_threshold: 0.6,
                         };
                         
                         let mut strategy_params_map = HashMap::new();
@@ -1756,6 +1799,7 @@ impl Worker {
         
         Ok(BacktestResult {
             job_id: job.id.clone(),
+            strategy_type: Some(job.params.strategy_type.clone()),
             total_pnl: total_oos_pnl,
             sharpe_ratio: avg_oos_sharpe,
             max_drawdown: max_oos_drawdown,
@@ -2289,6 +2333,24 @@ impl Worker {
             // Inventory risk limits
             max_inventory_pct: 0.15,
             inventory_skew_multiplier: 3.0,
+            
+            // Phase 5: Regime detection parameters
+            regime_vol_threshold_high: 1.5,
+            regime_vol_threshold_low: 0.7,
+            regime_trend_threshold: 0.3,
+            regime_high_vol_spread_mult: 1.5,
+            regime_low_vol_spread_mult: 0.8,
+            regime_trending_inv_mult: 0.5,
+            
+            // Phase 5: Order book microstructure parameters
+            orderbook_imbalance_sensitivity: 0.3,
+            orderbook_depth_levels: 5,
+            imbalance_skew_factor: 0.5,
+            
+            // Phase 5: Adverse selection parameters
+            informed_trader_prob_window_ms: 5000,
+            adverse_selection_multiplier: 2.0,
+            toxic_flow_threshold: 0.6,
         };
         
         let mut strategy_params_map = HashMap::new();
@@ -2410,6 +2472,7 @@ impl Worker {
         
         Ok(BacktestResult {
             job_id: job_id.to_string(),
+            strategy_type: Some("market_making".to_string()),
             total_pnl,
             sharpe_ratio: result.core.sharpe_ratio.unwrap_or(0.0),
             max_drawdown,
@@ -2473,6 +2536,12 @@ impl Worker {
                 bid_fill_rate: ex.bid_fill_rate,
                 ask_fill_rate: ex.ask_fill_rate,
                 avg_quote_spread_bps: ex.avg_quote_spread_bps,
+                round_trip_win_rate: ex.round_trip_win_rate,
+                total_round_trips: ex.total_round_trips,
+                profitable_round_trips: ex.profitable_round_trips,
+                spread_capture_rate: ex.spread_capture_rate,
+                adverse_selection_rate: ex.adverse_selection_rate,
+                avg_pnl_per_round_trip: ex.avg_pnl_per_round_trip,
             }),
             risk_halt_reason: None,
         })
@@ -2584,6 +2653,24 @@ impl Worker {
             // Inventory risk limits
             max_inventory_pct: 0.15,
             inventory_skew_multiplier: 3.0,
+            
+            // Phase 5: Regime detection parameters
+            regime_vol_threshold_high: 1.5,
+            regime_vol_threshold_low: 0.7,
+            regime_trend_threshold: 0.3,
+            regime_high_vol_spread_mult: 1.5,
+            regime_low_vol_spread_mult: 0.8,
+            regime_trending_inv_mult: 0.5,
+            
+            // Phase 5: Order book microstructure parameters
+            orderbook_imbalance_sensitivity: 0.3,
+            orderbook_depth_levels: 5,
+            imbalance_skew_factor: 0.5,
+            
+            // Phase 5: Adverse selection parameters
+            informed_trader_prob_window_ms: 5000,
+            adverse_selection_multiplier: 2.0,
+            toxic_flow_threshold: 0.6,
         };
         
         let mut strategy_params_map = HashMap::new();
@@ -2628,6 +2715,7 @@ impl Worker {
         
         Ok(BacktestResult {
             job_id: job_id.to_string(),
+            strategy_type: Some("market_making".to_string()),
             total_pnl,
             sharpe_ratio: result.core.sharpe_ratio.unwrap_or(0.0),
             max_drawdown,

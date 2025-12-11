@@ -45,8 +45,10 @@ bigdecimal = "0.4"
 indicatif = "0.17"
 rand = "0.8"
 
-# Message broker for real-time progress streaming
+# Message broker for real-time progress streaming and distributed processing
 publisher = { path = "../../MessageBrokerEngine/publisher" }
+protocol = { path = "../../MessageBrokerEngine/protocol" }
+prost = "0.13"
 bytes = "1.0"
 
 # Internal dependencies
