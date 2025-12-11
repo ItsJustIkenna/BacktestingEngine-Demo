@@ -9,6 +9,7 @@ postgres = ["databaseschema", "dataloader/postgres", "strategy/postgres", "order
 
 [dependencies]
 rand = "0.8"
+serde = { version = "1.0", features = ["derive"] }
 dataloader = { path = "../dataloader" }
 config = { path = "../config" }
 # Removed circular dependency: backtest now depends on genetic, not vice versa

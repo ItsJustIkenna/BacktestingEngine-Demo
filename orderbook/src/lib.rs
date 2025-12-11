@@ -9,6 +9,7 @@ pub mod level;
 pub mod reconstructor;
 pub mod types;
 pub mod logging_facade;
+pub mod queue_position;
 
 // Re-export main types for convenience
 pub use order_book::OrderBook;
@@ -20,6 +21,10 @@ pub use types::{
     ExecutionLevel, MarketOrderExecution,
 };
 pub use config::OrderBookConfig;
+pub use queue_position::{
+    QueuePosition, QueuePositionTracker, QueuePositionConfig,
+    estimate_queue_position,
+};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

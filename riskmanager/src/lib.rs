@@ -7,6 +7,15 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 
+/// Cross-asset correlation monitoring for portfolio risk
+pub mod correlation_monitor;
+
+pub use correlation_monitor::{
+    CrossAssetCorrelationMonitor, CorrelationMonitorConfig,
+    CorrelationAlert, CorrelationAlertType,
+    PortfolioCorrelationSummary,
+};
+
 /// Volatility regime for risk management
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VolatilityRegime {

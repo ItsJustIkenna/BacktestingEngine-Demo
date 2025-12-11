@@ -22,6 +22,12 @@ pub mod persistence;
 /// Trade statistics (e.g., win rate, average trade duration)
 pub mod trade_stats;
 
+/// Advanced metrics: Omega ratio, Tail ratio, Kelly criterion, Cross-asset correlation
+pub mod advanced;
+
+/// Fractional Kelly with drawdown constraints for robust position sizing
+pub mod fractional_kelly;
+
 use serde::{Serialize, Deserialize};
 
 // Re-export commonly used functions for convenience
@@ -29,6 +35,18 @@ pub use performance::{sharpe_ratio, sharpe_ratio_from_equity_curve, profit_facto
                      average_trade_return, median_trade_return, number_of_trades};
 pub use risk::{max_drawdown, volatility};
 pub use trade_stats::{win_rate, average_trade_duration};
+pub use advanced::{
+    omega_ratio, omega_ratio_suite, OmegaRatioSuite,
+    tail_ratio, tail_analysis, TailAnalysis,
+    kelly_criterion, KellyResult, KellyValidation, KellyAssessment,
+    CrossAssetMonitor, CorrelationMatrix, CorrelationBreakdown,
+};
+
+pub use fractional_kelly::{
+    FractionalKellyConfig, FractionalKellyCalculator, KellyPositionResult,
+    PositionAdjustments, RiskAssessment, RiskLevel, ReductionCurve,
+    calculate_fractional_kelly, find_optimal_kelly_fraction, OptimalFractionResult,
+};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PerformanceMetrics {

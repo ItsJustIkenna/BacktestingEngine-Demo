@@ -42,6 +42,9 @@ mod tests {
                 exchange_fees: None,
                 routing_mode: None,
                 latency_ms: 10,
+                latency_jitter_pct: 0.2,
+                min_latency_ms: 1,
+                latency_spike_probability: 0.01,
             },
             data: DataConfig {
                 default_timeframe: "1h".to_string(),
@@ -127,6 +130,9 @@ mod tests {
                 exchange_fees: None,
                 routing_mode: None,
                 latency_ms: 10,
+                latency_jitter_pct: 0.2,
+                min_latency_ms: 1,
+                latency_spike_probability: 0.01,
             },
             data: DataConfig {
                 default_timeframe: "1d".to_string(),
@@ -176,6 +182,9 @@ mod tests {
                 exchange_fees: None,
                 routing_mode: None,
                 latency_ms: 10,
+                latency_jitter_pct: 0.2,
+                min_latency_ms: 1,
+                latency_spike_probability: 0.01,
             },
             data: DataConfig {
                 default_timeframe: "1h".to_string(),

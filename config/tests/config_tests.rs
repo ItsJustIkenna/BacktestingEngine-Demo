@@ -83,11 +83,16 @@ fn test_trading_config_custom() {
         exchange_fees: None,
         routing_mode: None,
         latency_ms: 10, // Simulated network latency (realistic for co-located)
+        latency_jitter_pct: 0.2, // 20% jitter
+        min_latency_ms: 1,
+        latency_spike_probability: 0.01, // 1% spike probability
     };
     
     assert_eq!(config.initial_capital, 50000.0);
     assert_eq!(config.slippage_bps, 2.5);
     assert_eq!(config.max_position_size, Some(10.0));
+    assert_eq!(config.latency_jitter_pct, 0.2);
+    assert_eq!(config.min_latency_ms, 1);
 }
 
 // ============================================================================

@@ -446,6 +446,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "criterion",
+ "rand 0.8.5",
  "serde",
  "serde_yaml",
  "tempfile",
@@ -1093,6 +1094,7 @@ dependencies = [
  "rayon",
  "riskmanager",
  "rustc-hash",
+ "serde",
  "smallvec",
  "strategy",
  "tokio",
@@ -2575,6 +2577,7 @@ dependencies = [
  "chrono",
  "criterion",
  "once_cell",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "tokio",

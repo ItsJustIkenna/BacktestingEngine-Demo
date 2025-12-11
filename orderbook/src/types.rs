@@ -12,7 +12,7 @@ pub enum LiquidityType {
 }
 
 /// Side of the order book (bid or ask)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BookSide {
     Bid,
     Ask,

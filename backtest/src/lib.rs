@@ -9,11 +9,13 @@ pub mod simulation;
 pub mod types;
 pub mod monte_carlo;
 pub mod html_export;
+pub mod latency;
 
 // Re-export main types for easy access
 pub use engine::{BacktestEngine, BacktestResults, AnalysisMetadata, WalkForwardSummary};
 pub use types::{BacktestResult, BacktestEvent};
 pub use html_export::HtmlExporter;
+pub use latency::{LatencySampler, sample_latency};
 
 // Utility functions for report generation
 use metrics::{ReportConfig, ReportFormat};

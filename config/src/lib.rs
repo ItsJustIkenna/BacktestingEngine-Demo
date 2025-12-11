@@ -4,6 +4,11 @@ use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use thiserror::Error;
 
+/// Variable latency simulation with jitter and spikes
+pub mod variable_latency;
+
+pub use variable_latency::{VariableLatencyConfig, LatencySimulator, TimeOfDayLatencyPattern};
+
 /// Configuration validation errors
 #[derive(Error, Debug)]
 pub enum ConfigError {
@@ -64,9 +69,24 @@ pub struct TradingConfig {
     /// This simulates realistic order propagation delay (default: 50ms)
     #[serde(default = "default_latency_ms")]
     pub latency_ms: u64,
+    /// Latency jitter percentage (0.0-1.0)
+    /// Adds random variation to latency: actual = latency_ms * (1 + jitter * random(-1, 1))
+    /// Default: 0.2 (20% variation)
+    #[serde(default = "default_latency_jitter")]
+    pub latency_jitter_pct: f64,
+    /// Minimum latency floor in milliseconds (even with negative jitter)
+    #[serde(default = "default_min_latency_ms")]
+    pub min_latency_ms: u64,
+    /// Latency spike probability (0.0-1.0)
+    /// Probability of experiencing a latency spike (3-10x normal latency)
+    #[serde(default = "default_latency_spike_prob")]
+    pub latency_spike_probability: f64,
 }
 
 fn default_latency_ms() -> u64 { 10 }
+fn default_latency_jitter() -> f64 { 0.2 }
+fn default_min_latency_ms() -> u64 { 1 }
+fn default_latency_spike_prob() -> f64 { 0.01 }
 
 /// Routing mode for multi-exchange strategies
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -632,6 +652,9 @@ impl Default for TradingConfig {
             exchange_fees: Some(ExchangeFeeConfig::default()), // Kraken at $5M volume
             routing_mode: None,         // Single exchange by default
             latency_ms: 10,             // 10ms simulated latency (realistic for co-located)
+            latency_jitter_pct: 0.2,    // 20% variation
+            min_latency_ms: 1,          // Minimum 1ms even with negative jitter
+            latency_spike_probability: 0.01, // 1% chance of latency spike
         }
     }
 }

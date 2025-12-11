@@ -17,6 +17,22 @@ pub mod chromosome;
 // Fitness functions moved to backtest crate to avoid circular dependency
 // pub mod fitness;
 
+/// Regime-aware Monte Carlo simulation for robust backtesting
+pub mod regime_mc;
+
+/// Hidden Markov Model for probabilistic regime detection
+pub mod hmm_regime;
+
+pub use regime_mc::{
+    RegimeMCConfig, RegimeMCResult, RegimeAwareMC, RegimeInfo,
+    MarketRegime, run_regime_aware_monte_carlo,
+};
+
+pub use hmm_regime::{
+    HMMConfig, HiddenMarkovModel, GaussianEmission, FitResult,
+    HMMRegimeTracker, RegimeCharacteristics, RegimeUpdate,
+};
+
 /// Logger for genetic algorithm operations
 static GENETIC_LOGGER: Lazy<Arc<UltraLogger>> = Lazy::new(|| {
     Arc::new(UltraLogger::new("BacktestingEngine-genetic".to_string()))
