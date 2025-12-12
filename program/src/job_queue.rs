@@ -27,6 +27,15 @@ pub struct BacktestJobParams {
     pub strategy_type: String,
     pub initial_capital: f64,
     
+    // Initial inventory configuration
+    /// Percentage of initial_capital to hold as base asset (e.g., 0.5 = 50% in BTC, 50% in USD)
+    #[serde(default = "default_initial_inventory_pct")]
+    pub initial_inventory_pct: f64,
+    
+    /// Initial 30-day trading volume in USD (for fee tier calculations)
+    #[serde(default = "default_initial_30d_volume")]
+    pub initial_30d_volume: f64,
+    
     // Optimization method
     #[serde(default = "default_optimization_method")]
     pub optimization_method: String, // "genetic" or "manual"
@@ -128,6 +137,8 @@ pub struct BacktestJobParams {
 }
 
 // Default functions for serde
+fn default_initial_inventory_pct() -> f64 { 0.5 }  // 50% in base asset, 50% in quote
+fn default_initial_30d_volume() -> f64 { 0.0 }  // 0 = use exchange default fee tier
 fn default_optimization_method() -> String { "genetic".to_string() }
 fn default_population_size() -> usize { 30 }  // Reduced from 50 for faster optimization
 fn default_generations() -> usize { 15 }      // Reduced from 20, early stopping handles convergence
@@ -165,6 +176,8 @@ impl Default for BacktestJobParams {
             exchange: String::new(),
             strategy_type: "market_making".to_string(),
             initial_capital: 10000.0,
+            initial_inventory_pct: default_initial_inventory_pct(),
+            initial_30d_volume: default_initial_30d_volume(),
             optimization_method: default_optimization_method(),
             population_size: default_population_size(),
             generations: default_generations(),

@@ -706,8 +706,8 @@ impl Worker {
         let initial_price = Self::get_reference_price(&data);
         
         // Initialize portfolio with BOTH quote and base assets for proper market making
-        // Split capital: 50% as quote (USD), 50% as base asset (BTC/ETH)
-        let inventory_pct = 0.5; // 50% of capital as base asset inventory
+        // Split capital based on initial_inventory_pct (default 50% as quote, 50% as base)
+        let inventory_pct = params.initial_inventory_pct;
         let quote_balance = params.initial_capital * (1.0 - inventory_pct);
         let base_value = params.initial_capital * inventory_pct;
         let base_quantity = if initial_price > 0.0 { base_value / initial_price } else { 0.0 };
@@ -1091,6 +1091,7 @@ impl Worker {
         let exchange = params.exchange.clone();
         let exchange_for_logging = exchange.clone(); // Clone for use after the closure
         let initial_capital = params.initial_capital;
+        let initial_inventory_pct = params.initial_inventory_pct;
         let commission_rate = params.commission_rate;
         
         // Create fitness function that evaluates chromosomes and returns equity curve for robustness analysis
@@ -1129,7 +1130,7 @@ impl Worker {
                 let asset_price = Self::get_reference_price(&data);
                 
                 // Initialize portfolio with BOTH quote and base assets for proper market making
-                let inventory_pct = 0.5;
+                let inventory_pct = initial_inventory_pct;
                 let quote_balance = initial_capital * (1.0 - inventory_pct);
                 let base_value = initial_capital * inventory_pct;
                 let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };
@@ -1478,6 +1479,7 @@ impl Worker {
             &params.symbol,
             &params.exchange,
             params.initial_capital,
+            params.initial_inventory_pct,
             params.commission_rate,
             &best_chromosome,
             &data_for_backtest,      // Full data for backtest + Monte Carlo
@@ -1732,6 +1734,7 @@ impl Worker {
                 &params.symbol,
                 &params.exchange,
                 params.initial_capital,
+                params.initial_inventory_pct,
                 params.commission_rate,
                 &fixed_chromosome,
                 &test_data,
@@ -2268,6 +2271,7 @@ impl Worker {
         symbol: &str,
         exchange: &str,
         initial_capital: f64,
+        initial_inventory_pct: f64,
         commission_rate: f64,
         chromosome: &genetic::chromosome::AvellanedaStoikovChromosome,
         backtest_data: &[MarketData],
@@ -2307,7 +2311,7 @@ impl Worker {
         log_info!(MAIN_LOGGER, "Job {} FINAL_ANALYSIS_ASSET_PRICE | price={:.2}", job_id, asset_price);
         
         // Initialize portfolio with BOTH quote and base assets for proper market making
-        let inventory_pct = 0.5;
+        let inventory_pct = initial_inventory_pct;
         let quote_balance = initial_capital * (1.0 - inventory_pct);
         let base_value = initial_capital * inventory_pct;
         let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };
@@ -2727,6 +2731,7 @@ impl Worker {
         symbol: &str,
         exchange: &str,
         initial_capital: f64,
+        initial_inventory_pct: f64,
         commission_rate: f64,
         chromosome: &genetic::chromosome::AvellanedaStoikovChromosome,
         data: &[MarketData],
@@ -2746,7 +2751,7 @@ impl Worker {
         let asset_price = Self::get_reference_price(data);
         
         // Initialize portfolio with BOTH quote and base assets for proper market making
-        let inventory_pct = 0.5;
+        let inventory_pct = initial_inventory_pct;
         let quote_balance = initial_capital * (1.0 - inventory_pct);
         let base_value = initial_capital * inventory_pct;
         let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };

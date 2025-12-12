@@ -227,6 +227,8 @@ impl PostgresQueue {
                 exchange: record.exchange,
                 strategy_type: record.strategy_type,
                 initial_capital: f64::from_str(&record.initial_capital.to_string())?,
+                initial_inventory_pct: 0.5,  // Default 50% - not stored in DB yet
+                initial_30d_volume: 0.0,     // Default 0 - not stored in DB yet
                 optimization_method: record.optimization_method,
                 population_size: record.population_size.unwrap_or(30) as usize,  // Reduced from 50
                 generations: record.generations.unwrap_or(15) as usize,        // Reduced from 20

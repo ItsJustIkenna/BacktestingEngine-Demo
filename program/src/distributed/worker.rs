@@ -193,8 +193,8 @@ impl DistributedWorker {
         
         // Initialize portfolio with starting state from previous chunk or fresh
         let (quote_balance, base_quantity) = if chunk.chunk_id == 0 {
-            // First chunk: split capital 50/50
-            let inventory_pct = 0.5;
+            // First chunk: split capital based on initial_inventory_pct
+            let inventory_pct = params.initial_inventory_pct;
             let quote = chunk.initial_capital * (1.0 - inventory_pct);
             let base_value = chunk.initial_capital * inventory_pct;
             let base = if initial_price > 0.0 { base_value / initial_price } else { 0.0 };

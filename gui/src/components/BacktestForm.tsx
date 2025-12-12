@@ -5,6 +5,8 @@ interface BacktestFormData {
   exchange: string;
   strategy_type: string;
   initial_capital: number;
+  initial_inventory_pct: number;  // Percentage of capital as base asset (e.g., 0.5 = 50% BTC, 50% USD)
+  initial_30d_volume: number;     // Starting 30-day volume for fee tier calculation
   optimization_method: 'genetic' | 'manual';
   // Genetic algorithm parameters
   population_size: number;
@@ -51,6 +53,8 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     exchange: '',
     strategy_type: 'market_making',
     initial_capital: 10000,
+    initial_inventory_pct: 0.5,   // Default 50% base asset
+    initial_30d_volume: 0,        // Default 0 = use exchange default fee tier
     optimization_method: 'genetic',
     // Genetic algorithm defaults
     population_size: 50,
@@ -152,6 +156,8 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
         exchange: formData.exchange,
         strategy_type: formData.strategy_type,
         initial_capital: formData.initial_capital,
+        initial_inventory_pct: formData.initial_inventory_pct,
+        initial_30d_volume: formData.initial_30d_volume,
         optimization_method: formData.optimization_method,
         // Monte Carlo and Walk-Forward settings
         monte_carlo_enabled: formData.monte_carlo_enabled,
@@ -308,6 +314,73 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
             required
             style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
           />
+        </div>
+
+        {/* Portfolio Allocation */}
+        <div style={{ 
+          padding: '15px', 
+          backgroundColor: '#f0f8ff', 
+          borderRadius: '4px', 
+          border: '1px solid #b8d4e8',
+          marginTop: '10px'
+        }}>
+          <label style={{ display: 'block', marginBottom: '10px', fontWeight: 'bold' }}>
+            💰 Portfolio Allocation
+          </label>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+            <div>
+              <label htmlFor="initial_inventory_pct" style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
+                Base Asset Allocation (%)
+              </label>
+              <input
+                type="number"
+                id="initial_inventory_pct"
+                name="initial_inventory_pct"
+                value={formData.initial_inventory_pct * 100}
+                onChange={(e) => setFormData(prev => ({ ...prev, initial_inventory_pct: parseFloat(e.target.value) / 100 }))}
+                step="5"
+                min="0"
+                max="100"
+                style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px' }}
+              />
+              <div style={{ fontSize: '11px', color: '#6c757d', marginTop: '2px' }}>
+                % of capital as base asset (e.g., BTC). Rest is quote (USD). Default: 50%
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="initial_30d_volume" style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
+                30-Day Volume ($)
+              </label>
+              <input
+                type="number"
+                id="initial_30d_volume"
+                name="initial_30d_volume"
+                value={formData.initial_30d_volume}
+                onChange={handleChange}
+                step="100000"
+                min="0"
+                style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px' }}
+              />
+              <div style={{ fontSize: '11px', color: '#6c757d', marginTop: '2px' }}>
+                Starting 30-day volume for fee tier. 0 = default fees.
+              </div>
+            </div>
+          </div>
+          
+          <div style={{ 
+            marginTop: '10px', 
+            padding: '8px', 
+            backgroundColor: '#e8f4f8', 
+            borderRadius: '4px',
+            fontSize: '12px',
+            color: '#495057'
+          }}>
+            <strong>Current allocation:</strong>{' '}
+            ${((formData.initial_capital * formData.initial_inventory_pct)).toLocaleString()} in base asset,{' '}
+            ${((formData.initial_capital * (1 - formData.initial_inventory_pct))).toLocaleString()} in quote
+          </div>
         </div>
 
         {/* Optimization Method */}

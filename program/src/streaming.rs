@@ -460,15 +460,15 @@ impl OrderBookBatchLoader {
         let trades: Vec<MarketData> = results
             .into_iter()
             .map(|row| {
-                MarketData::Trade(TradeData {
-                    timestamp: DateTime::from_naive_utc_and_offset(row.created_at, Utc),
-                    symbol: row.symbol,
-                    exchange: row.exchange,
-                    trade_id: row.trade_id,
-                    side: row.side,
-                    price: row.price,
-                    quantity: row.quantity,
-                })
+                MarketData::Trade(TradeData::new(
+                    DateTime::from_naive_utc_and_offset(row.created_at, Utc),
+                    row.symbol,
+                    row.exchange,
+                    row.price,
+                    row.quantity,
+                    row.side,
+                    row.trade_id,
+                ))
             })
             .collect();
         
@@ -542,15 +542,15 @@ impl OrderBookBatchLoader {
         let trades: Vec<MarketData> = results
             .into_iter()
             .map(|row| {
-                MarketData::Trade(TradeData {
-                    timestamp: DateTime::from_naive_utc_and_offset(row.created_at, Utc),
-                    symbol: row.symbol,
-                    exchange: row.exchange,
-                    trade_id: row.trade_id,
-                    side: row.side,
-                    price: row.price,
-                    quantity: row.quantity,
-                })
+                MarketData::Trade(TradeData::new(
+                    DateTime::from_naive_utc_and_offset(row.created_at, Utc),
+                    row.symbol,
+                    row.exchange,
+                    row.price,
+                    row.quantity,
+                    row.side,
+                    row.trade_id,
+                ))
             })
             .collect();
         
@@ -1345,15 +1345,15 @@ impl ParallelDataLoader {
         let trades: Vec<MarketData> = results
             .into_iter()
             .map(|row| {
-                MarketData::Trade(TradeData {
-                    timestamp: DateTime::from_naive_utc_and_offset(row.created_at, Utc),
-                    symbol: row.symbol,
-                    exchange: row.exchange,
-                    trade_id: row.trade_id,
-                    side: row.side,
-                    price: row.price,
-                    quantity: row.quantity,
-                })
+                MarketData::Trade(TradeData::new(
+                    DateTime::from_naive_utc_and_offset(row.created_at, Utc),
+                    row.symbol,
+                    row.exchange,
+                    row.price,
+                    row.quantity,
+                    row.side,
+                    row.trade_id,
+                ))
             })
             .collect();
         
