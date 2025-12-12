@@ -1341,21 +1341,21 @@ impl Worker {
         Ok(final_result)
     }
     
-    /// Execute walk-forward analysis: rolling optimization/test windows
+    /// Execute walk-forward validation: test fixed parameters across rolling time windows
     /// 
-    /// Walk-forward tests the robustness of the optimization process itself,
-    /// not just specific parameters. Each window:
-    /// 1. Runs genetic optimization on in-sample data (optimization window)
-    /// 2. Tests the optimal parameters on out-of-sample data (test window)
+    /// Walk-forward VALIDATES that optimized parameters generalize across different
+    /// market conditions. Uses the SAME parameters for all windows (no re-optimization).
+    /// This is much faster than per-window optimization and tests true out-of-sample robustness.
+    /// 
+    /// For each window:
+    /// 1. Uses fixed parameters from job (from prior GA or manual input)
+    /// 2. Tests on the test window data (out-of-sample validation)
     /// 3. Slides forward and repeats
     async fn execute_walkforward_analysis(
         &self,
         job: &BacktestJob,
     ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
-        use genetic::GeneticOptimizer;
         use genetic::chromosome::AvellanedaStoikovChromosome;
-        use genetic::FitnessResult;
-        use config::GeneticConfig;
         
         let params = &job.params;
         
@@ -1421,29 +1421,36 @@ impl Worker {
         let mut aggregated_equity_curve: Vec<f64> = Vec::new();
         let total_windows = windows.len();
         
-        // Genetic config for each window's optimization
-        let config = GeneticConfig {
-            population_size: params.population_size,
-            generations: params.generations,
-            mutation_rate: 0.1,
-            crossover_rate: 0.7,
-            ..Default::default()
+        // Use FIXED parameters from job - no per-window optimization
+        // These come from prior GA run or manual input
+        let fixed_chromosome = AvellanedaStoikovChromosome {
+            risk_aversion: params.risk_aversion,
+            inventory_target: params.inventory_target,
+            order_size_pct: params.order_size_pct,
+            window_ms: params.window_ms,
+            min_quote_lifetime_ms: params.min_quote_lifetime_ms,
+            volatility_cap: params.volatility_cap,
+            time_horizon_minutes: params.time_horizon_minutes as f64,
+            market_depth_k: params.market_depth_k,
+            volatility_adjustment_factor: params.volatility_adjustment_factor,
+            inventory_penalty_factor: params.inventory_penalty_factor,
+            trend_sensitivity: params.trend_sensitivity,
+            flow_sensitivity: params.flow_sensitivity,
+            take_profit_pct: params.take_profit_pct,
+            stop_loss_pct: params.stop_loss_pct,
+            min_spread_bps: params.min_spread_bps,
+            max_trades_per_minute: params.max_trades_per_minute,
         };
+        
+        log_info!(WALKFORWARD_LOGGER, "Job {} using fixed params for validation | risk_aversion={:.3} inventory_target={:.3} order_size_pct={:.2}%",
+            job.id, fixed_chromosome.risk_aversion, fixed_chromosome.inventory_target, fixed_chromosome.order_size_pct * 100.0);
         
         for (window_idx, window) in windows.iter().enumerate() {
             let window_num = window_idx + 1;
             
-            log_info!(WALKFORWARD_LOGGER, "Job {} window {}/{} | opt: {} to {} | test: {} to {}", 
+            log_info!(WALKFORWARD_LOGGER, "Job {} window {}/{} | test: {} to {}", 
                 job.id, window_num, total_windows,
-                window.opt_start.format("%Y-%m-%d"), window.opt_end.format("%Y-%m-%d"),
                 window.test_start.format("%Y-%m-%d"), window.test_end.format("%Y-%m-%d"));
-            
-            log_debug!(MAIN_LOGGER, "\n🔄 Window {}/{}: Opt {} to {}, Test {} to {}", 
-                window_num, total_windows,
-                window.opt_start.format("%Y-%m-%d"),
-                window.opt_end.format("%Y-%m-%d"),
-                window.test_start.format("%Y-%m-%d"),
-                window.test_end.format("%Y-%m-%d"));
             
             // Update progress
             let progress = (window_idx as f64 / total_windows as f64) * 90.0;
@@ -1454,234 +1461,11 @@ impl Worker {
                 serde_json::json!({
                     "current_window": window_num,
                     "total_windows": total_windows,
-                    "phase": "optimizing"
+                    "phase": "validating"
                 })
             ).await;
             
-            // Filter data for optimization window
-            let opt_data: Vec<MarketData> = all_data.iter()
-                .filter(|d| {
-                    let ts = self.get_market_data_timestamp(d);
-                    ts >= window.opt_start && ts < window.opt_end
-                })
-                .cloned()
-                .collect();
-            
-            if opt_data.is_empty() {
-                log_warn!(WALKFORWARD_LOGGER, "Job {} window {} no optimization data, skipping", job.id, window_num);
-                log_debug!(MAIN_LOGGER, "⚠️ Window {}: No optimization data, skipping", window_num);
-                continue;
-            }
-            
-            log_debug!(WALKFORWARD_LOGGER, "Job {} window {} optimization data: {} points", job.id, window_num, opt_data.len());
-            
-            // Run genetic optimization on this window's in-sample data
-            let opt_data_arc = Arc::new(opt_data);
-            let symbol = params.symbol.clone();
-            let exchange = params.exchange.clone();
-            let initial_capital = params.initial_capital;
-            let commission_rate = params.commission_rate;
-            
-            let fitness_fn: genetic::AsyncFitnessFn<AvellanedaStoikovChromosome> = {
-                let data = Arc::clone(&opt_data_arc);
-                Arc::new(move |chromosome: &AvellanedaStoikovChromosome| {
-                    let data = Arc::clone(&data);
-                    let symbol = symbol.clone();
-                    let exchange = exchange.clone();
-                    let chr = chromosome.clone();
-                    
-                    Box::pin(async move {
-                        let mut backtest_config = BacktestConfig::default();
-                        backtest_config.trading.initial_capital = initial_capital;
-                        backtest_config.trading.commission_rate = commission_rate;
-                        backtest_config.analysis.skip_genetic_optimization = true;
-                        backtest_config.analysis.auto_monte_carlo = false;
-                        backtest_config.analysis.auto_walk_forward = false;
-                        backtest_config.data.gap_detection.enabled = false;
-                        
-                        let engine = BacktestEngine::new(backtest_config);
-                        
-                        // Get initial price for inventory calculation
-                        let asset_price = Self::get_reference_price(&data);
-                        
-                        // Initialize portfolio with BOTH quote and base assets for proper market making
-                        let inventory_pct = 0.5;
-                        let quote_balance = initial_capital * (1.0 - inventory_pct);
-                        let base_value = initial_capital * inventory_pct;
-                        let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };
-                        let first_timestamp = Self::get_first_timestamp(&data);
-                        
-                        let mut portfolio = PortfolioState::with_inventory(
-                            symbol.clone(),
-                            BigDecimal::from_f64(quote_balance).unwrap_or_default(),
-                            base_quantity,
-                            BigDecimal::from_f64(asset_price).unwrap_or_default(),
-                            first_timestamp,
-                        );
-                        
-                        let orderbook_config = OrderBookConfig::default();
-                        let mut orderbook = OrderBook::new(symbol.clone(), exchange.clone(), orderbook_config);
-                        let mut risk_manager = RiskManager::new();
-                        
-                        // Calculate order_size in asset units from percentage
-                        let asset_price = Self::get_reference_price(&data);
-                        let order_size_units = (initial_capital * chr.order_size_pct) / asset_price;
-                        
-                        // Get actual exchange maker fee
-                        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&exchange);
-                        let maker_fee = exchange_fee_config.maker_fee;
-                        
-                        let strategy_params = AvellanedaStoikovParams {
-                            risk_aversion: chr.risk_aversion,
-                            inventory_target: chr.inventory_target,
-                            order_size: order_size_units,
-                            order_size_pct: chr.order_size_pct,
-                            initial_capital,
-                            initial_inventory_pct: 0.5,  // 50% of capital as base asset for market making
-                            window_ms: chr.window_ms,
-                            min_quote_lifetime_ms: chr.min_quote_lifetime_ms,
-                            fee_rate: maker_fee,  // Use actual exchange maker fee
-                            // latency_buffer removed - latency simulated in order matching
-                            volatility_cap: chr.volatility_cap,
-                            volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start
-                            time_horizon_minutes: chr.time_horizon_minutes,
-                            market_depth_k: chr.market_depth_k,
-                            volatility_adjustment_factor: chr.volatility_adjustment_factor,
-                            inventory_penalty_factor: chr.inventory_penalty_factor,
-                            trend_sensitivity: chr.trend_sensitivity,
-                            flow_sensitivity: chr.flow_sensitivity,
-                            take_profit_pct: chr.take_profit_pct,
-                            stop_loss_pct: chr.stop_loss_pct,
-                            min_spread_bps: chr.min_spread_bps,
-                            max_trades_per_minute: chr.max_trades_per_minute,
-                            
-                            // Phase 3: Dynamic k parameters (k divides liquidity term)
-                            k_volatility_sensitivity: 0.3,
-                            k_flow_sensitivity: 0.2,
-                            k_min: 1.0,   // Floor for liquid markets
-                            k_max: 50.0,  // GA can explore tight spreads
-                            
-                            // Phase 4: Dynamic time horizon parameters
-                            time_horizon_vol_sensitivity: 0.5,
-                            time_horizon_min: 0.25,
-                            time_horizon_max: 5.0,
-                            
-                            // Phase 4: Dynamic min spread parameters
-                            min_spread_vol_sensitivity: 0.3,
-                            min_spread_flow_sensitivity: 0.2,
-                            min_spread_min_bps: 3.0,
-                            min_spread_max_bps: 50.0,
-                            
-                            // Phase 4: Dynamic order size parameters
-                            size_vol_sensitivity: 0.3,
-                            size_drawdown_sensitivity: 0.5,
-                            size_win_boost: 0.1,
-                            size_min_pct: 0.005,
-                            size_max_pct: 0.05,
-                            
-                            // Phase 4: Dynamic rate limiting parameters
-                            rate_vol_sensitivity: 0.4,
-                            rate_min: 5.0,
-                            rate_max: 60.0,
-                            
-                            // Inventory risk limits
-                            max_inventory_pct: 0.15,
-                            inventory_skew_multiplier: 3.0,
-                            
-                            // Phase 5: Regime detection parameters
-                            regime_vol_threshold_high: 1.5,
-                            regime_vol_threshold_low: 0.7,
-                            regime_trend_threshold: 0.3,
-                            regime_high_vol_spread_mult: 1.5,
-                            regime_low_vol_spread_mult: 0.8,
-                            regime_trending_inv_mult: 0.5,
-                            
-                            // Phase 5: Order book microstructure parameters
-                            orderbook_imbalance_sensitivity: 0.3,
-                            orderbook_depth_levels: 5,
-                            imbalance_skew_factor: 0.5,
-                            
-                            // Phase 5: Adverse selection parameters
-                            informed_trader_prob_window_ms: 5000,
-                            adverse_selection_multiplier: 2.0,
-                            toxic_flow_threshold: 0.6,
-                        };
-                        
-                        let mut strategy_params_map = HashMap::new();
-                        strategy_params_map.insert("risk_aversion".to_string(), config::ParameterValue::Float(chr.risk_aversion));
-                        strategy_params_map.insert("inventory_target".to_string(), config::ParameterValue::Float(chr.inventory_target));
-                        strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(order_size_units));
-                        
-                        let strategy_config = StrategyConfig {
-                            id: "wf-genetic-eval".to_string(),
-                            name: "Avellaneda-Stoikov".to_string(),
-                            strategy_type: "AvellanedaStoikov".to_string(),
-                            symbol: symbol.clone(),
-                            exchange: exchange.clone(),
-                            parameters: strategy_params_map,
-                            risk_limits: StrategyRiskLimits::default(),
-                            enabled: true,
-                        };
-                        
-                        let strategy = AvellanedaStoikovStrategy::new(strategy_params);
-                        let mut strategy_manager = StrategyManager::new();
-                        if strategy_manager.register_strategy(strategy_config, strategy).is_err() {
-                            return FitnessResult::new(0.0, Vec::new());
-                        }
-                        
-                        match engine.run_core_simulation_direct(
-                            &mut strategy_manager,
-                            &mut orderbook,
-                            &mut portfolio,
-                            &mut risk_manager,
-                            &data,
-                        ).await {
-                            Ok(result) => {
-                                // Use comprehensive fitness function that penalizes commission-heavy strategies
-                                let fitness = calculate_comprehensive_fitness(&result, initial_capital);
-                                FitnessResult::new(fitness, result.equity_curve.clone())
-                            }
-                            Err(_) => FitnessResult::new(0.0, Vec::new()),
-                        }
-                    })
-                })
-            };
-            
-            let optimizer = GeneticOptimizer {
-                config: config.clone(),
-                fitness_fn,
-                progress_callback: None, // Don't update DB for each window's generations
-                job_id: Some(format!("{}-window-{}", job.id, window_num)),
-            };
-            
-            log_debug!(WALKFORWARD_LOGGER, "Job {} window {} starting genetic optimization", job.id, window_num);
-            log_debug!(MAIN_LOGGER, "🧬 Window {}: Running genetic optimization...", window_num);
-            let (best_chromosome, optimization_fitness) = optimizer.run().await;
-            
-            // Check if optimization found a viable strategy
-            if optimization_fitness < 0.01 {
-                log_warn!(WALKFORWARD_LOGGER, "Job {} window {} no viable strategy found (fitness={:.6}), skipping window", 
-                    job.id, window_num, optimization_fitness);
-                continue;
-            }
-            
-            log_info!(WALKFORWARD_LOGGER, "Job {} window {} optimization complete | fitness={:.4} risk_aversion={:.3} inventory_target={:.3} order_size_pct={:.2}%",
-                job.id, window_num, optimization_fitness, best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size_pct * 100.0);
-            log_debug!(MAIN_LOGGER, "✅ Window {}: Best params - risk_aversion={:.3}, inventory_target={:.3}, order_size_pct={:.2}%",
-                window_num, best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size_pct * 100.0);
-            
-            // Update phase to testing
-            let _ = self.job_queue.update_phase(
-                &job.id,
-                "walkforward_window",
-                serde_json::json!({
-                    "current_window": window_num,
-                    "total_windows": total_windows,
-                    "phase": "testing"
-                })
-            ).await;
-            
-            // Filter data for test window (out-of-sample)
+            // Filter data for test window only (validation is out-of-sample)
             let test_data: Vec<MarketData> = all_data.iter()
                 .filter(|d| {
                     let ts = self.get_market_data_timestamp(d);
@@ -1692,30 +1476,26 @@ impl Worker {
             
             if test_data.is_empty() {
                 log_warn!(WALKFORWARD_LOGGER, "Job {} window {} no test data, skipping", job.id, window_num);
-                log_debug!(MAIN_LOGGER, "⚠️ Window {}: No test data, skipping", window_num);
                 continue;
             }
             
-            log_debug!(WALKFORWARD_LOGGER, "Job {} window {} testing on {} out-of-sample points", job.id, window_num, test_data.len());
-            // Run backtest on out-of-sample data with optimal parameters
-            log_debug!(MAIN_LOGGER, "📈 Window {}: Testing on out-of-sample data ({} events)...", window_num, test_data.len());
+            log_debug!(WALKFORWARD_LOGGER, "Job {} window {} validating on {} out-of-sample points", job.id, window_num, test_data.len());
             
+            // Run backtest on out-of-sample data with FIXED parameters
             let test_result = self.run_backtest_with_chromosome(
                 &format!("{}-window{}", job.id, window_num),
                 &params.symbol,
                 &params.exchange,
                 params.initial_capital,
                 params.commission_rate,
-                &best_chromosome,
+                &fixed_chromosome,
                 &test_data,
             ).await?;
             
             log_info!(WALKFORWARD_LOGGER, "Job {} window {} OOS results | pnl={:.2} sharpe={:.3} trades={} max_dd={:.2}%", 
                 job.id, window_num, test_result.total_pnl, test_result.sharpe_ratio, test_result.total_trades, test_result.max_drawdown * 100.0);
-            log_debug!(MAIN_LOGGER, "📊 Window {}: OOS PnL={:.2}, Sharpe={:.3}, Trades={}", 
-                window_num, test_result.total_pnl, test_result.sharpe_ratio, test_result.total_trades);
             
-            // Store window result
+            // Store window result (params are same for all windows in validation mode)
             window_results.push(WalkForwardWindowResult {
                 window_id: window_num as u32,
                 opt_start: window.opt_start,
@@ -1723,11 +1503,11 @@ impl Worker {
                 test_start: window.test_start,
                 test_end: window.test_end,
                 optimal_params: OptimalParams {
-                    risk_aversion: best_chromosome.risk_aversion,
-                    inventory_target: best_chromosome.inventory_target,
-                    order_size_pct: best_chromosome.order_size_pct,
+                    risk_aversion: fixed_chromosome.risk_aversion,
+                    inventory_target: fixed_chromosome.inventory_target,
+                    order_size_pct: fixed_chromosome.order_size_pct,
                 },
-                optimization_fitness,
+                optimization_fitness: 0.0, // Not applicable for validation mode
                 oos_pnl: test_result.total_pnl,
                 oos_sharpe: test_result.sharpe_ratio,
                 oos_max_drawdown: test_result.max_drawdown,
