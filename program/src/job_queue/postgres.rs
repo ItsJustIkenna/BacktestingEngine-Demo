@@ -228,8 +228,8 @@ impl PostgresQueue {
                 strategy_type: record.strategy_type,
                 initial_capital: f64::from_str(&record.initial_capital.to_string())?,
                 optimization_method: record.optimization_method,
-                population_size: record.population_size.unwrap_or(50) as usize,
-                generations: record.generations.unwrap_or(20) as usize,
+                population_size: record.population_size.unwrap_or(30) as usize,  // Reduced from 50
+                generations: record.generations.unwrap_or(15) as usize,        // Reduced from 20
                 // Walk-forward params - default to None when loading from DB
                 walkforward_optimization_days: None,
                 walkforward_test_days: None,
@@ -1062,8 +1062,8 @@ mod tests {
             start_date: None,
             end_date: None,
             optimization_method: "manual".to_string(),
-            population_size: 50,
-            generations: 20,
+            population_size: 30,  // Reduced from 50 for faster optimization
+            generations: 15,     // Reduced from 20, early stopping handles convergence
             walkforward_optimization_days: None,
             walkforward_test_days: None,
             walkforward_step_days: None,

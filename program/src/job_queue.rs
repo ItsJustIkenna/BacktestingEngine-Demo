@@ -129,8 +129,8 @@ pub struct BacktestJobParams {
 
 // Default functions for serde
 fn default_optimization_method() -> String { "genetic".to_string() }
-fn default_population_size() -> usize { 50 }
-fn default_generations() -> usize { 20 }
+fn default_population_size() -> usize { 30 }  // Reduced from 50 for faster optimization
+fn default_generations() -> usize { 15 }      // Reduced from 20, early stopping handles convergence
 fn default_risk_aversion() -> f64 { 0.5 }
 fn default_inventory_target() -> f64 { 0.5 }
 fn default_order_size() -> f64 { 0.01 }

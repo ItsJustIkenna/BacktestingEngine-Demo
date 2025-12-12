@@ -318,8 +318,8 @@ mod tests {
             strategy_type: "market_making".to_string(),
             initial_capital: 100000.0,
             optimization_method: "genetic".to_string(),
-            population_size: 50,
-            generations: 10,
+            population_size: 30,  // Reduced from 50 for faster optimization
+            generations: 15,     // Standardized with early stopping
             risk_aversion: 0.5,
             inventory_target: 0.0,
             order_size: 0.01,
