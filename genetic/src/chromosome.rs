@@ -82,9 +82,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
             stop_loss_pct: rng.gen_range(0.0005..0.05),
             
             // Minimum spread in basis points
-            // 1 bps (HFT on liquid markets) to 15 bps (less liquid)
-            // Reduced further - spreads > 15 bps rarely get fills on liquid markets
-            min_spread_bps: rng.gen_range(1.0..15.0),
+            // Range: 1-100 bps - GA will find optimal based on exchange fees
+            // Low fee exchanges (DeepBook 5bps): can be competitive at 10-20 bps
+            // High fee exchanges (Kraken 25bps): needs 50+ bps to be profitable
+            min_spread_bps: rng.gen_range(1.0..100.0),
             
             // Trade frequency: 0.01 to 60 trades per minute
             // 0.01 = 1 trade per 100 minutes (swing), 60 = 1 trade per second (HFT)
@@ -190,10 +191,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.stop_loss_pct *= rng.gen_range(0.5..2.0);
             self.stop_loss_pct = self.stop_loss_pct.clamp(0.0005, 0.05);
         }
-        // Min spread: range 1-15 bps (tight for fills)
+        // Min spread: range 1-150 bps (GA finds optimal based on exchange fees)
         if rng.gen_bool(mutation_rate) {
             self.min_spread_bps *= rng.gen_range(0.5..2.0);
-            self.min_spread_bps = self.min_spread_bps.clamp(1.0, 15.0);
+            self.min_spread_bps = self.min_spread_bps.clamp(1.0, 150.0);
         }
         // Trade frequency: range 0.01-60 trades/min
         if rng.gen_bool(mutation_rate) {

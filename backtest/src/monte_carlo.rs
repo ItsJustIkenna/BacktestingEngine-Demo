@@ -10,9 +10,12 @@
 //! - Regime-Aware: Sample from similar market conditions
 
 use crate::BacktestResult;
+use crate::logging_facade::BACKTEST_LOGGER;
+use crate::log_info;
 use metrics::PerformanceMetrics;
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use rand::prelude::*;
 use rayon::prelude::*;
 
@@ -278,6 +281,13 @@ fn run_monte_carlo_simulation_internal(
     let bootstrap_runs = num_runs / 2; // Half bootstrap, half shuffle
     let shuffle_runs = num_runs - bootstrap_runs;
     
+    // Progress tracking with atomic counter
+    let completed_runs = AtomicUsize::new(0);
+    let log_interval = (num_runs / 10).max(100); // Log every 10% or every 100 runs
+    
+    log_info!(BACKTEST_LOGGER, "Monte Carlo starting | total_runs={} shuffle={} bootstrap={}", 
+              num_runs, shuffle_runs, bootstrap_runs);
+    
     // Calculate base win rate from actual trades (used for shuffle method)
     let base_win_rate = if !actual_trade_returns.is_empty() {
         let wins = actual_trade_returns.iter().filter(|&&r| r > 0.0).count();
@@ -292,6 +302,13 @@ fn run_monte_carlo_simulation_internal(
     let shuffle_results: Vec<_> = (0..shuffle_runs)
         .into_par_iter()
         .map(|_i| {
+            // Progress logging
+            let completed = completed_runs.fetch_add(1, Ordering::Relaxed);
+            if completed % log_interval == 0 {
+                log_info!(BACKTEST_LOGGER, "Monte Carlo progress | run={}/{} ({:.0}%)", 
+                         completed, num_runs, (completed as f64 / num_runs as f64) * 100.0);
+            }
+            
             let mut rng = rand::thread_rng();
             
             // Shuffle equity deltas for portfolio path simulation
@@ -352,6 +369,8 @@ fn run_monte_carlo_simulation_internal(
         all_win_rates.push(win_rate);
     }
     
+    log_info!(BACKTEST_LOGGER, "Monte Carlo shuffle phase complete | runs={}", shuffle_runs);
+    
     // Report progress after shuffle phase
     if let Some(ref callback) = progress_callback {
         callback("monte_carlo", shuffle_runs, num_runs);
@@ -362,6 +381,13 @@ fn run_monte_carlo_simulation_internal(
     let bootstrap_results: Vec<_> = (0..bootstrap_runs)
         .into_par_iter()
         .map(|_i| {
+            // Progress logging
+            let completed = completed_runs.fetch_add(1, Ordering::Relaxed);
+            if completed % log_interval == 0 {
+                log_info!(BACKTEST_LOGGER, "Monte Carlo progress | run={}/{} ({:.0}%)", 
+                         completed, num_runs, (completed as f64 / num_runs as f64) * 100.0);
+            }
+            
             let mut rng = rand::thread_rng();
             
             // Bootstrap sample equity deltas for portfolio path simulation
@@ -508,6 +534,9 @@ fn run_monte_carlo_simulation_internal(
     } else {
         var_95  // Fall back to VaR if no data
     };
+    
+    log_info!(BACKTEST_LOGGER, "Monte Carlo complete | runs={} mean_sharpe={:.3} VaR95=${:.2} CVaR95=${:.2}", 
+              num_runs, mean_sharpe, var_95, cvar_95);
     
     Ok(MonteCarloResult {
         num_runs,

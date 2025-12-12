@@ -342,6 +342,9 @@ impl SimulationLoop {
     let total_items = market_data.len();
     let mut processed_count = 0_usize;
     let sim_start = std::time::Instant::now();
+    let log_interval = (total_items / 10).max(1000); // Log every 10% or every 1000 items
+    
+    log_info!(BACKTEST_LOGGER, "SIMULATION_START | items={} log_interval={}", total_items, log_interval);
     
     // Early stopping for GA fitness - abort clearly failing strategies
     let early_stop_threshold = config.trading.initial_capital * 0.5; // Stop if 50% loss
@@ -349,10 +352,10 @@ impl SimulationLoop {
     let mut _early_stopped = false;
 
     for data in market_data {
-            // Progress logging every 1000 items
+            // Progress logging at intervals (INFO level for visibility)
             processed_count += 1;
-            if processed_count % 1000 == 0 || processed_count == 1 {
-                log_debug!(BACKTEST_LOGGER, "SIM_PROGRESS | {}/{} items ({:.1}%) | elapsed={:.2}s", 
+            if processed_count % log_interval == 0 {
+                log_info!(BACKTEST_LOGGER, "SIM_PROGRESS | {}/{} ({:.0}%) | elapsed={:.1}s", 
                     processed_count, total_items, (processed_count as f64 / total_items as f64) * 100.0, sim_start.elapsed().as_secs_f64());
             }
             

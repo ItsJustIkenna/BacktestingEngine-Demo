@@ -128,6 +128,9 @@ impl BacktestEngine {
     ) -> Result<BacktestResults> {
         let start_time = Instant::now();
         
+        log_info!(BACKTEST_LOGGER, "run_with_export_option ENTER | data_points={} export={}", 
+            market_data.len(), export_requested);
+        
         // Determine analysis mode
         let mut current_mode = self.determine_analysis_mode(export_requested);
         let original_mode = current_mode;
@@ -180,7 +183,7 @@ impl BacktestEngine {
             strategy_manager.update_all_parameters(optimized_params).await?;
             log_info!(BACKTEST_LOGGER, "Genetic optimization complete");
         } else {
-            log_debug!(BACKTEST_LOGGER, "Skipping genetic optimization (already done by worker)");
+            log_info!(BACKTEST_LOGGER, "Skipping GA (pre-optimized) - proceeding to simulation");
         }
         
         // Run core backtest simulation with optimized parameters
