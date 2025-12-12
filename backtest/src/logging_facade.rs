@@ -59,47 +59,58 @@ pub static BACKTEST_LOGGER: Lazy<Arc<UltraLogger>> =
 
 /// Performance-optimized logging macros for backtest module
 /// These use tokio::spawn to ensure non-blocking operation
+/// Safe to call from any context - silently drops logs if no Tokio runtime is available
+/// (e.g., when called from Rayon threads during tests)
 
 #[macro_export]
 macro_rules! log_info {
     ($logger:expr, $fmt:expr $(, $arg:expr)*) => {{
-        let logger = $logger.clone();
-        let msg = format!($fmt $(, $arg)*);
-        tokio::spawn(async move {
-            let _ = logger.info(msg).await;
-        });
+        // Only log if Tokio runtime is available (safe for Rayon threads)
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let logger = $logger.clone();
+            let msg = format!($fmt $(, $arg)*);
+            handle.spawn(async move {
+                let _ = logger.info(msg).await;
+            });
+        }
     }};
 }
 
 #[macro_export]
 macro_rules! log_warn {
     ($logger:expr, $fmt:expr $(, $arg:expr)*) => {{
-        let logger = $logger.clone();
-        let msg = format!($fmt $(, $arg)*);
-        tokio::spawn(async move {
-            let _ = logger.warn(msg).await;
-        });
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let logger = $logger.clone();
+            let msg = format!($fmt $(, $arg)*);
+            handle.spawn(async move {
+                let _ = logger.warn(msg).await;
+            });
+        }
     }};
 }
 
 #[macro_export]
 macro_rules! log_error {
     ($logger:expr, $fmt:expr $(, $arg:expr)*) => {{
-        let logger = $logger.clone();
-        let msg = format!($fmt $(, $arg)*);
-        tokio::spawn(async move {
-            let _ = logger.error(msg).await;
-        });
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let logger = $logger.clone();
+            let msg = format!($fmt $(, $arg)*);
+            handle.spawn(async move {
+                let _ = logger.error(msg).await;
+            });
+        }
     }};
 }
 
 #[macro_export]
 macro_rules! log_debug {
     ($logger:expr, $fmt:expr $(, $arg:expr)*) => {{
-        let logger = $logger.clone();
-        let msg = format!($fmt $(, $arg)*);
-        tokio::spawn(async move {
-            let _ = logger.debug(msg).await;
-        });
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let logger = $logger.clone();
+            let msg = format!($fmt $(, $arg)*);
+            handle.spawn(async move {
+                let _ = logger.debug(msg).await;
+            });
+        }
     }};
 }

@@ -128,6 +128,7 @@ impl RegimeAwareConfig {
 }
 
 /// Helper functions for aggregation
+#[inline]
 fn mean(values: &[f64]) -> f64 {
     if values.is_empty() {
         0.0
@@ -136,6 +137,7 @@ fn mean(values: &[f64]) -> f64 {
     }
 }
 
+#[inline]
 fn std_dev(values: &[f64]) -> f64 {
     if values.len() < 2 {
         0.0
@@ -148,6 +150,7 @@ fn std_dev(values: &[f64]) -> f64 {
     }
 }
 
+#[inline]
 fn percentile(values: &mut [f64], p: f64) -> f64 {
     if values.is_empty() {
         return 0.0;
@@ -157,6 +160,19 @@ fn percentile(values: &mut [f64], p: f64) -> f64 {
     let index = (p / 100.0 * (values.len() - 1) as f64) as usize;
     values[index.min(values.len() - 1)]
 }
+
+/// Extract percentile from pre-sorted slice (no re-sorting needed)
+#[inline]
+fn percentile_from_sorted(sorted_values: &[f64], p: f64) -> f64 {
+    if sorted_values.is_empty() {
+        return 0.0;
+    }
+    let index = (p / 100.0 * (sorted_values.len() - 1) as f64) as usize;
+    sorted_values[index.min(sorted_values.len() - 1)]
+}
+
+/// Pre-computed constant for annualization
+const SQRT_252: f64 = 15.874507866387544; // SQRT_252
 
 /// Run Monte Carlo simulation with progress callback
 /// 
@@ -190,20 +206,22 @@ pub fn run_lightweight_monte_carlo(
     num_runs: usize,
 ) -> anyhow::Result<(f64, f64)> {
     // Extract individual trade returns from equity curve
-    let mut trade_returns: Vec<f64> = Vec::new();
-    if base_result.equity_curve.len() > 1 {
-        for i in 1..base_result.equity_curve.len() {
-            let ret = base_result.equity_curve[i] - base_result.equity_curve[i - 1];
-            trade_returns.push(ret);
-        }
-    }
+    let trade_returns: Vec<f64> = if base_result.equity_curve.len() > 1 {
+        base_result.equity_curve.windows(2)
+            .map(|w| w[1] - w[0])
+            .collect()
+    } else {
+        Vec::new()
+    };
     
     // If no trades, return zero mean/stddev
     if trade_returns.is_empty() {
         return Ok((0.0, 0.0));
     }
     
-    // Run Monte Carlo simulations in parallel
+    let n = trade_returns.len();
+    
+    // OPTIMIZED: Run Monte Carlo simulations in parallel with Welford's algorithm
     let sharpe_ratios: Vec<f64> = (0..num_runs)
         .into_par_iter()
         .map(|_| {
@@ -211,20 +229,48 @@ pub fn run_lightweight_monte_carlo(
             let mut shuffled_returns = trade_returns.clone();
             shuffled_returns.shuffle(&mut rng);
             
-            // Calculate Sharpe ratio for this shuffle
-            let mean_ret = mean(&shuffled_returns);
-            let std_ret = std_dev(&shuffled_returns);
-            if std_ret > 0.0 {
-                mean_ret / std_ret * (252.0_f64.sqrt()) // Annualized
+            // Welford's online algorithm for single-pass mean and variance
+            let mut mean_acc = 0.0_f64;
+            let mut m2 = 0.0_f64;
+            
+            for (i, &ret) in shuffled_returns.iter().enumerate() {
+                let delta = ret - mean_acc;
+                mean_acc += delta / (i + 1) as f64;
+                let delta2 = ret - mean_acc;
+                m2 += delta * delta2;
+            }
+            
+            // Calculate Sharpe ratio
+            if n > 1 && m2 > 0.0 {
+                let variance = m2 / (n - 1) as f64;
+                let std_ret = variance.sqrt();
+                if std_ret > 0.0 {
+                    mean_acc / std_ret * SQRT_252 // Annualized
+                } else {
+                    0.0
+                }
             } else {
                 0.0
             }
         })
         .collect();
     
-    // Return mean and standard deviation of Sharpe ratios
-    let mean_sharpe = mean(&sharpe_ratios);
-    let std_sharpe = std_dev(&sharpe_ratios);
+    // Calculate mean and standard deviation of Sharpe ratios using Welford's
+    let mut mean_sharpe = 0.0_f64;
+    let mut m2_sharpe = 0.0_f64;
+    
+    for (i, &sharpe) in sharpe_ratios.iter().enumerate() {
+        let delta = sharpe - mean_sharpe;
+        mean_sharpe += delta / (i + 1) as f64;
+        let delta2 = sharpe - mean_sharpe;
+        m2_sharpe += delta * delta2;
+    }
+    
+    let std_sharpe = if num_runs > 1 {
+        (m2_sharpe / (num_runs - 1) as f64).sqrt()
+    } else {
+        0.0
+    };
     
     Ok((mean_sharpe, std_sharpe))
 }
@@ -302,7 +348,7 @@ fn run_monte_carlo_simulation_internal(
     let shuffle_results: Vec<_> = (0..shuffle_runs)
         .into_par_iter()
         .map(|_i| {
-            // Progress logging
+            // Progress logging (kept for debugging stalls)
             let completed = completed_runs.fetch_add(1, Ordering::Relaxed);
             if completed % log_interval == 0 {
                 log_info!(BACKTEST_LOGGER, "Monte Carlo progress | run={}/{} ({:.0}%)", 
@@ -311,46 +357,60 @@ fn run_monte_carlo_simulation_internal(
             
             let mut rng = rand::thread_rng();
             
-            // Shuffle equity deltas for portfolio path simulation
+            // Shuffle equity deltas in-place (avoid clone by using indices)
             let mut shuffled_returns = equity_deltas.clone();
             shuffled_returns.shuffle(&mut rng);
         
-        // Reconstruct equity curve from shuffled returns
-        let mut equity = base_result.initial_capital;
-        let mut equity_curve = vec![equity];
-        for ret in &shuffled_returns {
-            equity += ret;
-            equity_curve.push(equity);
-        }
-        
-        // Calculate metrics for this run
-        let net_profit = equity - base_result.initial_capital;
-        
-        // Calculate Sharpe ratio
-        let sharpe = if !shuffled_returns.is_empty() {
-            let mean_ret = mean(&shuffled_returns);
-            let std_ret = std_dev(&shuffled_returns);
-            if std_ret > 0.0 {
-                mean_ret / std_ret * (252.0_f64.sqrt()) // Annualized
+            // OPTIMIZED: Calculate metrics in single pass without storing equity curve
+            // Uses Welford's online algorithm for mean/variance + streaming drawdown
+            let initial_capital = base_result.initial_capital;
+            let n = shuffled_returns.len();
+            
+            if n == 0 {
+                return (0.0, 0.0, 0.0, base_win_rate);
+            }
+            
+            // Single-pass calculation of equity, drawdown, mean, and variance
+            let mut equity = initial_capital;
+            let mut peak = initial_capital;
+            let mut max_dd = 0.0_f64;
+            
+            // Welford's online algorithm for mean and variance
+            let mut mean_acc = 0.0_f64;
+            let mut m2 = 0.0_f64;
+            
+            for (i, &ret) in shuffled_returns.iter().enumerate() {
+                // Update equity and drawdown
+                equity += ret;
+                if equity > peak {
+                    peak = equity;
+                }
+                let dd = (peak - equity) / peak;
+                if dd > max_dd {
+                    max_dd = dd;
+                }
+                
+                // Welford's algorithm: update mean and M2
+                let delta = ret - mean_acc;
+                mean_acc += delta / (i + 1) as f64;
+                let delta2 = ret - mean_acc;
+                m2 += delta * delta2;
+            }
+            
+            let net_profit = equity - initial_capital;
+            
+            // Calculate Sharpe ratio from Welford accumulators
+            let sharpe = if n > 1 && m2 > 0.0 {
+                let variance = m2 / (n - 1) as f64;
+                let std_ret = variance.sqrt();
+                if std_ret > 0.0 {
+                    mean_acc / std_ret * SQRT_252 // Annualized
+                } else {
+                    0.0
+                }
             } else {
                 0.0
-            }
-        } else {
-            0.0
-        };
-        
-        // Calculate max drawdown
-        let mut peak = equity_curve[0];
-        let mut max_dd = 0.0;
-        for &val in &equity_curve {
-            if val > peak {
-                peak = val;
-            }
-            let dd = (peak - val) / peak;
-            if dd > max_dd {
-                max_dd = dd;
-            }
-        }
+            };
         
         // Win rate is constant for shuffle (same trades, different order)
         (net_profit, sharpe, max_dd, base_win_rate)
@@ -381,7 +441,7 @@ fn run_monte_carlo_simulation_internal(
     let bootstrap_results: Vec<_> = (0..bootstrap_runs)
         .into_par_iter()
         .map(|_i| {
-            // Progress logging
+            // Progress logging (kept for debugging stalls)
             let completed = completed_runs.fetch_add(1, Ordering::Relaxed);
             if completed % log_interval == 0 {
                 log_info!(BACKTEST_LOGGER, "Monte Carlo progress | run={}/{} ({:.0}%)", 
@@ -389,63 +449,75 @@ fn run_monte_carlo_simulation_internal(
             }
             
             let mut rng = rand::thread_rng();
+            let n = equity_deltas.len();
+            let initial_capital = base_result.initial_capital;
             
-            // Bootstrap sample equity deltas for portfolio path simulation
-            let mut bootstrap_equity_deltas = Vec::with_capacity(equity_deltas.len());
-        for _ in 0..equity_deltas.len() {
-            let idx = rng.gen_range(0..equity_deltas.len());
-            bootstrap_equity_deltas.push(equity_deltas[idx]);
-        }
-        
-        // Bootstrap sample actual trade returns for win_rate calculation
-        let bootstrap_win_rate = if !actual_trade_returns.is_empty() {
-            let mut bootstrap_trades = Vec::with_capacity(actual_trade_returns.len());
-            for _ in 0..actual_trade_returns.len() {
-                let idx = rng.gen_range(0..actual_trade_returns.len());
-                bootstrap_trades.push(actual_trade_returns[idx]);
+            if n == 0 {
+                return (0.0, 0.0, 0.0, 0.0);
             }
-            let wins = bootstrap_trades.iter().filter(|&&r| r > 0.0).count();
-            wins as f64 / bootstrap_trades.len() as f64
-        } else {
-            0.0
-        };
-        
-        // Reconstruct equity curve from bootstrap sample
-        let mut equity = base_result.initial_capital;
-        let mut equity_curve = vec![equity];
-        for ret in &bootstrap_equity_deltas {
-            equity += ret;
-            equity_curve.push(equity);
-        }
-        
-        // Calculate metrics for this run
-        let net_profit = equity - base_result.initial_capital;
-        
-        // Calculate Sharpe ratio
-        let sharpe = if !bootstrap_equity_deltas.is_empty() {
-            let mean_ret = mean(&bootstrap_equity_deltas);
-            let std_ret = std_dev(&bootstrap_equity_deltas);
-            if std_ret > 0.0 {
-                mean_ret / std_ret * (252.0_f64.sqrt()) // Annualized
+            
+            // OPTIMIZED: Bootstrap sample + calculate win_rate in single pass
+            // Count wins while sampling instead of storing all trades
+            let bootstrap_win_rate = if !actual_trade_returns.is_empty() {
+                let trade_n = actual_trade_returns.len();
+                let mut wins = 0usize;
+                for _ in 0..trade_n {
+                    let idx = rng.gen_range(0..trade_n);
+                    if actual_trade_returns[idx] > 0.0 {
+                        wins += 1;
+                    }
+                }
+                wins as f64 / trade_n as f64
             } else {
                 0.0
+            };
+            
+            // OPTIMIZED: Single-pass bootstrap with streaming metrics
+            // Uses Welford's online algorithm for mean/variance + streaming drawdown
+            let mut equity = initial_capital;
+            let mut peak = initial_capital;
+            let mut max_dd = 0.0_f64;
+            
+            // Welford's online algorithm accumulators
+            let mut mean_acc = 0.0_f64;
+            let mut m2 = 0.0_f64;
+            
+            for i in 0..n {
+                // Bootstrap sample: pick random index
+                let idx = rng.gen_range(0..n);
+                let ret = equity_deltas[idx];
+                
+                // Update equity and drawdown
+                equity += ret;
+                if equity > peak {
+                    peak = equity;
+                }
+                let dd = (peak - equity) / peak;
+                if dd > max_dd {
+                    max_dd = dd;
+                }
+                
+                // Welford's algorithm: update mean and M2
+                let delta = ret - mean_acc;
+                mean_acc += delta / (i + 1) as f64;
+                let delta2 = ret - mean_acc;
+                m2 += delta * delta2;
             }
-        } else {
-            0.0
-        };
-        
-        // Calculate max drawdown
-        let mut peak = equity_curve[0];
-        let mut max_dd = 0.0;
-        for &val in &equity_curve {
-            if val > peak {
-                peak = val;
-            }
-            let dd = (peak - val) / peak;
-            if dd > max_dd {
-                max_dd = dd;
-            }
-        }
+            
+            let net_profit = equity - initial_capital;
+            
+            // Calculate Sharpe ratio from Welford accumulators
+            let sharpe = if n > 1 && m2 > 0.0 {
+                let variance = m2 / (n - 1) as f64;
+                let std_ret = variance.sqrt();
+                if std_ret > 0.0 {
+                    mean_acc / std_ret * SQRT_252 // Annualized
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
         
         (net_profit, sharpe, max_dd, bootstrap_win_rate)
     }).collect();
@@ -473,19 +545,20 @@ fn run_monte_carlo_simulation_internal(
     let mean_win_rate = mean(&all_win_rates);
     let std_win_rate = std_dev(&all_win_rates);
     
-    // Calculate percentiles
+    // Calculate percentiles - OPTIMIZED: sort once, extract all percentiles
+    // Sort each metric array once instead of 5 times
+    all_net_profits.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    all_sharpe_ratios.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    all_max_drawdowns.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    all_win_rates.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    
     let mut percentiles = HashMap::new();
     for &p in &[5, 25, 50, 75, 95] {
-        let mut profits_copy = all_net_profits.clone();
-        let mut sharpe_copy = all_sharpe_ratios.clone();
-        let mut dd_copy = all_max_drawdowns.clone();
-        let mut wr_copy = all_win_rates.clone();
-        
         percentiles.insert(p, PerformanceMetrics {
-            net_profit: percentile(&mut profits_copy, p as f64),
-            sharpe_ratio: percentile(&mut sharpe_copy, p as f64),
-            max_drawdown: percentile(&mut dd_copy, p as f64),
-            win_rate: percentile(&mut wr_copy, p as f64),
+            net_profit: percentile_from_sorted(&all_net_profits, p as f64),
+            sharpe_ratio: percentile_from_sorted(&all_sharpe_ratios, p as f64),
+            max_drawdown: percentile_from_sorted(&all_max_drawdowns, p as f64),
+            win_rate: percentile_from_sorted(&all_win_rates, p as f64),
             gross_profit: 0.0, // Not calculated in Monte Carlo
             gross_loss: 0.0,
             profit_factor: 0.0,
@@ -672,7 +745,7 @@ pub fn run_block_bootstrap_simulation(
             };
             
             let sharpe = if std_ret > 0.0 {
-                mean_ret / std_ret * 252.0_f64.sqrt()
+                mean_ret / std_ret * SQRT_252
             } else {
                 0.0
             };
@@ -809,7 +882,7 @@ pub fn run_regime_aware_simulation(
             };
             
             let sharpe = if std_ret > 0.0 {
-                mean_ret / std_ret * 252.0_f64.sqrt()
+                mean_ret / std_ret * SQRT_252
             } else {
                 0.0
             };

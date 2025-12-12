@@ -13,6 +13,7 @@ use bigdecimal::BigDecimal;
 use std::sync::Arc;
 use std::str::FromStr;
 use chrono::{Utc, Duration, TimeZone};
+use tokio;
 
 // ============================================================================
 // BACKTEST ENGINE CREATION TESTS
@@ -228,8 +229,8 @@ fn test_monte_carlo_result_structure() {
     assert!((result.cvar_95 - 0.08).abs() < 0.001);
 }
 
-#[test]
-fn test_monte_carlo_with_empty_result() {
+#[tokio::test]
+async fn test_monte_carlo_with_empty_result() {
     let base_result = BacktestResult::default();
     
     let mc_result = monte_carlo::run_monte_carlo_simulation(&base_result, 100);
@@ -237,8 +238,8 @@ fn test_monte_carlo_with_empty_result() {
     assert!(mc_result.is_ok(), "Monte Carlo should handle empty results");
 }
 
-#[test]
-fn test_monte_carlo_with_trades() {
+#[tokio::test]
+async fn test_monte_carlo_with_trades() {
     let base_result = BacktestResult {
         total_pnl: BigDecimal::from(5000),
         num_trades: 50,
@@ -296,8 +297,8 @@ fn test_lightweight_monte_carlo() {
     assert!(stddev >= 0.0, "Standard deviation should be non-negative");
 }
 
-#[test]
-fn test_monte_carlo_with_progress_callback() {
+#[tokio::test]
+async fn test_monte_carlo_with_progress_callback() {
     let base_result = BacktestResult {
         equity_curve: vec![100000.0, 100100.0, 100200.0, 100300.0, 100400.0],
         initial_capital: 100000.0,
