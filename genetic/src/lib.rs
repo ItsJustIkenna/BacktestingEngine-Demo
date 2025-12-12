@@ -113,7 +113,7 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
         let mut best_fitness = initial_result.fitness;
         let mut best_equity_curve = initial_result.equity_curve;
         let mut generations_without_improvement = 0;
-        const CONVERGENCE_THRESHOLD: usize = 10;
+        const CONVERGENCE_THRESHOLD: usize = 5; // Stop after 5 gens without meaningful improvement
         
         let elite_size = (self.config.population_size as f64 * 0.05).ceil() as usize;
 
@@ -163,9 +163,6 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
                 self.apply_robustness_penalty(&mut fitnesses, &fitness_results);
             }
             
-            // Track best fitness in this generation
-            let mut generation_best_fitness = best_fitness;
-            
             // 3. Sort population by fitness for elitism
             let mut indexed_population: Vec<(usize, &C, f64, &FitnessResult)> = population.iter()
                 .enumerate()
@@ -175,21 +172,32 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
                 .collect();
             indexed_population.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
             
+            // Track best fitness BEFORE updating (for convergence check)
+            let previous_best_fitness = best_fitness;
+            
             // 4. Preserve elite individuals (top 5%)
             let mut new_population = Vec::with_capacity(population.len());
             for i in 0..elite_size {
                 new_population.push(indexed_population[i].1.clone());
-                if indexed_population[i].2 > generation_best_fitness {
-                    generation_best_fitness = indexed_population[i].2;
+                if indexed_population[i].2 > best_fitness {
                     best = indexed_population[i].1.clone();
-                    best_fitness = generation_best_fitness;
+                    best_fitness = indexed_population[i].2;
                     best_equity_curve = indexed_population[i].3.equity_curve.clone();
                 }
             }
             
-            // Check for improvement
-            if generation_best_fitness > best_fitness {
+            // Check for improvement (compare against PREVIOUS best, not current)
+            const IMPROVEMENT_THRESHOLD: f64 = 0.001; // 0.1% improvement required
+            let relative_improvement = if previous_best_fitness > 0.0 {
+                (best_fitness - previous_best_fitness) / previous_best_fitness
+            } else {
+                best_fitness - previous_best_fitness
+            };
+            
+            if relative_improvement > IMPROVEMENT_THRESHOLD {
                 generations_without_improvement = 0;
+                log_info!("{}Gen {}: Improvement! fitness {:.6} → {:.6} (+{:.2}%)", 
+                    job_tag, generation + 1, previous_best_fitness, best_fitness, relative_improvement * 100.0);
             } else {
                 generations_without_improvement += 1;
             }
@@ -235,8 +243,8 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
             // 7. Adaptive mutation (skip elites)
             // Adaptive step sizing: larger steps early, smaller as we converge
             // Also increase mutation if improvement rate is slow
-            let improvement_rate = if generation > 0 && best_fitness > 0.0 {
-                (best_fitness - generation_best_fitness).abs() / best_fitness.abs()
+            let improvement_rate = if generation > 0 && previous_best_fitness > 0.0 {
+                (best_fitness - previous_best_fitness).abs() / previous_best_fitness.abs()
             } else {
                 0.1 // Default high improvement rate at start
             };

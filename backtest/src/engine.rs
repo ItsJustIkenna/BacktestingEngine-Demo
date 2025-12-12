@@ -691,17 +691,34 @@ impl BacktestEngine {
     
     /// Run Monte Carlo simulation analysis
     async fn run_monte_carlo_analysis(&self, base_result: &BacktestResult) -> Result<monte_carlo::MonteCarloResult> {
+        use crate::logging_facade::BACKTEST_LOGGER;
+        use crate::log_info;
+        
         let num_runs = self.analysis_config.monte_carlo_runs;
+        let num_trades = base_result.num_trades;
         let base_result = base_result.clone();
         
+        // Log before spawn_blocking (we have Tokio runtime here)
+        log_info!(BACKTEST_LOGGER, "Monte Carlo starting | runs={} trades={} shuffle={} bootstrap={}", 
+                  num_runs, num_trades, num_runs / 2, num_runs - num_runs / 2);
+        
+        let start_time = std::time::Instant::now();
+        
         // Run Monte Carlo in blocking thread pool (CPU-intensive, now parallel with Rayon)
-        // Don't pass progress callback since spawn_blocking can't await async tasks spawned by callback
+        // Note: Logging inside spawn_blocking won't work since there's no Tokio runtime
         let mc_result = tokio::task::spawn_blocking(move || {
             monte_carlo::run_monte_carlo_simulation(
                 &base_result, 
                 num_runs
             )
         }).await??;
+        
+        let elapsed = start_time.elapsed();
+        
+        // Log after spawn_blocking completes (we have Tokio runtime here)
+        log_info!(BACKTEST_LOGGER, "Monte Carlo complete | runs={} elapsed={:.2}s mean_sharpe={:.3} var_95=${:.2} cvar_95=${:.2}", 
+                  num_runs, elapsed.as_secs_f64(), mc_result.mean_metrics.sharpe_ratio, 
+                  mc_result.var_95, mc_result.cvar_95);
         
         Ok(mc_result)
     }
