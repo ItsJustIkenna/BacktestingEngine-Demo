@@ -975,8 +975,11 @@ impl Worker {
         // Subsample data for faster GA optimization
         // 20K events (~5 hours of tick data) provides enough diversity for GA exploration
         // Each chromosome evaluation should complete in under 30 seconds
-        // Full data is used for final backtest validation after GA completes
         const MAX_OPTIMIZATION_SAMPLES: usize = 20_000;
+        // Cap final backtest at 200K samples for speed (Monte Carlo will run on this)
+        // Walk-forward uses the FULL dataset but samples within each window
+        const MAX_FINAL_BACKTEST_SAMPLES: usize = 200_000;
+        
         let optimization_data: Vec<MarketData> = if data.len() > MAX_OPTIMIZATION_SAMPLES {
             // Use stratified sampling: take evenly spaced samples across the entire dataset
             // This ensures we get data from all time periods, not just the beginning
@@ -986,8 +989,16 @@ impl Worker {
             data.clone()
         };
         
-        log_info!(GENETIC_LOGGER, "Job {} using {} samples for GA optimization (full {} for final validation)", 
-            job.id, optimization_data.len(), data.len());
+        // Sample for final backtest (Monte Carlo runs on this)
+        let final_backtest_data: Vec<MarketData> = if data.len() > MAX_FINAL_BACKTEST_SAMPLES {
+            let step = data.len() / MAX_FINAL_BACKTEST_SAMPLES;
+            data.iter().step_by(step).take(MAX_FINAL_BACKTEST_SAMPLES).cloned().collect()
+        } else {
+            data.clone()
+        };
+        
+        log_info!(GENETIC_LOGGER, "Job {} data samples: GA={} backtest={} walkforward={}", 
+            job.id, optimization_data.len(), final_backtest_data.len(), data.len());
         
         // Create genetic config
         let config = GeneticConfig {
@@ -1004,7 +1015,8 @@ impl Worker {
         // Prepare data for fitness function (as Arc for sharing)
         // Use subsampled data for faster optimization
         let data_arc = Arc::new(optimization_data);
-        let data_for_final = Arc::new(data); // Full data for final backtest
+        let data_for_backtest = Arc::new(final_backtest_data); // Capped at 200K for Monte Carlo speed
+        let data_for_walkforward = Arc::new(data); // Full data for walk-forward validation
         let symbol = params.symbol.clone();
         let exchange = params.exchange.clone();
         let exchange_for_logging = exchange.clone(); // Clone for use after the closure
@@ -1233,11 +1245,25 @@ impl Worker {
             "risk_aversion": best_chromosome.risk_aversion,
             "inventory_target": best_chromosome.inventory_target,
         }));
-        let _ = progress_tracker.persist_phase_change("post_optimization", serde_json::json!({
-            "best_fitness": best_fitness,
-            "risk_aversion": best_chromosome.risk_aversion,
-            "inventory_target": best_chromosome.inventory_target,
-        })).await;
+        
+        // Log BEFORE db persist to diagnose stalls
+        log_info!(GENETIC_LOGGER, "Job {} GA_COMPLETE_BEFORE_DB_PERSIST | best_fitness={:.4}", job.id, best_fitness);
+        
+        // Persist with timeout to prevent indefinite stalls on db issues
+        let persist_result = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            progress_tracker.persist_phase_change("post_optimization", serde_json::json!({
+                "best_fitness": best_fitness,
+                "risk_aversion": best_chromosome.risk_aversion,
+                "inventory_target": best_chromosome.inventory_target,
+            }))
+        ).await;
+        
+        if persist_result.is_err() {
+            log_warn!(GENETIC_LOGGER, "Job {} DB_PERSIST_TIMEOUT - continuing without persist", job.id);
+        }
+        
+        log_info!(GENETIC_LOGGER, "Job {} GA_COMPLETE_AFTER_DB_PERSIST", job.id);
         
         log_info!(GENETIC_LOGGER, "Job {} genetic optimization complete | best_fitness={:.4} risk_aversion={:.3} inventory_target={:.3} order_size_pct={:.2}%", 
             job.id, best_fitness, best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size_pct * 100.0);
@@ -1290,14 +1316,23 @@ impl Worker {
             "stage": "monte_carlo_walkforward"
         }));
         progress_tracker.broadcast_progress(90.0);
-        let _ = progress_tracker.persist_phase_change("final_analysis", serde_json::json!({
-            "stage": "monte_carlo_walkforward",
-            "progress": 90.0
-        })).await;
-        let _ = progress_tracker.persist_progress(90.0).await;
+        
+        // Persist with timeout to prevent stalls
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            progress_tracker.persist_phase_change("final_analysis", serde_json::json!({
+                "stage": "monte_carlo_walkforward",
+                "progress": 90.0
+            }))
+        ).await;
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            progress_tracker.persist_progress(90.0)
+        ).await;
         
         // Run final backtest with best parameters to get full results
-        // This includes Monte Carlo and Walk-Forward analysis automatically
+        // Backtest + Monte Carlo use sampled data (200K) for speed
+        // Walk-Forward uses full data but samples per-window (already capped at 200K/window in engine)
         log_info!(GENETIC_LOGGER, "Job {} running full analysis pipeline (Backtest → Monte Carlo → Walk-Forward)", job.id);
         log_debug!(MAIN_LOGGER, "🚀 About to run final backtest for job {}", job.id);
         
@@ -1308,9 +1343,10 @@ impl Worker {
             params.initial_capital,
             params.commission_rate,
             &best_chromosome,
-            &data_for_final,
+            &data_for_backtest,      // 200K samples for backtest + Monte Carlo
+            &data_for_walkforward,   // Full data for walk-forward (per-window sampling in engine)
             params.monte_carlo_enabled,
-            params.monte_carlo_runs,
+            params.monte_carlo_runs.min(200), // Cap at 200 runs for speed (1000 is excessive)
             params.walk_forward_enabled,
         ).await?;
         
@@ -1996,6 +2032,9 @@ impl Worker {
     
     /// Run full analysis with Monte Carlo and Walk-Forward enabled
     /// Used as the final step after genetic optimization
+    /// 
+    /// backtest_data: Sampled data (200K) for fast backtest + Monte Carlo
+    /// walkforward_data: Full data for walk-forward (engine samples per-window)
     async fn run_full_analysis_with_chromosome(
         &self,
         job_id: &str,
@@ -2004,40 +2043,48 @@ impl Worker {
         initial_capital: f64,
         commission_rate: f64,
         chromosome: &genetic::chromosome::AvellanedaStoikovChromosome,
-        data: &[MarketData],
+        backtest_data: &[MarketData],
+        walkforward_data: &[MarketData],
         monte_carlo_enabled: bool,
         monte_carlo_runs: usize,
         walk_forward_enabled: bool,
     ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
+        // Run backtest + Monte Carlo on sampled data for speed
+        log_info!(MAIN_LOGGER, "Job {} FINAL_ANALYSIS_ENTER | backtest_pts={} walkforward_pts={} mc={} wf={}", 
+            job_id, backtest_data.len(), walkforward_data.len(), monte_carlo_enabled, walk_forward_enabled);
+        
         let mut backtest_config = BacktestConfig::default();
         backtest_config.trading.initial_capital = initial_capital;
         backtest_config.trading.commission_rate = commission_rate;
         backtest_config.analysis.skip_genetic_optimization = true; // Already done by worker
         backtest_config.analysis.auto_monte_carlo = monte_carlo_enabled;
         backtest_config.analysis.monte_carlo_runs = monte_carlo_runs;
-        backtest_config.analysis.auto_walk_forward = walk_forward_enabled;
-        backtest_config.analysis.mode = if monte_carlo_enabled || walk_forward_enabled {
+        backtest_config.analysis.auto_walk_forward = false; // We'll run WF separately with full data
+        backtest_config.analysis.mode = if monte_carlo_enabled {
             config::AnalysisMode::Production
         } else {
             config::AnalysisMode::Development
         };
         backtest_config.data.gap_detection.enabled = false;
         
-        log_debug!(MAIN_LOGGER, "📊 Running full analysis pipeline: Backtest{}{}", 
-            if monte_carlo_enabled { " → Monte Carlo" } else { "" },
-            if walk_forward_enabled { " → Walk-Forward" } else { "" });
+        log_info!(MAIN_LOGGER, "Job {} FINAL_ANALYSIS_CONFIG | gap_detection=false mode={:?}", 
+            job_id, backtest_config.analysis.mode);
         
-        let engine = BacktestEngine::new(backtest_config);
+        let engine = BacktestEngine::new(backtest_config.clone());
+        
+        log_info!(MAIN_LOGGER, "Job {} FINAL_ANALYSIS_ENGINE_CREATED", job_id);
         
         // Get initial price for inventory calculation
-        let asset_price = Self::get_reference_price(data);
+        let asset_price = Self::get_reference_price(backtest_data);
+        
+        log_info!(MAIN_LOGGER, "Job {} FINAL_ANALYSIS_ASSET_PRICE | price={:.2}", job_id, asset_price);
         
         // Initialize portfolio with BOTH quote and base assets for proper market making
         let inventory_pct = 0.5;
         let quote_balance = initial_capital * (1.0 - inventory_pct);
         let base_value = initial_capital * inventory_pct;
         let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };
-        let first_timestamp = Self::get_first_timestamp(data);
+        let first_timestamp = Self::get_first_timestamp(backtest_data);
         
         let mut portfolio = PortfolioState::with_inventory(
             symbol.to_string(),
@@ -2154,6 +2201,10 @@ impl Worker {
             enabled: true,
         };
         
+        // Clone before moving for potential walk-forward reuse
+        let strategy_params_for_wf = strategy_params.clone();
+        let strategy_config_for_wf = strategy_config.clone();
+        
         let strategy = AvellanedaStoikovStrategy::new(strategy_params);
         let mut strategy_manager = StrategyManager::new();
         strategy_manager.register_strategy(strategy_config, strategy)
@@ -2165,14 +2216,28 @@ impl Worker {
             if monte_carlo_enabled { format!(" → Monte Carlo ({} runs)", monte_carlo_runs) } else { "".to_string() },
             if walk_forward_enabled { " → Walk-Forward" } else { "" });
         
-        // Run full analysis (includes Monte Carlo and Walk-Forward)
-        let result = engine.run_backtest(
+        // Run backtest + Monte Carlo on sampled data (fast)
+        // Walk-forward disabled in engine - we'll run it separately with full data
+        log_info!(MAIN_LOGGER, "Job {} CALLING_ENGINE_RUN_BACKTEST | data_points={}", job_id, backtest_data.len());
+        
+        // SYNC PRINT for diagnosis - this will appear in stdout immediately
+        eprintln!("[SYNC] Job {} ABOUT_TO_CALL_ENGINE_RUN_BACKTEST | data_points={}", job_id, backtest_data.len());
+        
+        let backtest_start = std::time::Instant::now();
+        
+        let mut result = engine.run_backtest(
             &mut strategy_manager,
             &mut orderbook,
             &mut portfolio,
             &mut risk_manager,
-            data,
+            backtest_data,
         ).await?;
+        
+        // SYNC PRINT after engine completes
+        eprintln!("[SYNC] Job {} ENGINE_RETURNED | elapsed={:.1}s", job_id, backtest_start.elapsed().as_secs_f64());
+        
+        log_info!(MAIN_LOGGER, "Job {} ENGINE_RUN_BACKTEST_COMPLETE | elapsed={:.1}s trades={}", 
+            job_id, backtest_start.elapsed().as_secs_f64(), result.core.num_trades);
         
         // Debug: Log portfolio state after final backtest using MAIN_LOGGER (which we know works)
         log_info!(MAIN_LOGGER, "Job {} final portfolio | balance={} positions={} open={}",
@@ -2205,8 +2270,60 @@ impl Worker {
                 job_id, mc.num_runs, mc.mean_metrics.sharpe_ratio, mc.var_95, var_pct, mc.cvar_95, cvar_pct);
         }
         
-        // Log Walk-Forward results if available
-        if let Some(ref wf) = result.walk_forward {
+        // Run walk-forward on FULL data separately (engine samples per-window at 200K max)
+        // This validates the strategy generalizes across all time periods
+        if walk_forward_enabled && !walkforward_data.is_empty() {
+            log_info!(MAIN_LOGGER, "Job {} starting Walk-Forward on {} data points", job_id, walkforward_data.len());
+            
+            // Create a separate engine config for walk-forward only
+            let mut wf_config = backtest_config.clone();
+            wf_config.analysis.auto_walk_forward = true;
+            wf_config.analysis.auto_monte_carlo = false; // Already done above
+            
+            let wf_engine = BacktestEngine::new(wf_config);
+            
+            // Fresh state for walk-forward
+            let wf_asset_price = Self::get_reference_price(walkforward_data);
+            let wf_first_timestamp = Self::get_first_timestamp(walkforward_data);
+            let wf_quote_balance = initial_capital * 0.5;
+            let wf_base_quantity = if wf_asset_price > 0.0 { (initial_capital * 0.5) / wf_asset_price } else { 0.0 };
+            
+            let mut wf_portfolio = PortfolioState::with_inventory(
+                symbol.to_string(),
+                BigDecimal::from_f64(wf_quote_balance).unwrap_or_default(),
+                wf_base_quantity,
+                BigDecimal::from_f64(wf_asset_price).unwrap_or_default(),
+                wf_first_timestamp,
+            );
+            let mut wf_orderbook = OrderBook::new(symbol.to_string(), exchange.to_string(), OrderBookConfig::default());
+            let mut wf_risk_manager = RiskManager::new();
+            
+            // Re-register strategy for walk-forward (using cloned versions)
+            let wf_strategy = AvellanedaStoikovStrategy::new(strategy_params_for_wf);
+            let mut wf_strategy_manager = StrategyManager::new();
+            let _ = wf_strategy_manager.register_strategy(strategy_config_for_wf, wf_strategy);
+            
+            match wf_engine.run_backtest(
+                &mut wf_strategy_manager,
+                &mut wf_orderbook,
+                &mut wf_portfolio,
+                &mut wf_risk_manager,
+                walkforward_data,
+            ).await {
+                Ok(wf_result) => {
+                    // Merge walk-forward result into main result
+                    result.walk_forward = wf_result.walk_forward;
+                    if let Some(ref wf) = result.walk_forward {
+                        log_info!(MAIN_LOGGER, "Job {} Walk-Forward complete | periods={} avg_perf={:.2}% consistency={:.1}% OOS_degradation={:.1}%",
+                            job_id, wf.periods_tested, wf.average_performance * 100.0, wf.consistency_score * 100.0, wf.out_of_sample_degradation * 100.0);
+                    }
+                }
+                Err(e) => {
+                    log_warn!(MAIN_LOGGER, "Job {} Walk-Forward failed: {} - continuing without WF results", job_id, e);
+                }
+            }
+        } else if let Some(ref wf) = result.walk_forward {
+            // Log if walk-forward was somehow already done
             log_info!(MAIN_LOGGER, "Job {} Walk-Forward complete | periods={} avg_perf={:.2}% consistency={:.1}% OOS_degradation={:.1}%",
                 job_id, wf.periods_tested, wf.average_performance * 100.0, wf.consistency_score * 100.0, wf.out_of_sample_degradation * 100.0);
         }

@@ -7,10 +7,11 @@
 /// on top performers to prevent overfitting to lucky parameter combinations.
 
 use std::sync::Arc;
+use std::collections::HashMap;
 use config::GeneticConfig;
 use futures::stream::{FuturesUnordered, StreamExt};
 use rand::prelude::*;
-use ultra_logger::UltraLogger;
+use ultra_logger::{UltraLogger, LoggerConfig, TransportConfig, ConnectionConfig};
 use once_cell::sync::Lazy;
 
 pub mod chromosome;
@@ -33,9 +34,53 @@ pub use hmm_regime::{
     HMMRegimeTracker, RegimeCharacteristics, RegimeUpdate,
 };
 
-/// Logger for genetic algorithm operations
+/// Create Elasticsearch configuration for genetic module
+fn create_elasticsearch_config() -> LoggerConfig {
+    // Check if we should use Elasticsearch (environment variable or default)
+    let use_elasticsearch = std::env::var("USE_ELASTICSEARCH_LOGGING")
+        .map(|v| v.to_lowercase() == "true")
+        .unwrap_or(true); // Default to true for production
+
+    if use_elasticsearch {
+        // Get credentials from environment variables set by Kubernetes
+        let endpoint = std::env::var("ELASTICSEARCH_ENDPOINT")
+            .or_else(|_| std::env::var("ELASTIC_CLOUD_ENDPOINT"))
+            .unwrap_or_else(|_| "https://my-observability-deployment-76d771.es.us-east-2.aws.elastic-cloud.com".to_string());
+        let username = std::env::var("ELASTICSEARCH_USERNAME")
+            .or_else(|_| std::env::var("ELASTIC_CLOUD_USERNAME"))
+            .unwrap_or_else(|_| "elastic".to_string());
+        let password = std::env::var("ELASTICSEARCH_PASSWORD")
+            .or_else(|_| std::env::var("ELASTIC_CLOUD_PASSWORD"))
+            .unwrap_or_else(|_| "mN9CNxqYU9J0nw4aywXVxTAw".to_string());
+
+        let mut options = HashMap::new();
+        options.insert("index".to_string(), "backtestingengine-logs".to_string());
+
+        LoggerConfig {
+            level: std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),
+            transport: TransportConfig {
+                transport_type: "elasticsearch".to_string(),
+                connection: ConnectionConfig {
+                    host: endpoint,
+                    port: 443,
+                    username: Some(username),
+                    password: Some(password),
+                    options,
+                },
+            },
+        }
+    } else {
+        // Fallback to stdout for development
+        LoggerConfig::default()
+    }
+}
+
+/// Logger for genetic algorithm operations with Elasticsearch support
 static GENETIC_LOGGER: Lazy<Arc<UltraLogger>> = Lazy::new(|| {
-    Arc::new(UltraLogger::new("BacktestingEngine-genetic".to_string()))
+    Arc::new(UltraLogger::with_config(
+        "BacktestingEngine-genetic".to_string(),
+        create_elasticsearch_config()
+    ))
 });
 
 /// Log info message using tokio::spawn for async logging (matches worker's pattern)
