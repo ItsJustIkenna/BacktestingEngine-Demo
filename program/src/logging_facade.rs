@@ -193,6 +193,55 @@ macro_rules! log_trace {
     }};
 }
 
+/// Log info with structured metadata fields for Kibana/Elasticsearch
+/// Usage: log_info_structured!(LOGGER, "message", "field1" => "value1", "field2" => "value2")
+#[macro_export]
+macro_rules! log_info_structured {
+    ($logger:expr, $msg:expr, $($key:expr => $value:expr),* $(,)?) => {{
+        let logger = $logger.clone();
+        let msg = $msg.to_string();
+        let mut metadata = std::collections::HashMap::new();
+        $(
+            metadata.insert($key.to_string(), $value.to_string());
+        )*
+        tokio::spawn(async move {
+            let _ = logger.log_with_metadata(ultra_logger::LogLevel::Info, msg, metadata).await;
+        });
+    }};
+}
+
+/// Log warning with structured metadata fields for Kibana/Elasticsearch
+#[macro_export]
+macro_rules! log_warn_structured {
+    ($logger:expr, $msg:expr, $($key:expr => $value:expr),* $(,)?) => {{
+        let logger = $logger.clone();
+        let msg = $msg.to_string();
+        let mut metadata = std::collections::HashMap::new();
+        $(
+            metadata.insert($key.to_string(), $value.to_string());
+        )*
+        tokio::spawn(async move {
+            let _ = logger.log_with_metadata(ultra_logger::LogLevel::Warn, msg, metadata).await;
+        });
+    }};
+}
+
+/// Log error with structured metadata fields for Kibana/Elasticsearch
+#[macro_export]
+macro_rules! log_error_structured {
+    ($logger:expr, $msg:expr, $($key:expr => $value:expr),* $(,)?) => {{
+        let logger = $logger.clone();
+        let msg = $msg.to_string();
+        let mut metadata = std::collections::HashMap::new();
+        $(
+            metadata.insert($key.to_string(), $value.to_string());
+        )*
+        tokio::spawn(async move {
+            let _ = logger.log_with_metadata(ultra_logger::LogLevel::Error, msg, metadata).await;
+        });
+    }};
+}
+
 /// Utility struct for BacktestingEngine logging
 pub struct BacktestEngineLogger {
     logger: Arc<UltraLogger>,

@@ -270,8 +270,13 @@ impl ProgressTracker {
                 let progress_pct = (current as f64 / total as f64) * 80.0 + 5.0; // 5% to 85% for genetic phase
                 
                 // Log every generation for complete visibility
-                log_info!(GENETIC_LOGGER, "Job {} generation {}/{} ({:.1}%)", 
-                    job_id, current, total, (current as f64 / total as f64) * 100.0);
+                log_info_structured!(GENETIC_LOGGER, "GA_GENERATION",
+                    "event" => "GA_GENERATION",
+                    "job_id" => &job_id,
+                    "current_generation" => current,
+                    "total_generations" => total,
+                    "progress_pct" => format!("{:.1}", (current as f64 / total as f64) * 100.0)
+                );
                 
                 // Broadcast to WebSocket clients (fire-and-forget, ~176ns)
                 get_progress_broadcaster().publish_generation(&job_id, current, total);
@@ -401,7 +406,10 @@ impl Worker {
     
     /// Start the worker loop
     pub async fn run(self) {
-        log_info!(MAIN_LOGGER, "Worker {} started and polling for jobs", self.id);
+        log_info_structured!(MAIN_LOGGER, "WORKER_STARTED",
+            "event" => "WORKER_STARTED",
+            "worker_id" => &self.id
+        );
         log_debug!(MAIN_LOGGER, "🚀 Worker {} started and polling for jobs", self.id);
         
         loop {
@@ -429,8 +437,14 @@ impl Worker {
             None => return Ok(false), // No job available
         };
         
-        log_info!(MAIN_LOGGER, "Worker {} claimed job {} | symbol={} exchange={} method={}", 
-            self.id, job.id, job.params.symbol, job.params.exchange, job.params.optimization_method);
+        log_info_structured!(MAIN_LOGGER, "JOB_CLAIMED",
+            "event" => "JOB_CLAIMED",
+            "worker_id" => &self.id,
+            "job_id" => &job.id,
+            "symbol" => &job.params.symbol,
+            "exchange" => &job.params.exchange,
+            "method" => &job.params.optimization_method
+        );
         log_debug!(MAIN_LOGGER, "🎯 Worker {} claimed job: {} (symbol={}, exchange={})", 
             self.id, job.id, job.params.symbol, job.params.exchange);
         
@@ -485,19 +499,31 @@ impl Worker {
         
         let result = match job.params.optimization_method.as_str() {
             "genetic" => {
-                log_info!(GENETIC_LOGGER, "Job {} starting genetic optimization | pop_size={} generations={}", 
-                    job.id, job.params.population_size, job.params.generations);
+                log_info_structured!(GENETIC_LOGGER, "GENETIC_OPTIMIZATION_START",
+                    "event" => "GENETIC_OPTIMIZATION_START",
+                    "job_id" => &job.id,
+                    "population_size" => job.params.population_size,
+                    "generations" => job.params.generations
+                );
                 self.execute_genetic_optimization(&job).await
             },
             "walkforward" => {
-                log_info!(WALKFORWARD_LOGGER, "Job {} starting walk-forward analysis | opt_days={:?} test_days={:?}", 
-                    job.id, job.params.walkforward_optimization_days, job.params.walkforward_test_days);
+                log_info_structured!(WALKFORWARD_LOGGER, "WALKFORWARD_ANALYSIS_START",
+                    "event" => "WALKFORWARD_ANALYSIS_START",
+                    "job_id" => &job.id,
+                    "opt_days" => format!("{:?}", job.params.walkforward_optimization_days),
+                    "test_days" => format!("{:?}", job.params.walkforward_test_days)
+                );
                 log_debug!(MAIN_LOGGER, "🔄 Starting walk-forward analysis for job {}", job.id);
                 self.execute_walkforward_analysis(&job).await
             },
             _ => {
-                log_info!(BACKTEST_LOGGER, "Job {} starting manual backtest | risk_aversion={} order_size={}", 
-                    job.id, job.params.risk_aversion, job.params.order_size);
+                log_info_structured!(BACKTEST_LOGGER, "BACKTEST_START",
+                    "event" => "BACKTEST_START",
+                    "job_id" => &job.id,
+                    "risk_aversion" => job.params.risk_aversion,
+                    "order_size" => job.params.order_size
+                );
                 self.execute_backtest(&job).await
             },
         };
@@ -919,8 +945,13 @@ impl Worker {
             metrics_profile: Some(Self::build_metrics_profile(&job.params.strategy_type)),
         };
         
-        log_info!(BACKTEST_LOGGER, "Job {} backtest complete | pnl={:.2} sharpe={:.3} trades={}", 
-            job.id, backtest_result.total_pnl, backtest_result.sharpe_ratio, backtest_result.total_trades);
+        log_info_structured!(BACKTEST_LOGGER, "BACKTEST_COMPLETE",
+            "event" => "BACKTEST_COMPLETE",
+            "job_id" => &job.id,
+            "total_pnl" => format!("{:.2}", backtest_result.total_pnl),
+            "sharpe_ratio" => format!("{:.3}", backtest_result.sharpe_ratio),
+            "total_trades" => backtest_result.total_trades
+        );
         
         // Final progress update
         let _ = self.job_queue.update_progress(&job.id, 100.0).await;
@@ -944,24 +975,54 @@ impl Worker {
         
         let params = &job.params;
         
-        log_info!(GENETIC_LOGGER, "Job {} genetic optimization starting | pop={} gen={} symbol={} strategy={}", 
-            job.id, params.population_size, params.generations, params.symbol, params.strategy_type);
+        // ============ TIMING: Total Job ============
+        let timing_total_start = std::time::Instant::now();
+        
+        // Send structured timing event to Kibana
+        log_info_structured!(MAIN_LOGGER, "TIMING_JOB_START",
+            "event" => "TIMING_JOB_START",
+            "job_id" => &job.id,
+            "symbol" => &params.symbol,
+            "exchange" => &params.exchange,
+            "population_size" => params.population_size,
+            "generations" => params.generations
+        );
+        
+        log_info_structured!(GENETIC_LOGGER, "GA_OPTIMIZATION_STARTING",
+            "event" => "GA_OPTIMIZATION_STARTING",
+            "job_id" => &job.id,
+            "population_size" => params.population_size,
+            "generations" => params.generations,
+            "symbol" => &params.symbol,
+            "strategy_type" => &params.strategy_type
+        );
         
         // Create efficient progress tracker (broadcasts via channel, no DB in hot path)
         let progress_tracker = Arc::new(ProgressTracker::new(job.id.clone(), Arc::clone(&self.job_queue)));
         
-        // Persist phase change to DB (lifecycle event) + broadcast
-        progress_tracker.broadcast_phase("genetic_optimization", serde_json::json!({
-            "population_size": params.population_size,
-            "generations": params.generations,
+        // Persist phase change to DB (lifecycle event) + broadcast with granular details
+        progress_tracker.broadcast_phase("data_loading", serde_json::json!({
+            "status": "starting",
+            "symbol": params.symbol,
+            "exchange": params.exchange,
         }));
-        let _ = progress_tracker.persist_phase_change("genetic_optimization", serde_json::json!({
+        let _ = progress_tracker.persist_phase_change("data_loading", serde_json::json!({
+            "status": "starting",
             "population_size": params.population_size,
             "generations": params.generations,
         })).await;
+        let _ = progress_tracker.persist_progress(2.0).await; // 2% - starting data load
+        
+        // ============ TIMING: Data Loading ============
+        let timing_data_load_start = std::time::Instant::now();
         
         // Load market data
-        log_info!(GENETIC_LOGGER, "Job {} loading market data for {} on {}", job.id, params.symbol, params.exchange);
+        log_info_structured!(GENETIC_LOGGER, "GA_LOADING_DATA",
+            "event" => "GA_LOADING_DATA",
+            "job_id" => &job.id,
+            "symbol" => &params.symbol,
+            "exchange" => &params.exchange
+        );
         
         let data = self.load_market_data_for_strategy(&params.symbol, &params.exchange, &params.strategy_type).await?;
         
@@ -970,35 +1031,44 @@ impl Worker {
             return Err("No market data available".into());
         }
         
-        log_info!(GENETIC_LOGGER, "Job {} loaded {} market data points", job.id, data.len());
+        let timing_data_load_elapsed = timing_data_load_start.elapsed();
+        let data_load_rate = data.len() as f64 / timing_data_load_elapsed.as_secs_f64();
         
-        // Subsample data for faster GA optimization
-        // 20K events (~5 hours of tick data) provides enough diversity for GA exploration
-        // Each chromosome evaluation should complete in under 30 seconds
-        const MAX_OPTIMIZATION_SAMPLES: usize = 20_000;
-        // Cap final backtest at 200K samples for speed (Monte Carlo will run on this)
-        // Walk-forward uses the FULL dataset but samples within each window
-        const MAX_FINAL_BACKTEST_SAMPLES: usize = 200_000;
+        // Send timing to Kibana with structured metadata
+        log_info_structured!(MAIN_LOGGER, "TIMING_DATA_LOAD",
+            "event" => "TIMING_DATA_LOAD",
+            "job_id" => &job.id,
+            "data_points" => data.len(),
+            "elapsed_sec" => format!("{:.2}", timing_data_load_elapsed.as_secs_f64()),
+            "rate_per_sec" => format!("{:.0}", data_load_rate)
+        );
         
-        let optimization_data: Vec<MarketData> = if data.len() > MAX_OPTIMIZATION_SAMPLES {
-            // Use stratified sampling: take evenly spaced samples across the entire dataset
-            // This ensures we get data from all time periods, not just the beginning
-            let step = data.len() / MAX_OPTIMIZATION_SAMPLES;
-            data.iter().step_by(step).take(MAX_OPTIMIZATION_SAMPLES).cloned().collect()
-        } else {
-            data.clone()
-        };
+        // Update UI with data load complete
+        progress_tracker.broadcast_phase("data_loading", serde_json::json!({
+            "status": "complete",
+            "data_points": data.len(),
+            "elapsed_sec": timing_data_load_elapsed.as_secs_f64(),
+        }));
+        let _ = progress_tracker.persist_progress(5.0).await; // 5% - data loaded
+        eprintln!("⏱️ TIMING | DATA_LOAD | {} points in {:.2}s", data.len(), timing_data_load_elapsed.as_secs_f64());
         
-        // Sample for final backtest (Monte Carlo runs on this)
-        let final_backtest_data: Vec<MarketData> = if data.len() > MAX_FINAL_BACKTEST_SAMPLES {
-            let step = data.len() / MAX_FINAL_BACKTEST_SAMPLES;
-            data.iter().step_by(step).take(MAX_FINAL_BACKTEST_SAMPLES).cloned().collect()
-        } else {
-            data.clone()
-        };
+        // Use FULL dataset for all phases - no sampling
+        // This ensures accurate fill simulation for market making strategies
+        // Note: This will be slower but provides accurate results
         
-        log_info!(GENETIC_LOGGER, "Job {} data samples: GA={} backtest={} walkforward={}", 
-            job.id, optimization_data.len(), final_backtest_data.len(), data.len());
+        // For GA optimization - use full data (slower but accurate)
+        let optimization_data = data.clone();
+        
+        // For final backtest + Monte Carlo - use full data
+        let final_backtest_data = data.clone();
+        
+        log_info_structured!(GENETIC_LOGGER, "GA_DATA_SPLIT",
+            "event" => "GA_DATA_SPLIT",
+            "job_id" => &job.id,
+            "ga_data_points" => optimization_data.len(),
+            "backtest_data_points" => final_backtest_data.len(),
+            "walkforward_data_points" => data.len()
+        );
         
         // Create genetic config
         let config = GeneticConfig {
@@ -1036,8 +1106,12 @@ impl Worker {
             
             Box::pin(async move {
                 let eval_id = FITNESS_EVAL_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                log_info!(GENETIC_LOGGER, "FITNESS_EVAL #{} ENTER | data_len={} chr.risk_aversion={:.4}", 
-                    eval_id, data.len(), chr.risk_aversion);
+                log_info_structured!(GENETIC_LOGGER, "FITNESS_EVAL_ENTER",
+                    "event" => "FITNESS_EVAL_ENTER",
+                    "eval_id" => eval_id,
+                    "data_len" => data.len(),
+                    "risk_aversion" => format!("{:.4}", chr.risk_aversion)
+                );
                 let eval_start = std::time::Instant::now();
                 
                 // Each async block gets its own fresh state - no shared mutable state
@@ -1204,8 +1278,14 @@ impl Worker {
                     Ok(result) => {
                         // Use comprehensive fitness function that penalizes commission-heavy strategies
                         let fitness = calculate_comprehensive_fitness(&result, initial_capital);
-                        log_info!(GENETIC_LOGGER, "FITNESS_EVAL #{} SUCCESS | fitness={:.6} pnl={:.2} trades={} | elapsed={:.2}s", 
-                            eval_id, fitness, result.total_pnl, result.num_trades, eval_start.elapsed().as_secs_f64());
+                        log_info_structured!(GENETIC_LOGGER, "FITNESS_EVAL_SUCCESS",
+                            "event" => "FITNESS_EVAL_SUCCESS",
+                            "eval_id" => eval_id,
+                            "fitness" => format!("{:.6}", fitness),
+                            "pnl" => format!("{:.2}", result.total_pnl),
+                            "trade_count" => result.num_trades,
+                            "elapsed_secs" => format!("{:.2}", eval_start.elapsed().as_secs_f64())
+                        );
                         genetic::FitnessResult::new(fitness, result.equity_curve)
                     }
                     Err(e) => {
@@ -1226,9 +1306,51 @@ impl Worker {
             job_id: Some(job.id.clone()),
         };
         
+        // Update UI for GA start
+        progress_tracker.broadcast_phase("genetic_optimization", serde_json::json!({
+            "status": "running",
+            "population_size": params.population_size,
+            "generations": params.generations,
+            "current_generation": 0,
+        }));
+        let _ = progress_tracker.persist_phase_change("genetic_optimization", serde_json::json!({
+            "status": "running",
+            "population_size": params.population_size,
+            "generations": params.generations,
+        })).await;
+        
+        // ============ TIMING: GA Optimization ============
+        let timing_ga_start = std::time::Instant::now();
+        
         log_info!(GENETIC_LOGGER, "Job {} starting genetic algorithm with robustness-weighted fitness", job.id);
         let (best_chromosome, best_fitness) = optimizer.run().await;
-        log_info!(GENETIC_LOGGER, "Job {} optimizer.run() completed | best_fitness={:.6}", job.id, best_fitness);
+        
+        let timing_ga_elapsed = timing_ga_start.elapsed();
+        
+        // Send timing to Kibana with structured metadata
+        log_info_structured!(MAIN_LOGGER, "TIMING_GA_COMPLETE",
+            "event" => "TIMING_GA_COMPLETE",
+            "job_id" => &job.id,
+            "elapsed_sec" => format!("{:.2}", timing_ga_elapsed.as_secs_f64()),
+            "elapsed_min" => format!("{:.1}", timing_ga_elapsed.as_secs_f64() / 60.0),
+            "best_fitness" => format!("{:.6}", best_fitness),
+            "population_size" => params.population_size,
+            "generations" => params.generations
+        );
+        
+        // Update UI with GA complete
+        progress_tracker.broadcast_phase("genetic_optimization", serde_json::json!({
+            "status": "complete",
+            "best_fitness": best_fitness,
+            "elapsed_sec": timing_ga_elapsed.as_secs_f64(),
+        }));
+        let _ = progress_tracker.persist_progress(85.0).await; // 85% - GA complete
+        
+        log_info_structured!(GENETIC_LOGGER, "GA_OPTIMIZER_RUN_COMPLETE",
+            "event" => "GA_OPTIMIZER_RUN_COMPLETE",
+            "job_id" => &job.id,
+            "best_fitness" => format!("{:.6}", best_fitness)
+        );
         
         // Track if strategy is below viability threshold (but continue to show results)
         let strategy_below_threshold = best_fitness < 0.01;
@@ -1247,7 +1369,11 @@ impl Worker {
         }));
         
         // Log BEFORE db persist to diagnose stalls
-        log_info!(GENETIC_LOGGER, "Job {} GA_COMPLETE_BEFORE_DB_PERSIST | best_fitness={:.4}", job.id, best_fitness);
+        log_info_structured!(GENETIC_LOGGER, "GA_COMPLETE_BEFORE_DB_PERSIST",
+            "event" => "GA_COMPLETE_BEFORE_DB_PERSIST",
+            "job_id" => &job.id,
+            "best_fitness" => format!("{:.4}", best_fitness)
+        );
         
         // Persist with timeout to prevent indefinite stalls on db issues
         let persist_result = tokio::time::timeout(
@@ -1263,35 +1389,44 @@ impl Worker {
             log_warn!(GENETIC_LOGGER, "Job {} DB_PERSIST_TIMEOUT - continuing without persist", job.id);
         }
         
-        log_info!(GENETIC_LOGGER, "Job {} GA_COMPLETE_AFTER_DB_PERSIST", job.id);
+        log_info_structured!(GENETIC_LOGGER, "GA_COMPLETE_AFTER_DB_PERSIST",
+            "event" => "GA_COMPLETE_AFTER_DB_PERSIST",
+            "job_id" => &job.id
+        );
         
-        log_info!(GENETIC_LOGGER, "Job {} genetic optimization complete | best_fitness={:.4} risk_aversion={:.3} inventory_target={:.3} order_size_pct={:.2}%", 
-            job.id, best_fitness, best_chromosome.risk_aversion, best_chromosome.inventory_target, best_chromosome.order_size_pct * 100.0);
+        log_info_structured!(GENETIC_LOGGER, "GA_OPTIMIZATION_COMPLETE",
+            "event" => "GA_OPTIMIZATION_COMPLETE",
+            "job_id" => &job.id,
+            "best_fitness" => format!("{:.4}", best_fitness),
+            "risk_aversion" => format!("{:.3}", best_chromosome.risk_aversion),
+            "inventory_target" => format!("{:.3}", best_chromosome.inventory_target),
+            "order_size_pct" => format!("{:.2}", best_chromosome.order_size_pct * 100.0)
+        );
         
         // Log ALL chromosome parameters for debugging unprofitable strategies
         // Note: fee_rate is now from exchange config, not chromosome
         let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&exchange_for_logging);
-        log_info!(MAIN_LOGGER, 
-            r#"{{"event": "STRATEGY_PARAMS", "job_id": "{}", "best_fitness": {:.6}, "exchange_maker_fee": {:.4}, "params": {{"risk_aversion": {:.4}, "order_size_pct": {:.4}, "window_ms": {}, "min_quote_lifetime_ms": {}, "inventory_target": {:.4}, "volatility_cap": {:.4}, "time_horizon_min": {:.2}, "market_depth_k": {:.2}, "min_spread_bps": {:.1}, "max_trades_per_min": {:.2}, "take_profit_pct": {:.4}, "stop_loss_pct": {:.4}, "vol_adj_factor": {:.2}, "inv_penalty_factor": {:.2}, "trend_sensitivity": {:.3}, "flow_sensitivity": {:.3}}}}}"#,
-            job.id,
-            best_fitness,
-            exchange_fee_config.maker_fee * 100.0,  // Convert to bps for logging
-            best_chromosome.risk_aversion,
-            best_chromosome.order_size_pct,
-            best_chromosome.window_ms,
-            best_chromosome.min_quote_lifetime_ms,
-            best_chromosome.inventory_target,
-            best_chromosome.volatility_cap,
-            best_chromosome.time_horizon_minutes,
-            best_chromosome.market_depth_k,
-            best_chromosome.min_spread_bps,
-            best_chromosome.max_trades_per_minute,
-            best_chromosome.take_profit_pct,
-            best_chromosome.stop_loss_pct,
-            best_chromosome.volatility_adjustment_factor,
-            best_chromosome.inventory_penalty_factor,
-            best_chromosome.trend_sensitivity,
-            best_chromosome.flow_sensitivity
+        log_info_structured!(MAIN_LOGGER, "STRATEGY_PARAMS",
+            "event" => "STRATEGY_PARAMS",
+            "job_id" => &job.id,
+            "best_fitness" => format!("{:.6}", best_fitness),
+            "exchange_maker_fee" => format!("{:.4}", exchange_fee_config.maker_fee * 100.0),
+            "risk_aversion" => format!("{:.4}", best_chromosome.risk_aversion),
+            "order_size_pct" => format!("{:.4}", best_chromosome.order_size_pct),
+            "window_ms" => best_chromosome.window_ms,
+            "min_quote_lifetime_ms" => best_chromosome.min_quote_lifetime_ms,
+            "inventory_target" => format!("{:.4}", best_chromosome.inventory_target),
+            "volatility_cap" => format!("{:.4}", best_chromosome.volatility_cap),
+            "time_horizon_min" => format!("{:.2}", best_chromosome.time_horizon_minutes),
+            "market_depth_k" => format!("{:.2}", best_chromosome.market_depth_k),
+            "min_spread_bps" => format!("{:.1}", best_chromosome.min_spread_bps),
+            "max_trades_per_min" => format!("{:.2}", best_chromosome.max_trades_per_minute),
+            "take_profit_pct" => format!("{:.4}", best_chromosome.take_profit_pct),
+            "stop_loss_pct" => format!("{:.4}", best_chromosome.stop_loss_pct),
+            "vol_adj_factor" => format!("{:.2}", best_chromosome.volatility_adjustment_factor),
+            "inv_penalty_factor" => format!("{:.2}", best_chromosome.inventory_penalty_factor),
+            "trend_sensitivity" => format!("{:.3}", best_chromosome.trend_sensitivity),
+            "flow_sensitivity" => format!("{:.3}", best_chromosome.flow_sensitivity)
         );
         
         // Log expected economics based on parameters
@@ -1300,41 +1435,43 @@ impl Worker {
         let expected_commission_per_trade = 2.0 * expected_order_value * 0.0025; // Both sides, maker fee
         let expected_spread_capture = expected_order_value * best_chromosome.min_spread_bps / 10000.0;
         let expected_net_per_trade = expected_spread_capture - expected_commission_per_trade;
-        log_info!(MAIN_LOGGER,
-            r#"{{"event": "EXPECTED_ECONOMICS", "job_id": "{}", "order_value_usd": {:.2}, "min_spread_bps": {:.1}, "expected_spread_capture": {:.2}, "expected_commission": {:.2}, "expected_net_per_trade": {:.2}, "viable": {}}}"#,
-            job.id,
-            expected_order_value,
-            best_chromosome.min_spread_bps,
-            expected_spread_capture,
-            expected_commission_per_trade,
-            expected_net_per_trade,
-            expected_net_per_trade > 0.0
+        log_info_structured!(MAIN_LOGGER, "EXPECTED_ECONOMICS",
+            "event" => "EXPECTED_ECONOMICS",
+            "job_id" => &job.id,
+            "order_value_usd" => format!("{:.2}", expected_order_value),
+            "min_spread_bps" => format!("{:.1}", best_chromosome.min_spread_bps),
+            "expected_spread_capture" => format!("{:.2}", expected_spread_capture),
+            "expected_commission" => format!("{:.2}", expected_commission_per_trade),
+            "expected_net_per_trade" => format!("{:.2}", expected_net_per_trade),
+            "viable" => (expected_net_per_trade > 0.0)
         );
         
-        // Update phase for final analysis
+        // Update phase for final analysis with granular sub-phases
         progress_tracker.broadcast_phase("final_analysis", serde_json::json!({
-            "stage": "monte_carlo_walkforward"
+            "status": "starting",
+            "sub_phase": "backtest",
+            "monte_carlo_enabled": params.monte_carlo_enabled,
+            "walk_forward_enabled": params.walk_forward_enabled,
+            "data_points": data_for_backtest.len(),
         }));
-        progress_tracker.broadcast_progress(90.0);
-        
-        // Persist with timeout to prevent stalls
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            progress_tracker.persist_phase_change("final_analysis", serde_json::json!({
-                "stage": "monte_carlo_walkforward",
-                "progress": 90.0
-            }))
-        ).await;
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            progress_tracker.persist_progress(90.0)
-        ).await;
+        let _ = progress_tracker.persist_phase_change("final_analysis", serde_json::json!({
+            "status": "starting",
+            "sub_phase": "backtest",
+            "monte_carlo_runs": params.monte_carlo_runs.min(200),
+        })).await;
+        let _ = progress_tracker.persist_progress(87.0).await; // 87% - starting final analysis
         
         // Run final backtest with best parameters to get full results
-        // Backtest + Monte Carlo use sampled data (200K) for speed
-        // Walk-Forward uses full data but samples per-window (already capped at 200K/window in engine)
-        log_info!(GENETIC_LOGGER, "Job {} running full analysis pipeline (Backtest → Monte Carlo → Walk-Forward)", job.id);
+        log_info_structured!(GENETIC_LOGGER, "GA_FULL_ANALYSIS_PIPELINE_START",
+            "event" => "GA_FULL_ANALYSIS_PIPELINE_START",
+            "job_id" => &job.id,
+            "monte_carlo_enabled" => params.monte_carlo_enabled,
+            "walk_forward_enabled" => params.walk_forward_enabled
+        );
         log_debug!(MAIN_LOGGER, "🚀 About to run final backtest for job {}", job.id);
+        
+        // ============ TIMING: Final Analysis (Backtest + MC + WF) ============
+        let timing_analysis_start = std::time::Instant::now();
         
         let mut final_result = self.run_full_analysis_with_chromosome(
             &job.id,
@@ -1343,12 +1480,33 @@ impl Worker {
             params.initial_capital,
             params.commission_rate,
             &best_chromosome,
-            &data_for_backtest,      // 200K samples for backtest + Monte Carlo
-            &data_for_walkforward,   // Full data for walk-forward (per-window sampling in engine)
+            &data_for_backtest,      // Full data for backtest + Monte Carlo
+            &data_for_walkforward,   // Full data for walk-forward
             params.monte_carlo_enabled,
             params.monte_carlo_runs.min(200), // Cap at 200 runs for speed (1000 is excessive)
             params.walk_forward_enabled,
         ).await?;
+        
+        let timing_analysis_elapsed = timing_analysis_start.elapsed();
+        
+        // Send timing to Kibana with structured metadata
+        log_info_structured!(MAIN_LOGGER, "TIMING_FINAL_ANALYSIS",
+            "event" => "TIMING_FINAL_ANALYSIS",
+            "job_id" => &job.id,
+            "elapsed_sec" => format!("{:.2}", timing_analysis_elapsed.as_secs_f64()),
+            "elapsed_min" => format!("{:.1}", timing_analysis_elapsed.as_secs_f64() / 60.0),
+            "data_points" => data_for_backtest.len(),
+            "monte_carlo_enabled" => params.monte_carlo_enabled,
+            "walk_forward_enabled" => params.walk_forward_enabled
+        );
+        
+        // Update UI with final analysis complete
+        progress_tracker.broadcast_phase("final_analysis", serde_json::json!({
+            "status": "complete",
+            "elapsed_sec": timing_analysis_elapsed.as_secs_f64(),
+            "total_pnl": final_result.total_pnl,
+        }));
+        let _ = progress_tracker.persist_progress(98.0).await; // 98% - analysis complete
         
         // If strategy was below viability threshold, add warning to result
         if strategy_below_threshold {
@@ -1359,20 +1517,47 @@ impl Worker {
             ));
         }
         
-        // Final broadcast + persist (lifecycle event)
+        // Final broadcast + persist (lifecycle event) with comprehensive timing
+        let timing_total_elapsed = timing_total_start.elapsed();
+        
+        // Send comprehensive timing summary to Kibana with structured metadata
+        log_info_structured!(MAIN_LOGGER, "TIMING_JOB_COMPLETE",
+            "event" => "TIMING_JOB_COMPLETE",
+            "job_id" => &job.id,
+            "total_elapsed_sec" => format!("{:.2}", timing_total_elapsed.as_secs_f64()),
+            "total_elapsed_min" => format!("{:.1}", timing_total_elapsed.as_secs_f64() / 60.0),
+            "data_load_sec" => format!("{:.2}", timing_data_load_elapsed.as_secs_f64()),
+            "ga_sec" => format!("{:.2}", timing_ga_elapsed.as_secs_f64()),
+            "analysis_sec" => format!("{:.2}", timing_analysis_elapsed.as_secs_f64()),
+            "data_points" => data_for_walkforward.len(),
+            "total_pnl" => format!("{:.2}", final_result.total_pnl),
+            "sharpe_ratio" => format!("{:.3}", final_result.sharpe_ratio)
+        );
+        
         progress_tracker.broadcast_progress(100.0);
         progress_tracker.broadcast_phase("completed", serde_json::json!({
             "total_pnl": final_result.total_pnl,
             "sharpe_ratio": final_result.sharpe_ratio,
+            "total_elapsed_sec": timing_total_elapsed.as_secs_f64(),
+            "timing": {
+                "data_load_sec": timing_data_load_elapsed.as_secs_f64(),
+                "ga_sec": timing_ga_elapsed.as_secs_f64(),
+                "analysis_sec": timing_analysis_elapsed.as_secs_f64(),
+            }
         }));
         let _ = progress_tracker.persist_progress(100.0).await;
         let _ = progress_tracker.persist_phase_change("completed", serde_json::json!({
             "total_pnl": final_result.total_pnl,
             "sharpe_ratio": final_result.sharpe_ratio,
+            "total_elapsed_sec": timing_total_elapsed.as_secs_f64(),
         })).await;
         
-        log_info!(GENETIC_LOGGER, "Job {} full analysis complete | pnl={:.2} sharpe={:.3}", 
-            job.id, final_result.total_pnl, final_result.sharpe_ratio);
+        log_info_structured!(GENETIC_LOGGER, "GA_FULL_ANALYSIS_COMPLETE",
+            "event" => "GA_FULL_ANALYSIS_COMPLETE",
+            "job_id" => &job.id,
+            "total_pnl" => format!("{:.2}", final_result.total_pnl),
+            "sharpe_ratio" => format!("{:.3}", final_result.sharpe_ratio)
+        );
         
         Ok(final_result)
     }
@@ -1400,8 +1585,13 @@ impl Worker {
         let test_days = params.walkforward_test_days.unwrap_or(30);
         let step_days = params.walkforward_step_days.unwrap_or(30);
         
-        log_info!(WALKFORWARD_LOGGER, "Job {} walk-forward config | opt_days={} test_days={} step_days={}", 
-            job.id, optimization_days, test_days, step_days);
+        log_info_structured!(WALKFORWARD_LOGGER, "WALKFORWARD_CONFIG",
+            "event" => "WALKFORWARD_CONFIG",
+            "job_id" => &job.id,
+            "optimization_days" => optimization_days,
+            "test_days" => test_days,
+            "step_days" => step_days
+        );
         log_debug!(MAIN_LOGGER, "📊 Walk-forward config: opt={}d, test={}d, step={}d", 
             optimization_days, test_days, step_days);
         
@@ -1431,8 +1621,13 @@ impl Worker {
         
         // Determine date range from data
         let (data_start, data_end) = self.get_data_date_range(&all_data)?;
-        log_info!(WALKFORWARD_LOGGER, "Job {} data range {} to {} | {} data points", 
-            job.id, data_start.format("%Y-%m-%d"), data_end.format("%Y-%m-%d"), all_data.len());
+        log_info_structured!(WALKFORWARD_LOGGER, "WALKFORWARD_DATA_RANGE",
+            "event" => "WALKFORWARD_DATA_RANGE",
+            "job_id" => &job.id,
+            "data_start" => data_start.format("%Y-%m-%d").to_string(),
+            "data_end" => data_end.format("%Y-%m-%d").to_string(),
+            "data_points" => all_data.len()
+        );
         log_debug!(MAIN_LOGGER, "📅 Data range: {} to {}", data_start, data_end);
         
         // Generate walk-forward windows
@@ -1449,7 +1644,11 @@ impl Worker {
             return Err("Not enough data for walk-forward analysis. Need at least one complete window.".into());
         }
         
-        log_info!(WALKFORWARD_LOGGER, "Job {} generated {} walk-forward windows", job.id, windows.len());
+        log_info_structured!(WALKFORWARD_LOGGER, "WALKFORWARD_WINDOWS_GENERATED",
+            "event" => "WALKFORWARD_WINDOWS_GENERATED",
+            "job_id" => &job.id,
+            "window_count" => windows.len()
+        );
         log_debug!(MAIN_LOGGER, "🔢 Generated {} walk-forward windows", windows.len());
         
         // Track results for each window
@@ -1478,15 +1677,25 @@ impl Worker {
             max_trades_per_minute: params.max_trades_per_minute,
         };
         
-        log_info!(WALKFORWARD_LOGGER, "Job {} using fixed params for validation | risk_aversion={:.3} inventory_target={:.3} order_size_pct={:.2}%",
-            job.id, fixed_chromosome.risk_aversion, fixed_chromosome.inventory_target, fixed_chromosome.order_size_pct * 100.0);
+        log_info_structured!(WALKFORWARD_LOGGER, "WALKFORWARD_FIXED_PARAMS",
+            "event" => "WALKFORWARD_FIXED_PARAMS",
+            "job_id" => &job.id,
+            "risk_aversion" => format!("{:.3}", fixed_chromosome.risk_aversion),
+            "inventory_target" => format!("{:.3}", fixed_chromosome.inventory_target),
+            "order_size_pct" => format!("{:.2}", fixed_chromosome.order_size_pct * 100.0)
+        );
         
         for (window_idx, window) in windows.iter().enumerate() {
             let window_num = window_idx + 1;
             
-            log_info!(WALKFORWARD_LOGGER, "Job {} window {}/{} | test: {} to {}", 
-                job.id, window_num, total_windows,
-                window.test_start.format("%Y-%m-%d"), window.test_end.format("%Y-%m-%d"));
+            log_info_structured!(WALKFORWARD_LOGGER, "WALKFORWARD_WINDOW_START",
+                "event" => "WALKFORWARD_WINDOW_START",
+                "job_id" => &job.id,
+                "window_num" => window_num,
+                "total_windows" => total_windows,
+                "test_start" => window.test_start.format("%Y-%m-%d").to_string(),
+                "test_end" => window.test_end.format("%Y-%m-%d").to_string()
+            );
             
             // Update progress
             let progress = (window_idx as f64 / total_windows as f64) * 90.0;
@@ -1528,8 +1737,15 @@ impl Worker {
                 &test_data,
             ).await?;
             
-            log_info!(WALKFORWARD_LOGGER, "Job {} window {} OOS results | pnl={:.2} sharpe={:.3} trades={} max_dd={:.2}%", 
-                job.id, window_num, test_result.total_pnl, test_result.sharpe_ratio, test_result.total_trades, test_result.max_drawdown * 100.0);
+            log_info_structured!(WALKFORWARD_LOGGER, "WALKFORWARD_WINDOW_OOS_RESULTS",
+                "event" => "WALKFORWARD_WINDOW_OOS_RESULTS",
+                "job_id" => &job.id,
+                "window_num" => window_num,
+                "pnl" => format!("{:.2}", test_result.total_pnl),
+                "sharpe_ratio" => format!("{:.3}", test_result.sharpe_ratio),
+                "trade_count" => test_result.total_trades,
+                "max_drawdown_pct" => format!("{:.2}", test_result.max_drawdown * 100.0)
+            );
             
             // Store window result (params are same for all windows in validation mode)
             window_results.push(WalkForwardWindowResult {
@@ -1561,7 +1777,11 @@ impl Worker {
         }
         
         // Calculate aggregated metrics across all windows
-        log_info!(WALKFORWARD_LOGGER, "Job {} aggregating {} window results", job.id, window_results.len());
+        log_info_structured!(WALKFORWARD_LOGGER, "WALKFORWARD_AGGREGATING",
+            "event" => "WALKFORWARD_AGGREGATING",
+            "job_id" => &job.id,
+            "window_count" => window_results.len()
+        );
         log_debug!(MAIN_LOGGER, "\n📊 Aggregating {} window results...", window_results.len());
         
         let total_oos_pnl: f64 = window_results.iter().map(|w| w.oos_pnl).sum();
@@ -1577,8 +1797,15 @@ impl Worker {
         // Calculate parameter stability (how consistent are optimal params across windows)
         let param_stability = self.calculate_parameter_stability(&window_results);
         
-        log_info!(WALKFORWARD_LOGGER, "Job {} walk-forward complete | windows={} total_pnl={:.2} avg_sharpe={:.3} max_dd={:.2}% param_stability={:.2}%", 
-            job.id, window_results.len(), total_oos_pnl, avg_oos_sharpe, max_oos_drawdown * 100.0, param_stability * 100.0);
+        log_info_structured!(WALKFORWARD_LOGGER, "WALKFORWARD_COMPLETE",
+            "event" => "WALKFORWARD_COMPLETE",
+            "job_id" => &job.id,
+            "windows" => window_results.len(),
+            "total_pnl" => format!("{:.2}", total_oos_pnl),
+            "avg_sharpe" => format!("{:.3}", avg_oos_sharpe),
+            "max_drawdown_pct" => format!("{:.2}", max_oos_drawdown * 100.0),
+            "param_stability_pct" => format!("{:.2}", param_stability * 100.0)
+        );
         
         log_debug!(MAIN_LOGGER, "✅ Walk-forward complete:");
         log_debug!(MAIN_LOGGER, "   Total OOS PnL: {:.2}", total_oos_pnl);
@@ -2223,6 +2450,7 @@ impl Worker {
         // SYNC PRINT for diagnosis - this will appear in stdout immediately
         eprintln!("[SYNC] Job {} ABOUT_TO_CALL_ENGINE_RUN_BACKTEST | data_points={}", job_id, backtest_data.len());
         
+        // ============ TIMING: Backtest + Monte Carlo ============
         let backtest_start = std::time::Instant::now();
         
         let mut result = engine.run_backtest(
@@ -2233,8 +2461,22 @@ impl Worker {
             backtest_data,
         ).await?;
         
+        let backtest_elapsed = backtest_start.elapsed();
+        
         // SYNC PRINT after engine completes
-        eprintln!("[SYNC] Job {} ENGINE_RETURNED | elapsed={:.1}s", job_id, backtest_start.elapsed().as_secs_f64());
+        eprintln!("⏱️ TIMING | BACKTEST+MC | completed in {:.2}s ({:.1} min) | {} events @ {:.0}/sec", 
+            backtest_elapsed.as_secs_f64(), backtest_elapsed.as_secs_f64() / 60.0,
+            backtest_data.len(), backtest_data.len() as f64 / backtest_elapsed.as_secs_f64());
+        
+        // Structured metadata for Kibana
+        log_info_structured!(MAIN_LOGGER, "TIMING_BACKTEST_COMPLETE",
+            "event" => "TIMING_BACKTEST_COMPLETE",
+            "job_id" => job_id,
+            "elapsed_sec" => format!("{:.2}", backtest_elapsed.as_secs_f64()),
+            "elapsed_min" => format!("{:.1}", backtest_elapsed.as_secs_f64() / 60.0),
+            "data_points" => backtest_data.len(),
+            "events_per_sec" => format!("{:.0}", backtest_data.len() as f64 / backtest_elapsed.as_secs_f64())
+        );
         
         log_info!(MAIN_LOGGER, "Job {} ENGINE_RUN_BACKTEST_COMPLETE | elapsed={:.1}s trades={}", 
             job_id, backtest_start.elapsed().as_secs_f64(), result.core.num_trades);
@@ -2268,12 +2510,28 @@ impl Worker {
             let cvar_pct = mc.cvar_95 / initial_capital * 100.0;
             log_info!(MAIN_LOGGER, "Job {} Monte Carlo complete | runs={} mean_sharpe={:.3} VaR95=${:.2} ({:.2}%) CVaR95=${:.2} ({:.2}%)",
                 job_id, mc.num_runs, mc.mean_metrics.sharpe_ratio, mc.var_95, var_pct, mc.cvar_95, cvar_pct);
+            
+            // Structured metadata for Kibana
+            log_info_structured!(MAIN_LOGGER, "TIMING_MONTE_CARLO_COMPLETE",
+                "event" => "TIMING_MONTE_CARLO_COMPLETE",
+                "job_id" => job_id,
+                "runs" => mc.num_runs,
+                "mean_sharpe" => format!("{:.3}", mc.mean_metrics.sharpe_ratio),
+                "var_95" => format!("{:.2}", mc.var_95),
+                "cvar_95" => format!("{:.2}", mc.cvar_95),
+                "var_pct" => format!("{:.2}", var_pct),
+                "cvar_pct" => format!("{:.2}", cvar_pct)
+            );
         }
         
         // Run walk-forward on FULL data separately (engine samples per-window at 200K max)
         // This validates the strategy generalizes across all time periods
         if walk_forward_enabled && !walkforward_data.is_empty() {
             log_info!(MAIN_LOGGER, "Job {} starting Walk-Forward on {} data points", job_id, walkforward_data.len());
+            
+            // ============ TIMING: Walk-Forward ============
+            let wf_timing_start = std::time::Instant::now();
+            eprintln!("⏱️ TIMING | WALK_FORWARD | starting on {} data points...", walkforward_data.len());
             
             // Create a separate engine config for walk-forward only
             let mut wf_config = backtest_config.clone();
@@ -2311,6 +2569,19 @@ impl Worker {
                 walkforward_data,
             ).await {
                 Ok(wf_result) => {
+                    let wf_timing_elapsed = wf_timing_start.elapsed();
+                    eprintln!("⏱️ TIMING | WALK_FORWARD | completed in {:.2}s ({:.1} min)", 
+                        wf_timing_elapsed.as_secs_f64(), wf_timing_elapsed.as_secs_f64() / 60.0);
+                    
+                    // Structured metadata for Kibana
+                    log_info_structured!(MAIN_LOGGER, "TIMING_WALKFORWARD_COMPLETE",
+                        "event" => "TIMING_WALKFORWARD_COMPLETE",
+                        "job_id" => job_id,
+                        "elapsed_sec" => format!("{:.2}", wf_timing_elapsed.as_secs_f64()),
+                        "elapsed_min" => format!("{:.1}", wf_timing_elapsed.as_secs_f64() / 60.0),
+                        "data_points" => walkforward_data.len()
+                    );
+                    
                     // Merge walk-forward result into main result
                     result.walk_forward = wf_result.walk_forward;
                     if let Some(ref wf) = result.walk_forward {
@@ -2319,6 +2590,8 @@ impl Worker {
                     }
                 }
                 Err(e) => {
+                    let wf_timing_elapsed = wf_timing_start.elapsed();
+                    eprintln!("⏱️ TIMING | WALK_FORWARD | FAILED after {:.2}s: {}", wf_timing_elapsed.as_secs_f64(), e);
                     log_warn!(MAIN_LOGGER, "Job {} Walk-Forward failed: {} - continuing without WF results", job_id, e);
                 }
             }

@@ -85,6 +85,7 @@ pub struct Candle {
 }
 
 /// Trade data extracted from historical orders
+/// Pre-computed f64 values for performance in hot simulation loop
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradeData {
     pub timestamp: DateTime<Utc>,
@@ -94,6 +95,44 @@ pub struct TradeData {
     pub quantity: BigDecimal,
     pub side: String,
     pub trade_id: String,
+    /// Pre-computed price as f64 for fast access in simulation
+    #[serde(default)]
+    pub price_f64: f64,
+    /// Pre-computed quantity as f64 for fast access in simulation
+    #[serde(default)]
+    pub quantity_f64: f64,
+    /// Pre-computed value (price * quantity) as f64
+    #[serde(default)]
+    pub value_f64: f64,
+}
+
+impl TradeData {
+    /// Create a new TradeData with pre-computed f64 values
+    pub fn new(
+        timestamp: DateTime<Utc>,
+        symbol: String,
+        exchange: String,
+        price: BigDecimal,
+        quantity: BigDecimal,
+        side: String,
+        trade_id: String,
+    ) -> Self {
+        use bigdecimal::ToPrimitive;
+        let price_f64 = price.to_f64().unwrap_or(0.0);
+        let quantity_f64 = quantity.to_f64().unwrap_or(0.0);
+        Self {
+            timestamp,
+            symbol,
+            exchange,
+            price,
+            quantity,
+            side,
+            trade_id,
+            price_f64,
+            quantity_f64,
+            value_f64: price_f64 * quantity_f64,
+        }
+    }
 }
 
 /// Query parameters for data retrieval
@@ -190,14 +229,21 @@ impl DataLoader {
 
         let trade_data: Vec<TradeData> = trades
             .into_iter()
-            .map(|trade| TradeData {
-                timestamp: trade.created_at,
-                symbol: trade.symbol,
-                exchange: trade.exchange,
-                price: trade.price,
-                quantity: trade.quantity,
-                side: trade.side,
-                trade_id: trade.trade_id,
+            .map(|trade| {
+                let price_f64 = trade.price.to_f64().unwrap_or(0.0);
+                let quantity_f64 = trade.quantity.to_f64().unwrap_or(0.0);
+                TradeData {
+                    timestamp: trade.created_at,
+                    symbol: trade.symbol,
+                    exchange: trade.exchange,
+                    price: trade.price,
+                    quantity: trade.quantity,
+                    side: trade.side,
+                    trade_id: trade.trade_id,
+                    price_f64,
+                    quantity_f64,
+                    value_f64: price_f64 * quantity_f64,
+                }
             })
             .collect();
 

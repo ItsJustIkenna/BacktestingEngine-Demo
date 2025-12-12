@@ -25,7 +25,7 @@ use uuid::Uuid;
 #[cfg(feature = "postgres")]
 use databaseschema::models::historical_order::HistoricalOrder;
 #[cfg(feature = "postgres")]
-use crate::{log_info, log_error, log_debug};
+use crate::{log_debug, log_info_structured, log_warn_structured, log_error_structured};
 #[cfg(feature = "postgres")]
 use crate::logging_facade::MAIN_LOGGER;
 
@@ -103,11 +103,17 @@ impl OrderBookStreamIterator {
             self.pool.get()
         ).await
             .map_err(|_| {
-                log_error!(MAIN_LOGGER, "Connection pool timeout at offset {}", self.offset);
+                log_error_structured!(MAIN_LOGGER, "DB_CONNECTION_TIMEOUT",
+                    "event" => "DB_CONNECTION_TIMEOUT",
+                    "offset" => self.offset
+                );
                 "Connection pool timeout - possible deadlock or pool exhaustion"
             })?
             .map_err(|e| {
-                log_error!(MAIN_LOGGER, "Failed to get database connection: {}", e);
+                log_error_structured!(MAIN_LOGGER, "DB_CONNECTION_FAILED",
+                    "event" => "DB_CONNECTION_FAILED",
+                    "error" => e.to_string()
+                );
                 format!("Failed to get database connection: {}", e)
             })?;
         
@@ -132,12 +138,20 @@ impl OrderBookStreamIterator {
             diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn)
         ).await
             .map_err(|_| {
-                log_error!(MAIN_LOGGER, "Query timeout loading order events for {} {} at offset {} (30s limit)", 
-                    self.symbol, self.exchange, self.offset);
+                log_error_structured!(MAIN_LOGGER, "QUERY_TIMEOUT",
+                    "event" => "QUERY_TIMEOUT",
+                    "symbol" => &self.symbol,
+                    "exchange" => &self.exchange,
+                    "offset" => self.offset,
+                    "timeout_secs" => 30
+                );
                 "Query execution timeout - database may be overloaded"
             })?
             .map_err(|e| {
-                log_error!(MAIN_LOGGER, "Query failed: {}", e);
+                log_error_structured!(MAIN_LOGGER, "QUERY_FAILED",
+                    "event" => "QUERY_FAILED",
+                    "error" => e.to_string()
+                );
                 format!("Failed to load order events chunk: {}", e)
             })?;
 
@@ -205,7 +219,11 @@ impl OrderBookStreamIterator {
             }
         }
         
-        log_info!(MAIN_LOGGER, "Loaded {} order events (limit: {})", all_data.len(), max_events);
+        log_info_structured!(MAIN_LOGGER, "DATA_LOAD_ORDER_EVENTS",
+            "event" => "DATA_LOAD_ORDER_EVENTS",
+            "order_event_count" => all_data.len(),
+            "limit" => max_events
+        );
         
         Ok(all_data)
     }
@@ -260,8 +278,12 @@ impl OrderBookBatchLoader {
             .map(|(_, event)| event)
             .collect();
 
-        log_info!(MAIN_LOGGER, "Sampled {} events from {} total (rate: {:.1}%)", 
-                 sampled_data.len(), total, sample_rate * 100.0);
+        log_info_structured!(MAIN_LOGGER, "DATA_LOAD_SAMPLED",
+            "event" => "DATA_LOAD_SAMPLED",
+            "sampled_count" => sampled_data.len(),
+            "total_count" => total,
+            "sample_rate_pct" => format!("{:.1}", sample_rate * 100.0)
+        );
 
         Ok(sampled_data)
     }
@@ -283,7 +305,11 @@ impl OrderBookBatchLoader {
         // Load trades
         let trades = self.load_trades(max_events / 2).await?;
         
-        log_info!(MAIN_LOGGER, "Loaded {} order events and {} trades", order_events.len(), trades.len());
+        log_info_structured!(MAIN_LOGGER, "DATA_LOAD_ORDERS_AND_TRADES",
+            "event" => "DATA_LOAD_ORDERS_AND_TRADES",
+            "order_event_count" => order_events.len(),
+            "trade_count" => trades.len()
+        );
         
         // Merge by timestamp
         let mut merged = Vec::with_capacity(order_events.len() + trades.len());
@@ -314,7 +340,11 @@ impl OrderBookBatchLoader {
             merged.truncate(max_events);
         }
         
-        log_info!(MAIN_LOGGER, "Total merged events: {} (limit: {})", merged.len(), max_events);
+        log_info_structured!(MAIN_LOGGER, "DATA_LOAD_MERGED",
+            "event" => "DATA_LOAD_MERGED",
+            "merged_count" => merged.len(),
+            "limit" => max_events
+        );
 
         Ok(merged)
     }
@@ -335,7 +365,11 @@ impl OrderBookBatchLoader {
         // Load ALL trades
         let trades = self.load_all_trades().await?;
         
-        log_info!(MAIN_LOGGER, "Loaded {} order events and {} trades (no limit)", order_events.len(), trades.len());
+        log_info_structured!(MAIN_LOGGER, "DATA_LOAD_ALL_ORDERS_AND_TRADES",
+            "event" => "DATA_LOAD_ALL_ORDERS_AND_TRADES",
+            "order_event_count" => order_events.len(),
+            "trade_count" => trades.len()
+        );
         
         // Merge by timestamp
         let mut merged = Vec::with_capacity(order_events.len() + trades.len());
@@ -361,7 +395,10 @@ impl OrderBookBatchLoader {
             ts_a.cmp(&ts_b)
         });
         
-        log_info!(MAIN_LOGGER, "Total merged events: {} (ALL data)", merged.len());
+        log_info_structured!(MAIN_LOGGER, "DATA_LOAD_MERGED_ALL",
+            "event" => "DATA_LOAD_MERGED_ALL",
+            "merged_count" => merged.len()
+        );
 
         Ok(merged)
     }
@@ -484,7 +521,11 @@ impl OrderBookBatchLoader {
             self.symbol, self.exchange
         );
         
-        log_info!(MAIN_LOGGER, "Loading ALL trades for {} on {}", self.symbol, self.exchange);
+        log_info_structured!(MAIN_LOGGER, "DATA_LOAD_ALL_TRADES_START",
+            "event" => "DATA_LOAD_ALL_TRADES_START",
+            "symbol" => &self.symbol,
+            "exchange" => &self.exchange
+        );
         
         let results: Vec<TradeRow> = tokio::time::timeout(
             std::time::Duration::from_secs(120), // Longer timeout for large datasets
@@ -493,7 +534,10 @@ impl OrderBookBatchLoader {
             .map_err(|_| "Query timeout loading all trades (120s limit)")?
             .map_err(|e| format!("Failed to load trades: {}", e))?;
         
-        log_info!(MAIN_LOGGER, "Loaded {} trades", results.len());
+        log_info_structured!(MAIN_LOGGER, "DATA_LOAD_TRADES_COMPLETE",
+            "event" => "DATA_LOAD_TRADES_COMPLETE",
+            "trade_count" => results.len()
+        );
         
         let trades: Vec<MarketData> = results
             .into_iter()
@@ -580,7 +624,10 @@ impl StreamingDataLoader {
             
             // Safety limit
             if all_batches.len() > 10000 {
-                log_warn!(MAIN_LOGGER, "Reached batch limit (10000 batches), stopping");
+                log_warn_structured!(MAIN_LOGGER, "BATCH_LIMIT_REACHED",
+                    "event" => "BATCH_LIMIT_REACHED",
+                    "batch_count" => 10000
+                );
                 break;
             }
         }
@@ -772,21 +819,33 @@ impl ParallelDataLoader {
         use std::time::Instant;
         
         let start_time = Instant::now();
-        log_info!(MAIN_LOGGER, "Starting parallel load with {} workers for {} on {}", 
-            self.num_workers, symbol, exchange);
+        log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_START",
+            "event" => "PARALLEL_LOAD_START",
+            "worker_count" => self.num_workers,
+            "symbol" => symbol,
+            "exchange" => exchange
+        );
         
         // First, get the time range of the data
         let (min_ts, max_ts) = self.get_time_range(symbol, exchange).await?;
         
         if min_ts.is_none() || max_ts.is_none() {
-            log_info!(MAIN_LOGGER, "No data found for {} on {}", symbol, exchange);
+            log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_NO_DATA",
+                "event" => "PARALLEL_LOAD_NO_DATA",
+                "symbol" => symbol,
+                "exchange" => exchange
+            );
             return Ok(Vec::new());
         }
         
         let min_ts = min_ts.unwrap();
         let max_ts = max_ts.unwrap();
         
-        log_info!(MAIN_LOGGER, "Data range: {} to {}", min_ts, max_ts);
+        log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_DATA_RANGE",
+            "event" => "PARALLEL_LOAD_DATA_RANGE",
+            "min_timestamp" => min_ts.to_string(),
+            "max_timestamp" => max_ts.to_string()
+        );
         
         // Divide time range into partitions
         let duration = max_ts.signed_duration_since(min_ts);
@@ -806,7 +865,10 @@ impl ParallelDataLoader {
             current_start = current_end;
         }
         
-        log_info!(MAIN_LOGGER, "Created {} time partitions", partitions.len());
+        log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_PARTITIONS",
+            "event" => "PARALLEL_LOAD_PARTITIONS",
+            "partition_count" => partitions.len()
+        );
         
         // Load each partition in parallel
         let symbol = symbol.to_string();
@@ -837,11 +899,19 @@ impl ParallelDataLoader {
                     all_events.extend(events);
                 }
                 Ok(Err(e)) => {
-                    log_error!(MAIN_LOGGER, "Partition {} failed: {}", idx, e);
+                    log_error_structured!(MAIN_LOGGER, "PARTITION_FAILED",
+                        "event" => "PARTITION_FAILED",
+                        "partition_idx" => idx,
+                        "error" => e.to_string()
+                    );
                     return Err(e);
                 }
                 Err(e) => {
-                    log_error!(MAIN_LOGGER, "Partition {} task panicked: {}", idx, e);
+                    log_error_structured!(MAIN_LOGGER, "PARTITION_PANICKED",
+                        "event" => "PARTITION_PANICKED",
+                        "partition_idx" => idx,
+                        "error" => e.to_string()
+                    );
                     return Err(format!("Task panicked: {}", e).into());
                 }
             }
@@ -865,9 +935,12 @@ impl ParallelDataLoader {
         });
         
         let elapsed = start_time.elapsed();
-        log_info!(MAIN_LOGGER, "Parallel load complete: {} orders in {:.2}s ({:.0} rows/sec)", 
-            all_events.len(), elapsed.as_secs_f64(), 
-            all_events.len() as f64 / elapsed.as_secs_f64());
+        log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_COMPLETE",
+            "event" => "PARALLEL_LOAD_COMPLETE",
+            "order_count" => all_events.len(),
+            "elapsed_secs" => format!("{:.2}", elapsed.as_secs_f64()),
+            "rows_per_sec" => format!("{:.0}", all_events.len() as f64 / elapsed.as_secs_f64())
+        );
         
         for (idx, count) in partition_counts {
             log_debug!(MAIN_LOGGER, "  Partition {}: {} rows", idx, count);
@@ -885,13 +958,20 @@ impl ParallelDataLoader {
         use std::time::Instant;
         
         let start_time = Instant::now();
-        log_info!(MAIN_LOGGER, "Starting parallel trade load with {} workers", self.num_workers);
+        log_info_structured!(MAIN_LOGGER, "PARALLEL_TRADE_LOAD_START",
+            "event" => "PARALLEL_TRADE_LOAD_START",
+            "worker_count" => self.num_workers
+        );
         
         // Get time range for trades
         let (min_ts, max_ts) = self.get_trade_time_range(symbol, exchange).await?;
         
         if min_ts.is_none() || max_ts.is_none() {
-            log_info!(MAIN_LOGGER, "No trades found for {} on {}", symbol, exchange);
+            log_info_structured!(MAIN_LOGGER, "PARALLEL_TRADE_LOAD_NO_DATA",
+                "event" => "PARALLEL_TRADE_LOAD_NO_DATA",
+                "symbol" => symbol,
+                "exchange" => exchange
+            );
             return Ok(Vec::new());
         }
         
@@ -942,11 +1022,19 @@ impl ParallelDataLoader {
                     all_trades.extend(trades);
                 }
                 Ok(Err(e)) => {
-                    log_error!(MAIN_LOGGER, "Trade partition {} failed: {}", idx, e);
+                    log_error_structured!(MAIN_LOGGER, "TRADE_PARTITION_FAILED",
+                        "event" => "TRADE_PARTITION_FAILED",
+                        "partition_idx" => idx,
+                        "error" => e.to_string()
+                    );
                     return Err(e);
                 }
                 Err(e) => {
-                    log_error!(MAIN_LOGGER, "Trade partition {} panicked: {}", idx, e);
+                    log_error_structured!(MAIN_LOGGER, "TRADE_PARTITION_PANICKED",
+                        "event" => "TRADE_PARTITION_PANICKED",
+                        "partition_idx" => idx,
+                        "error" => e.to_string()
+                    );
                     return Err(format!("Task panicked: {}", e).into());
                 }
             }
@@ -970,8 +1058,11 @@ impl ParallelDataLoader {
         });
         
         let elapsed = start_time.elapsed();
-        log_info!(MAIN_LOGGER, "Parallel trade load complete: {} trades in {:.2}s", 
-            all_trades.len(), elapsed.as_secs_f64());
+        log_info_structured!(MAIN_LOGGER, "PARALLEL_TRADE_LOAD_COMPLETE",
+            "event" => "PARALLEL_TRADE_LOAD_COMPLETE",
+            "trade_count" => all_trades.len(),
+            "elapsed_secs" => format!("{:.2}", elapsed.as_secs_f64())
+        );
         
         Ok(all_trades)
     }
@@ -985,7 +1076,11 @@ impl ParallelDataLoader {
         use std::time::Instant;
         
         let start_time = Instant::now();
-        log_info!(MAIN_LOGGER, "Starting parallel load of ALL data for {} on {}", symbol, exchange);
+        log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_ALL_START",
+            "event" => "PARALLEL_LOAD_ALL_START",
+            "symbol" => symbol,
+            "exchange" => exchange
+        );
         
         // Load orders and trades concurrently
         let orders_future = self.load_all_orders(symbol, exchange);
@@ -996,7 +1091,11 @@ impl ParallelDataLoader {
         let orders = orders_result?;
         let trades = trades_result?;
         
-        log_info!(MAIN_LOGGER, "Loaded {} orders and {} trades", orders.len(), trades.len());
+        log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_ORDERS_TRADES_COUNTS",
+            "event" => "PARALLEL_LOAD_ORDERS_TRADES_COUNTS",
+            "order_count" => orders.len(),
+            "trade_count" => trades.len()
+        );
         
         // Merge and sort
         let mut merged = Vec::with_capacity(orders.len() + trades.len());
@@ -1020,9 +1119,12 @@ impl ParallelDataLoader {
         });
         
         let elapsed = start_time.elapsed();
-        log_info!(MAIN_LOGGER, "PARALLEL LOAD COMPLETE: {} total events in {:.2}s ({:.0} rows/sec)", 
-            merged.len(), elapsed.as_secs_f64(),
-            merged.len() as f64 / elapsed.as_secs_f64());
+        log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_ALL_COMPLETE",
+            "event" => "PARALLEL_LOAD_ALL_COMPLETE",
+            "total_event_count" => merged.len(),
+            "elapsed_secs" => format!("{:.2}", elapsed.as_secs_f64()),
+            "rows_per_sec" => format!("{:.0}", merged.len() as f64 / elapsed.as_secs_f64())
+        );
         
         Ok(merged)
     }

@@ -658,15 +658,16 @@ impl JobQueue for PostgresQueue {
         };
         
         // Debug log all numeric values before insert to diagnose overflow issues
-        log_info!(crate::MAIN_LOGGER, "Job {} storing result | total_return={} annualized={} volatility={} sharpe={} max_dd={} win_rate={} profit_factor={}",
-            result.job_id,
-            new_result.total_return,
-            new_result.annualized_return,
-            new_result.volatility,
-            new_result.sharpe_ratio.as_ref().map(|v| v.to_string()).unwrap_or_default(),
-            new_result.max_drawdown,
-            new_result.win_rate,
-            new_result.profit_factor
+        log_info_structured!(crate::MAIN_LOGGER, "STORE_RESULT",
+            "event" => "STORE_RESULT",
+            "job_id" => &result.job_id,
+            "total_return" => new_result.total_return,
+            "annualized_return" => new_result.annualized_return,
+            "volatility" => new_result.volatility,
+            "sharpe_ratio" => new_result.sharpe_ratio.as_ref().map(|v| v.to_string()).unwrap_or_default(),
+            "max_drawdown" => new_result.max_drawdown,
+            "win_rate" => new_result.win_rate,
+            "profit_factor" => new_result.profit_factor
         );
         
         // Log additional fields that might overflow

@@ -12,7 +12,7 @@ use protocol::broker::messages::{
     BacktestCancelRequest,
 };
 
-use crate::{log_info, log_debug};
+use crate::{log_info_structured, log_debug};
 use crate::logging_facade::MAIN_LOGGER;
 
 /// Connection mode for the broker client
@@ -232,7 +232,11 @@ impl BacktestBrokerClient {
             sender.send(request).map_err(|_| BrokerError::SendFailed)?;
         }
         
-        log_info!(MAIN_LOGGER, "Cancellation requested for job {}: {}", job_id, reason);
+        log_info_structured!(MAIN_LOGGER, "JOB_CANCELLATION_REQUESTED",
+            "event" => "JOB_CANCELLATION_REQUESTED",
+            "job_id" => job_id,
+            "reason" => reason
+        );
         Ok(())
     }
     

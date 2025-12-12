@@ -20,15 +20,15 @@ fn create_test_candle(symbol: &str, price: f64) -> MarketData {
 
 // Helper function to create test trades
 fn create_test_trade(symbol: &str, price: f64) -> MarketData {
-    MarketData::Trade(TradeData {
-        symbol: symbol.to_string(),
-        exchange: "TEST".to_string(),
-        timestamp: Utc::now(),
-        trade_id: "test_trade_123".to_string(),
-        price: BigDecimal::from_f64(price).unwrap_or_default(),
-        quantity: BigDecimal::from_f64(100.0).unwrap_or_default(),
-        side: "buy".to_string(),
-    })
+    MarketData::Trade(TradeData::new(
+        Utc::now(),
+        symbol.to_string(),
+        "TEST".to_string(),
+        BigDecimal::from_f64(price).unwrap_or_default(),
+        BigDecimal::from_f64(100.0).unwrap_or_default(),
+        "buy".to_string(),
+        "test_trade_123".to_string(),
+    ))
 }
 
 // Benchmark DataLoader creation (only for non-postgres builds)

@@ -16,7 +16,7 @@ use config::ParameterValue;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc, Duration};
 use bigdecimal::BigDecimal;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 /// Market regime detected from volatility and trend analysis
 /// Used for regime-aware strategy adjustments
@@ -268,7 +268,7 @@ pub struct AvellanedaStoikovStrategy {
     
     // Phase 2: Market state tracking for dynamic adjustments
     baseline_volatility: Option<f64>,       // Historical average volatility for comparison
-    recent_fills: Vec<(DateTime<Utc>, f64)>, // Recent fill prices for trend estimation
+    recent_fills: VecDeque<(DateTime<Utc>, f64)>, // Recent fill prices for trend estimation (VecDeque for O(1) pop_front)
     buy_volume: f64,                         // Recent buy volume
     sell_volume: f64,                        // Recent sell volume
     max_inventory: f64,                      // Maximum allowed inventory for penalty calculation
@@ -280,7 +280,7 @@ pub struct AvellanedaStoikovStrategy {
     // Phase 4: Performance tracking for dynamic sizing
     peak_equity: f64,                        // Peak equity for drawdown calculation
     current_equity: f64,                     // Current equity
-    recent_pnl: Vec<f64>,                    // Recent trade P&L for win/loss streak
+    recent_pnl: VecDeque<f64>,               // Recent trade P&L for win/loss streak (VecDeque for O(1) pop_front)
     consecutive_wins: u32,                    // Count of consecutive winning trades
     consecutive_losses: u32,                  // Count of consecutive losing trades
     
@@ -293,7 +293,7 @@ pub struct AvellanedaStoikovStrategy {
     
     // Phase 5: Regime detection state
     current_regime: MarketRegime,            // Current detected market regime
-    regime_history: Vec<(DateTime<Utc>, MarketRegime)>, // History for regime persistence
+    regime_history: VecDeque<(DateTime<Utc>, MarketRegime)>, // History for regime persistence (VecDeque for O(1) pop_front)
     
     // Phase 5: Order book microstructure state
     #[allow(dead_code)]
@@ -331,7 +331,7 @@ impl AvellanedaStoikovStrategy {
             
             // Phase 2: Initialize market state tracking
             baseline_volatility: None,
-            recent_fills: Vec::new(),
+            recent_fills: VecDeque::new(),
             buy_volume: 0.0,
             sell_volume: 0.0,
             max_inventory: 10.0, // Default max inventory (will be calibrated)
@@ -342,7 +342,7 @@ impl AvellanedaStoikovStrategy {
             // Phase 4: Initialize performance tracking
             peak_equity: initial_capital,
             current_equity: initial_capital,
-            recent_pnl: Vec::new(),
+            recent_pnl: VecDeque::new(),
             consecutive_wins: 0,
             consecutive_losses: 0,
             
@@ -355,7 +355,7 @@ impl AvellanedaStoikovStrategy {
             
             // Phase 5: Initialize regime detection state
             current_regime: MarketRegime::Normal,
-            regime_history: Vec::new(),
+            regime_history: VecDeque::new(),
             
             // Phase 5: Initialize order book microstructure state
             last_bid_depth: 0.0,
@@ -736,9 +736,9 @@ impl AvellanedaStoikovStrategy {
     
     /// Track trade P&L for win/loss streaks
     fn track_trade_pnl(&mut self, pnl: f64) {
-        self.recent_pnl.push(pnl);
+        self.recent_pnl.push_back(pnl);
         if self.recent_pnl.len() > 20 {
-            self.recent_pnl.remove(0);
+            self.recent_pnl.pop_front();
         }
         
         if pnl > 0.0 {
@@ -782,7 +782,8 @@ impl AvellanedaStoikovStrategy {
         
         // Use last 20 fills or all available
         let window = self.recent_fills.len().min(20);
-        let recent = &self.recent_fills[self.recent_fills.len() - window..];
+        // Collect the recent fills (VecDeque doesn't support range slicing)
+        let recent: Vec<_> = self.recent_fills.iter().rev().take(window).collect();
         
         // Simple slope calculation
         let n = recent.len() as f64;
@@ -823,7 +824,8 @@ impl AvellanedaStoikovStrategy {
         // Add new volume based on market data type
         match market_data {
             dataloader::MarketData::Trade(trade) => {
-                let volume = trade.quantity.to_f64().unwrap_or(0.0);
+                // Use pre-computed f64 values for performance
+                let volume = trade.quantity_f64;
                 let is_buy = trade.side == "buy";
                 if is_buy {
                     self.buy_volume += volume;
@@ -831,13 +833,13 @@ impl AvellanedaStoikovStrategy {
                     self.sell_volume += volume;
                 }
                 
-                // Track fill price for trend estimation
-                let price = trade.price.to_f64().unwrap_or(0.0);
-                self.recent_fills.push((trade.timestamp, price));
+                // Track fill price for trend estimation (use pre-computed)
+                let price = trade.price_f64;
+                self.recent_fills.push_back((trade.timestamp, price));
                 
                 // Keep only recent fills (last 100)
                 if self.recent_fills.len() > 100 {
-                    self.recent_fills.remove(0);
+                    self.recent_fills.pop_front();
                 }
                 
                 // Phase 5: Track trade direction for adverse selection
@@ -888,9 +890,9 @@ impl AvellanedaStoikovStrategy {
         };
         
         // Update regime history for persistence analysis
-        self.regime_history.push((now, new_regime));
+        self.regime_history.push_back((now, new_regime));
         if self.regime_history.len() > 100 {
-            self.regime_history.remove(0);
+            self.regime_history.pop_front();
         }
         
         // Apply regime persistence (require 3 consecutive observations to switch)
@@ -1084,18 +1086,20 @@ impl Strategy for AvellanedaStoikovStrategy {
     ) -> StrategyResult<Vec<Signal>> {
         // 1. Update price history for volatility estimation
         let now = context.timestamp;
-        // Compute mid price from market data (assume Snapshot variant)
-        let mid = match market_data {
+        // Compute mid price from market data - extract both BigDecimal and f64 for performance
+        let (mid, mid_price_f64) = match market_data {
             #[cfg(feature = "postgres")]
             dataloader::MarketData::Snapshot(snapshot) => {
                 // For a single snapshot, use price_level directly
-                snapshot.price_level.clone()
+                let mid = snapshot.price_level.clone();
+                let mid_f64 = mid.to_f64().unwrap_or(0.0);
+                (mid, mid_f64)
             }
             #[cfg(feature = "postgres")]
             dataloader::MarketData::Order(order) => {
                 // For order-level data, calculate mid price from context spread if available
                 // Otherwise use the last known price from history, or the order price as fallback
-                if let Some(_spread) = &context.spread {
+                let mid = if let Some(_spread) = &context.spread {
                     // If we have spread, use the last known price + half spread as approximation
                     if !context.price_history.is_empty() {
                         let last_price = &context.price_history.last().unwrap().price;
@@ -1109,15 +1113,19 @@ impl Strategy for AvellanedaStoikovStrategy {
                     context.price_history.last().unwrap().price.clone()
                 } else {
                     order.price_level.clone()
-                }
+                };
+                let mid_f64 = mid.to_f64().unwrap_or(0.0);
+                (mid, mid_f64)
             }
             dataloader::MarketData::Candle(candle) => {
                 // Use close price as mid price approximation
-                candle.close.clone()
+                let mid = candle.close.clone();
+                let mid_f64 = mid.to_f64().unwrap_or(0.0);
+                (mid, mid_f64)
             }
             dataloader::MarketData::Trade(trade) => {
-                // Use trade price as mid price approximation
-                trade.price.clone()
+                // Use trade price - leverage pre-computed f64 for performance
+                (trade.price.clone(), trade.price_f64)
             }
         };
         self.price_history.push((now, mid.clone()));
@@ -1129,7 +1137,8 @@ impl Strategy for AvellanedaStoikovStrategy {
         // More responsive to recent changes than simple rolling standard deviation
         let lambda = 0.94; // RiskMetrics standard decay factor
         
-        let mid_price = mid.to_f64().unwrap_or(0.0);
+        // Use pre-computed mid_price_f64 from market data extraction
+        let mid_price = mid_price_f64;
         
         // Calculate return from last price
         let log_return = if self.price_history.len() >= 2 {
@@ -1203,7 +1212,8 @@ impl Strategy for AvellanedaStoikovStrategy {
         
         let sigma = ann_vol;
         let q = self.inventory;
-        let s = mid.to_f64().unwrap_or(0.0);
+        // Use pre-computed mid price for performance
+        let s = mid_price;
         
         // Phase 4: Use dynamic time horizon based on volatility
         let dynamic_t_minutes = self.calculate_dynamic_time_horizon(ann_vol);

@@ -89,15 +89,15 @@ fn test_candle_volume_positive() {
 
 #[test]
 fn test_trade_data_creation() {
-    let trade = TradeData {
-        timestamp: Utc::now(),
-        symbol: "BTC-USD".to_string(),
-        exchange: "coinbase".to_string(),
-        price: BigDecimal::from_str("50000.0").unwrap(),
-        quantity: BigDecimal::from_str("0.5").unwrap(),
-        side: "buy".to_string(),
-        trade_id: "trade_001".to_string(),
-    };
+    let trade = TradeData::new(
+        Utc::now(),
+        "BTC-USD".to_string(),
+        "coinbase".to_string(),
+        BigDecimal::from_str("50000.0").unwrap(),
+        BigDecimal::from_str("0.5").unwrap(),
+        "buy".to_string(),
+        "trade_001".to_string(),
+    );
     
     assert_eq!(trade.symbol, "BTC-USD");
     assert_eq!(trade.side, "buy");
@@ -105,25 +105,25 @@ fn test_trade_data_creation() {
 
 #[test]
 fn test_trade_data_sides() {
-    let buy_trade = TradeData {
-        timestamp: Utc::now(),
-        symbol: "BTC-USD".to_string(),
-        exchange: "binance".to_string(),
-        price: BigDecimal::from_str("50000.0").unwrap(),
-        quantity: BigDecimal::from_str("1.0").unwrap(),
-        side: "buy".to_string(),
-        trade_id: "buy_001".to_string(),
-    };
+    let buy_trade = TradeData::new(
+        Utc::now(),
+        "BTC-USD".to_string(),
+        "binance".to_string(),
+        BigDecimal::from_str("50000.0").unwrap(),
+        BigDecimal::from_str("1.0").unwrap(),
+        "buy".to_string(),
+        "buy_001".to_string(),
+    );
     
-    let sell_trade = TradeData {
-        timestamp: Utc::now(),
-        symbol: "BTC-USD".to_string(),
-        exchange: "binance".to_string(),
-        price: BigDecimal::from_str("50000.0").unwrap(),
-        quantity: BigDecimal::from_str("1.0").unwrap(),
-        side: "sell".to_string(),
-        trade_id: "sell_001".to_string(),
-    };
+    let sell_trade = TradeData::new(
+        Utc::now(),
+        "BTC-USD".to_string(),
+        "binance".to_string(),
+        BigDecimal::from_str("50000.0").unwrap(),
+        BigDecimal::from_str("1.0").unwrap(),
+        "sell".to_string(),
+        "sell_001".to_string(),
+    );
     
     assert_eq!(buy_trade.side, "buy");
     assert_eq!(sell_trade.side, "sell");
@@ -154,15 +154,15 @@ fn test_market_data_candle_variant() {
 
 #[test]
 fn test_market_data_trade_variant() {
-    let trade = TradeData {
-        timestamp: Utc::now(),
-        symbol: "ETH-USD".to_string(),
-        exchange: "kraken".to_string(),
-        price: BigDecimal::from(3000),
-        quantity: BigDecimal::from(10),
-        side: "buy".to_string(),
-        trade_id: "t_123".to_string(),
-    };
+    let trade = TradeData::new(
+        Utc::now(),
+        "ETH-USD".to_string(),
+        "kraken".to_string(),
+        BigDecimal::from(3000),
+        BigDecimal::from(10),
+        "buy".to_string(),
+        "t_123".to_string(),
+    );
     
     let market_data = MarketData::Trade(trade);
     

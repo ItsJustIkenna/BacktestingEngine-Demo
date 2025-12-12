@@ -141,7 +141,11 @@ impl JobBroker {
         // Broadcast to subscribed workers
         match self.job_sender.send(message) {
             Ok(count) => {
-                log_info!(MAIN_LOGGER, "Job {} published to {} workers", job_id, count);
+                log_info_structured!(MAIN_LOGGER, "JOB_PUBLISHED",
+                    "event" => "JOB_PUBLISHED",
+                    "job_id" => &job_id,
+                    "worker_count" => count
+                );
             }
             Err(_) => {
                 log_debug!(MAIN_LOGGER, "Job {} queued (no active subscribers)", job_id);
@@ -196,7 +200,12 @@ impl JobBroker {
         };
 
         let _ = self.completed_sender.send(event);
-        log_info!(MAIN_LOGGER, "Job {} completed by worker {} (success={})", job_id, worker_id, success);
+        log_info_structured!(MAIN_LOGGER, "JOB_COMPLETED_BY_WORKER",
+            "event" => "JOB_COMPLETED_BY_WORKER",
+            "job_id" => job_id,
+            "worker_id" => worker_id,
+            "success" => success
+        );
     }
 
     /// Subscribe to job completed events

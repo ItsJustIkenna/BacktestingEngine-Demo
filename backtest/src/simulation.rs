@@ -342,21 +342,36 @@ impl SimulationLoop {
     let total_items = market_data.len();
     let mut processed_count = 0_usize;
     let sim_start = std::time::Instant::now();
-    let log_interval = (total_items / 10).max(1000); // Log every 10% or every 1000 items
+    // Log more frequently for large datasets to show progress
+    let log_interval = if total_items > 1_000_000 {
+        total_items / 20  // Every 5% for large datasets
+    } else if total_items > 100_000 {
+        total_items / 10  // Every 10% for medium datasets
+    } else {
+        (total_items / 10).max(1000)  // Every 10% or 1000 for small datasets
+    };
     
-    log_info!(BACKTEST_LOGGER, "SIMULATION_START | items={} log_interval={}", total_items, log_interval);
+    log_info!(BACKTEST_LOGGER, "SIMULATION_START | items={} log_interval={} ({}%)", 
+        total_items, log_interval, if total_items > 0 { log_interval * 100 / total_items } else { 0 });
     
     // Early stopping for GA fitness - abort clearly failing strategies
     let early_stop_threshold = config.trading.initial_capital * 0.5; // Stop if 50% loss
-    let early_stop_check_interval = 5000_usize; // Check every 5000 events
+    let early_stop_check_interval = 50_000_usize; // Check every 50K events (less frequent for large datasets)
     let mut _early_stopped = false;
+    
+    // Pre-cache exchange name to avoid cloning in hot path
+    let exchange_name = orderbook.exchange.clone();
 
     for data in market_data {
-            // Progress logging at intervals (INFO level for visibility)
+            // Progress logging at intervals with ETA
             processed_count += 1;
             if processed_count % log_interval == 0 {
-                log_info!(BACKTEST_LOGGER, "SIM_PROGRESS | {}/{} ({:.0}%) | elapsed={:.1}s", 
-                    processed_count, total_items, (processed_count as f64 / total_items as f64) * 100.0, sim_start.elapsed().as_secs_f64());
+                let elapsed = sim_start.elapsed().as_secs_f64();
+                let rate = processed_count as f64 / elapsed;
+                let remaining = (total_items - processed_count) as f64 / rate;
+                log_info!(BACKTEST_LOGGER, "SIM_PROGRESS | {}/{} ({:.0}%) | elapsed={:.1}s | rate={:.0}/s | ETA={:.0}s", 
+                    processed_count, total_items, (processed_count as f64 / total_items as f64) * 100.0, 
+                    elapsed, rate, remaining);
             }
             
             // Early stopping check for failing strategies (speeds up GA)
@@ -388,8 +403,8 @@ impl SimulationLoop {
                     // Update current market price from trade
                     current_market_price = Some(trade.price.clone());
                     
-                    // Track first and last trade timestamps/prices
-                    let trade_price_f64 = trade.price.to_f64().unwrap_or(0.0);
+                    // Use pre-computed f64 values for performance (postgres path)
+                    let trade_price_f64 = trade.price_f64;
                     if self.first_trade_timestamp.is_none() {
                         self.first_trade_timestamp = Some(trade.timestamp);
                         self.first_trade_price = Some(trade_price_f64);
@@ -397,12 +412,11 @@ impl SimulationLoop {
                     self.last_trade_timestamp = Some(trade.timestamp);
                     self.last_trade_price = Some(trade_price_f64);
                     
-                    // Get exchange for fee tracking
-                    let exchange = orderbook.exchange.clone();
+                    // Use cached exchange_name instead of cloning
+                    let exchange = &exchange_name;
                     
-                    // Track market volume for realistic market impact calculation
-                    let trade_volume_usd = trade.price.to_f64().unwrap_or(0.0) * trade.quantity.to_f64().unwrap_or(0.0);
-                    self.update_market_volume(trade.timestamp, trade_volume_usd);
+                    // Track market volume using pre-computed value
+                    self.update_market_volume(trade.timestamp, trade.value_f64);
                     
                     // Convert TradeData side string to BookSide
                     // The trade side is the AGGRESSOR's side (the taker who initiated):
@@ -422,7 +436,7 @@ impl SimulationLoop {
                     
                     // Track missed fill opportunities BEFORE matching
                     // This helps diagnose why we might have 0 bid fills or 0 ask fills
-                    let trade_price_for_tracking = trade.price.to_f64().unwrap_or(0.0);
+                    let trade_price_for_tracking = trade_price_f64;
                     if matches!(aggressor_side, BookSide::Ask) {
                         // Sell trade - could fill our bids if trade_price <= bid_price
                         // Find our best bid from trackers
@@ -467,8 +481,8 @@ impl SimulationLoop {
                     #[cfg(feature = "debug_logging")]
                     let debug_count = TRADE_DEBUG_COUNT_PG.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     
-                    // Get trade price early for missed opportunity tracking
-                    let _trade_price = trade.price.to_f64().unwrap_or(0.0);
+                    // Get trade price early for missed opportunity tracking (use pre-computed)
+                    let _trade_price = trade_price_f64;
                     
                     // Filter fills to only include OUR strategy's orders
                     // Also apply latency simulation: orders placed within latency_ms can't be filled yet
@@ -512,7 +526,7 @@ impl SimulationLoop {
                     // Debug logging - only with debug_logging feature (postgres path)
                     #[cfg(feature = "debug_logging")]
                     if debug_count < 10 && !self.active_order_ids.is_empty() {
-                        let trade_price = trade.price.to_f64().unwrap_or(0.0);
+                        let trade_price = trade_price_f64;
                         let best_bid = orderbook.best_bid().and_then(|p| p.to_f64());
                         let best_ask = orderbook.best_ask().and_then(|p| p.to_f64());
                         // Strategy's bid/ask from the trackers
@@ -608,8 +622,8 @@ impl SimulationLoop {
                     // Update current market price from trade
                     current_market_price = Some(trade.price.clone());
                     
-                    // Track first and last trade timestamps/prices
-                    let trade_price_f64 = trade.price.to_f64().unwrap_or(0.0);
+                    // Use pre-computed f64 values for performance (non-postgres path)
+                    let trade_price_f64 = trade.price_f64;
                     if self.first_trade_timestamp.is_none() {
                         self.first_trade_timestamp = Some(trade.timestamp);
                         self.first_trade_price = Some(trade_price_f64);
@@ -617,12 +631,11 @@ impl SimulationLoop {
                     self.last_trade_timestamp = Some(trade.timestamp);
                     self.last_trade_price = Some(trade_price_f64);
                     
-                    // Get exchange for fee tracking
-                    let exchange = orderbook.exchange.clone();
+                    // Use cached exchange_name instead of cloning
+                    let exchange = &exchange_name;
                     
-                    // Track market volume for realistic market impact calculation
-                    let trade_volume_usd = trade.price.to_f64().unwrap_or(0.0) * trade.quantity.to_f64().unwrap_or(0.0);
-                    self.update_market_volume(trade.timestamp, trade_volume_usd);
+                    // Track market volume using pre-computed value
+                    self.update_market_volume(trade.timestamp, trade.value_f64);
                     
                     // Convert TradeData side string to BookSide
                     // The trade side is the AGGRESSOR's side (the taker who initiated):
@@ -642,7 +655,7 @@ impl SimulationLoop {
                     
                     // Track missed fill opportunities BEFORE matching
                     // This helps diagnose why we might have 0 bid fills or 0 ask fills
-                    let trade_price_for_tracking = trade.price.to_f64().unwrap_or(0.0);
+                    let trade_price_for_tracking = trade_price_f64;
                     if matches!(aggressor_side, BookSide::Ask) {
                         // Sell trade - could fill our bids if trade_price <= bid_price
                         // Find our best bid from trackers
@@ -687,8 +700,8 @@ impl SimulationLoop {
                     #[cfg(feature = "debug_logging")]
                     let debug_count = TRADE_DEBUG_COUNT_NP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     
-                    // Get trade price early for missed opportunity tracking
-                    let _trade_price = trade.price.to_f64().unwrap_or(0.0);
+                    // Get trade price early for missed opportunity tracking (use pre-computed)
+                    let _trade_price = trade_price_f64;
                     
                     // Filter fills to only include OUR strategy's orders
                     // Also apply latency simulation: orders placed within latency_ms can't be filled yet
@@ -732,7 +745,7 @@ impl SimulationLoop {
                     // Debug logging - only with debug_logging feature (non-postgres path)
                     #[cfg(feature = "debug_logging")]
                     if debug_count < 10 && !self.active_order_ids.is_empty() {
-                        let trade_price = trade.price.to_f64().unwrap_or(0.0);
+                        let trade_price = trade_price_f64;
                         let best_bid = orderbook.best_bid().and_then(|p| p.to_f64());
                         let best_ask = orderbook.best_ask().and_then(|p| p.to_f64());
                         // Strategy's bid/ask from the trackers
@@ -1178,6 +1191,43 @@ impl SimulationLoop {
             let total_portfolio_value = portfolio.get_total_value().to_f64().unwrap_or(0.0);
             equity_curve.push(total_portfolio_value);
         }
+
+        // ========== DETAILED FILL DIAGNOSTICS ==========
+        // Log comprehensive diagnostics to understand why fills aren't happening
+        log_info!(BACKTEST_LOGGER, "FILL_DIAGNOSTICS | total_orders={} total_fills={} buy_fills={} sell_fills={} latency_rejected={} (bid={} ask={})",
+            self.total_order_count, self.total_fill_count, self.buy_fills, self.sell_fills,
+            self.latency_rejections, self.latency_rejections_bid, self.latency_rejections_ask);
+        log_info!(BACKTEST_LOGGER, "FILL_DIAGNOSTICS | orders_cancelled={} missed_bid_opps={} missed_ask_opps={}",
+            self.orders_cancelled, self.missed_bid_opportunities, self.missed_ask_opportunities);
+        log_info!(BACKTEST_LOGGER, "FILL_DIAGNOSTICS | active_orders_remaining={} order_trackers_remaining={}",
+            self.active_order_ids.len(), self.order_trackers.len());
+        
+        // Analyze quote spreads if we have them
+        if !self.quote_spreads_bps.is_empty() {
+            let avg_spread = self.quote_spreads_bps.iter().sum::<f64>() / self.quote_spreads_bps.len() as f64;
+            let min_spread = self.quote_spreads_bps.iter().cloned().fold(f64::INFINITY, f64::min);
+            let max_spread = self.quote_spreads_bps.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            log_info!(BACKTEST_LOGGER, "FILL_DIAGNOSTICS | quote_spreads: count={} avg={:.1}bps min={:.1}bps max={:.1}bps",
+                self.quote_spreads_bps.len(), avg_spread, min_spread, max_spread);
+        } else {
+            log_warn!(BACKTEST_LOGGER, "FILL_DIAGNOSTICS | NO QUOTES GENERATED - strategy didn't produce any bid/ask pairs!");
+        }
+        
+        // Analyze price gaps for missed opportunities
+        if self.missed_bid_opportunities > 0 || self.missed_ask_opportunities > 0 {
+            let avg_bid_gap = if self.missed_bid_opportunities > 0 { 
+                self.bid_price_gap_sum / self.missed_bid_opportunities as f64 
+            } else { 0.0 };
+            let avg_ask_gap = if self.missed_ask_opportunities > 0 { 
+                self.ask_price_gap_sum / self.missed_ask_opportunities as f64 
+            } else { 0.0 };
+            log_info!(BACKTEST_LOGGER, "FILL_DIAGNOSTICS | price_gaps: avg_bid_gap=${:.2} avg_ask_gap=${:.2} (quotes too far from market)",
+                avg_bid_gap, avg_ask_gap);
+        }
+        
+        // Log market trade stats for context
+        log_info!(BACKTEST_LOGGER, "FILL_DIAGNOSTICS | market_trades: buys={} sells={} (potential opportunities)",
+            self.market_buy_trades, self.market_sell_trades);
 
         // Collect trade returns and durations from closed positions (do this after market data processing)
         let mut closed_position_count = 0;

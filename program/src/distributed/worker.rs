@@ -14,7 +14,7 @@ use protocol::broker::messages::{BacktestChunk, BacktestChunkResult};
 
 use super::broker_client::{BacktestBrokerClient, get_broker_client};
 use crate::job_queue::BacktestJobParams;
-use crate::{log_info, log_error, log_warn};
+use crate::{log_debug, log_info_structured, log_warn_structured, log_error_structured};
 use crate::logging_facade::{MAIN_LOGGER, BACKTEST_LOGGER};
 
 // Import backtest infrastructure
@@ -62,37 +62,58 @@ impl DistributedWorker {
     
     /// Run the worker (processes chunks until shutdown)
     pub async fn run(&mut self) {
-        log_info!(MAIN_LOGGER, "🔧 Distributed worker {} starting...", self.worker_id);
+        log_info_structured!(MAIN_LOGGER, "DISTRIBUTED_WORKER_START",
+            "event" => "DISTRIBUTED_WORKER_START",
+            "worker_id" => &self.worker_id
+        );
         
         let mut chunk_rx = self.broker.subscribe_all_chunks();
         
         loop {
             if self.shutdown {
-                log_info!(MAIN_LOGGER, "Worker {} shutting down", self.worker_id);
+                log_info_structured!(MAIN_LOGGER, "DISTRIBUTED_WORKER_SHUTDOWN",
+                    "event" => "DISTRIBUTED_WORKER_SHUTDOWN",
+                    "worker_id" => &self.worker_id
+                );
                 break;
             }
             
             // Wait for a chunk
             match chunk_rx.recv().await {
                 Ok(chunk) => {
-                    log_info!(BACKTEST_LOGGER, "Worker {} received chunk {}/{} for job {}", 
-                        self.worker_id, chunk.chunk_id, chunk.total_chunks, chunk.job_id);
+                    log_info_structured!(BACKTEST_LOGGER, "CHUNK_RECEIVED",
+                        "event" => "CHUNK_RECEIVED",
+                        "worker_id" => &self.worker_id,
+                        "chunk_id" => chunk.chunk_id,
+                        "total_chunks" => chunk.total_chunks,
+                        "job_id" => &chunk.job_id
+                    );
                     
                     // Process the chunk
                     let result = self.process_chunk(chunk).await;
                     
                     // Publish the result
                     if let Err(e) = self.broker.publish_result(result).await {
-                        log_error!(MAIN_LOGGER, "Worker {} failed to publish result: {}", 
-                            self.worker_id, e);
+                        log_error_structured!(MAIN_LOGGER, "WORKER_PUBLISH_RESULT_FAILED",
+                            "event" => "WORKER_PUBLISH_RESULT_FAILED",
+                            "worker_id" => &self.worker_id,
+                            "error" => e.to_string()
+                        );
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    log_warn!(MAIN_LOGGER, "Worker {} lagged {} messages", self.worker_id, n);
+                    log_warn_structured!(MAIN_LOGGER, "WORKER_LAGGED",
+                        "event" => "WORKER_LAGGED",
+                        "worker_id" => &self.worker_id,
+                        "lagged_messages" => n
+                    );
                     continue;
                 }
                 Err(broadcast::error::RecvError::Closed) => {
-                    log_info!(MAIN_LOGGER, "Worker {} channel closed, shutting down", self.worker_id);
+                    log_info_structured!(MAIN_LOGGER, "DISTRIBUTED_WORKER_CHANNEL_CLOSED",
+                        "event" => "DISTRIBUTED_WORKER_CHANNEL_CLOSED",
+                        "worker_id" => &self.worker_id
+                    );
                     break;
                 }
             }
@@ -126,8 +147,14 @@ impl DistributedWorker {
             }
         };
         
-        log_info!(BACKTEST_LOGGER, "Processing chunk {}: {} to {} for {} on {}", 
-            chunk.chunk_id, start_dt, end_dt, chunk.symbol, chunk.exchange);
+        log_info_structured!(BACKTEST_LOGGER, "CHUNK_PROCESSING_START",
+            "event" => "CHUNK_PROCESSING_START",
+            "chunk_id" => chunk.chunk_id,
+            "start_time" => start_dt.to_string(),
+            "end_time" => end_dt.to_string(),
+            "symbol" => &chunk.symbol,
+            "exchange" => &chunk.exchange
+        );
         
         // Load data for this chunk only (memory efficient!)
         let market_data = match self.load_chunk_data(
@@ -143,7 +170,11 @@ impl DistributedWorker {
         };
         
         let events_processed = market_data.len() as i64;
-        log_info!(BACKTEST_LOGGER, "Loaded {} events for chunk {}", events_processed, chunk.chunk_id);
+        log_info_structured!(BACKTEST_LOGGER, "CHUNK_DATA_LOADED",
+            "event" => "CHUNK_DATA_LOADED",
+            "event_count" => events_processed,
+            "chunk_id" => chunk.chunk_id
+        );
         
         if market_data.is_empty() {
             return self.error_result(&chunk, "No market data for this time range".to_string());
@@ -290,8 +321,14 @@ impl DistributedWorker {
         let ending_position = portfolio.net_position;
         let ending_cash = portfolio.balance.to_f64().unwrap_or(chunk.starting_cash);
         
-        log_info!(BACKTEST_LOGGER, "Chunk {} complete: {} events, {} trades, PnL: ${:.2}, {:.0}ms", 
-            chunk.chunk_id, events_processed, num_trades, net_pnl, processing_duration);
+        log_info_structured!(BACKTEST_LOGGER, "CHUNK_COMPLETE",
+            "event" => "CHUNK_COMPLETE",
+            "chunk_id" => chunk.chunk_id,
+            "event_count" => events_processed,
+            "trade_count" => num_trades,
+            "net_pnl" => format!("{:.2}", net_pnl),
+            "processing_ms" => processing_duration
+        );
         
         BacktestChunkResult {
             job_id: chunk.job_id,
@@ -318,7 +355,11 @@ impl DistributedWorker {
     
     /// Create error result
     fn error_result(&self, chunk: &BacktestChunk, error: String) -> BacktestChunkResult {
-        log_error!(BACKTEST_LOGGER, "Chunk {} failed: {}", chunk.chunk_id, error);
+        log_error_structured!(BACKTEST_LOGGER, "CHUNK_FAILED",
+            "event" => "CHUNK_FAILED",
+            "chunk_id" => chunk.chunk_id,
+            "error" => &error
+        );
         
         BacktestChunkResult {
             job_id: chunk.job_id.clone(),

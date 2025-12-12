@@ -21,7 +21,7 @@ use super::broker_client::{BacktestBrokerClient, get_broker_client, BrokerError}
 use super::chunking::{ChunkCalculator, ChunkingStrategy, BacktestChunkInfo};
 use super::aggregator::ResultAggregator;
 use crate::job_queue::{BacktestJob, BacktestJobParams};
-use crate::{log_info, log_error, log_debug, log_warn};
+use crate::{log_debug, log_info_structured, log_error_structured, log_warn_structured};
 use crate::logging_facade::BACKTEST_LOGGER;
 
 /// Timeout for waiting for all results
@@ -73,14 +73,22 @@ impl DistributedCoordinator {
         let job_id = &job.id;
         let start_time = Instant::now();
         
-        log_info!(BACKTEST_LOGGER, "🚀 Starting distributed backtest for job {}", job_id);
+        log_info_structured!(BACKTEST_LOGGER, "DISTRIBUTED_BACKTEST_START",
+            "event" => "DISTRIBUTED_BACKTEST_START",
+            "job_id" => job_id
+        );
         
         // 1. Parse dates and get event count
         let (start_dt, end_dt) = self.parse_job_dates(&job.params)?;
         let event_count = self.get_event_count(&job.params, &start_dt, &end_dt).await?;
         
-        log_info!(BACKTEST_LOGGER, "Job {} has {} events from {} to {}", 
-            job_id, event_count, start_dt, end_dt);
+        log_info_structured!(BACKTEST_LOGGER, "DISTRIBUTED_JOB_EVENTS",
+            "event" => "DISTRIBUTED_JOB_EVENTS",
+            "job_id" => job_id,
+            "event_count" => event_count,
+            "start_time" => start_dt.to_string(),
+            "end_time" => end_dt.to_string()
+        );
         
         // 2. Calculate chunks
         let chunks = self.chunk_calculator.calculate_chunks(
@@ -89,7 +97,11 @@ impl DistributedCoordinator {
             Some(event_count)
         );
         
-        log_info!(BACKTEST_LOGGER, "Job {} split into {} chunks", job_id, chunks.len());
+        log_info_structured!(BACKTEST_LOGGER, "DISTRIBUTED_JOB_CHUNKS",
+            "event" => "DISTRIBUTED_JOB_CHUNKS",
+            "job_id" => job_id,
+            "chunk_count" => chunks.len()
+        );
         
         // 3. Create aggregator
         let mut aggregator = ResultAggregator::new(job_id.clone(), chunks.len() as i32);
@@ -108,7 +120,11 @@ impl DistributedCoordinator {
                 .map_err(|e| CoordinatorError::BrokerError(e))?;
         }
         
-        log_info!(BACKTEST_LOGGER, "Published {} chunks for job {}", chunks.len(), job_id);
+        log_info_structured!(BACKTEST_LOGGER, "DISTRIBUTED_CHUNKS_PUBLISHED",
+            "event" => "DISTRIBUTED_CHUNKS_PUBLISHED",
+            "chunk_count" => chunks.len(),
+            "job_id" => job_id
+        );
         
         // 6. Collect results with timeout
         let collection_result = self.collect_results(
@@ -120,10 +136,18 @@ impl DistributedCoordinator {
         
         match collection_result {
             Ok(()) => {
-                log_info!(BACKTEST_LOGGER, "All {} chunks received for job {}", chunks.len(), job_id);
+                log_info_structured!(BACKTEST_LOGGER, "DISTRIBUTED_ALL_CHUNKS_RECEIVED",
+                    "event" => "DISTRIBUTED_ALL_CHUNKS_RECEIVED",
+                    "chunk_count" => chunks.len(),
+                    "job_id" => job_id
+                );
             }
             Err(e) => {
-                log_error!(BACKTEST_LOGGER, "Failed to collect all results for job {}: {}", job_id, e);
+                log_error_structured!(BACKTEST_LOGGER, "DISTRIBUTED_COLLECTION_FAILED",
+                    "event" => "DISTRIBUTED_COLLECTION_FAILED",
+                    "job_id" => job_id,
+                    "error" => e.to_string()
+                );
                 // Continue with partial results
             }
         }
@@ -133,9 +157,12 @@ impl DistributedCoordinator {
             .map_err(|e| CoordinatorError::AggregationError(e.to_string()))?;
         
         let total_duration = start_time.elapsed();
-        log_info!(BACKTEST_LOGGER, 
-            "✅ Distributed backtest {} complete: {} trades, PnL ${:.2}, {:.1}s total",
-            job_id, aggregated.total_trades, aggregated.total_net_pnl, total_duration.as_secs_f64()
+        log_info_structured!(BACKTEST_LOGGER, "DISTRIBUTED_BACKTEST_COMPLETE",
+            "event" => "DISTRIBUTED_BACKTEST_COMPLETE",
+            "job_id" => job_id,
+            "total_trades" => aggregated.total_trades,
+            "total_pnl" => format!("{:.2}", aggregated.total_net_pnl),
+            "elapsed_secs" => format!("{:.1}", total_duration.as_secs_f64())
         );
         
         // 8. Cleanup
@@ -256,7 +283,10 @@ impl DistributedCoordinator {
                     }
                 }
                 Ok(Err(broadcast::error::RecvError::Lagged(n))) => {
-                    log_warn!(BACKTEST_LOGGER, "Coordinator lagged {} messages", n);
+                    log_warn_structured!(BACKTEST_LOGGER, "COORDINATOR_LAGGED",
+                        "event" => "COORDINATOR_LAGGED",
+                        "lagged_messages" => n
+                    );
                 }
                 Ok(Err(broadcast::error::RecvError::Closed)) => {
                     return Err(CoordinatorError::ChannelClosed);
@@ -282,12 +312,13 @@ impl DistributedCoordinator {
                         let _ = self.broker.publish_progress(progress).await;
                         last_progress = Instant::now();
                         
-                        log_info!(BACKTEST_LOGGER, "Job {} progress: {}/{} chunks ({:.1}%), running PnL: ${:.2}",
-                            job_id, 
-                            aggregator.successful_chunks(), 
-                            total_chunks,
-                            aggregator.completion_percentage(),
-                            aggregator.running_pnl()
+                        log_info_structured!(BACKTEST_LOGGER, "DISTRIBUTED_JOB_PROGRESS",
+                            "event" => "DISTRIBUTED_JOB_PROGRESS",
+                            "job_id" => job_id,
+                            "chunks_completed" => aggregator.successful_chunks(),
+                            "total_chunks" => total_chunks,
+                            "percent_complete" => format!("{:.1}", aggregator.completion_percentage()),
+                            "running_pnl" => format!("{:.2}", aggregator.running_pnl())
                         );
                     }
                 }

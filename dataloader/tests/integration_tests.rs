@@ -18,15 +18,15 @@ use std::str::FromStr;
 
 // Mock data fixtures for non-postgres builds
 fn create_test_trade_data() -> TradeData {
-    TradeData {
-        timestamp: Utc::now(),
-        symbol: "BTCUSD".to_string(),
-        exchange: "BINANCE".to_string(),
-        price: BigDecimal::from_str("45000.00").unwrap(),
-        quantity: BigDecimal::from_str("1.5").unwrap(),
-        side: "BUY".to_string(),
-        trade_id: Uuid::new_v4().to_string(),
-    }
+    TradeData::new(
+        Utc::now(),
+        "BTCUSD".to_string(),
+        "BINANCE".to_string(),
+        BigDecimal::from_str("45000.00").unwrap(),
+        BigDecimal::from_str("1.5").unwrap(),
+        "BUY".to_string(),
+        Uuid::new_v4().to_string(),
+    )
 }
 
 fn create_test_candle() -> Candle {
