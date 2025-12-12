@@ -1812,12 +1812,12 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
             />
             <MetricCard
               title="Buy Fills"
-              value={result.inventory_metrics.buy_fills.toString()}
+              value={(result.inventory_metrics.buy_fills ?? 0).toString()}
               color="#28a745"
             />
             <MetricCard
               title="Sell Fills"
-              value={result.inventory_metrics.sell_fills.toString()}
+              value={(result.inventory_metrics.sell_fills ?? 0).toString()}
               color="#dc3545"
             />
             <MetricCard
@@ -1860,22 +1860,22 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
           }}>
             <MetricCard
               title="Orders Placed"
-              value={result.execution_metrics.orders_placed.toString()}
+              value={(result.execution_metrics.orders_placed ?? 0).toString()}
               color="#007bff"
             />
             <MetricCard
               title="Orders Filled"
-              value={result.execution_metrics.orders_filled.toString()}
+              value={(result.execution_metrics.orders_filled ?? 0).toString()}
               color="#28a745"
             />
             <MetricCard
               title="Orders Cancelled"
-              value={result.execution_metrics.orders_cancelled.toString()}
-              color={result.execution_metrics.orders_cancelled === 0 ? '#28a745' : '#ffc107'}
+              value={(result.execution_metrics.orders_cancelled ?? 0).toString()}
+              color={(result.execution_metrics.orders_cancelled ?? 0) === 0 ? '#28a745' : '#ffc107'}
             />
             <MetricCard
               title="Total Fills"
-              value={result.execution_metrics.total_fills.toString()}
+              value={(result.execution_metrics.total_fills ?? 0).toString()}
               color="#17a2b8"
             />
             <MetricCard
@@ -1929,22 +1929,22 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
           }}>
             <MetricCard
               title="Bid Orders"
-              value={result.execution_metrics.bid_orders.toString()}
+              value={(result.execution_metrics.bid_orders ?? 0).toString()}
               color="#28a745"
             />
             <MetricCard
               title="Ask Orders"
-              value={result.execution_metrics.ask_orders.toString()}
+              value={(result.execution_metrics.ask_orders ?? 0).toString()}
               color="#dc3545"
             />
             <MetricCard
               title="Bid Fills"
-              value={result.execution_metrics.bid_fills.toString()}
+              value={(result.execution_metrics.bid_fills ?? 0).toString()}
               color="#28a745"
             />
             <MetricCard
               title="Ask Fills"
-              value={result.execution_metrics.ask_fills.toString()}
+              value={(result.execution_metrics.ask_fills ?? 0).toString()}
               color="#dc3545"
             />
             <MetricCard
@@ -2025,14 +2025,14 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
             gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
             gap: '15px',
           }}>
-            {result.closed_trades !== undefined && (
+            {result.closed_trades !== undefined && result.closed_trades !== null && (
               <MetricCard
                 title="Closed Trades"
                 value={result.closed_trades.toString()}
                 color="#28a745"
               />
             )}
-            {result.open_positions !== undefined && (
+            {result.open_positions !== undefined && result.open_positions !== null && (
               <MetricCard
                 title="Open Positions"
                 value={result.open_positions.toString()}
