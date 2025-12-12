@@ -14,7 +14,7 @@ use protocol::broker::messages::{BacktestChunk, BacktestChunkResult};
 
 use super::broker_client::{BacktestBrokerClient, get_broker_client};
 use crate::job_queue::BacktestJobParams;
-use crate::{log_debug, log_info_structured, log_warn_structured, log_error_structured};
+use crate::{log_info_structured, log_warn_structured, log_error_structured};
 use crate::logging_facade::{MAIN_LOGGER, BACKTEST_LOGGER};
 
 // Import backtest infrastructure
@@ -504,15 +504,15 @@ mod tests {
     fn test_get_reference_price_from_trade() {
         use dataloader::TradeData;
         
-        let trade = TradeData {
-            timestamp: Utc::now(),
-            symbol: "BTCUSDT".to_string(),
-            exchange: "binance".to_string(),
-            trade_id: "t1".to_string(),
-            side: "buy".to_string(),
-            price: BigDecimal::from_f64(50000.0).unwrap(),
-            quantity: BigDecimal::from_f64(0.1).unwrap(),
-        };
+        let trade = TradeData::new(
+            Utc::now(),
+            "BTCUSDT".to_string(),
+            "binance".to_string(),
+            BigDecimal::from_f64(50000.0).unwrap(),
+            BigDecimal::from_f64(0.1).unwrap(),
+            "buy".to_string(),
+            "t1".to_string(),
+        );
         
         let market_data = vec![MarketData::Trade(trade)];
         let price = DistributedWorker::get_reference_price(&market_data);
@@ -532,15 +532,15 @@ mod tests {
         use dataloader::TradeData;
         
         let expected_time = Utc.with_ymd_and_hms(2025, 1, 15, 10, 30, 0).unwrap();
-        let trade = TradeData {
-            timestamp: expected_time,
-            symbol: "BTCUSDT".to_string(),
-            exchange: "binance".to_string(),
-            trade_id: "t1".to_string(),
-            side: "buy".to_string(),
-            price: BigDecimal::from_f64(50000.0).unwrap(),
-            quantity: BigDecimal::from_f64(0.1).unwrap(),
-        };
+        let trade = TradeData::new(
+            expected_time,
+            "BTCUSDT".to_string(),
+            "binance".to_string(),
+            BigDecimal::from_f64(50000.0).unwrap(),
+            BigDecimal::from_f64(0.1).unwrap(),
+            "buy".to_string(),
+            "t1".to_string(),
+        );
         
         let market_data = vec![MarketData::Trade(trade)];
         let timestamp = DistributedWorker::get_first_timestamp(&market_data);

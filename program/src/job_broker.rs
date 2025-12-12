@@ -35,7 +35,7 @@ use tokio::sync::{broadcast, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::job_queue::BacktestJobParams;
-use crate::{log_info, log_warn, log_debug};
+use crate::{log_info_structured, log_warn, log_debug};
 use crate::logging_facade::MAIN_LOGGER;
 
 /// Job message published to the message broker
