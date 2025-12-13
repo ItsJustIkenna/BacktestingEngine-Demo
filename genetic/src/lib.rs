@@ -9,7 +9,6 @@
 use std::sync::Arc;
 use std::collections::HashMap;
 use config::GeneticConfig;
-use futures::stream::{FuturesUnordered, StreamExt};
 use rand::prelude::*;
 use ultra_logger::{UltraLogger, LoggerConfig, TransportConfig, ConnectionConfig};
 use once_cell::sync::Lazy;
@@ -165,38 +164,55 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
         for generation in 0..self.config.generations {
             let generation_start = std::time::Instant::now();
             
-            log_info!("{}Gen {}/{}: Starting fitness evaluation for {} chromosomes", 
+            log_info!("{}Gen {}/{}: Starting PARALLEL fitness evaluation for {} chromosomes", 
                 job_tag, generation + 1, self.config.generations, population.len());
             
-            // Evaluate fitness with controlled parallelism
-            // Process in batches of 10 for better throughput while controlling memory
-            let mut futures = FuturesUnordered::new();
-            let mut fitness_results = Vec::with_capacity(population.len());
-            let batch_start = std::time::Instant::now();
-            const BATCH_SIZE: usize = 10;
-
-            for (chunk_idx, chunk) in population.chunks(BATCH_SIZE).enumerate() {
-                // Queue up fitness evaluations for this batch
-                for chromo in chunk {
-                    futures.push((self.fitness_fn)(chromo));
-                }
-                // Collect results from this batch before starting next
-                while let Some(result) = futures.next().await {
-                    fitness_results.push(result);
-                }
+            // PARALLEL FITNESS EVALUATION using tokio::spawn
+            // Each chromosome evaluation runs on its own tokio task for true parallelism
+            // This leverages multiple CPU cores instead of sequential execution
+            let fitness_fn = Arc::clone(&self.fitness_fn);
+            let mut handles = Vec::with_capacity(population.len());
+            
+            for chromo in population.iter() {
+                let fitness_fn = Arc::clone(&fitness_fn);
+                let chromo = chromo.clone();
                 
-                // Log every 2 batches with timing
-                if chunk_idx % 2 == 0 {
-                    let elapsed = batch_start.elapsed().as_secs_f64();
-                    let rate = fitness_results.len() as f64 / elapsed.max(0.001);
-                    log_info!("{}Gen {}: batch {} done, {}/{} chromosomes, {:.1}s elapsed, {:.1}/s", 
-                        job_tag, generation + 1, chunk_idx + 1, fitness_results.len(), population.len(), elapsed, rate);
+                // Spawn each fitness evaluation as a separate tokio task
+                let handle = tokio::spawn(async move {
+                    fitness_fn(&chromo).await
+                });
+                handles.push(handle);
+            }
+            
+            // Collect all results in parallel
+            let mut fitness_results = Vec::with_capacity(population.len());
+            let mut completed = 0;
+            let batch_start = std::time::Instant::now();
+            
+            for handle in handles {
+                match handle.await {
+                    Ok(result) => {
+                        fitness_results.push(result);
+                        completed += 1;
+                        
+                        // Log progress every 10 completions
+                        if completed % 10 == 0 {
+                            let elapsed = batch_start.elapsed().as_secs_f64();
+                            let rate = completed as f64 / elapsed.max(0.001);
+                            log_info!("{}Gen {}: {}/{} chromosomes evaluated, {:.1}s elapsed, {:.1}/s", 
+                                job_tag, generation + 1, completed, population.len(), elapsed, rate);
+                        }
+                    }
+                    Err(e) => {
+                        log_info!("{}Gen {}: chromosome evaluation panicked: {}", job_tag, generation + 1, e);
+                        fitness_results.push(FitnessResult::failure());
+                    }
                 }
             }
             
             let gen_elapsed = generation_start.elapsed().as_secs_f64();
-            log_info!("{}Gen {}/{}: Fitness evaluation complete in {:.1}s", 
-                job_tag, generation + 1, self.config.generations, gen_elapsed);
+            log_info!("{}Gen {}/{}: Fitness evaluation complete in {:.1}s ({:.1} chromosomes/sec)", 
+                job_tag, generation + 1, self.config.generations, gen_elapsed, population.len() as f64 / gen_elapsed);
             
             // Extract raw fitness values
             let mut fitnesses: Vec<f64> = fitness_results.iter().map(|r| r.fitness).collect();

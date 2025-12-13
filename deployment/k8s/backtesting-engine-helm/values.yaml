@@ -79,11 +79,11 @@ ui:
 # Resource requests and limits
 resources:
   limits:
-    cpu: "4000m"      # Increased for better performance
-    memory: "16Gi"    # Increased to prevent OOMKill with large order books (50K+ events)
+    cpu: "14000m"     # 14 CPU cores - maximize parallelism for genetic algorithm
+    memory: "48Gi"    # 48GB - can load ALL historical data + parallel chromosome evals
   requests:
-    cpu: "2000m"      # Higher baseline for faster processing
-    memory: "8Gi"     # More memory for parallel operations and genetic optimization
+    cpu: "8000m"      # 8 cores guaranteed baseline
+    memory: "32Gi"    # 32GB baseline for large datasets
 
 # Node selection
 nodeSelector: {}
@@ -195,10 +195,9 @@ config:
     file_enabled: true
     file_path: "/var/log/backtesting/app.log"
   performance:
-    # Worker threads per pod - set to 1 to allow full memory for loading ALL historical data
-    # With 1 thread, each pod can use up to 16Gi for a single job
-    # Scale horizontally with more pods (via HPA) instead of more threads per pod
-    worker_threads: 1
+    # Worker threads per pod - with 48GB memory, can run 2 concurrent backtests
+    # Each backtest uses ~10-15GB with full historical data + parallel chromosomes
+    worker_threads: 2
   database:
     host: ""  # Required: Set via --set config.database.host or Azure Key Vault
     port: 5432
