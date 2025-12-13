@@ -1061,6 +1061,8 @@ mod tests {
             order_size: 0.1,
             order_size_pct: 0.02, // 2% of capital per trade
             initial_capital: 100000.0,
+            initial_inventory_pct: 0.5,
+            initial_30d_volume: 0.0,
             commission_rate: 0.001,
             start_date: None,
             end_date: None,

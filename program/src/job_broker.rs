@@ -326,6 +326,8 @@ mod tests {
             exchange: "Kraken".to_string(),
             strategy_type: "market_making".to_string(),
             initial_capital: 100000.0,
+            initial_inventory_pct: 0.5,
+            initial_30d_volume: 0.0,
             optimization_method: "genetic".to_string(),
             population_size: 30,  // Reduced from 50 for faster optimization
             generations: 15,     // Standardized with early stopping
@@ -381,6 +383,8 @@ mod tests {
             exchange: "Kraken".to_string(),
             strategy_type: "market_making".to_string(),
             initial_capital: 50000.0,
+            initial_inventory_pct: 0.5,
+            initial_30d_volume: 0.0,
             optimization_method: "genetic".to_string(),
             population_size: 30,
             generations: 5,
