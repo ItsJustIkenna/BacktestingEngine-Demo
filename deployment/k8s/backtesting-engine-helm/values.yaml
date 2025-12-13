@@ -79,11 +79,11 @@ ui:
 # Resource requests and limits
 resources:
   limits:
-    cpu: "14000m"     # 14 CPU cores - maximize parallelism for genetic algorithm
-    memory: "48Gi"    # 48GB - can load ALL historical data + parallel chromosome evals
+    cpu: "12000m"     # 12 CPU cores - good parallelism for genetic algorithm
+    memory: "32Gi"    # 32GB - can load ALL historical data + parallel chromosome evals
   requests:
-    cpu: "8000m"      # 8 cores guaranteed baseline
-    memory: "32Gi"    # 32GB baseline for large datasets
+    cpu: "4000m"      # 4 cores guaranteed (lower request = easier to schedule)
+    memory: "16Gi"    # 16GB baseline - reduced for scheduling
 
 # Node selection
 nodeSelector: {}
@@ -307,8 +307,8 @@ metrics:
 
 autoscaling:
   enabled: true
-  minReplicas: 2
-  maxReplicas: 20
+  minReplicas: 1      # Start with 1 pod to ensure scheduling, HPA scales up as needed
+  maxReplicas: 4      # Max 4 pods (each with 32GB = 128GB total)
   targetCPUUtilizationPercentage: 70
   targetMemoryUtilizationPercentage: 80
   # Scale up quickly for burst workloads, scale down slowly to maintain capacity
