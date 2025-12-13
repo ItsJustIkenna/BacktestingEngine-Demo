@@ -3013,6 +3013,8 @@ impl Worker {
         const NUM_WORKERS: usize = 10;
         let loader = ParallelDataLoader::new(pool, NUM_WORKERS);
         
+        // Load ALL data - no limits
+        // Memory management is handled by running only 1 job at a time (--threads 1)
         let merged = loader.load_all(symbol, exchange).await?;
         
         log_info!(MAIN_LOGGER, "Loaded {} total events (orders + trades) using parallel streaming", merged.len());

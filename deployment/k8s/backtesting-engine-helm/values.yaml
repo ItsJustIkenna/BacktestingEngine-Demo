@@ -41,14 +41,14 @@ api:
   service:
     type: ClusterIP
     port: 8080
-  # API pod resource limits - increased to prevent OOMKill
+  # API pod resource limits - handles job processing, needs enough memory for genetic optimization
   resources:
     limits:
-      cpu: "2000m"
-      memory: "6Gi"      # Increased from 4Gi - API was getting OOMKilled
+      cpu: "4000m"
+      memory: "16Gi"     # Increased from 6Gi - genetic optimization uses 2-4GB per job
     requests:
-      cpu: "500m"
-      memory: "3Gi"
+      cpu: "1000m"
+      memory: "8Gi"      # Increased from 3Gi - ensure adequate baseline for job processing
 
 # UI configuration
 ui:
@@ -195,7 +195,10 @@ config:
     file_enabled: true
     file_path: "/var/log/backtesting/app.log"
   performance:
-    worker_threads: 4
+    # Worker threads per pod - set to 1 to allow full memory for loading ALL historical data
+    # With 1 thread, each pod can use up to 16Gi for a single job
+    # Scale horizontally with more pods (via HPA) instead of more threads per pod
+    worker_threads: 1
   database:
     host: ""  # Required: Set via --set config.database.host or Azure Key Vault
     port: 5432

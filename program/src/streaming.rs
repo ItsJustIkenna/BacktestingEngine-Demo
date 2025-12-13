@@ -1129,6 +1129,85 @@ impl ParallelDataLoader {
         Ok(merged)
     }
     
+    /// Load orders and trades with a maximum event limit to prevent OOM
+    /// Distributes the budget between orders and trades, then truncates to limit
+    pub async fn load_with_limit(
+        &self,
+        symbol: &str,
+        exchange: &str,
+        max_events: usize,
+    ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        use std::time::Instant;
+        
+        let start_time = Instant::now();
+        log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_WITH_LIMIT_START",
+            "event" => "PARALLEL_LOAD_WITH_LIMIT_START",
+            "symbol" => symbol,
+            "exchange" => exchange,
+            "max_events" => max_events
+        );
+        
+        // Load orders and trades concurrently
+        let orders_future = self.load_all_orders(symbol, exchange);
+        let trades_future = self.load_all_trades(symbol, exchange);
+        
+        let (orders_result, trades_result) = tokio::join!(orders_future, trades_future);
+        
+        let orders = orders_result?;
+        let trades = trades_result?;
+        
+        let total_loaded = orders.len() + trades.len();
+        
+        log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_WITH_LIMIT_RAW_COUNTS",
+            "event" => "PARALLEL_LOAD_WITH_LIMIT_RAW_COUNTS",
+            "order_count" => orders.len(),
+            "trade_count" => trades.len(),
+            "total_loaded" => total_loaded,
+            "max_events" => max_events
+        );
+        
+        // Merge and sort
+        let mut merged = Vec::with_capacity(orders.len().min(max_events) + trades.len().min(max_events));
+        merged.extend(orders);
+        merged.extend(trades);
+        
+        merged.sort_by(|a, b| {
+            let ts_a = match a {
+                MarketData::Order(o) => o.timestamp,
+                MarketData::Trade(t) => t.timestamp,
+                MarketData::Candle(c) => c.timestamp,
+                MarketData::Snapshot(s) => s.timestamp,
+            };
+            let ts_b = match b {
+                MarketData::Order(o) => o.timestamp,
+                MarketData::Trade(t) => t.timestamp,
+                MarketData::Candle(c) => c.timestamp,
+                MarketData::Snapshot(s) => s.timestamp,
+            };
+            ts_a.cmp(&ts_b)
+        });
+        
+        // Truncate to max_events to prevent OOM
+        if merged.len() > max_events {
+            log_warn!(MAIN_LOGGER, "Truncating {} events to {} to prevent OOM", merged.len(), max_events);
+            merged.truncate(max_events);
+            // Shrink capacity to free excess memory
+            merged.shrink_to_fit();
+        }
+        
+        let elapsed = start_time.elapsed();
+        log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_WITH_LIMIT_COMPLETE",
+            "event" => "PARALLEL_LOAD_WITH_LIMIT_COMPLETE",
+            "total_event_count" => merged.len(),
+            "events_truncated" => total_loaded > max_events,
+            "events_dropped" => total_loaded.saturating_sub(merged.len()),
+            "elapsed_secs" => format!("{:.2}", elapsed.as_secs_f64()),
+            "rows_per_sec" => format!("{:.0}", merged.len() as f64 / elapsed.as_secs_f64())
+        );
+        
+        Ok(merged)
+    }
+    
     /// Get min/max timestamp for orders
     async fn get_time_range(
         &self,
