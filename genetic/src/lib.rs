@@ -160,25 +160,32 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
         const CONVERGENCE_THRESHOLD: usize = 5; // Stop after 5 gens without meaningful improvement
         
         let elite_size = (self.config.population_size as f64 * 0.05).ceil() as usize;
+        
+        // Limit concurrent chromosome evaluations to prevent OOM
+        // Each evaluation uses ~1-2GB memory, so limit to 8 concurrent
+        const MAX_CONCURRENT_EVALS: usize = 8;
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_EVALS));
 
         for generation in 0..self.config.generations {
             let generation_start = std::time::Instant::now();
             
-            log_info!("{}Gen {}/{}: Starting PARALLEL fitness evaluation for {} chromosomes", 
-                job_tag, generation + 1, self.config.generations, population.len());
+            log_info!("{}Gen {}/{}: Starting PARALLEL fitness evaluation for {} chromosomes (max {} concurrent)", 
+                job_tag, generation + 1, self.config.generations, population.len(), MAX_CONCURRENT_EVALS);
             
-            // PARALLEL FITNESS EVALUATION using tokio::spawn
-            // Each chromosome evaluation runs on its own tokio task for true parallelism
-            // This leverages multiple CPU cores instead of sequential execution
+            // PARALLEL FITNESS EVALUATION with bounded concurrency
+            // Uses semaphore to limit memory usage while still parallelizing
             let fitness_fn = Arc::clone(&self.fitness_fn);
             let mut handles = Vec::with_capacity(population.len());
             
             for chromo in population.iter() {
                 let fitness_fn = Arc::clone(&fitness_fn);
                 let chromo = chromo.clone();
+                let permit = Arc::clone(&semaphore);
                 
                 // Spawn each fitness evaluation as a separate tokio task
+                // Semaphore limits how many run concurrently
                 let handle = tokio::spawn(async move {
+                    let _permit = permit.acquire().await.expect("semaphore closed");
                     fitness_fn(&chromo).await
                 });
                 handles.push(handle);
@@ -195,11 +202,11 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
                         fitness_results.push(result);
                         completed += 1;
                         
-                        // Log progress every 10 completions
-                        if completed % 10 == 0 {
+                        // Log progress every 5 completions
+                        if completed % 5 == 0 || completed == population.len() {
                             let elapsed = batch_start.elapsed().as_secs_f64();
                             let rate = completed as f64 / elapsed.max(0.001);
-                            log_info!("{}Gen {}: {}/{} chromosomes evaluated, {:.1}s elapsed, {:.1}/s", 
+                            log_info!("{}Gen {}: {}/{} chromosomes evaluated, {:.1}s elapsed, {:.2}/s", 
                                 job_tag, generation + 1, completed, population.len(), elapsed, rate);
                         }
                     }
@@ -211,13 +218,11 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
             }
             
             let gen_elapsed = generation_start.elapsed().as_secs_f64();
-            log_info!("{}Gen {}/{}: Fitness evaluation complete in {:.1}s ({:.1} chromosomes/sec)", 
+            log_info!("{}Gen {}/{}: Fitness evaluation complete in {:.1}s ({:.2} chromosomes/sec)", 
                 job_tag, generation + 1, self.config.generations, gen_elapsed, population.len() as f64 / gen_elapsed);
             
             // Extract raw fitness values
             let mut fitnesses: Vec<f64> = fitness_results.iter().map(|r| r.fitness).collect();
-            
-            // ROBUSTNESS-WEIGHTED FITNESS: Apply Monte Carlo consistency check
             // Only apply in later generations to speed up initial exploration
             // This validates stability and prevents overfitting of top performers
             if self.config.use_monte_carlo_fitness && generation >= self.config.generations / 2 {
