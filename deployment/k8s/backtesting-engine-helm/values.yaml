@@ -195,9 +195,10 @@ config:
     file_enabled: true
     file_path: "/var/log/backtesting/app.log"
   performance:
-    # Worker threads per pod - with 48GB memory, can run 2 concurrent backtests
-    # Each backtest uses ~10-15GB with full historical data + parallel chromosomes
-    worker_threads: 2
+    # Worker threads per pod - reduced to 1 to prevent OOM
+    # Each backtest uses ~15-20GB with full 6.8M data points + parallel evaluations
+    # With 32GB limit, only 1 concurrent backtest is safe
+    worker_threads: 1
   database:
     host: ""  # Required: Set via --set config.database.host or Azure Key Vault
     port: 5432

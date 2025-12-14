@@ -164,9 +164,11 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
         let elite_size = (self.config.population_size as f64 * 0.05).ceil() as usize;
         
         // Limit concurrent chromosome evaluations to prevent OOM
-        // Each evaluation uses ~1-2GB memory, so limit to 8 concurrent
-        const MAX_CONCURRENT_EVALS: usize = 8;
+        // With 6.8M data points (~4GB) + each evaluation using ~2-4GB,
+        // we need to be very conservative. 2 concurrent = ~12GB peak
+        const MAX_CONCURRENT_EVALS: usize = 2;
         let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_EVALS));
+        log_info!("{}Using {} concurrent evaluations to stay within memory limits", job_tag, MAX_CONCURRENT_EVALS);
 
         for generation in 0..self.config.generations {
             let generation_start = std::time::Instant::now();
