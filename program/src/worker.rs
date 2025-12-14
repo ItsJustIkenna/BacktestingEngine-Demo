@@ -1054,21 +1054,19 @@ impl Worker {
         
         // Use FULL dataset for all phases - no sampling
         // This ensures accurate fill simulation for market making strategies
-        // Note: This will be slower but provides accurate results
-        
-        // For GA optimization - use full data (slower but accurate)
-        let optimization_data = data.clone();
-        
-        // For final backtest + Monte Carlo - use full data
-        let final_backtest_data = data.clone();
+        // OPTIMIZATION: Wrap in Arc ONCE to avoid cloning 6.8M elements multiple times
+        // Previously we cloned data twice which used ~3x memory and was very slow
+        let data_len = data.len();
+        let shared_data = Arc::new(data);
         
         log_info_structured!(GENETIC_LOGGER, "GA_DATA_SPLIT",
             "event" => "GA_DATA_SPLIT",
             "job_id" => &job.id,
-            "ga_data_points" => optimization_data.len(),
-            "backtest_data_points" => final_backtest_data.len(),
-            "walkforward_data_points" => data.len()
+            "ga_data_points" => data_len,
+            "backtest_data_points" => data_len,
+            "walkforward_data_points" => data_len
         );
+        eprintln!("📊 Data wrapped in Arc (no cloning) - {} points shared across all phases", data_len);
         
         // Create genetic config
         let config = GeneticConfig {
@@ -1082,11 +1080,10 @@ impl Worker {
         // Use efficient progress callback that batches DB writes
         let generation_callback = progress_tracker.generation_callback();
         
-        // Prepare data for fitness function (as Arc for sharing)
-        // Use subsampled data for faster optimization
-        let data_arc = Arc::new(optimization_data);
-        let data_for_backtest = Arc::new(final_backtest_data); // Capped at 200K for Monte Carlo speed
-        let data_for_walkforward = Arc::new(data); // Full data for walk-forward validation
+        // All phases share the same Arc - no cloning needed
+        let data_arc = Arc::clone(&shared_data);
+        let data_for_backtest = Arc::clone(&shared_data);
+        let data_for_walkforward = Arc::clone(&shared_data);
         let symbol = params.symbol.clone();
         let exchange = params.exchange.clone();
         let exchange_for_logging = exchange.clone(); // Clone for use after the closure
