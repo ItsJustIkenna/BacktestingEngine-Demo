@@ -151,9 +151,11 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
             .map(|_| C::random(&mut rng))
             .collect();
         
-        // Evaluate initial best
+        // Evaluate initial best (this can take several minutes with full data)
         let mut best = population[0].clone();
+        log_info!("{}Evaluating initial chromosome (this may take several minutes)...", job_tag);
         let initial_result = (self.fitness_fn)(&best).await;
+        log_info!("{}Initial chromosome evaluated: fitness={:.6}", job_tag, initial_result.fitness);
         let mut best_fitness = initial_result.fitness;
         let mut best_equity_curve = initial_result.equity_curve;
         let mut generations_without_improvement = 0;
