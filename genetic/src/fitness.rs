@@ -133,7 +133,7 @@ pub async fn avellaneda_stoikov_fitness(
         &mut orderbook,
         &mut portfolio,
         &mut risk_manager,
-        market_data,
+        &market_data,  // Pass slice reference
         config,
     ).await;
     

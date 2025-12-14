@@ -319,7 +319,7 @@ impl BacktestEngine {
             orderbook,
             portfolio,
             risk_manager,
-            market_data.to_vec(),
+            market_data,  // Pass slice directly - no cloning!
             &self.config,
         ).await;
         
@@ -372,11 +372,12 @@ impl BacktestEngine {
         };
         
         // Create fitness function that runs backtest with parameters
-        let market_data_clone = market_data.to_vec();
+        // MEMORY OPTIMIZATION: Use Arc to share data across evaluations instead of cloning
+        let market_data_arc = Arc::new(market_data.to_vec());
         let backtest_config = self.config.clone();
         
         let fitness_fn = Arc::new(move |chromo: &AvellanedaStoikovChromosome| {
-            let market_data = market_data_clone.clone();
+            let market_data = Arc::clone(&market_data_arc);  // Cheap pointer clone
             let config = backtest_config.clone();
             let chromo = chromo.clone(); // Clone to satisfy 'static lifetime
             
@@ -528,7 +529,7 @@ impl BacktestEngine {
                     &mut temp_orderbook,
                     &mut temp_portfolio,
                     &mut temp_risk_manager,
-                    market_data,
+                    &market_data,  // Pass slice reference
                     &config,
                 ).await;
                 

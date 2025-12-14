@@ -1,9 +1,10 @@
 //! Chromosome definitions for genetic optimization of strategy parameters
 
 use rand::Rng;
+use serde::{Serialize, Deserialize};
 use crate::Chromosome;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AvellanedaStoikovChromosome {
     pub risk_aversion: f64,
     pub order_size_pct: f64,  // Order size as percentage of capital (0.01 = 1%)

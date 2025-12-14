@@ -9,7 +9,8 @@ use tokio::sync::{broadcast, RwLock};
 
 use protocol::broker::messages::{
     BacktestChunk, BacktestChunkResult, BacktestProgress, 
-    BacktestCancelRequest,
+    BacktestCancelRequest, ChromosomeEvalRequest, ChromosomeEvalResult,
+    DataBroadcastRequest, DataCacheAck,
 };
 
 use crate::{log_info_structured, log_debug};
@@ -48,6 +49,19 @@ pub struct BacktestBrokerClient {
     all_results_sender: broadcast::Sender<BacktestChunkResult>,
     /// Cancel requests
     cancel_senders: Arc<RwLock<HashMap<String, broadcast::Sender<BacktestCancelRequest>>>>,
+    
+    // ========================================================================
+    // GENETIC ALGORITHM CHANNELS
+    // ========================================================================
+    
+    /// Channel for chromosome evaluation requests (coordinator -> workers)
+    chromosome_request_sender: broadcast::Sender<ChromosomeEvalRequest>,
+    /// Channel for chromosome evaluation results (workers -> coordinator)
+    chromosome_result_sender: broadcast::Sender<ChromosomeEvalResult>,
+    /// Channel for data broadcast requests
+    data_broadcast_sender: broadcast::Sender<DataBroadcastRequest>,
+    /// Channel for data cache acknowledgments
+    data_ack_sender: broadcast::Sender<DataCacheAck>,
 }
 
 impl BacktestBrokerClient {
@@ -55,6 +69,12 @@ impl BacktestBrokerClient {
     pub fn new(mode: BrokerMode) -> Self {
         let (all_chunks_sender, _) = broadcast::channel(10_000);
         let (all_results_sender, _) = broadcast::channel(10_000);
+        
+        // GA channels
+        let (chromosome_request_sender, _) = broadcast::channel(1_000);
+        let (chromosome_result_sender, _) = broadcast::channel(1_000);
+        let (data_broadcast_sender, _) = broadcast::channel(100);
+        let (data_ack_sender, _) = broadcast::channel(100);
         
         Self {
             mode,
@@ -64,6 +84,10 @@ impl BacktestBrokerClient {
             all_chunks_sender,
             all_results_sender,
             cancel_senders: Arc::new(RwLock::new(HashMap::new())),
+            chromosome_request_sender,
+            chromosome_result_sender,
+            data_broadcast_sender,
+            data_ack_sender,
         }
     }
     
@@ -266,6 +290,62 @@ impl BacktestBrokerClient {
         
         log_debug!(MAIN_LOGGER, "Cleaned up broker channels for job {}", job_id);
     }
+    
+    // ========================================================================
+    // GENETIC ALGORITHM - CHROMOSOME EVALUATION
+    // ========================================================================
+    
+    /// Publish a chromosome evaluation request (coordinator -> workers)
+    pub fn publish_chromosome_request(&self, request: ChromosomeEvalRequest) -> Result<(), BrokerError> {
+        self.chromosome_request_sender.send(request)
+            .map_err(|_| BrokerError::SendFailed)?;
+        Ok(())
+    }
+    
+    /// Subscribe to chromosome evaluation requests (worker)
+    pub fn subscribe_chromosome_requests(&self) -> broadcast::Receiver<ChromosomeEvalRequest> {
+        self.chromosome_request_sender.subscribe()
+    }
+    
+    /// Publish a chromosome evaluation result (worker -> coordinator)
+    pub fn publish_chromosome_result(&self, result: ChromosomeEvalResult) -> Result<(), BrokerError> {
+        self.chromosome_result_sender.send(result)
+            .map_err(|_| BrokerError::SendFailed)?;
+        Ok(())
+    }
+    
+    /// Subscribe to chromosome evaluation results (coordinator)
+    pub fn subscribe_chromosome_results(&self) -> broadcast::Receiver<ChromosomeEvalResult> {
+        self.chromosome_result_sender.subscribe()
+    }
+    
+    // ========================================================================
+    // GENETIC ALGORITHM - DATA BROADCASTING
+    // ========================================================================
+    
+    /// Publish a data broadcast request (coordinator -> workers)
+    pub fn publish_data_broadcast(&self, request: DataBroadcastRequest) -> Result<(), BrokerError> {
+        self.data_broadcast_sender.send(request)
+            .map_err(|_| BrokerError::SendFailed)?;
+        Ok(())
+    }
+    
+    /// Subscribe to data broadcast requests (workers)
+    pub fn subscribe_data_broadcasts(&self) -> broadcast::Receiver<DataBroadcastRequest> {
+        self.data_broadcast_sender.subscribe()
+    }
+    
+    /// Publish a data cache acknowledgment (worker -> coordinator)
+    pub fn publish_data_ack(&self, ack: DataCacheAck) -> Result<(), BrokerError> {
+        self.data_ack_sender.send(ack)
+            .map_err(|_| BrokerError::SendFailed)?;
+        Ok(())
+    }
+    
+    /// Subscribe to data cache acknowledgments (coordinator)
+    pub fn subscribe_data_acks(&self) -> broadcast::Receiver<DataCacheAck> {
+        self.data_ack_sender.subscribe()
+    }
 }
 
 impl Clone for BacktestBrokerClient {
@@ -278,6 +358,10 @@ impl Clone for BacktestBrokerClient {
             all_chunks_sender: self.all_chunks_sender.clone(),
             all_results_sender: self.all_results_sender.clone(),
             cancel_senders: Arc::clone(&self.cancel_senders),
+            chromosome_request_sender: self.chromosome_request_sender.clone(),
+            chromosome_result_sender: self.chromosome_result_sender.clone(),
+            data_broadcast_sender: self.data_broadcast_sender.clone(),
+            data_ack_sender: self.data_ack_sender.clone(),
         }
     }
 }

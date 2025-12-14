@@ -50,12 +50,16 @@ pub mod coordinator;
 pub mod worker;
 pub mod aggregator;
 pub mod broker_client;
+pub mod ga_coordinator;
+pub mod ga_worker;
 
 pub use chunking::{ChunkCalculator, BacktestChunkInfo, ChunkingStrategy};
 pub use coordinator::DistributedCoordinator;
 pub use worker::DistributedWorker;
 pub use aggregator::ResultAggregator;
 pub use broker_client::BacktestBrokerClient;
+pub use ga_coordinator::{DistributedGACoordinator, DistributedGAConfig};
+pub use ga_worker::DistributedGAWorker;
 
 /// Default chunk size in events
 pub const DEFAULT_CHUNK_SIZE: usize = 200_000;
@@ -96,5 +100,34 @@ pub mod topics {
     /// Wildcard topic for all results (coordinator subscribes)
     pub fn all_results() -> String {
         "backtest.results.*".to_string()
+    }
+    
+    // ========================================================================
+    // DISTRIBUTED GA TOPICS
+    // ========================================================================
+    
+    /// Topic for data broadcast to workers: ga.data.broadcast
+    pub fn ga_data_broadcast() -> String {
+        "ga.data.broadcast".to_string()
+    }
+    
+    /// Topic for data cache acknowledgments: ga.data.ack
+    pub fn ga_data_ack() -> String {
+        "ga.data.ack".to_string()
+    }
+    
+    /// Topic for chromosome evaluation requests: ga.chromosome.eval.{job_id}
+    pub fn ga_chromosome_eval(job_id: &str) -> String {
+        format!("ga.chromosome.eval.{}", job_id)
+    }
+    
+    /// Topic for chromosome results: ga.chromosome.result.{job_id}
+    pub fn ga_chromosome_result(job_id: &str) -> String {
+        format!("ga.chromosome.result.{}", job_id)
+    }
+    
+    /// Wildcard topic for all chromosome evals (workers subscribe)
+    pub fn ga_all_chromosome_evals() -> String {
+        "ga.chromosome.eval.*".to_string()
     }
 }

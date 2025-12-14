@@ -10,6 +10,7 @@ use chrono::Utc;
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 
 use crate::job_queue::{BacktestJob, BacktestResult, JobQueue, JobStatus, MonteCarloSummary, WalkForwardSummary, InventorySummary, ExecutionSummary};
+use crate::distributed::ga_coordinator::{DistributedMode, DistributedGARunner, DistributedGAConfig};
 
 // Logging infrastructure from the library crate
 use crate::logging_facade::{MAIN_LOGGER, GENETIC_LOGGER, WALKFORWARD_LOGGER, BACKTEST_LOGGER};
@@ -48,7 +49,7 @@ use dataloader::MarketData;
 /// - < 30 trades: linear penalty
 /// - Avg trade < 4x commission: 0.5x (raised from 3x)
 /// - VaR > 5% of capital: penalty
-fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult, initial_capital: f64) -> f64 {
+pub fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult, initial_capital: f64) -> f64 {
     use bigdecimal::ToPrimitive;
     
     // === HARD CONSTRAINT: Reject commission-inefficient strategies early ===
@@ -1084,12 +1085,19 @@ impl Worker {
         let data_arc = Arc::clone(&shared_data);
         let data_for_backtest = Arc::clone(&shared_data);
         let data_for_walkforward = Arc::clone(&shared_data);
+        // Create separate clones for distributed mode fallback (local GA uses these too)
+        let data_for_distributed = Arc::clone(&shared_data);
         let symbol = params.symbol.clone();
         let exchange = params.exchange.clone();
+        let symbol_for_distributed = params.symbol.clone();
+        let exchange_for_distributed = params.exchange.clone();
         let exchange_for_logging = exchange.clone(); // Clone for use after the closure
         let initial_capital = params.initial_capital;
+        let initial_capital_for_distributed = params.initial_capital;
         let initial_inventory_pct = params.initial_inventory_pct;
+        let initial_inventory_pct_for_distributed = params.initial_inventory_pct;
         let commission_rate = params.commission_rate;
+        let commission_rate_for_distributed = params.commission_rate;
         
         // Create fitness function that evaluates chromosomes and returns equity curve for robustness analysis
         // THREAD SAFETY: We clone Arc references and create fresh state inside each async block
@@ -1297,6 +1305,10 @@ impl Worker {
         
         // Run genetic optimization with robustness-weighted fitness
         log_info!(GENETIC_LOGGER, "Job {} creating GeneticOptimizer", job.id);
+        
+        // Clone config before creating optimizer since it will be moved
+        let config_for_distributed = config.clone();
+        
         let optimizer = GeneticOptimizer {
             config,
             fitness_fn,
@@ -1320,8 +1332,144 @@ impl Worker {
         // ============ TIMING: GA Optimization ============
         let timing_ga_start = std::time::Instant::now();
         
-        log_info!(GENETIC_LOGGER, "Job {} starting genetic algorithm with robustness-weighted fitness", job.id);
-        let (best_chromosome, best_fitness) = optimizer.run().await;
+        // Check if distributed mode is enabled via environment variable
+        let distributed_mode = DistributedMode::from_env();
+        
+        let (best_chromosome, best_fitness) = if distributed_mode.enabled {
+            log_info!(GENETIC_LOGGER, "Job {} attempting DISTRIBUTED genetic optimization", job.id);
+            
+            // Create distributed GA config
+            let distributed_config = DistributedGAConfig {
+                genetic_config: config_for_distributed.clone(),
+                symbol: params.symbol.clone(),
+                exchange: params.exchange.clone(),
+                initial_capital,
+                cache_ttl_seconds: 3600, // 1 hour cache TTL
+            };
+            
+            // Clone data for the closure
+            let data_for_fallback = Arc::clone(&data_for_distributed);
+            let symbol_for_fallback = symbol_for_distributed.clone();
+            let exchange_for_fallback = exchange_for_distributed.clone();
+            let initial_capital_fallback = initial_capital_for_distributed;
+            let initial_inventory_pct_fallback = initial_inventory_pct_for_distributed;
+            let commission_rate_fallback = commission_rate_for_distributed;
+            
+            // Run with automatic fallback to local if distributed fails
+            DistributedGARunner::run_with_fallback(
+                &distributed_mode,
+                &distributed_config,
+                &shared_data,  // Pass slice reference
+                move |chromo: &AvellanedaStoikovChromosome| {
+                    // This fitness function is used for LOCAL fallback only
+                    // When distributed mode works, workers evaluate chromosomes
+                    let data = Arc::clone(&data_for_fallback);
+                    let symbol = symbol_for_fallback.clone();
+                    let exchange = exchange_for_fallback.clone();
+                    let chr = chromo.clone();
+                    let initial_capital = initial_capital_fallback;
+                    let initial_inventory_pct = initial_inventory_pct_fallback;
+                    let commission_rate = commission_rate_fallback;
+                    
+                    Box::pin(async move {
+                        // Same fitness evaluation as the main local path
+                        let mut backtest_config = BacktestConfig::default();
+                        backtest_config.trading.initial_capital = initial_capital;
+                        backtest_config.trading.commission_rate = commission_rate;
+                        backtest_config.analysis.skip_genetic_optimization = true;
+                        backtest_config.analysis.auto_monte_carlo = false;
+                        backtest_config.analysis.auto_walk_forward = false;
+                        backtest_config.data.gap_detection.enabled = false;
+                        
+                        let engine = BacktestEngine::new(backtest_config);
+                        let asset_price = Self::get_reference_price(&data);
+                        
+                        let inventory_pct = initial_inventory_pct;
+                        let quote_balance = initial_capital * (1.0 - inventory_pct);
+                        let base_value = initial_capital * inventory_pct;
+                        let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };
+                        let first_timestamp = Self::get_first_timestamp(&data);
+                        
+                        let mut portfolio = PortfolioState::with_inventory(
+                            symbol.clone(),
+                            BigDecimal::from_f64(quote_balance).unwrap_or_default(),
+                            base_quantity,
+                            BigDecimal::from_f64(asset_price).unwrap_or_default(),
+                            first_timestamp,
+                        );
+                        
+                        let orderbook_config = OrderBookConfig::default();
+                        let mut orderbook = OrderBook::new(symbol.clone(), exchange.clone(), orderbook_config);
+                        let mut risk_manager = RiskManager::new();
+                        
+                        let order_size_units = (initial_capital * chr.order_size_pct) / asset_price;
+                        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&exchange);
+                        let maker_fee = exchange_fee_config.maker_fee;
+                        
+                        let strategy_params = AvellanedaStoikovParams {
+                            risk_aversion: chr.risk_aversion,
+                            inventory_target: chr.inventory_target,
+                            order_size: order_size_units,
+                            order_size_pct: chr.order_size_pct,
+                            initial_capital,
+                            initial_inventory_pct: 0.5,
+                            window_ms: chr.window_ms,
+                            min_quote_lifetime_ms: chr.min_quote_lifetime_ms,
+                            fee_rate: maker_fee,
+                            volatility_cap: chr.volatility_cap,
+                            time_horizon_minutes: chr.time_horizon_minutes,
+                            market_depth_k: chr.market_depth_k,
+                            min_spread_bps: chr.min_spread_bps,
+                            max_trades_per_minute: chr.max_trades_per_minute,
+                            take_profit_pct: chr.take_profit_pct,
+                            stop_loss_pct: chr.stop_loss_pct,
+                            volatility_adjustment_factor: chr.volatility_adjustment_factor,
+                            inventory_penalty_factor: chr.inventory_penalty_factor,
+                            trend_sensitivity: chr.trend_sensitivity,
+                            flow_sensitivity: chr.flow_sensitivity,
+                            ..Default::default()
+                        };
+                        
+                        let mut strategy_params_map = HashMap::new();
+                        strategy_params_map.insert("risk_aversion".to_string(), config::ParameterValue::Float(chr.risk_aversion));
+                        
+                        let strategy_config = StrategyConfig {
+                            id: "genetic-eval-fallback".to_string(),
+                            name: "Avellaneda-Stoikov".to_string(),
+                            strategy_type: "AvellanedaStoikov".to_string(),
+                            symbol: symbol.clone(),
+                            exchange: exchange.clone(),
+                            parameters: strategy_params_map,
+                            risk_limits: StrategyRiskLimits::default(),
+                            enabled: true,
+                        };
+                        
+                        let strategy = AvellanedaStoikovStrategy::new(strategy_params);
+                        let mut strategy_manager = StrategyManager::new();
+                        if strategy_manager.register_strategy(strategy_config, strategy).is_err() {
+                            return genetic::FitnessResult::failure();
+                        }
+                        
+                        match engine.run_core_simulation_direct(
+                            &mut strategy_manager,
+                            &mut orderbook,
+                            &mut portfolio,
+                            &mut risk_manager,
+                            &data,
+                        ).await {
+                            Ok(result) => {
+                                let fitness = calculate_comprehensive_fitness(&result, initial_capital);
+                                genetic::FitnessResult::new(fitness, result.equity_curve)
+                            }
+                            Err(_) => genetic::FitnessResult::failure()
+                        }
+                    })
+                },
+            ).await
+        } else {
+            log_info!(GENETIC_LOGGER, "Job {} starting LOCAL genetic algorithm with robustness-weighted fitness", job.id);
+            optimizer.run().await
+        };
         
         let timing_ga_elapsed = timing_ga_start.elapsed();
         

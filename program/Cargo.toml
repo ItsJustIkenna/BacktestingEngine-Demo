@@ -51,6 +51,11 @@ protocol = { path = "../../MessageBrokerEngine/protocol" }
 prost = "0.13"
 bytes = "1.0"
 
+# Serialization and compression for distributed GA
+bincode = "1.3"
+lz4_flex = "0.11"
+url = "2.5"
+
 # Internal dependencies
 walkforward = { path = "../walkforward" }
 backtest = { path = "../backtest" }

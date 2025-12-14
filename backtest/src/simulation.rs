@@ -314,7 +314,7 @@ impl SimulationLoop {
         orderbook: &mut OrderBook,
         portfolio: &mut PortfolioState,
         risk_manager: &mut RiskManager,
-        market_data: Vec<MarketData>,
+        market_data: &[MarketData],
         config: &config::BacktestConfig,
     ) -> BacktestResult {
     let mut events: Vec<BacktestEvent> = Vec::with_capacity(market_data.len());
