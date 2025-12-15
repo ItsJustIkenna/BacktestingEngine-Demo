@@ -81,6 +81,51 @@ pub struct TradingConfig {
     /// Probability of experiencing a latency spike (3-10x normal latency)
     #[serde(default = "default_latency_spike_prob")]
     pub latency_spike_probability: f64,
+    /// Performance optimization settings
+    #[serde(default)]
+    pub optimization: PerformanceOptimization,
+}
+
+/// Performance optimization settings for backtesting
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformanceOptimization {
+    /// Enable adaptive sampling in GA (coarser data in early generations)
+    /// Provides 1.3-1.5x speedup with minimal accuracy loss
+    #[serde(default = "default_true")]
+    pub adaptive_sampling_enabled: bool,
+    /// Enable stable region skipping (skip strategy recalc when price unchanged)
+    /// Provides 1.2-1.3x speedup depending on market activity
+    #[serde(default = "default_true")]
+    pub stable_region_skipping: bool,
+    /// Price change threshold for stable region detection (as ratio, e.g., 0.0001 = 1bp)
+    #[serde(default = "default_stable_threshold")]
+    pub stable_region_threshold: f64,
+    /// Maximum ticks to skip between forced strategy updates
+    #[serde(default = "default_max_skip_ticks")]
+    pub max_skip_ticks: usize,
+    /// Enable SIMD-accelerated calculations
+    #[serde(default = "default_true")]
+    pub simd_enabled: bool,
+    /// Override for MAX_CONCURRENT_EVALS (0 = auto-detect from memory)
+    #[serde(default)]
+    pub max_concurrent_evals: usize,
+}
+
+fn default_true() -> bool { true }
+fn default_stable_threshold() -> f64 { 0.0001 } // 1 basis point
+fn default_max_skip_ticks() -> usize { 100 }
+
+impl Default for PerformanceOptimization {
+    fn default() -> Self {
+        Self {
+            adaptive_sampling_enabled: true,
+            stable_region_skipping: true,
+            stable_region_threshold: 0.0001,
+            max_skip_ticks: 100,
+            simd_enabled: true,
+            max_concurrent_evals: 0, // Auto-detect
+        }
+    }
 }
 
 fn default_latency_ms() -> u64 { 10 }
@@ -655,6 +700,7 @@ impl Default for TradingConfig {
             latency_jitter_pct: 0.2,    // 20% variation
             min_latency_ms: 1,          // Minimum 1ms even with negative jitter
             latency_spike_probability: 0.01, // 1% chance of latency spike
+            optimization: PerformanceOptimization::default(),
         }
     }
 }

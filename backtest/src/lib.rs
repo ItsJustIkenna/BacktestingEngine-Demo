@@ -1,4 +1,7 @@
 //! Clean and unified backtest library
+//!
+//! High-performance backtesting engine with SIMD-accelerated calculations
+//! and adaptive optimization strategies.
 
 // Include logging macros first
 #[macro_use]
@@ -10,6 +13,7 @@ pub mod types;
 pub mod monte_carlo;
 pub mod html_export;
 pub mod latency;
+pub mod simd_utils;
 
 // Re-export main types for easy access
 pub use engine::{BacktestEngine, BacktestResults, AnalysisMetadata, WalkForwardSummary};
