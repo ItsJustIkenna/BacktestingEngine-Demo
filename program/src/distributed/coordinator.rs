@@ -194,7 +194,9 @@ impl DistributedCoordinator {
         // Use StreamingDataLoader to count events
         use crate::streaming::StreamingDataLoader;
         
-        let loader = StreamingDataLoader::new(&self.db_url)
+        let db_url = std::env::var("DATABASE_URL")
+            .map_err(|_| CoordinatorError::DatabaseError("DATABASE_URL not set".to_string()))?;
+        let loader = StreamingDataLoader::new(&db_url)
             .await
             .map_err(|e| CoordinatorError::DatabaseError(e.to_string()))?;
         

@@ -419,7 +419,8 @@ impl DistributedWorker {
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
         use crate::streaming::StreamingDataLoader;
         
-        let loader = StreamingDataLoader::new(&self.db_url).await?;
+        let db_url = std::env::var("DATABASE_URL")?;
+        let loader = StreamingDataLoader::new(&db_url).await?;
         loader.load_events_with_limit(symbol, exchange, start, end, 500_000).await
     }
     
