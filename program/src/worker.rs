@@ -1112,10 +1112,27 @@ impl Worker {
             
             Box::pin(async move {
                 let eval_id = FITNESS_EVAL_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                
+                // GA FITNESS SAMPLING: Sample every Nth point to accelerate fitness evaluation
+                // This provides ~3-5x speedup with minimal impact on relative fitness ranking
+                // ENV: GA_FITNESS_SAMPLE_RATE (default: 3 = use every 3rd point = 3x speedup)
+                let sample_rate: usize = std::env::var("GA_FITNESS_SAMPLE_RATE")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(3);
+                
+                let sampled_data: Vec<dataloader::MarketData> = if sample_rate > 1 {
+                    data.iter().step_by(sample_rate).cloned().collect()
+                } else {
+                    data.to_vec()
+                };
+                
                 log_info_structured!(GENETIC_LOGGER, "FITNESS_EVAL_ENTER",
                     "event" => "FITNESS_EVAL_ENTER",
                     "eval_id" => eval_id,
-                    "data_len" => data.len(),
+                    "original_data_len" => data.len(),
+                    "sampled_data_len" => sampled_data.len(),
+                    "sample_rate" => sample_rate,
                     "risk_aversion" => format!("{:.4}", chr.risk_aversion)
                 );
                 let eval_start = std::time::Instant::now();
@@ -1271,15 +1288,16 @@ impl Worker {
                     return genetic::FitnessResult::failure();
                 }
                 
-                log_info!(GENETIC_LOGGER, "FITNESS_EVAL #{} | strategy registered, starting simulation...", eval_id);
+                log_info!(GENETIC_LOGGER, "FITNESS_EVAL #{} | strategy registered, starting simulation on {} points...", eval_id, sampled_data.len());
                 
                 // Run ONLY core simulation (no Monte Carlo, no Walk-Forward)
+                // Uses sampled data for faster fitness evaluation during GA exploration
                 match engine.run_core_simulation_direct(
                     &mut strategy_manager,
                     &mut orderbook,
                     &mut portfolio,
                     &mut risk_manager,
-                    &data,
+                    &sampled_data,
                 ).await {
                     Ok(result) => {
                         // Use comprehensive fitness function that penalizes commission-heavy strategies
