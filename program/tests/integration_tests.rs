@@ -7,7 +7,7 @@ use strategy::StrategyManager;
 use orderbook::{OrderBook, OrderBookConfig};
 use portfoliomanager::{PortfolioState, Position, PositionSide};
 use riskmanager::{RiskManager, RiskLimits};
-use config::{BacktestConfig, TradingConfig, DatabaseConfig, DataConfig, OutputConfig, AnalysisConfig};
+use config::{BacktestConfig, TradingConfig, DatabaseConfig, DataConfig, OutputConfig, AnalysisConfig, PerformanceOptimization};
 use walkforward::{WalkForwardConfig, WalkForwardAnalyzer};
 
 #[cfg(test)]
@@ -45,6 +45,7 @@ mod tests {
                 latency_jitter_pct: 0.2,
                 min_latency_ms: 1,
                 latency_spike_probability: 0.01,
+                optimization: PerformanceOptimization::default(),
             },
             data: DataConfig {
                 default_timeframe: "1h".to_string(),
@@ -133,6 +134,7 @@ mod tests {
                 latency_jitter_pct: 0.2,
                 min_latency_ms: 1,
                 latency_spike_probability: 0.01,
+                optimization: PerformanceOptimization::default(),
             },
             data: DataConfig {
                 default_timeframe: "1d".to_string(),
@@ -185,6 +187,7 @@ mod tests {
                 latency_jitter_pct: 0.2,
                 min_latency_ms: 1,
                 latency_spike_probability: 0.01,
+                optimization: PerformanceOptimization::default(),
             },
             data: DataConfig {
                 default_timeframe: "1h".to_string(),

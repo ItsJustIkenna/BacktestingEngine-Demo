@@ -5,6 +5,7 @@ use config::{
     BacktestConfig, DatabaseConfig, TradingConfig, DataConfig, OutputConfig,
     AnalysisMode, AnalysisConfig, OrderBookConfig, ArbitrageRiskLimits,
     ExchangeFeeConfig, GapDetectionConfig, GapFillStrategy, MarketImpactConfig,
+    PerformanceOptimization,
 };
 
 // ============================================================================
@@ -86,6 +87,7 @@ fn test_trading_config_custom() {
         latency_jitter_pct: 0.2, // 20% jitter
         min_latency_ms: 1,
         latency_spike_probability: 0.01, // 1% spike probability
+        optimization: PerformanceOptimization::default(),
     };
     
     assert_eq!(config.initial_capital, 50000.0);

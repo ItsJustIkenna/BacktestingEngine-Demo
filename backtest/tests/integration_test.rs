@@ -70,7 +70,7 @@ mod tests {
             &mut orderbook,
             &mut portfolio,
             &mut risk_manager,
-            market_data,
+            &market_data,
             &config,
         )
         .await;
