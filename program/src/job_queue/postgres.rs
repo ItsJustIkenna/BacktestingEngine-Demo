@@ -39,8 +39,10 @@ use diesel_async::pooled_connection::{AsyncDieselConnectionManager, deadpool};
 use std::sync::Arc;
 use tokio::time::{timeout, Duration};
 
-// Import schema from databaseschema crate - single source of truth
+// Import schema and models from databaseschema crate - single source of truth
 use databaseschema::schema::{backtest_jobs, backtest_results};
+pub use databaseschema::models::backtest_job::{BacktestJobRecord, NewBacktestJob};
+pub use databaseschema::models::backtest_result::NewBacktestResult;
 
 /// Default timeout for acquiring database connections (10 seconds)
 /// This prevents indefinite blocking if the pool is exhausted
@@ -50,66 +52,6 @@ const CONNECTION_TIMEOUT_SECS: u64 = 10;
 /// This prevents transactions from holding connections indefinitely
 #[allow(dead_code)]
 const TRANSACTION_TIMEOUT_SECS: u64 = 300;
-
-// Re-export NewBacktestResult from databaseschema for result storage
-pub use databaseschema::models::backtest_result::NewBacktestResult;
-
-/// Queryable record for backtest_jobs table
-/// 
-/// Note: We define this locally rather than using databaseschema because
-/// the field order must match the table! macro column order exactly.
-#[derive(Queryable, Selectable, Clone, Debug)]
-#[diesel(table_name = backtest_jobs)]
-#[diesel(check_for_backend(diesel::pg::Pg))]
-pub struct BacktestJobRecord {
-    pub id: uuid::Uuid,
-    pub job_id: String,
-    pub symbol: String,
-    pub exchange: String,
-    pub risk_aversion: bigdecimal::BigDecimal,
-    pub inventory_target: bigdecimal::BigDecimal,
-    pub order_size: bigdecimal::BigDecimal,
-    pub initial_capital: bigdecimal::BigDecimal,
-    pub commission_rate: bigdecimal::BigDecimal,
-    pub start_date: Option<chrono::DateTime<chrono::Utc>>,
-    pub end_date: Option<chrono::DateTime<chrono::Utc>>,
-    pub status: String,
-    pub progress: bigdecimal::BigDecimal,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub error_message: Option<String>,
-    pub result_id: Option<uuid::Uuid>,
-    pub strategy_type: String,
-    pub last_heartbeat: Option<chrono::DateTime<chrono::Utc>>,
-    pub current_generation: Option<i32>,
-    pub total_generations: Option<i32>,
-    pub optimization_method: String,
-    pub population_size: Option<i32>,
-    pub generations: Option<i32>,
-    pub current_phase: Option<String>,
-    pub phase_details: Option<serde_json::Value>,
-}
-
-/// Insertable record for new backtest jobs
-#[derive(Insertable)]
-#[diesel(table_name = backtest_jobs)]
-pub struct NewBacktestJob {
-    pub job_id: String,
-    pub symbol: String,
-    pub exchange: String,
-    pub strategy_type: String,
-    pub optimization_method: String,
-    pub population_size: Option<i32>,
-    pub generations: Option<i32>,
-    pub risk_aversion: bigdecimal::BigDecimal,
-    pub inventory_target: bigdecimal::BigDecimal,
-    pub order_size: bigdecimal::BigDecimal,
-    pub initial_capital: bigdecimal::BigDecimal,
-    pub commission_rate: bigdecimal::BigDecimal,
-    pub start_date: Option<chrono::DateTime<chrono::Utc>>,
-    pub end_date: Option<chrono::DateTime<chrono::Utc>>,
-}
 
 pub struct PostgresQueue {
     pool: Arc<deadpool::Pool<AsyncPgConnection>>,

@@ -400,6 +400,26 @@ cronjob:
     backoffLimit: 3
 
 # =============================================================================
+# Distributed GA Configuration
+# =============================================================================
+# Enable distributed genetic algorithm for parallel chromosome evaluation
+# across multiple worker pods using NATS message broker
+
+distributedGA:
+  # Enable distributed GA mode
+  enabled: true
+  
+  # Minimum workers required to start distributed evaluation
+  minWorkers: 2
+  
+  # MessageBrokerEngine URL (custom gRPC/HTTP broker)
+  # The BacktestBrokerClient connects via HTTP to MessageBrokerEngine
+  brokerUrl: "http://message-broker-engine.backtestingengine.svc.cluster.local:8080"
+  
+  # Timeout waiting for workers to connect (seconds)
+  workerTimeout: 30
+
+# =============================================================================
 # Distributed Worker Configuration
 # =============================================================================
 # Distributed workers process chunks in parallel across multiple pods
@@ -407,7 +427,7 @@ cronjob:
 
 distributedWorker:
   # Enable distributed worker deployment
-  enabled: false
+  enabled: true
   
   # Number of worker replicas
   replicaCount: 4

@@ -14,12 +14,14 @@ pub mod monte_carlo;
 pub mod html_export;
 pub mod latency;
 pub mod simd_utils;
+pub mod fast_simulation;
 
 // Re-export main types for easy access
 pub use engine::{BacktestEngine, BacktestResults, AnalysisMetadata, WalkForwardSummary};
 pub use types::{BacktestResult, BacktestEvent};
 pub use html_export::HtmlExporter;
 pub use latency::{LatencySampler, sample_latency};
+pub use fast_simulation::{FastSimulator, MarketFeatures, FastASParams, FastSimResult};
 
 // Utility functions for report generation
 use metrics::{ReportConfig, ReportFormat};

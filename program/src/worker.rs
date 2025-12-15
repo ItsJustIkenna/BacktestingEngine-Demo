@@ -1071,6 +1071,28 @@ impl Worker {
         );
         eprintln!("📊 Data wrapped in Arc (no cloning) - {} points shared across all phases", data_len);
         
+        // === FAST PATH: Pre-compute vectorized market features ONCE for entire dataset ===
+        // This is the key optimization: calculate EWMA volatility, log returns, etc. once
+        // instead of recalculating per-event during each chromosome evaluation.
+        // 
+        // With 6.9M events and 100 chromosomes per generation:
+        // - Old: 6.9M * 100 = 690M async awaits per generation
+        // - New: Pre-compute once, then pure synchronous vectorized evaluation
+        //
+        // Speedup: ~50-100x for GA fitness evaluations
+        let fast_sim_start = std::time::Instant::now();
+        let market_features = Arc::new(backtest::fast_simulation::MarketFeatures::from_market_data(&shared_data));
+        log_info!(GENETIC_LOGGER, "Pre-computed market features in {:.2}ms | {} data points | {} log returns | {} volatility values",
+            fast_sim_start.elapsed().as_millis(),
+            market_features.len(),
+            market_features.log_returns.len(),
+            market_features.volatility.len());
+        
+        // Check if fast simulation mode is enabled (default: true for GA)
+        let use_fast_simulation = std::env::var("GA_FAST_SIMULATION")
+            .map(|v| v != "false" && v != "0")
+            .unwrap_or(true);
+        
         // Create genetic config
         let config = GeneticConfig {
             population_size: params.population_size,
@@ -1087,6 +1109,7 @@ impl Worker {
         let data_arc = Arc::clone(&shared_data);
         let data_for_backtest = Arc::clone(&shared_data);
         let data_for_walkforward = Arc::clone(&shared_data);
+        let features_arc = Arc::clone(&market_features);
         // Create separate clones for distributed mode fallback (local GA uses these too)
         let data_for_distributed = Arc::clone(&shared_data);
         let symbol = params.symbol.clone();
@@ -1106,22 +1129,80 @@ impl Worker {
         // Use static counter to track fitness evaluation progress
         static FITNESS_EVAL_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         
+        // === FITNESS FUNCTION ===
+        // Two modes:
+        // 1. FAST MODE (default): Vectorized simulation using pre-computed features
+        //    - ~50-100x faster than event-by-event simulation
+        //    - No async overhead, pure CPU-bound computation
+        //    - Suitable for exploring parameter space during GA
+        // 2. DETAILED MODE: Full event-by-event simulation with async strategy processing
+        //    - Used for final validation of best chromosome
+        //    - More accurate but much slower
+        
         let fitness_fn: genetic::AsyncFitnessFn<AvellanedaStoikovChromosome> = Arc::new(move |chromosome: &AvellanedaStoikovChromosome| {
+            let features = Arc::clone(&features_arc);
             let data = Arc::clone(&data_arc);
             let symbol = symbol.clone();
             let exchange = exchange.clone();
-            let chr = chromosome.clone(); // Clone the chromosome to move into async
+            let chr = chromosome.clone();
             
             Box::pin(async move {
                 let eval_id = FITNESS_EVAL_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let eval_start = std::time::Instant::now();
                 
-                // GA FITNESS SAMPLING: Sample every Nth point to accelerate fitness evaluation
-                // This provides ~3-5x speedup with minimal impact on relative fitness ranking
-                // ENV: GA_FITNESS_SAMPLE_RATE (default: 3 = use every 3rd point = 3x speedup)
-                let sample_rate: usize = std::env::var("GA_FITNESS_SAMPLE_RATE")
+                // === FAST PATH: Vectorized simulation (default for GA) ===
+                // This is synchronous - no .await overhead for millions of data points
+                if use_fast_simulation {
+                    // Convert chromosome to fast simulation parameters
+                    let fast_params = backtest::fast_simulation::FastASParams {
+                        risk_aversion: chr.risk_aversion,
+                        inventory_target: chr.inventory_target,
+                        order_size_pct: chr.order_size_pct,
+                        volatility_cap: chr.volatility_cap,
+                        min_spread_bps: chr.min_spread_bps,
+                        time_horizon_minutes: chr.time_horizon_minutes,
+                        fee_rate: commission_rate,
+                    };
+                    
+                    // Run vectorized simulation (synchronous, no async overhead!)
+                    let simulator = backtest::fast_simulation::FastSimulator::new(&features, initial_capital);
+                    let fast_result = simulator.evaluate(&fast_params);
+                    
+                    // Convert to standard BacktestResult and calculate fitness
+                    let backtest_result: backtest::types::BacktestResult = fast_result.clone().into();
+                    let fitness = calculate_comprehensive_fitness(&backtest_result, initial_capital);
+                    
+                    log_info_structured!(GENETIC_LOGGER, "FAST_FITNESS_EVAL",
+                        "event" => "FAST_FITNESS_EVAL",
+                        "eval_id" => eval_id,
+                        "fitness" => format!("{:.6}", fitness),
+                        "pnl" => format!("{:.2}", fast_result.total_pnl),
+                        "sharpe" => format!("{:.3}", fast_result.sharpe_ratio),
+                        "trades" => fast_result.num_trades,
+                        "elapsed_ms" => eval_start.elapsed().as_millis()
+                    );
+                    
+                    return genetic::FitnessResult::new(fitness, fast_result.equity_curve);
+                }
+                
+                // === DETAILED PATH: Full event-by-event simulation (legacy/validation) ===
+                // GA FITNESS SAMPLING: Adaptive sampling based on dataset size
+                // Target ~500K events per evaluation for consistent ~10-15 second evaluations
+                // ENV: GA_FITNESS_SAMPLE_RATE overrides adaptive calculation
+                const TARGET_EVENTS_PER_EVAL: usize = 500_000;
+                
+                let base_sample_rate: usize = std::env::var("GA_FITNESS_SAMPLE_RATE")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(3);
+                    .unwrap_or(0); // 0 means use adaptive
+                
+                let sample_rate = if base_sample_rate > 0 {
+                    base_sample_rate
+                } else {
+                    // Adaptive: calculate sample rate to hit ~500K events
+                    // 6.9M / 500K = 14, 2M / 500K = 4, 500K / 500K = 1
+                    (data.len() / TARGET_EVENTS_PER_EVAL).max(1)
+                };
                 
                 let sampled_data: Vec<dataloader::MarketData> = if sample_rate > 1 {
                     data.iter().step_by(sample_rate).cloned().collect()
@@ -1135,6 +1216,7 @@ impl Worker {
                     "original_data_len" => data.len(),
                     "sampled_data_len" => sampled_data.len(),
                     "sample_rate" => sample_rate,
+                    "adaptive" => base_sample_rate == 0,
                     "risk_aversion" => format!("{:.4}", chr.risk_aversion)
                 );
                 let eval_start = std::time::Instant::now();

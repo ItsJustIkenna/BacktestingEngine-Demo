@@ -91,6 +91,18 @@ spec:
               value: "false"
             {{- end }}
             
+            # Distributed GA configuration
+            {{- if .Values.distributedGA.enabled }}
+            - name: DISTRIBUTED_GA_ENABLED
+              value: "true"
+            - name: DISTRIBUTED_GA_MIN_WORKERS
+              value: "{{ .Values.distributedGA.minWorkers | default 2 }}"
+            - name: MESSAGE_BROKER_URL
+              value: "{{ .Values.distributedGA.brokerUrl }}"
+            - name: DISTRIBUTED_GA_WORKER_TIMEOUT
+              value: "{{ .Values.distributedGA.workerTimeout | default 30 }}"
+            {{- end }}
+            
             {{- if and .Values.config.secrets .Values.config.secrets.jwt_secret }}
             - name: JWT_SECRET
               valueFrom:
