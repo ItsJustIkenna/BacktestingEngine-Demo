@@ -414,7 +414,7 @@ distributedGA:
   
   # MessageBrokerEngine URL (custom gRPC/HTTP broker)
   # The BacktestBrokerClient connects via HTTP to MessageBrokerEngine
-  brokerUrl: "http://message-broker-engine.backtestingengine.svc.cluster.local:8080"
+  brokerUrl: "http://message-broker-engine.messagebroker.svc.cluster.local:8080"
   
   # Timeout waiting for workers to connect (seconds)
   workerTimeout: 30
