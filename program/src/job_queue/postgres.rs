@@ -358,7 +358,7 @@ impl JobQueue for PostgresQueue {
                 
                 if let Some(job_record) = job {
                     let now = Utc::now();
-                    diesel::update(backtest_jobs::table.find(job_record.id))
+                    let rows_updated = diesel::update(backtest_jobs::table.find(job_record.id))
                         .set((
                             backtest_jobs::status.eq("running"),
                             backtest_jobs::started_at.eq(Some(now)),
@@ -366,6 +366,8 @@ impl JobQueue for PostgresQueue {
                         ))
                         .execute(conn)
                         .await?;
+                    
+                    eprintln!("🔄 DB_STATUS_UPDATE | job_id={} | rows_updated={} | new_status=running", job_record.job_id, rows_updated);
                     
                     // Create updated record with started_at set
                     let mut updated_record = job_record;

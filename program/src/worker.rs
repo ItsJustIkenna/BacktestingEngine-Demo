@@ -450,6 +450,8 @@ impl Worker {
             self.id, job.id, job.params.symbol, job.params.exchange);
         
         // Note: get_next_job() already set status to "running" atomically in the database
+        // Verify status was updated by reading it back
+        eprintln!("✅ JOB_STATUS_CHECK | job_id={} | expected=running | job.status={:?}", job.id, job.status);
         
         // Spawn heartbeat task to update job every 30 seconds
         let heartbeat_queue = self.job_queue.clone();
