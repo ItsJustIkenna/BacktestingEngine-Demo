@@ -218,6 +218,8 @@ impl DataLoader {
     /// Load trade data directly from trades table with enhanced error handling
     #[cfg(feature = "postgres")]
     pub async fn load_trade_data(&self, params: &QueryParams) -> Result<Vec<TradeData>> {
+        use bigdecimal::ToPrimitive;
+        
         // Load directly from trades table instead of historical_orders
         let trades = self.retry_database_operation(|| {
             databaseschema::ops::trades_ops::get_trades_by_symbol(

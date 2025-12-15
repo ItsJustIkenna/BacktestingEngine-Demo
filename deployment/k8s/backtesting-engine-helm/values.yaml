@@ -59,7 +59,7 @@ ui:
     tag: "latest"
     pullPolicy: IfNotPresent
   service:
-    type: ClusterIP
+    type: LoadBalancer  # Changed from ClusterIP - gives public IP
     port: 80
   resources:
     limits:
