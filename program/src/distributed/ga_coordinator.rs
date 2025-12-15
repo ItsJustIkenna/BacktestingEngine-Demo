@@ -70,8 +70,10 @@ pub struct DistributedGAConfig {
 /// Worker capacity tracking
 #[derive(Debug, Clone)]
 struct WorkerInfo {
+    #[allow(dead_code)]
     worker_id: String,
     capacity: i32,
+    #[allow(dead_code)]
     last_seen: Instant,
 }
 

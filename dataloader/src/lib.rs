@@ -4,7 +4,7 @@ pub mod query;
 
 #[cfg(feature = "postgres")]
 use anyhow::Result;
-use bigdecimal::{BigDecimal, ToPrimitive};
+use bigdecimal::BigDecimal;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

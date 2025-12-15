@@ -33,25 +33,22 @@ const PROGRESS_INTERVAL_SECS: u64 = 5;
 /// Coordinator for distributed backtesting
 pub struct DistributedCoordinator {
     broker: Arc<BacktestBrokerClient>,
-    db_url: String,
     chunk_calculator: ChunkCalculator,
 }
 
 impl DistributedCoordinator {
     /// Create a new coordinator
-    pub fn new(db_url: impl Into<String>) -> Self {
+    pub fn new(_db_url: impl Into<String>) -> Self {
         Self {
             broker: get_broker_client(),
-            db_url: db_url.into(),
             chunk_calculator: ChunkCalculator::adaptive(),
         }
     }
     
     /// Create with custom broker
-    pub fn with_broker(db_url: impl Into<String>, broker: Arc<BacktestBrokerClient>) -> Self {
+    pub fn with_broker(_db_url: impl Into<String>, broker: Arc<BacktestBrokerClient>) -> Self {
         Self {
             broker,
-            db_url: db_url.into(),
             chunk_calculator: ChunkCalculator::adaptive(),
         }
     }

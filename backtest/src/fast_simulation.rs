@@ -49,30 +49,34 @@ impl MarketFeatures {
         let mut trade_sides = Vec::with_capacity(n);
         let mut volumes = Vec::with_capacity(n);
         
-        // Extract raw data
+        // Extract raw data - optimized for TradeData which has pre-computed f64 values
+        // Progress: log every 1M records
+        let mut processed = 0usize;
         for md in data {
             match md {
                 dataloader::MarketData::Trade(t) => {
                     prices.push(t.price_f64);
                     timestamps.push(t.timestamp.timestamp_millis());
                     volumes.push(t.quantity_f64);
-                    trade_sides.push(match t.side.to_lowercase().as_str() {
-                        "buy" | "b" => 1.0,
-                        "sell" | "s" => -1.0,
+                    trade_sides.push(match t.side.as_str() {
+                        "buy" | "Buy" | "BUY" | "b" | "B" => 1.0,
+                        "sell" | "Sell" | "SELL" | "s" | "S" => -1.0,
                         _ => 0.0,
                     });
                 }
                 dataloader::MarketData::Candle(c) => {
-                    // Use close price for candles
-                    let price = c.close.to_string().parse().unwrap_or(0.0);
+                    // Use pre-computed or convert BigDecimal (slower path)
+                    use bigdecimal::ToPrimitive;
+                    let price = c.close.to_f64().unwrap_or(0.0);
                     prices.push(price);
                     timestamps.push(c.timestamp.timestamp_millis());
-                    volumes.push(c.volume.to_string().parse().unwrap_or(0.0));
+                    volumes.push(c.volume.to_f64().unwrap_or(0.0));
                     trade_sides.push(0.0); // No side info for candles
                 }
                 #[cfg(feature = "postgres")]
                 dataloader::MarketData::Snapshot(s) => {
-                    let price = s.price_level.to_string().parse().unwrap_or(0.0);
+                    use bigdecimal::ToPrimitive;
+                    let price = s.price_level.to_f64().unwrap_or(0.0);
                     prices.push(price);
                     timestamps.push(s.timestamp.timestamp_millis());
                     volumes.push(0.0);
@@ -80,14 +84,20 @@ impl MarketFeatures {
                 }
                 #[cfg(feature = "postgres")]
                 dataloader::MarketData::Order(o) => {
-                    let price = o.price_level.to_string().parse().unwrap_or(0.0);
+                    use bigdecimal::ToPrimitive;
+                    let price = o.price_level.to_f64().unwrap_or(0.0);
                     prices.push(price);
                     timestamps.push(o.timestamp.timestamp_millis());
-                    volumes.push(o.quantity.to_string().parse().unwrap_or(0.0));
+                    volumes.push(o.quantity.to_f64().unwrap_or(0.0));
                     trade_sides.push(0.0);
                 }
             }
+            processed += 1;
+            if processed % 1_000_000 == 0 {
+                eprintln!("  ... extracted {}/{}M features", processed / 1_000_000, n / 1_000_000);
+            }
         }
+        eprintln!("  Feature extraction complete: {} records", processed);
         
         // Compute log returns
         let log_returns = compute_log_returns(&prices);

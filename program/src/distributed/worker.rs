@@ -33,29 +33,25 @@ pub struct DistributedWorker {
     worker_id: String,
     /// Broker client for pub/sub
     broker: Arc<BacktestBrokerClient>,
-    /// Database URL for loading data
-    db_url: String,
     /// Shutdown flag
     shutdown: bool,
 }
 
 impl DistributedWorker {
     /// Create a new distributed worker
-    pub fn new(worker_id: impl Into<String>, db_url: impl Into<String>) -> Self {
+    pub fn new(worker_id: impl Into<String>, _db_url: impl Into<String>) -> Self {
         Self {
             worker_id: worker_id.into(),
             broker: get_broker_client(),
-            db_url: db_url.into(),
             shutdown: false,
         }
     }
     
     /// Create with custom broker client
-    pub fn with_broker(worker_id: impl Into<String>, db_url: impl Into<String>, broker: Arc<BacktestBrokerClient>) -> Self {
+    pub fn with_broker(worker_id: impl Into<String>, _db_url: impl Into<String>, broker: Arc<BacktestBrokerClient>) -> Self {
         Self {
             worker_id: worker_id.into(),
             broker,
-            db_url: db_url.into(),
             shutdown: false,
         }
     }
