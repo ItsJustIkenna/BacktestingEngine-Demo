@@ -50,10 +50,10 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           # Run in worker mode - processes background jobs, no HTTP server
-          # Using 1 worker to allow full memory for loading ALL historical data
-          # Scale horizontally with more pods instead of more workers per pod
+          # Using 1 thread to allow full memory for loading ALL historical data
+          # Scale horizontally with more pods instead of more threads per pod
           command: ["/bin/server"]
-          args: ["worker", "--workers", "{{ .Values.config.performance.worker_threads | default 1 }}"]
+          args: ["worker", "--threads", "{{ .Values.config.performance.worker_threads | default 1 }}"]
           env:
             - name: DATABASE_PASSWORD
               valueFrom:
