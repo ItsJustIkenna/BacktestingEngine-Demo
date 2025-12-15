@@ -57,12 +57,10 @@ spec:
           command: ["/bin/server"]
           args: 
             - "distributed-worker"
-            - "--threads"
-            - "{{ .Values.distributedWorker.threads }}"
-            {{- if .Values.distributedWorker.brokerAddress }}
-            - "--broker-address"
-            - "{{ .Values.distributedWorker.brokerAddress }}"
-            {{- end }}
+            - "--workers"
+            - "{{ .Values.distributedWorker.threads | default 4 }}"
+            - "--prefix"
+            - "k8s-worker"
           env:
             - name: DATABASE_PASSWORD
               valueFrom:
