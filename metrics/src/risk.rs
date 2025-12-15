@@ -189,8 +189,12 @@ fn simd_mean(data: &[f64]) -> Option<f64> {
 /// SIMD-accelerated standard deviation
 #[inline]
 fn simd_std_dev(data: &[f64]) -> Option<f64> {
-	if data.len() < 2 {
+	if data.is_empty() {
 		return None;
+	}
+	if data.len() == 1 {
+		// Single value has zero volatility
+		return Some(0.0);
 	}
 
 	let mean = simd_mean(data)?;
