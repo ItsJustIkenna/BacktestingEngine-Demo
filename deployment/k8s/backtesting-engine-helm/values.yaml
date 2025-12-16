@@ -443,19 +443,19 @@ distributedWorker:
   # Note: MessageBrokerEngine URL is configured in distributedGA.brokerUrl
   
   # Resource limits for distributed workers
-  # Workers process 200K events per chunk, need less memory than full backtest
+  # Workers cache broadcasted market data and evaluate chromosomes
   resources:
     limits:
-      cpu: "1500m"
-      memory: "3Gi"       # Reduced for Docker Desktop
+      cpu: "4000m"        # 4 cores for parallel chromosome evaluation
+      memory: "6Gi"       # Cache market data + evaluation headroom
     requests:
-      cpu: "500m"
-      memory: "1Gi"       # Reduced for Docker Desktop
+      cpu: "1000m"        # Increased request for better scheduling
+      memory: "2Gi"       # Increased request for data caching
   
   # Autoscaling configuration
   autoscaling:
     enabled: true
-    minReplicas: 2
+    minReplicas: 3        # More workers for faster GA evaluation
     maxReplicas: 16
     targetCPUUtilizationPercentage: 70
     targetMemoryUtilizationPercentage: 80
