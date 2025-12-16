@@ -58,7 +58,7 @@ spec:
           args: 
             - "distributed-worker"
             - "--workers"
-            - "{{ .Values.distributedWorker.threads | default 4 }}"
+            - {{ .Values.distributedWorker.threads | default 4 | quote }}
             - "--prefix"
             - "k8s-worker"
           env:
