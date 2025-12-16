@@ -145,10 +145,8 @@ impl BacktestBrokerClient {
         let (data_broadcast_sender, _) = broadcast::channel(100);
         let (data_ack_sender, _) = broadcast::channel(100);
         
-        log_info_structured!(MAIN_LOGGER, "BROKER_CLIENT_INIT",
-            "event" => "BROKER_CLIENT_INIT",
-            "mode" => format!("{:?}", mode)
-        );
+        // Note: Logging skipped in constructor to avoid Lazy initialization issues during tests
+        // The mode is logged when connect() is called instead
         
         Self {
             mode,
@@ -187,6 +185,11 @@ impl BacktestBrokerClient {
     
     /// Connect to the message broker (only needed for Network mode)
     pub async fn connect(&self) -> Result<(), BrokerError> {
+        log_info_structured!(MAIN_LOGGER, "BROKER_CLIENT_INIT",
+            "event" => "BROKER_CLIENT_INIT",
+            "mode" => format!("{:?}", self.mode)
+        );
+        
         match &self.mode {
             BrokerMode::InProcess => {
                 log_debug!(MAIN_LOGGER, "In-process mode, no connection needed");
