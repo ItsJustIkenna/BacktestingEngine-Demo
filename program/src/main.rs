@@ -205,6 +205,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("📡 Connected to message broker, subscribed to chromosome results");
                 println!("   Requests published to: ga.chromosome.requests");
                 println!("   Results collected from: ga.chromosome.results");
+                
+                // Spawn job processor workers that will pick up queued jobs and distribute them
+                let num_job_processors = 2; // 2 processors to handle concurrent jobs
+                println!("👷 Starting {} job processors for distributed work...", num_job_processors);
+                
+                for i in 0..num_job_processors {
+                    let queue = Arc::clone(&job_queue);
+                    tokio::spawn(async move {
+                        let worker = worker::Worker::new(i, queue);
+                        worker.run().await;
+                    });
+                }
             } else {
                 println!("📡 Coordinator mode with local processing");
             }
