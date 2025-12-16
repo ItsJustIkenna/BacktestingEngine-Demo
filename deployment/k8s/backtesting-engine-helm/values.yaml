@@ -44,11 +44,11 @@ api:
   # API pod resource limits - reduced for Docker Desktop compatibility
   resources:
     limits:
-      cpu: "2000m"
-      memory: "4Gi"      # Reduced for Docker Desktop (increase for production)
+      cpu: "1000m"
+      memory: "2Gi"      # Reduced for Docker Desktop (increase for production)
     requests:
-      cpu: "500m"
-      memory: "2Gi"      # Reduced for Docker Desktop scheduling
+      cpu: "250m"
+      memory: "1Gi"      # Reduced for Docker Desktop scheduling
 
 # UI configuration
 ui:
@@ -79,11 +79,11 @@ ui:
 # Resource requests and limits
 resources:
   limits:
-    cpu: "4000m"      # 4 CPU cores - reduced for Docker Desktop compatibility
-    memory: "8Gi"     # 8GB - reduced for Docker Desktop (increase for production)
+    cpu: "2000m"      # 2 CPU cores - reduced for Docker Desktop compatibility
+    memory: "4Gi"     # 4GB - reduced for Docker Desktop (increase for production)
   requests:
-    cpu: "1000m"      # 1 core guaranteed (lower request = easier to schedule)
-    memory: "4Gi"     # 4GB baseline - reduced for Docker Desktop scheduling
+    cpu: "500m"       # 0.5 core guaranteed (lower request = easier to schedule)
+    memory: "2Gi"     # 2GB baseline - reduced for Docker Desktop scheduling
 
 # Node selection
 nodeSelector: {}
@@ -434,8 +434,8 @@ distributedWorker:
   # Enable distributed worker deployment
   enabled: true
   
-  # Number of worker replicas
-  replicaCount: 4
+  # Number of worker replicas (reduced for Docker Desktop - increase for production)
+  replicaCount: 2
   
   # Number of threads per worker pod
   threads: 4
@@ -446,11 +446,11 @@ distributedWorker:
   # Workers process 200K events per chunk, need less memory than full backtest
   resources:
     limits:
-      cpu: "2000m"
-      memory: "4Gi"
+      cpu: "1500m"
+      memory: "3Gi"       # Reduced for Docker Desktop
     requests:
-      cpu: "1000m"
-      memory: "2Gi"
+      cpu: "500m"
+      memory: "1Gi"       # Reduced for Docker Desktop
   
   # Autoscaling configuration
   autoscaling:
