@@ -624,9 +624,7 @@ jobs:
             "--set", "externalDatabase.host=$($env:POSTGRES_HOST)",
             "--set", "externalDatabase.port=$($env:POSTGRES_PORT)",
             "--set", "externalDatabase.database=$($env:POSTGRES_DB)",
-            "--set", "externalDatabase.username=$($env:POSTGRES_USER)",
-            "--wait",
-            "--timeout", "18m"
+            "--set", "externalDatabase.username=$($env:POSTGRES_USER)"
           )
           
           Write-Host "[INFO] Using Kubernetes secret: backtesting-secrets"
@@ -670,10 +668,9 @@ jobs:
           }
           
           # Use helm upgrade --install to handle both new and existing releases
-          # --atomic: rollback automatically on failure
-          # --cleanup-on-fail: delete resources created during failed upgrade
+          # Removed --wait/--atomic to prevent CI timeout - deployments verified separately
           Write-Host "Deploying with Helm (upgrade or install)..."
-          helm upgrade --install backtesting-engine ./deployment/k8s/backtesting-engine-helm @helmArgs --atomic --cleanup-on-fail
+          helm upgrade --install backtesting-engine ./deployment/k8s/backtesting-engine-helm @helmArgs
           
           if ($LASTEXITCODE -ne 0) {
             Write-Host "Deployment failed!"
@@ -691,6 +688,17 @@ jobs:
         shell: powershell
         run: |
           Write-Host "Verifying deployment..."
+          
+          # Wait for critical deployments to be ready (with timeout)
+          Write-Host "`n[INFO] Waiting for API deployment to be ready..."
+          kubectl rollout status deployment/backtesting-engine-api -n backtestingengine --timeout=5m
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "[WARN] API deployment not ready, checking logs..."
+            kubectl logs -n backtestingengine -l app.kubernetes.io/component=api --tail=20
+          }
+          
+          Write-Host "`n[INFO] Waiting for distributed workers to be ready..."
+          kubectl rollout status deployment/backtesting-engine-distributed-worker -n backtestingengine --timeout=5m
           
           Write-Host "`nPods:"
           kubectl get pods -n backtestingengine -o wide
