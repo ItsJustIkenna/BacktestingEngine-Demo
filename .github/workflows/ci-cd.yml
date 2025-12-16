@@ -636,24 +636,37 @@ jobs:
           # Check and clear any stuck Helm operations
           Write-Host "[INFO] Checking Helm release status..."
           $ErrorActionPreference = 'SilentlyContinue'
-          $helmList = helm list -n backtestingengine --all -o json | ConvertFrom-Json
+          $helmListJson = helm list -n backtestingengine --all -o json 2>$null
           $ErrorActionPreference = 'Stop'
           
-          if ($helmList -and $helmList.status -match "pending") {
-            Write-Host "[WARN] Found stuck release in status: $($helmList.status)"
+          if ($helmListJson) {
+            $helmReleases = $helmListJson | ConvertFrom-Json
+            # Handle both array and single object responses
+            $release = if ($helmReleases -is [Array]) { $helmReleases | Where-Object { $_.name -eq "backtesting-engine" } | Select-Object -First 1 } else { $helmReleases }
             
-            if ($helmList.status -eq "pending-install") {
-              Write-Host "[FIX] Deleting failed initial install..."
-              helm uninstall backtesting-engine -n backtestingengine --wait --timeout 2m
+            if ($release -and $release.status -match "pending") {
+              Write-Host "[WARN] Found stuck release in status: $($release.status)"
+              
+              if ($release.status -eq "pending-install") {
+                Write-Host "[FIX] Deleting failed initial install..."
+                helm uninstall backtesting-engine -n backtestingengine --wait --timeout 2m 2>$null
+              } else {
+                Write-Host "[FIX] Rolling back stuck release..."
+                helm rollback backtesting-engine -n backtestingengine --wait --timeout 2m 2>$null
+              }
+              
+              Start-Sleep -Seconds 5
+              Write-Host "[OK] Release cleanup completed"
+            } elseif ($release -and $release.status -eq "failed") {
+              Write-Host "[WARN] Found failed release, rolling back..."
+              helm rollback backtesting-engine -n backtestingengine --wait --timeout 2m 2>$null
+              Start-Sleep -Seconds 5
+              Write-Host "[OK] Rollback completed"
             } else {
-              Write-Host "[FIX] Rolling back stuck release..."
-              helm rollback backtesting-engine -n backtestingengine --wait --timeout 2m
+              Write-Host "[OK] Release status: $($release.status)"
             }
-            
-            Start-Sleep -Seconds 5
-            Write-Host "[OK] Release cleanup completed"
           } else {
-            Write-Host "[OK] No stuck releases found"
+            Write-Host "[OK] No existing releases found"
           }
           
           # Use helm upgrade --install to handle both new and existing releases
