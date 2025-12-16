@@ -80,10 +80,10 @@ ui:
 resources:
   limits:
     cpu: "2000m"      # 2 CPU cores - reduced for Docker Desktop compatibility
-    memory: "4Gi"     # 4GB - reduced for Docker Desktop (increase for production)
+    memory: "8Gi"     # 8GB - increased for loading large market data sets
   requests:
     cpu: "500m"       # 0.5 core guaranteed (lower request = easier to schedule)
-    memory: "2Gi"     # 2GB baseline - reduced for Docker Desktop scheduling
+    memory: "4Gi"     # 4GB baseline for market data loading
 
 # Node selection
 nodeSelector: {}
