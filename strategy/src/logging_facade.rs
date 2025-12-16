@@ -18,16 +18,21 @@ fn create_elasticsearch_config() -> LoggerConfig {
         // Get credentials from environment variables set by Kubernetes
         let endpoint = std::env::var("ELASTICSEARCH_ENDPOINT")
             .or_else(|_| std::env::var("ELASTIC_CLOUD_ENDPOINT"))
-            .unwrap_or_else(|_| "https://my-observability-deployment-76d771.es.us-east-2.aws.elastic-cloud.com".to_string());
+            .unwrap_or_default();
         let username = std::env::var("ELASTICSEARCH_USERNAME")
             .or_else(|_| std::env::var("ELASTIC_CLOUD_USERNAME"))
             .unwrap_or_else(|_| "elastic".to_string());
         let password = std::env::var("ELASTICSEARCH_PASSWORD")
             .or_else(|_| std::env::var("ELASTIC_CLOUD_PASSWORD"))
-            .unwrap_or_else(|_| "mN9CNxqYU9J0nw4aywXVxTAw".to_string());
+            .unwrap_or_default();
+
+        // Only configure elasticsearch if endpoint is set
+        if endpoint.is_empty() {
+            return LoggerConfig::default();
+        }
 
         let mut options = HashMap::new();
-        options.insert("index".to_string(), "backtestingengine-logs".to_string());
+        options.insert("index".to_string(), "backtestingengine-strategy-logs".to_string());
 
         LoggerConfig {
             level: std::env::var("LOG_LEVEL").unwrap_or_else(|_| "info".to_string()),

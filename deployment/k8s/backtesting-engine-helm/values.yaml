@@ -403,7 +403,10 @@ cronjob:
 # Distributed GA Configuration
 # =============================================================================
 # Enable distributed genetic algorithm for parallel chromosome evaluation
-# across multiple worker pods using NATS message broker
+# across multiple worker pods using MessageBrokerEngine TCP connections.
+# 
+# The broker client now supports network mode via TCP connections.
+# Set MESSAGE_BROKER_URL to enable cross-pod communication.
 
 distributedGA:
   # Enable distributed GA mode
@@ -435,8 +438,7 @@ distributedWorker:
   # Number of threads per worker pod
   threads: 4
   
-  # MessageBrokerEngine address (leave empty for in-process mode)
-  brokerAddress: ""
+  # Note: MessageBrokerEngine URL is configured in distributedGA.brokerUrl
   
   # Resource limits for distributed workers
   # Workers process 200K events per chunk, need less memory than full backtest

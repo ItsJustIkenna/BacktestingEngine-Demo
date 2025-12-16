@@ -83,11 +83,9 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             
-            # MessageBrokerEngine configuration
-            {{- if .Values.distributedWorker.brokerAddress }}
-            - name: BROKER_ADDRESS
-              value: "{{ .Values.distributedWorker.brokerAddress }}"
-            {{- end }}
+            # MessageBrokerEngine configuration - required for distributed GA
+            - name: MESSAGE_BROKER_URL
+              value: "{{ .Values.distributedGA.brokerUrl }}"
             
             # Elasticsearch logging configuration
             {{- if .Values.secrets.elasticsearch.enabled }}

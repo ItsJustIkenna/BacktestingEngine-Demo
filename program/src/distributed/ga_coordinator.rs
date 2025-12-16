@@ -171,7 +171,7 @@ impl DistributedGACoordinator {
         
         // Publish to data broadcast topic
         // Workers subscribed to ga.data.broadcast will receive and cache
-        self.broker.publish_data_broadcast(request)
+        self.broker.publish_data_broadcast(request).await
             .map_err(|e| CoordinatorError::BrokerError(e.to_string()))?;
         
         self.data_cache_key = Some(cache_key.clone());
@@ -270,7 +270,7 @@ impl DistributedGACoordinator {
             // Publish chromosome evaluation requests
             for (idx, chromo) in population.iter().enumerate() {
                 let request = self.create_eval_request(generation as i32, idx as i32, chromo, cache_key)?;
-                self.broker.publish_chromosome_request(request)
+                self.broker.publish_chromosome_request(request).await
                     .map_err(|e| CoordinatorError::BrokerError(e.to_string()))?;
             }
             

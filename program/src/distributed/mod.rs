@@ -57,7 +57,7 @@ pub use chunking::{ChunkCalculator, BacktestChunkInfo, ChunkingStrategy};
 pub use coordinator::DistributedCoordinator;
 pub use worker::DistributedWorker;
 pub use aggregator::ResultAggregator;
-pub use broker_client::BacktestBrokerClient;
+pub use broker_client::{BacktestBrokerClient, BrokerMode, BrokerRole, get_broker_client, init_broker_client};
 pub use ga_coordinator::{DistributedGACoordinator, DistributedGAConfig};
 pub use ga_worker::DistributedGAWorker;
 

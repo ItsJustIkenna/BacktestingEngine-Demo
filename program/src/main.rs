@@ -5,7 +5,7 @@ use std::sync::Arc;
 use program::job_queue::{JobQueue, PostgresQueue};
 use program::worker;
 use program::api;
-use program::distributed::{DistributedWorker, broker_client::get_broker_client};
+use program::distributed::DistributedWorker;
 
 #[derive(Parser)]
 #[command(name = "backtesting-engine")]
@@ -135,12 +135,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         
         Commands::DistributedWorker { workers, prefix } => {
+            use program::distributed::broker_client::{init_broker_client, BrokerRole};
+            
             let database_url = std::env::var("DATABASE_URL")
                 .expect("DATABASE_URL must be set");
 
             println!("🌐 Starting {} distributed workers (prefix: {})...", workers, prefix);
             
-            let broker = get_broker_client();
+            // Initialize broker connection
+            let broker = init_broker_client().await
+                .map_err(|e| format!("Failed to connect to broker: {:?}", e))?;
+            
+            // Start receiver for chromosome requests (workers receive work from coordinator)
+            broker.start_receiver(BrokerRole::Worker).await
+                .map_err(|e| format!("Failed to start broker receiver: {:?}", e))?;
+            
+            println!("📡 Connected to message broker, subscribed to chromosome requests");
             
             // Spawn distributed worker tasks
             let mut handles = Vec::with_capacity(workers);
@@ -161,8 +171,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             
             println!("✅ Distributed workers running");
-            println!("   Workers subscribe to: backtest.chunks.*");
-            println!("   Results published to: backtest.results.{{job_id}}");
+            println!("   Workers subscribe to: ga.chromosome.requests");
+            println!("   Results published to: ga.chromosome.results");
             
             // Wait for all workers
             for handle in handles {
@@ -171,6 +181,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         
         Commands::Coordinator { host, port, distributed } => {
+            use program::distributed::broker_client::{init_broker_client, BrokerRole};
+            
             let database_url = std::env::var("DATABASE_URL")
                 .expect("DATABASE_URL must be set");
 
@@ -181,8 +193,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if distributed {
                 println!("🌐 Coordinator mode with distributed processing");
-                println!("   Chunks published to: backtest.chunks.{{job_id}}");
-                println!("   Results collected from: backtest.results.{{job_id}}");
+                
+                // Initialize broker connection for distributed mode
+                let broker = init_broker_client().await
+                    .map_err(|e| format!("Failed to connect to broker: {:?}", e))?;
+                
+                // Start receiver for chromosome results (coordinator receives results from workers)
+                broker.start_receiver(BrokerRole::Coordinator).await
+                    .map_err(|e| format!("Failed to start broker receiver: {:?}", e))?;
+                
+                println!("📡 Connected to message broker, subscribed to chromosome results");
+                println!("   Requests published to: ga.chromosome.requests");
+                println!("   Results collected from: ga.chromosome.results");
             } else {
                 println!("📡 Coordinator mode with local processing");
             }

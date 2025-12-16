@@ -193,7 +193,7 @@ impl DistributedGAWorker {
             capacity: MAX_CONCURRENT_EVALS as i32,
         };
         
-        let _ = self.broker.publish_data_ack(ack);
+        let _ = self.broker.publish_data_ack(ack).await;
     }
     
     /// Process a chromosome evaluation request
@@ -255,7 +255,7 @@ impl DistributedGAWorker {
             processing_duration_ms: elapsed.as_millis() as i64,
         };
         
-        let _ = self.broker.publish_chromosome_result(response);
+        let _ = self.broker.publish_chromosome_result(response).await;
     }
     
     /// Evaluate a chromosome against the cached data
@@ -404,7 +404,7 @@ impl DistributedGAWorker {
             processing_duration_ms: 0,
         };
         
-        let _ = self.broker.publish_chromosome_result(response);
+        let _ = self.broker.publish_chromosome_result(response).await;
     }
     
     /// Create a lightweight clone for spawning tasks

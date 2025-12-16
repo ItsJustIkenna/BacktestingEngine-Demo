@@ -2,18 +2,32 @@
 //!
 //! Provides a unified interface for publishing and subscribing to
 //! backtest messages via MessageBrokerEngine.
+//!
+//! # Network Mode
+//!
+//! When MESSAGE_BROKER_URL is set, the client will use TCP connections to
+//! MessageBrokerEngine for cross-pod communication. This enables true
+//! distributed genetic algorithm optimization.
+//!
+//! # In-Process Mode (Default)
+//!
+//! Uses tokio broadcast channels. Only works within a single process.
 
 use std::sync::Arc;
 use std::collections::HashMap;
-use tokio::sync::{broadcast, RwLock};
+use std::time::Duration;
+use tokio::sync::{broadcast, RwLock, Mutex};
+use tokio::net::TcpStream;
+use tokio::io::AsyncWriteExt;
 
 use protocol::broker::messages::{
     BacktestChunk, BacktestChunkResult, BacktestProgress, 
     BacktestCancelRequest, ChromosomeEvalRequest, ChromosomeEvalResult,
     DataBroadcastRequest, DataCacheAck,
 };
+use prost::Message;
 
-use crate::{log_info_structured, log_debug};
+use crate::{log_info_structured, log_debug, log_error};
 use crate::logging_facade::MAIN_LOGGER;
 
 /// Connection mode for the broker client
@@ -28,10 +42,56 @@ pub enum BrokerMode {
     },
 }
 
+/// Role for broker client - determines which topics to subscribe to
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BrokerRole {
+    /// Coordinator: publishes chromosome requests, subscribes to results
+    Coordinator,
+    /// Worker: subscribes to chromosome requests, publishes results
+    Worker,
+}
+
 impl Default for BrokerMode {
     fn default() -> Self {
+        // Check for MESSAGE_BROKER_URL environment variable
+        if let Ok(url) = std::env::var("MESSAGE_BROKER_URL") {
+            if let Some(mode) = Self::parse_url(&url) {
+                return mode;
+            }
+        }
         BrokerMode::InProcess
     }
+}
+
+impl BrokerMode {
+    /// Parse a URL like "http://host:port" or "tcp://host:port" into BrokerMode
+    fn parse_url(url: &str) -> Option<BrokerMode> {
+        // Strip protocol prefix
+        let host_port = url
+            .strip_prefix("http://")
+            .or_else(|| url.strip_prefix("tcp://"))
+            .unwrap_or(url);
+        
+        // Parse host:port
+        let parts: Vec<&str> = host_port.split(':').collect();
+        if parts.len() >= 2 {
+            let host = parts[0].to_string();
+            if let Ok(port) = parts[1].trim_end_matches('/').parse::<u16>() {
+                return Some(BrokerMode::Network { host, port });
+            }
+        }
+        None
+    }
+}
+
+/// Topic names for distributed GA communication
+pub mod topics {
+    pub const CHROMOSOME_REQUESTS: &str = "ga.chromosome.requests";
+    pub const CHROMOSOME_RESULTS: &str = "ga.chromosome.results";
+    pub const DATA_BROADCAST: &str = "ga.data.broadcast";
+    pub const DATA_ACK: &str = "ga.data.ack";
+    pub const BACKTEST_CHUNKS: &str = "backtest.chunks";
+    pub const BACKTEST_RESULTS: &str = "backtest.results";
 }
 
 /// Broker client for distributed backtest communication
@@ -62,6 +122,15 @@ pub struct BacktestBrokerClient {
     data_broadcast_sender: broadcast::Sender<DataBroadcastRequest>,
     /// Channel for data cache acknowledgments
     data_ack_sender: broadcast::Sender<DataCacheAck>,
+    
+    // ========================================================================
+    // NETWORK MODE - TCP Connection
+    // ========================================================================
+    
+    /// TCP connection to MessageBrokerEngine (for Network mode)
+    tcp_connection: Arc<Mutex<Option<TcpStream>>>,
+    /// Whether we're connected to the broker
+    is_connected: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl BacktestBrokerClient {
@@ -76,6 +145,11 @@ impl BacktestBrokerClient {
         let (data_broadcast_sender, _) = broadcast::channel(100);
         let (data_ack_sender, _) = broadcast::channel(100);
         
+        log_info_structured!(MAIN_LOGGER, "BROKER_CLIENT_INIT",
+            "event" => "BROKER_CLIENT_INIT",
+            "mode" => format!("{:?}", mode)
+        );
+        
         Self {
             mode,
             chunk_senders: Arc::new(RwLock::new(HashMap::new())),
@@ -88,6 +162,8 @@ impl BacktestBrokerClient {
             chromosome_result_sender,
             data_broadcast_sender,
             data_ack_sender,
+            tcp_connection: Arc::new(Mutex::new(None)),
+            is_connected: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
     
@@ -102,6 +178,237 @@ impl BacktestBrokerClient {
             host: host.to_string(),
             port,
         })
+    }
+    
+    /// Create a client based on environment configuration
+    pub fn from_env() -> Self {
+        Self::new(BrokerMode::default())
+    }
+    
+    /// Connect to the message broker (only needed for Network mode)
+    pub async fn connect(&self) -> Result<(), BrokerError> {
+        match &self.mode {
+            BrokerMode::InProcess => {
+                log_debug!(MAIN_LOGGER, "In-process mode, no connection needed");
+                Ok(())
+            }
+            BrokerMode::Network { host, port } => {
+                let addr = format!("{}:{}", host, port);
+                log_info_structured!(MAIN_LOGGER, "BROKER_CONNECTING",
+                    "event" => "BROKER_CONNECTING",
+                    "address" => addr.clone()
+                );
+                
+                match tokio::time::timeout(
+                    Duration::from_secs(10),
+                    TcpStream::connect(&addr)
+                ).await {
+                    Ok(Ok(stream)) => {
+                        // Configure for low latency
+                        let _ = stream.set_nodelay(true);
+                        
+                        let mut conn = self.tcp_connection.lock().await;
+                        *conn = Some(stream);
+                        self.is_connected.store(true, std::sync::atomic::Ordering::Relaxed);
+                        
+                        log_info_structured!(MAIN_LOGGER, "BROKER_CONNECTED",
+                            "event" => "BROKER_CONNECTED",
+                            "address" => addr
+                        );
+                        Ok(())
+                    }
+                    Ok(Err(e)) => {
+                        log_error!(MAIN_LOGGER, "Failed to connect to broker at {}: {}", addr, e);
+                        Err(BrokerError::ConnectionFailed(e.to_string()))
+                    }
+                    Err(_) => {
+                        log_error!(MAIN_LOGGER, "Connection to broker at {} timed out", addr);
+                        Err(BrokerError::Timeout)
+                    }
+                }
+            }
+        }
+    }
+    
+    /// Check if connected (for Network mode)
+    pub fn is_connected(&self) -> bool {
+        match &self.mode {
+            BrokerMode::InProcess => true,
+            BrokerMode::Network { .. } => {
+                self.is_connected.load(std::sync::atomic::Ordering::Relaxed)
+            }
+        }
+    }
+    
+    /// Publish raw bytes to a topic via TCP
+    async fn publish_tcp(&self, topic: &str, data: &[u8]) -> Result<(), BrokerError> {
+        let mut conn = self.tcp_connection.lock().await;
+        if let Some(ref mut stream) = *conn {
+            // Wire format: [msg_type: u8][topic_len: u32][topic: bytes][data_len: u32][data: bytes]
+            // msg_type: 0x01 = PUBLISH, 0x02 = SUBSCRIBE
+            let topic_bytes = topic.as_bytes();
+            let mut buffer = Vec::with_capacity(1 + 8 + topic_bytes.len() + data.len());
+            
+            buffer.push(0x01); // PUBLISH message type
+            buffer.extend_from_slice(&(topic_bytes.len() as u32).to_le_bytes());
+            buffer.extend_from_slice(topic_bytes);
+            buffer.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            buffer.extend_from_slice(data);
+            
+            stream.write_all(&buffer).await.map_err(|e| {
+                self.is_connected.store(false, std::sync::atomic::Ordering::Relaxed);
+                BrokerError::ConnectionFailed(e.to_string())
+            })?;
+            
+            stream.flush().await.map_err(|e| {
+                BrokerError::ConnectionFailed(e.to_string())
+            })?;
+            
+            Ok(())
+        } else {
+            Err(BrokerError::ConnectionFailed("Not connected".to_string()))
+        }
+    }
+    
+    /// Subscribe to a topic via TCP
+    async fn subscribe_tcp(&self, topic_pattern: &str) -> Result<(), BrokerError> {
+        let mut conn = self.tcp_connection.lock().await;
+        if let Some(ref mut stream) = *conn {
+            // Wire format: [msg_type: u8][topic_len: u32][topic_pattern: bytes]
+            // msg_type: 0x02 = SUBSCRIBE
+            let topic_bytes = topic_pattern.as_bytes();
+            let mut buffer = Vec::with_capacity(1 + 4 + topic_bytes.len());
+            
+            buffer.push(0x02); // SUBSCRIBE message type
+            buffer.extend_from_slice(&(topic_bytes.len() as u32).to_le_bytes());
+            buffer.extend_from_slice(topic_bytes);
+            
+            stream.write_all(&buffer).await.map_err(|e| {
+                self.is_connected.store(false, std::sync::atomic::Ordering::Relaxed);
+                BrokerError::ConnectionFailed(e.to_string())
+            })?;
+            
+            stream.flush().await.map_err(|e| {
+                BrokerError::ConnectionFailed(e.to_string())
+            })?;
+            
+            log_debug!(MAIN_LOGGER, "Subscribed to topic pattern: {}", topic_pattern);
+            Ok(())
+        } else {
+            Err(BrokerError::ConnectionFailed("Not connected".to_string()))
+        }
+    }
+
+    /// Start receiving messages from broker (for Network mode)
+    /// This spawns a background task that reads messages and forwards them to local channels
+    pub async fn start_receiver(&self, role: BrokerRole) -> Result<(), BrokerError> {
+        match &self.mode {
+            BrokerMode::InProcess => Ok(()), // No-op for in-process
+            BrokerMode::Network { host, port } => {
+                // Create a separate connection for receiving (subscriptions)
+                let addr = format!("{}:{}", host, port);
+                
+                let stream = tokio::time::timeout(
+                    Duration::from_secs(10),
+                    TcpStream::connect(&addr)
+                ).await
+                    .map_err(|_| BrokerError::Timeout)?
+                    .map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
+                
+                let _ = stream.set_nodelay(true);
+                
+                let (mut reader, mut writer) = stream.into_split();
+                
+                // Subscribe based on role
+                let subscribe_topic = match role {
+                    BrokerRole::Coordinator => topics::CHROMOSOME_RESULTS,
+                    BrokerRole::Worker => topics::CHROMOSOME_REQUESTS,
+                };
+                
+                // Send SUBSCRIBE message
+                let topic_bytes = subscribe_topic.as_bytes();
+                let mut buffer = Vec::with_capacity(1 + 4 + topic_bytes.len());
+                buffer.push(0x02); // SUBSCRIBE
+                buffer.extend_from_slice(&(topic_bytes.len() as u32).to_le_bytes());
+                buffer.extend_from_slice(topic_bytes);
+                writer.write_all(&buffer).await.map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
+                writer.flush().await.map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
+                
+                log_info_structured!(MAIN_LOGGER, "BROKER_SUBSCRIBER_STARTED",
+                    "event" => "BROKER_SUBSCRIBER_STARTED",
+                    "role" => format!("{:?}", role),
+                    "topic" => subscribe_topic
+                );
+                
+                // Spawn receiver task based on role
+                match role {
+                    BrokerRole::Worker => {
+                        let chromosome_sender = self.chromosome_request_sender.clone();
+                        tokio::spawn(async move {
+                            Self::receiver_loop(reader, move |data| {
+                                if let Ok(request) = ChromosomeEvalRequest::decode(&data[..]) {
+                                    let _ = chromosome_sender.send(request);
+                                }
+                            }).await;
+                        });
+                    }
+                    BrokerRole::Coordinator => {
+                        let result_sender = self.chromosome_result_sender.clone();
+                        tokio::spawn(async move {
+                            Self::receiver_loop(reader, move |data| {
+                                if let Ok(result) = ChromosomeEvalResult::decode(&data[..]) {
+                                    let _ = result_sender.send(result);
+                                }
+                            }).await;
+                        });
+                    }
+                }
+                
+                Ok(())
+            }
+        }
+    }
+    
+    /// Internal receiver loop that reads messages and calls handler
+    async fn receiver_loop<F>(mut reader: tokio::net::tcp::OwnedReadHalf, handler: F)
+    where
+        F: Fn(Vec<u8>) + Send + 'static,
+    {
+        let mut buf_reader = tokio::io::BufReader::new(&mut reader);
+        
+        loop {
+            // Read incoming messages: [topic_len: u32][topic][data_len: u32][data]
+            let topic_len = match tokio::io::AsyncReadExt::read_u32_le(&mut buf_reader).await {
+                Ok(len) => len as usize,
+                Err(_) => break,
+            };
+            
+            if topic_len > 1024 {
+                break;
+            }
+            
+            let mut topic_buf = vec![0u8; topic_len];
+            if tokio::io::AsyncReadExt::read_exact(&mut buf_reader, &mut topic_buf).await.is_err() {
+                break;
+            }
+            
+            let data_len = match tokio::io::AsyncReadExt::read_u32_le(&mut buf_reader).await {
+                Ok(len) => len as usize,
+                Err(_) => break,
+            };
+            
+            if data_len > 16 * 1024 * 1024 {
+                break;
+            }
+            
+            let mut data = vec![0u8; data_len];
+            if tokio::io::AsyncReadExt::read_exact(&mut buf_reader, &mut data).await.is_err() {
+                break;
+            }
+            
+            // Call handler with the data
+            handler(data);
+        }
     }
     
     // ========================================================================
@@ -131,11 +438,18 @@ impl BacktestBrokerClient {
                     chunk_id, total_chunks, job_id);
                 Ok(())
             }
-            BrokerMode::Network { host: _, port: _ } => {
-                // TODO: Implement network publishing via MessageBrokerEngine
-                // For now, fall back to in-process
-                log_debug!(MAIN_LOGGER, "Network mode not yet implemented, using in-process for job {}", job_id);
-                self.all_chunks_sender.send(chunk).map_err(|_| BrokerError::SendFailed)?;
+            BrokerMode::Network { .. } => {
+                // Serialize and send via TCP
+                let topic = format!("{}.{}", topics::BACKTEST_CHUNKS, job_id);
+                let data = chunk.encode_to_vec();
+                
+                self.publish_tcp(&topic, &data).await?;
+                
+                // Also publish to in-process channels for local subscribers
+                let _ = self.all_chunks_sender.send(chunk);
+                
+                log_debug!(MAIN_LOGGER, "Published chunk {}/{} for job {} via network", 
+                    chunk_id, total_chunks, job_id);
                 Ok(())
             }
         }
@@ -186,8 +500,17 @@ impl BacktestBrokerClient {
                 Ok(())
             }
             BrokerMode::Network { .. } => {
-                // TODO: Network publishing
-                self.all_results_sender.send(result).map_err(|_| BrokerError::SendFailed)?;
+                // Serialize and send via TCP
+                let topic = format!("{}.{}", topics::BACKTEST_RESULTS, job_id);
+                let data = result.encode_to_vec();
+                
+                self.publish_tcp(&topic, &data).await?;
+                
+                // Also publish to in-process channels for local subscribers
+                let _ = self.all_results_sender.send(result);
+                
+                log_debug!(MAIN_LOGGER, "Published result for chunk {} of job {} via network", 
+                    chunk_id, job_id);
                 Ok(())
             }
         }
@@ -296,10 +619,21 @@ impl BacktestBrokerClient {
     // ========================================================================
     
     /// Publish a chromosome evaluation request (coordinator -> workers)
-    pub fn publish_chromosome_request(&self, request: ChromosomeEvalRequest) -> Result<(), BrokerError> {
-        self.chromosome_request_sender.send(request)
-            .map_err(|_| BrokerError::SendFailed)?;
-        Ok(())
+    pub async fn publish_chromosome_request(&self, request: ChromosomeEvalRequest) -> Result<(), BrokerError> {
+        match &self.mode {
+            BrokerMode::InProcess => {
+                self.chromosome_request_sender.send(request)
+                    .map_err(|_| BrokerError::SendFailed)?;
+                Ok(())
+            }
+            BrokerMode::Network { .. } => {
+                let data = request.encode_to_vec();
+                self.publish_tcp(topics::CHROMOSOME_REQUESTS, &data).await?;
+                // Also publish locally
+                let _ = self.chromosome_request_sender.send(request);
+                Ok(())
+            }
+        }
     }
     
     /// Subscribe to chromosome evaluation requests (worker)
@@ -308,10 +642,21 @@ impl BacktestBrokerClient {
     }
     
     /// Publish a chromosome evaluation result (worker -> coordinator)
-    pub fn publish_chromosome_result(&self, result: ChromosomeEvalResult) -> Result<(), BrokerError> {
-        self.chromosome_result_sender.send(result)
-            .map_err(|_| BrokerError::SendFailed)?;
-        Ok(())
+    pub async fn publish_chromosome_result(&self, result: ChromosomeEvalResult) -> Result<(), BrokerError> {
+        match &self.mode {
+            BrokerMode::InProcess => {
+                self.chromosome_result_sender.send(result)
+                    .map_err(|_| BrokerError::SendFailed)?;
+                Ok(())
+            }
+            BrokerMode::Network { .. } => {
+                let data = result.encode_to_vec();
+                self.publish_tcp(topics::CHROMOSOME_RESULTS, &data).await?;
+                // Also publish locally
+                let _ = self.chromosome_result_sender.send(result);
+                Ok(())
+            }
+        }
     }
     
     /// Subscribe to chromosome evaluation results (coordinator)
@@ -324,10 +669,21 @@ impl BacktestBrokerClient {
     // ========================================================================
     
     /// Publish a data broadcast request (coordinator -> workers)
-    pub fn publish_data_broadcast(&self, request: DataBroadcastRequest) -> Result<(), BrokerError> {
-        self.data_broadcast_sender.send(request)
-            .map_err(|_| BrokerError::SendFailed)?;
-        Ok(())
+    pub async fn publish_data_broadcast(&self, request: DataBroadcastRequest) -> Result<(), BrokerError> {
+        match &self.mode {
+            BrokerMode::InProcess => {
+                self.data_broadcast_sender.send(request)
+                    .map_err(|_| BrokerError::SendFailed)?;
+                Ok(())
+            }
+            BrokerMode::Network { .. } => {
+                let data = request.encode_to_vec();
+                self.publish_tcp(topics::DATA_BROADCAST, &data).await?;
+                // Also publish locally
+                let _ = self.data_broadcast_sender.send(request);
+                Ok(())
+            }
+        }
     }
     
     /// Subscribe to data broadcast requests (workers)
@@ -336,10 +692,20 @@ impl BacktestBrokerClient {
     }
     
     /// Publish a data cache acknowledgment (worker -> coordinator)
-    pub fn publish_data_ack(&self, ack: DataCacheAck) -> Result<(), BrokerError> {
-        self.data_ack_sender.send(ack)
-            .map_err(|_| BrokerError::SendFailed)?;
-        Ok(())
+    pub async fn publish_data_ack(&self, ack: DataCacheAck) -> Result<(), BrokerError> {
+        match &self.mode {
+            BrokerMode::InProcess => {
+                self.data_ack_sender.send(ack)
+                    .map_err(|_| BrokerError::SendFailed)?;
+                Ok(())
+            }
+            BrokerMode::Network { .. } => {
+                let data = ack.encode_to_vec();
+                self.publish_tcp(topics::DATA_ACK, &data).await?;
+                let _ = self.data_ack_sender.send(ack);
+                Ok(())
+            }
+        }
     }
     
     /// Subscribe to data cache acknowledgments (coordinator)
@@ -362,17 +728,27 @@ impl Clone for BacktestBrokerClient {
             chromosome_result_sender: self.chromosome_result_sender.clone(),
             data_broadcast_sender: self.data_broadcast_sender.clone(),
             data_ack_sender: self.data_ack_sender.clone(),
+            tcp_connection: Arc::clone(&self.tcp_connection),
+            is_connected: Arc::clone(&self.is_connected),
         }
     }
 }
 
-/// Global broker client instance
+/// Global broker client instance - initialized based on environment
 static BROKER_CLIENT: once_cell::sync::Lazy<Arc<BacktestBrokerClient>> =
-    once_cell::sync::Lazy::new(|| Arc::new(BacktestBrokerClient::in_process()));
+    once_cell::sync::Lazy::new(|| Arc::new(BacktestBrokerClient::from_env()));
 
 /// Get the global broker client
 pub fn get_broker_client() -> Arc<BacktestBrokerClient> {
     Arc::clone(&BROKER_CLIENT)
+}
+
+/// Initialize and connect the global broker client (call once at startup)
+/// Returns the broker client for use by callers - they must call start_receiver with appropriate role
+pub async fn init_broker_client() -> Result<Arc<BacktestBrokerClient>, BrokerError> {
+    let client = get_broker_client();
+    client.connect().await?;
+    Ok(client)
 }
 
 /// Broker error types
