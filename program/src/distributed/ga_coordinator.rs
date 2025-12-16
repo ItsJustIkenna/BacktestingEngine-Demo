@@ -566,6 +566,20 @@ impl DistributedGARunner {
         };
         
         let broker = Arc::new(BacktestBrokerClient::network(&host, port));
+        
+        // Connect to broker and start receiver for results
+        if let Err(e) = broker.connect().await {
+            log_warn!(MAIN_LOGGER, "Failed to connect to broker: {}. Falling back to local GA.", e);
+            return Self::run_local(config, local_fitness_fn).await;
+        }
+        
+        // Start receiver to get chromosome results from workers
+        use super::broker_client::BrokerRole;
+        if let Err(e) = broker.start_receiver(BrokerRole::Coordinator).await {
+            log_warn!(MAIN_LOGGER, "Failed to start broker receiver: {}. Falling back to local GA.", e);
+            return Self::run_local(config, local_fitness_fn).await;
+        }
+        
         let job_id = format!("distributed-{}", uuid::Uuid::new_v4());
         let mut coordinator = DistributedGACoordinator::new(
             Arc::clone(&broker),
