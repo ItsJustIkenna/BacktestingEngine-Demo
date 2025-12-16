@@ -44,7 +44,8 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/bin/server"]
-          args: ["serve"]
+          # Use coordinator mode for distributed GA processing
+          args: ["coordinator", "--distributed", "{{ .Values.distributedGA.enabled | default true }}"]
           ports:
             - name: http
               containerPort: 8080
@@ -62,6 +63,9 @@ spec:
                   key: DATABASE_URL
             - name: RUST_LOG
               value: "info"
+            # MessageBrokerEngine configuration - required for distributed GA
+            - name: MESSAGE_BROKER_URL
+              value: "{{ .Values.distributedGA.brokerUrl }}"
             # Elasticsearch logging configuration (shared with DataEngine)
             {{- if .Values.secrets.elasticsearch.enabled }}
             - name: USE_ELASTICSEARCH_LOGGING
