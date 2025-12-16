@@ -415,9 +415,9 @@ distributedGA:
   # Minimum workers required to start distributed evaluation
   minWorkers: 2
   
-  # MessageBrokerEngine URL (custom gRPC/HTTP broker)
-  # The BacktestBrokerClient connects via HTTP to MessageBrokerEngine
-  brokerUrl: "http://message-broker-engine.messagebroker.svc.cluster.local:8080"
+  # MessageBrokerEngine TCP wire protocol URL
+  # Port 8081 is the TCP broker for distributed backtest communication
+  brokerUrl: "tcp://message-broker-engine.messagebroker.svc.cluster.local:8081"
   
   # Timeout waiting for workers to connect (seconds)
   workerTimeout: 30
