@@ -305,9 +305,11 @@ metrics:
 # =============================================================================
 # Autoscaling Configuration
 # =============================================================================
+# NOTE: Main coordinator autoscaling is DISABLED to avoid HPA selector conflicts
+# with distributed workers. Only distributed workers need HPA for scaling.
 
 autoscaling:
-  enabled: true
+  enabled: false      # Disabled - coordinator doesn't need autoscaling
   minReplicas: 1      # Start with 1 pod to ensure scheduling, HPA scales up as needed
   maxReplicas: 4      # Max 4 pods (each with 32GB = 128GB total)
   targetCPUUtilizationPercentage: 70
