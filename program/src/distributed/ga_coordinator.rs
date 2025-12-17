@@ -176,7 +176,7 @@ impl DistributedGACoordinator {
         // This handles the race condition where workers haven't subscribed yet
         let mut last_publish = Instant::now() - Duration::from_secs(10); // Force immediate first publish
         let publish_interval = Duration::from_secs(5);
-        let min_workers_needed = self.config.min_workers.unwrap_or(2) as usize;
+        let min_workers_needed = 2_usize; // Default minimum workers required
         
         log_info_structured!(MAIN_LOGGER, "GA_WAITING_FOR_WORKERS",
             "event" => "GA_WAITING_FOR_WORKERS",
