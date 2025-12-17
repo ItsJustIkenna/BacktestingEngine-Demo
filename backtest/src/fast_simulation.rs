@@ -100,13 +100,19 @@ impl MarketFeatures {
         eprintln!("  Feature extraction complete: {} records", processed);
         
         // Compute log returns
+        eprintln!("  Computing log returns for {} prices...", prices.len());
         let log_returns = compute_log_returns(&prices);
+        eprintln!("  Log returns computed: {} values", log_returns.len());
         
         // Compute EWMA volatility (vectorized)
+        eprintln!("  Computing EWMA volatility...");
         let volatility = compute_ewma_volatility(&log_returns, 0.94);
+        eprintln!("  Volatility computed: {} values", volatility.len());
         
         // Compute cumulative volumes
+        eprintln!("  Computing cumulative volumes...");
         let (cum_buy_volume, cum_sell_volume) = compute_cumulative_volumes(&volumes, &trade_sides);
+        eprintln!("  Feature computation complete!");
         
         Self {
             prices,

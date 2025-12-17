@@ -1081,7 +1081,9 @@ impl Worker {
         //
         // Speedup: ~50-100x for GA fitness evaluations
         let fast_sim_start = std::time::Instant::now();
+        eprintln!("📊 Starting MarketFeatures computation...");
         let market_features = Arc::new(backtest::fast_simulation::MarketFeatures::from_market_data(&shared_data));
+        eprintln!("📊 MarketFeatures computed in {:.2}s", fast_sim_start.elapsed().as_secs_f64());
         log_info!(GENETIC_LOGGER, "Pre-computed market features in {:.2}ms | {} data points | {} log returns | {} volatility values",
             fast_sim_start.elapsed().as_millis(),
             market_features.len(),
@@ -1092,6 +1094,9 @@ impl Worker {
         let use_fast_simulation = std::env::var("GA_FAST_SIMULATION")
             .map(|v| v != "false" && v != "0")
             .unwrap_or(true);
+        
+        eprintln!("📊 Fast simulation enabled: {}", use_fast_simulation);
+        eprintln!("📊 About to create GeneticConfig...");
         
         // Create genetic config
         let config = GeneticConfig {
@@ -1435,9 +1440,13 @@ impl Worker {
         let timing_ga_start = std::time::Instant::now();
         
         // Check if distributed mode is enabled via environment variable
+        eprintln!("🧬 Checking distributed mode configuration...");
         let distributed_mode = DistributedMode::from_env();
+        eprintln!("🧬 Distributed mode: enabled={}, min_workers={}, broker_url={:?}", 
+            distributed_mode.enabled, distributed_mode.min_workers, distributed_mode.broker_url);
         
         let (best_chromosome, best_fitness) = if distributed_mode.enabled {
+            eprintln!("🧬 Taking DISTRIBUTED GA path...");
             log_info!(GENETIC_LOGGER, "Job {} attempting DISTRIBUTED genetic optimization", job.id);
             
             // Create distributed GA config
@@ -1448,6 +1457,7 @@ impl Worker {
                 initial_capital,
                 cache_ttl_seconds: 3600, // 1 hour cache TTL
             };
+            eprintln!("🧬 Created DistributedGAConfig, about to call run_with_fallback...");
             
             // Clone data for the closure
             let data_for_fallback = Arc::clone(&data_for_distributed);

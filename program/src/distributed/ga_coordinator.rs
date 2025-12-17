@@ -136,6 +136,8 @@ impl DistributedGACoordinator {
             chrono::Utc::now().timestamp()
         );
         
+        eprintln!("📡 BROADCAST: Starting data broadcast, {} data points", data.len());
+        
         log_info_structured!(MAIN_LOGGER, "GA_DATA_BROADCAST_START",
             "event" => "GA_DATA_BROADCAST_START",
             "job_id" => &self.job_id,
@@ -144,11 +146,17 @@ impl DistributedGACoordinator {
         );
         
         // Serialize and compress the data
+        eprintln!("📡 BROADCAST: Serializing {} data points with bincode...", data.len());
+        let serialize_start = std::time::Instant::now();
         let serialized = bincode::serialize(data)
             .map_err(|e| CoordinatorError::SerializationError(e.to_string()))?;
+        eprintln!("📡 BROADCAST: Serialized to {} bytes in {:.2}s", serialized.len(), serialize_start.elapsed().as_secs_f64());
         
         // Use LZ4 compression for speed
+        eprintln!("📡 BROADCAST: Compressing with LZ4...");
+        let compress_start = std::time::Instant::now();
         let compressed = lz4_flex::compress_prepend_size(&serialized);
+        eprintln!("📡 BROADCAST: Compressed to {} bytes in {:.2}s", compressed.len(), compress_start.elapsed().as_secs_f64());
         
         let compression_ratio = serialized.len() as f64 / compressed.len() as f64;
         log_info_structured!(MAIN_LOGGER, "GA_DATA_COMPRESSED",
@@ -171,8 +179,10 @@ impl DistributedGACoordinator {
         
         // Publish to data broadcast topic
         // Workers subscribed to ga.data.broadcast will receive and cache
+        eprintln!("📡 BROADCAST: Publishing to broker...");
         self.broker.publish_data_broadcast(request).await
             .map_err(|e| CoordinatorError::BrokerError(e.to_string()))?;
+        eprintln!("📡 BROADCAST: Published successfully!");
         
         self.data_cache_key = Some(cache_key.clone());
         
@@ -182,6 +192,7 @@ impl DistributedGACoordinator {
         let cache_key_clone = cache_key.clone();
         
         // Wait for workers to acknowledge (with timeout)
+        eprintln!("📡 BROADCAST: Waiting for worker acknowledgments (10s timeout)...");
         let ack_timeout = Duration::from_secs(10);
         let ack_deadline = Instant::now() + ack_timeout;
         
@@ -534,10 +545,14 @@ impl DistributedGARunner {
             return Self::run_local(config, local_fitness_fn).await;
         }
         
+        eprintln!("🌐 DISTRIBUTED: Mode enabled, attempting broker connection...");
+        
         // Try to connect to broker and discover workers
         let broker_url = mode.broker_url.clone()
             .or_else(|| std::env::var("MESSAGE_BROKER_URL").ok())
             .unwrap_or_else(|| "http://messagebrokerengine.default.svc.cluster.local:8080".to_string());
+        
+        eprintln!("🌐 DISTRIBUTED: broker_url = {}", broker_url);
         
         log_info_structured!(MAIN_LOGGER, "DISTRIBUTED_GA_ATTEMPTING",
             "event" => "DISTRIBUTED_GA_ATTEMPTING",
@@ -552,8 +567,9 @@ impl DistributedGARunner {
             let port = url.port().unwrap_or(8080);
             (host, port)
         } else {
-            // Fallback parsing
-            let parts: Vec<&str> = broker_url.trim_start_matches("http://")
+            // Fallback parsing for tcp:// URLs
+            let parts: Vec<&str> = broker_url.trim_start_matches("tcp://")
+                .trim_start_matches("http://")
                 .trim_start_matches("https://")
                 .split(':')
                 .collect();
@@ -561,26 +577,35 @@ impl DistributedGARunner {
             let port: u16 = parts.get(1)
                 .and_then(|p| p.split('/').next())
                 .and_then(|p| p.parse().ok())
-                .unwrap_or(8080);
+                .unwrap_or(8081);
             (host, port)
         };
         
+        eprintln!("🌐 DISTRIBUTED: Parsed host={} port={}", host, port);
+        
         let broker = Arc::new(BacktestBrokerClient::network(&host, port));
         
+        eprintln!("🌐 DISTRIBUTED: Connecting to broker...");
         // Connect to broker and start receiver for results
         if let Err(e) = broker.connect().await {
+            eprintln!("🌐 DISTRIBUTED: Failed to connect: {}. Falling back to local.", e);
             log_warn!(MAIN_LOGGER, "Failed to connect to broker: {}. Falling back to local GA.", e);
             return Self::run_local(config, local_fitness_fn).await;
         }
+        eprintln!("🌐 DISTRIBUTED: Connected to broker!");
         
+        eprintln!("🌐 DISTRIBUTED: Starting receiver for coordinator role...");
         // Start receiver to get chromosome results from workers
         use super::broker_client::BrokerRole;
         if let Err(e) = broker.start_receiver(BrokerRole::Coordinator).await {
+            eprintln!("🌐 DISTRIBUTED: Failed to start receiver: {}. Falling back to local.", e);
             log_warn!(MAIN_LOGGER, "Failed to start broker receiver: {}. Falling back to local GA.", e);
             return Self::run_local(config, local_fitness_fn).await;
         }
+        eprintln!("🌐 DISTRIBUTED: Receiver started successfully!");
         
         let job_id = format!("distributed-{}", uuid::Uuid::new_v4());
+        eprintln!("🌐 DISTRIBUTED: Creating coordinator for job_id={}", job_id);
         let mut coordinator = DistributedGACoordinator::new(
             Arc::clone(&broker),
             config.clone(),
@@ -588,9 +613,12 @@ impl DistributedGARunner {
         );
         
         // Broadcast data and wait for workers
+        eprintln!("🌐 DISTRIBUTED: Broadcasting {} data points to workers...", market_data.len());
         match coordinator.broadcast_data(market_data).await {
             Ok(cache_key) => {
+                eprintln!("🌐 DISTRIBUTED: Data broadcast complete, cache_key={}", cache_key);
                 let worker_count = coordinator.worker_count().await;
+                eprintln!("🌐 DISTRIBUTED: worker_count={}, min_workers={}", worker_count, mode.min_workers);
                 if worker_count >= mode.min_workers {
                     log_info_structured!(MAIN_LOGGER, "DISTRIBUTED_GA_STARTING",
                         "event" => "DISTRIBUTED_GA_STARTING",
@@ -599,16 +627,20 @@ impl DistributedGARunner {
                         "cache_key" => &cache_key
                     );
                     
+                    eprintln!("🌐 DISTRIBUTED: Running distributed GA...");
                     // Run distributed GA
                     match coordinator.run().await {
                         Ok((best, fitness)) => {
+                            eprintln!("🌐 DISTRIBUTED: GA completed! fitness={}", fitness);
                             return (best, fitness);
                         }
                         Err(e) => {
+                            eprintln!("🌐 DISTRIBUTED: GA failed: {}. Falling back to local.", e);
                             log_warn!(MAIN_LOGGER, "Distributed GA failed: {}. Falling back to local.", e);
                         }
                     }
                 } else {
+                    eprintln!("🌐 DISTRIBUTED: Not enough workers ({}), need {}. Falling back to local.", worker_count, mode.min_workers);
                     log_warn!(MAIN_LOGGER,
                         "Only {} workers available (need {}). Falling back to local GA.",
                         worker_count, mode.min_workers
@@ -616,6 +648,7 @@ impl DistributedGARunner {
                 }
             }
             Err(e) => {
+                eprintln!("🌐 DISTRIBUTED: Data broadcast failed: {}. Falling back to local.", e);
                 log_warn!(MAIN_LOGGER, "Data broadcast failed: {}. Falling back to local GA.", e);
             }
         }
