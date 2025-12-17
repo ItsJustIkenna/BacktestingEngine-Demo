@@ -96,15 +96,19 @@ impl DistributedGAWorker {
         // Subscribe to chromosome evaluation requests
         let mut eval_receiver = self.broker.subscribe_chromosome_requests();
         
+        println!("🔄 [WORKER {}] Main loop started, waiting for messages...", self.worker_id);
+        
         loop {
             tokio::select! {
                 // Handle legacy data broadcast (cache the data from message)
                 Ok(broadcast) = data_receiver.recv() => {
+                    println!("📨 [WORKER {}] Received DATA_BROADCAST", self.worker_id);
                     self.handle_data_broadcast(broadcast).await;
                 }
                 
                 // Handle data load request (workers query DB directly)
                 Ok(load_request) = data_load_receiver.recv() => {
+                    println!("📨 [WORKER {}] Received DATA_LOAD request: cache_key={}", self.worker_id, load_request.cache_key);
                     self.handle_data_load_request(load_request).await;
                 }
                 
