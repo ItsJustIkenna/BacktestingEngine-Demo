@@ -6,6 +6,7 @@ use program::job_queue::{JobQueue, PostgresQueue};
 use program::worker;
 use program::api;
 use program::distributed::DistributedWorker;
+use program::distributed::ga_worker::DistributedGAWorker;
 
 #[derive(Parser)]
 #[command(name = "backtesting-engine")]
@@ -136,26 +137,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         Commands::DistributedWorker { workers, prefix } => {
             use program::distributed::broker_client::{init_broker_client, BrokerRole};
+            use diesel_async::pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool};
+            use diesel_async::AsyncPgConnection;
             
             let database_url = std::env::var("DATABASE_URL")
                 .expect("DATABASE_URL must be set");
 
             println!("🌐 Starting {} distributed workers (prefix: {})...", workers, prefix);
             
+            // Create database pool for GA workers
+            let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&database_url);
+            let db_pool = Arc::new(Pool::builder(manager)
+                .max_size(workers * 2) // 2 connections per worker
+                .build()
+                .expect("Failed to create database pool"));
+            
             // Initialize broker connection
             let broker = init_broker_client().await
                 .map_err(|e| format!("Failed to connect to broker: {:?}", e))?;
             
-            // Start receiver for chromosome requests (workers receive work from coordinator)
+            // Start receiver for chromosome requests AND data load requests
             broker.start_receiver(BrokerRole::Worker).await
                 .map_err(|e| format!("Failed to start broker receiver: {:?}", e))?;
             
-            println!("📡 Connected to message broker, subscribed to chromosome requests");
+            println!("📡 Connected to message broker, subscribed to topics");
             
-            // Spawn distributed worker tasks
-            let mut handles = Vec::with_capacity(workers);
+            // Spawn GA workers (for chromosome evaluation)
+            let mut handles = Vec::with_capacity(workers * 2);
             for i in 0..workers {
-                let worker_id = format!("{}-{}", prefix, i);
+                let worker_id = format!("{}-ga-{}", prefix, i);
+                let broker_clone = Arc::clone(&broker);
+                let pool_clone = Arc::clone(&db_pool);
+                
+                let handle = tokio::spawn(async move {
+                    let worker = DistributedGAWorker::new(worker_id, broker_clone)
+                        .with_db_pool(pool_clone);
+                    let _ = worker.run().await;
+                });
+                handles.push(handle);
+            }
+            
+            // Spawn chunk workers (for distributed backtesting - legacy)
+            for i in 0..workers {
+                let worker_id = format!("{}-chunk-{}", prefix, i);
                 let db_url = database_url.clone();
                 let broker_clone = Arc::clone(&broker);
                 
@@ -171,8 +195,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             
             println!("✅ Distributed workers running");
-            println!("   Workers subscribe to: ga.chromosome.requests");
-            println!("   Results published to: ga.chromosome.results");
+            println!("   GA workers subscribe to: ga.chromosome.requests, ga.data.load");
+            println!("   Chunk workers subscribe to: backtest.chunks");
+            println!("   Results published to: ga.chromosome.results, backtest.results");
             
             // Wait for all workers
             for handle in handles {
