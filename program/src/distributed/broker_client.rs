@@ -27,7 +27,7 @@ use protocol::broker::messages::{
 };
 use prost::Message;
 
-use crate::{log_info_structured, log_debug, log_error};
+use crate::{log_info_structured, log_debug, log_error, log_warn};
 use crate::logging_facade::MAIN_LOGGER;
 
 /// Connection mode for the broker client
@@ -320,68 +320,72 @@ impl BacktestBrokerClient {
                 
                 let _ = stream.set_nodelay(true);
                 
-                let (mut reader, mut writer) = stream.into_split();
+                let (reader, mut writer) = stream.into_split();
                 
-                // Subscribe based on role
-                let subscribe_topic = match role {
-                    BrokerRole::Coordinator => topics::CHROMOSOME_RESULTS,
-                    BrokerRole::Worker => topics::CHROMOSOME_REQUESTS,
+                // Subscribe to ALL topics needed for this role
+                let topics_to_subscribe: Vec<&str> = match role {
+                    BrokerRole::Coordinator => vec![
+                        topics::CHROMOSOME_RESULTS,  // Receive evaluation results from workers
+                        topics::DATA_ACK,            // Receive data cache acknowledgments
+                    ],
+                    BrokerRole::Worker => vec![
+                        topics::CHROMOSOME_REQUESTS, // Receive evaluation requests from coordinator
+                        topics::DATA_BROADCAST,      // Receive market data broadcasts
+                    ],
                 };
                 
-                // Send SUBSCRIBE message
-                let topic_bytes = subscribe_topic.as_bytes();
-                let mut buffer = Vec::with_capacity(1 + 4 + topic_bytes.len());
-                buffer.push(0x02); // SUBSCRIBE
-                buffer.extend_from_slice(&(topic_bytes.len() as u32).to_le_bytes());
-                buffer.extend_from_slice(topic_bytes);
-                writer.write_all(&buffer).await.map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
+                // Send SUBSCRIBE message for each topic
+                for topic in &topics_to_subscribe {
+                    let topic_bytes = topic.as_bytes();
+                    let mut buffer = Vec::with_capacity(1 + 4 + topic_bytes.len());
+                    buffer.push(0x02); // SUBSCRIBE
+                    buffer.extend_from_slice(&(topic_bytes.len() as u32).to_le_bytes());
+                    buffer.extend_from_slice(topic_bytes);
+                    writer.write_all(&buffer).await.map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
+                }
                 writer.flush().await.map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
                 
                 log_info_structured!(MAIN_LOGGER, "BROKER_SUBSCRIBER_STARTED",
                     "event" => "BROKER_SUBSCRIBER_STARTED",
                     "role" => format!("{:?}", role),
-                    "topic" => subscribe_topic
+                    "topics" => format!("{:?}", topics_to_subscribe)
                 );
                 
-                // Spawn receiver task based on role
-                match role {
-                    BrokerRole::Worker => {
-                        let chromosome_sender = self.chromosome_request_sender.clone();
-                        tokio::spawn(async move {
-                            Self::receiver_loop(reader, move |data| {
-                                if let Ok(request) = ChromosomeEvalRequest::decode(&data[..]) {
-                                    let _ = chromosome_sender.send(request);
-                                }
-                            }).await;
-                        });
-                    }
-                    BrokerRole::Coordinator => {
-                        let result_sender = self.chromosome_result_sender.clone();
-                        tokio::spawn(async move {
-                            Self::receiver_loop(reader, move |data| {
-                                if let Ok(result) = ChromosomeEvalResult::decode(&data[..]) {
-                                    let _ = result_sender.send(result);
-                                }
-                            }).await;
-                        });
-                    }
-                }
+                // Spawn unified receiver task that routes messages based on topic
+                let chromosome_request_sender = self.chromosome_request_sender.clone();
+                let chromosome_result_sender = self.chromosome_result_sender.clone();
+                let data_broadcast_sender = self.data_broadcast_sender.clone();
+                let data_ack_sender = self.data_ack_sender.clone();
+                
+                tokio::spawn(async move {
+                    Self::unified_receiver_loop(
+                        reader,
+                        chromosome_request_sender,
+                        chromosome_result_sender,
+                        data_broadcast_sender,
+                        data_ack_sender,
+                    ).await;
+                });
                 
                 Ok(())
             }
         }
     }
     
-    /// Internal receiver loop that reads messages and calls handler
-    async fn receiver_loop<F>(mut reader: tokio::net::tcp::OwnedReadHalf, handler: F)
-    where
-        F: Fn(Vec<u8>) + Send + 'static,
-    {
+    /// Unified receiver loop that routes messages based on topic
+    async fn unified_receiver_loop(
+        mut reader: tokio::net::tcp::OwnedReadHalf,
+        chromosome_request_sender: broadcast::Sender<ChromosomeEvalRequest>,
+        chromosome_result_sender: broadcast::Sender<ChromosomeEvalResult>,
+        data_broadcast_sender: broadcast::Sender<DataBroadcastRequest>,
+        data_ack_sender: broadcast::Sender<DataCacheAck>,
+    ) {
+        use tokio::io::AsyncReadExt;
         let mut buf_reader = tokio::io::BufReader::new(&mut reader);
         
         loop {
             // Read incoming messages: [topic_len: u32][topic][data_len: u32][data]
-            let topic_len = match tokio::io::AsyncReadExt::read_u32_le(&mut buf_reader).await {
+            let topic_len = match buf_reader.read_u32_le().await {
                 Ok(len) => len as usize,
                 Err(_) => break,
             };
@@ -391,26 +395,53 @@ impl BacktestBrokerClient {
             }
             
             let mut topic_buf = vec![0u8; topic_len];
-            if tokio::io::AsyncReadExt::read_exact(&mut buf_reader, &mut topic_buf).await.is_err() {
+            if buf_reader.read_exact(&mut topic_buf).await.is_err() {
                 break;
             }
+            let topic = String::from_utf8_lossy(&topic_buf);
             
-            let data_len = match tokio::io::AsyncReadExt::read_u32_le(&mut buf_reader).await {
+            let data_len = match buf_reader.read_u32_le().await {
                 Ok(len) => len as usize,
                 Err(_) => break,
             };
             
-            if data_len > 16 * 1024 * 1024 {
+            // Cap at 256MB for data broadcasts with 7M records
+            if data_len > 256 * 1024 * 1024 {
+                log_warn!(MAIN_LOGGER, "Received message too large: {} bytes on topic {}", data_len, topic);
                 break;
             }
             
             let mut data = vec![0u8; data_len];
-            if tokio::io::AsyncReadExt::read_exact(&mut buf_reader, &mut data).await.is_err() {
+            if buf_reader.read_exact(&mut data).await.is_err() {
                 break;
             }
             
-            // Call handler with the data
-            handler(data);
+            // Route based on topic
+            match topic.as_ref() {
+                t if t == topics::CHROMOSOME_REQUESTS => {
+                    if let Ok(request) = ChromosomeEvalRequest::decode(&data[..]) {
+                        let _ = chromosome_request_sender.send(request);
+                    }
+                }
+                t if t == topics::CHROMOSOME_RESULTS => {
+                    if let Ok(result) = ChromosomeEvalResult::decode(&data[..]) {
+                        let _ = chromosome_result_sender.send(result);
+                    }
+                }
+                t if t == topics::DATA_BROADCAST => {
+                    if let Ok(broadcast) = DataBroadcastRequest::decode(&data[..]) {
+                        let _ = data_broadcast_sender.send(broadcast);
+                    }
+                }
+                t if t == topics::DATA_ACK => {
+                    if let Ok(ack) = DataCacheAck::decode(&data[..]) {
+                        let _ = data_ack_sender.send(ack);
+                    }
+                }
+                _ => {
+                    log_debug!(MAIN_LOGGER, "Received message on unknown topic: {}", topic);
+                }
+            }
         }
     }
     
