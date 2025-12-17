@@ -202,6 +202,7 @@ impl BacktestBrokerClient {
             }
             BrokerMode::Network { host, port } => {
                 let addr = format!("{}:{}", host, port);
+                println!("🔌 [BROKER] connect() called - establishing PUBLISH connection to {}", addr);
                 log_info_structured!(MAIN_LOGGER, "BROKER_CONNECTING",
                     "event" => "BROKER_CONNECTING",
                     "address" => addr.clone()
@@ -215,6 +216,8 @@ impl BacktestBrokerClient {
                         // Configure for low latency
                         let _ = stream.set_nodelay(true);
                         
+                        println!("✅ [BROKER] connect() - PUBLISH connection established to {}", addr);
+                        
                         let mut conn = self.tcp_connection.lock().await;
                         *conn = Some(stream);
                         self.is_connected.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -226,10 +229,12 @@ impl BacktestBrokerClient {
                         Ok(())
                     }
                     Ok(Err(e)) => {
+                        println!("❌ [BROKER] connect() failed: {}", e);
                         log_error!(MAIN_LOGGER, "Failed to connect to broker at {}: {}", addr, e);
                         Err(BrokerError::ConnectionFailed(e.to_string()))
                     }
                     Err(_) => {
+                        println!("❌ [BROKER] connect() timed out");
                         log_error!(MAIN_LOGGER, "Connection to broker at {} timed out", addr);
                         Err(BrokerError::Timeout)
                     }
