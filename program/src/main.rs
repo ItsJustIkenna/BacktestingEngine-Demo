@@ -137,7 +137,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         Commands::DistributedWorker { workers, prefix } => {
             use program::distributed::broker_client::{init_broker_client, BrokerRole};
+            #[cfg(feature = "postgres")]
             use diesel_async::pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool};
+            #[cfg(feature = "postgres")]
             use diesel_async::AsyncPgConnection;
             
             let database_url = std::env::var("DATABASE_URL")
@@ -146,11 +148,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("🌐 Starting {} distributed workers (prefix: {})...", workers, prefix);
             
             // Create database pool for GA workers
-            let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&database_url);
-            let db_pool = Arc::new(Pool::builder(manager)
-                .max_size(workers * 2) // 2 connections per worker
-                .build()
-                .expect("Failed to create database pool"));
+            #[cfg(feature = "postgres")]
+            let db_pool = {
+                let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&database_url);
+                Arc::new(Pool::builder(manager)
+                    .max_size(workers * 2) // 2 connections per worker
+                    .build()
+                    .expect("Failed to create database pool"))
+            };
             
             // Initialize broker connection
             let broker = init_broker_client().await
@@ -167,11 +172,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             for i in 0..workers {
                 let worker_id = format!("{}-ga-{}", prefix, i);
                 let broker_clone = Arc::clone(&broker);
+                #[cfg(feature = "postgres")]
                 let pool_clone = Arc::clone(&db_pool);
                 
                 let handle = tokio::spawn(async move {
+                    #[cfg(feature = "postgres")]
                     let worker = DistributedGAWorker::new(worker_id, broker_clone)
                         .with_db_pool(pool_clone);
+                    #[cfg(not(feature = "postgres"))]
+                    let worker = DistributedGAWorker::new(worker_id, broker_clone);
                     let _ = worker.run().await;
                 });
                 handles.push(handle);
