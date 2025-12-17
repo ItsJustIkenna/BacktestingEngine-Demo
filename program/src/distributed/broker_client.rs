@@ -263,17 +263,24 @@ impl BacktestBrokerClient {
             buffer.extend_from_slice(&(data.len() as u32).to_le_bytes());
             buffer.extend_from_slice(data);
             
+            println!("📤 [BROKER] Publishing to topic '{}' ({} bytes)", topic, data.len());
+            
             stream.write_all(&buffer).await.map_err(|e| {
+                println!("❌ [BROKER] Failed to write to TCP stream: {}", e);
                 self.is_connected.store(false, std::sync::atomic::Ordering::Relaxed);
                 BrokerError::ConnectionFailed(e.to_string())
             })?;
             
             stream.flush().await.map_err(|e| {
+                println!("❌ [BROKER] Failed to flush TCP stream: {}", e);
                 BrokerError::ConnectionFailed(e.to_string())
             })?;
             
+            println!("✅ [BROKER] Published successfully to '{}'", topic);
+            
             Ok(())
         } else {
+            println!("❌ [BROKER] Cannot publish - not connected");
             Err(BrokerError::ConnectionFailed("Not connected".to_string()))
         }
     }
@@ -316,12 +323,22 @@ impl BacktestBrokerClient {
                 // Create a separate connection for receiving (subscriptions)
                 let addr = format!("{}:{}", host, port);
                 
+                println!("🔌 [BROKER] Connecting to {} for {:?} receiver...", addr, role);
+                
                 let stream = tokio::time::timeout(
                     Duration::from_secs(10),
                     TcpStream::connect(&addr)
                 ).await
-                    .map_err(|_| BrokerError::Timeout)?
-                    .map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
+                    .map_err(|_| {
+                        println!("❌ [BROKER] Connection timeout to {}", addr);
+                        BrokerError::Timeout
+                    })?
+                    .map_err(|e| {
+                        println!("❌ [BROKER] Connection failed to {}: {}", addr, e);
+                        BrokerError::ConnectionFailed(e.to_string())
+                    })?;
+                
+                println!("✅ [BROKER] TCP connection established to {}", addr);
                 
                 let _ = stream.set_nodelay(true);
                 
@@ -348,8 +365,10 @@ impl BacktestBrokerClient {
                     buffer.extend_from_slice(&(topic_bytes.len() as u32).to_le_bytes());
                     buffer.extend_from_slice(topic_bytes);
                     writer.write_all(&buffer).await.map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
+                    println!("📝 [BROKER] Sent SUBSCRIBE for topic: {}", topic);
                 }
                 writer.flush().await.map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
+                println!("✅ [BROKER] All subscriptions sent and flushed");
                 
                 log_info_structured!(MAIN_LOGGER, "BROKER_SUBSCRIBER_STARTED",
                     "event" => "BROKER_SUBSCRIBER_STARTED",
@@ -392,19 +411,26 @@ impl BacktestBrokerClient {
         use tokio::io::AsyncReadExt;
         let mut buf_reader = tokio::io::BufReader::new(&mut reader);
         
+        println!("🔄 [BROKER] Receiver loop started, waiting for messages...");
+        
         loop {
             // Read incoming messages: [topic_len: u32][topic][data_len: u32][data]
             let topic_len = match buf_reader.read_u32_le().await {
                 Ok(len) => len as usize,
-                Err(_) => break,
+                Err(e) => {
+                    println!("❌ [BROKER] Receiver loop error reading topic_len: {}", e);
+                    break;
+                }
             };
             
             if topic_len > 1024 {
+                println!("❌ [BROKER] Topic length too large: {}", topic_len);
                 break;
             }
             
             let mut topic_buf = vec![0u8; topic_len];
             if buf_reader.read_exact(&mut topic_buf).await.is_err() {
+                println!("❌ [BROKER] Failed to read topic bytes");
                 break;
             }
             let topic = String::from_utf8_lossy(&topic_buf);
@@ -425,30 +451,37 @@ impl BacktestBrokerClient {
                 break;
             }
             
+            println!("📨 [BROKER] Received message on topic: {} ({} bytes)", topic, data_len);
+            
             // Route based on topic
             match topic.as_ref() {
                 t if t == topics::CHROMOSOME_REQUESTS => {
                     if let Ok(request) = ChromosomeEvalRequest::decode(&data[..]) {
+                        println!("📥 [BROKER] Routed CHROMOSOME_REQUEST");
                         let _ = chromosome_request_sender.send(request);
                     }
                 }
                 t if t == topics::CHROMOSOME_RESULTS => {
                     if let Ok(result) = ChromosomeEvalResult::decode(&data[..]) {
+                        println!("📥 [BROKER] Routed CHROMOSOME_RESULT");
                         let _ = chromosome_result_sender.send(result);
                     }
                 }
                 t if t == topics::DATA_BROADCAST => {
                     if let Ok(broadcast) = DataBroadcastRequest::decode(&data[..]) {
+                        println!("📥 [BROKER] Routed DATA_BROADCAST");
                         let _ = data_broadcast_sender.send(broadcast);
                     }
                 }
                 t if t == topics::DATA_LOAD => {
                     if let Ok(load_request) = DataLoadRequest::decode(&data[..]) {
+                        println!("📥 [BROKER] Routed DATA_LOAD");
                         let _ = data_load_sender.send(load_request);
                     }
                 }
                 t if t == topics::DATA_ACK => {
                     if let Ok(ack) = DataCacheAck::decode(&data[..]) {
+                        println!("📥 [BROKER] Routed DATA_ACK");
                         let _ = data_ack_sender.send(ack);
                     }
                 }
