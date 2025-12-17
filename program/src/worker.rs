@@ -1456,8 +1456,11 @@ impl Worker {
                 exchange: params.exchange.clone(),
                 initial_capital,
                 cache_ttl_seconds: 3600, // 1 hour cache TTL
+                start_time: params.start_date.clone().unwrap_or_else(|| "2024-01-01T00:00:00Z".to_string()),
+                end_time: params.end_date.clone().unwrap_or_else(|| "2024-12-31T23:59:59Z".to_string()),
             };
-            eprintln!("🧬 Created DistributedGAConfig, about to call run_with_fallback...");
+            eprintln!("🧬 Created DistributedGAConfig with start_time={}, end_time={}", 
+                distributed_config.start_time, distributed_config.end_time);
             
             // Clone data for the closure
             let data_for_fallback = Arc::clone(&data_for_distributed);

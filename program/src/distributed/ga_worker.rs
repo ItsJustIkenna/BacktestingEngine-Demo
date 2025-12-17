@@ -87,17 +87,25 @@ impl DistributedGAWorker {
             "max_concurrent" => MAX_CONCURRENT_EVALS
         );
         
-        // Subscribe to data broadcasts
+        // Subscribe to data broadcasts (legacy - for small datasets)
         let mut data_receiver = self.broker.subscribe_data_broadcasts();
+        
+        // Subscribe to data load requests (new - workers query DB directly)
+        let mut data_load_receiver = self.broker.subscribe_data_load_requests();
         
         // Subscribe to chromosome evaluation requests
         let mut eval_receiver = self.broker.subscribe_chromosome_requests();
         
         loop {
             tokio::select! {
-                // Handle data broadcast (cache the data)
+                // Handle legacy data broadcast (cache the data from message)
                 Ok(broadcast) = data_receiver.recv() => {
                     self.handle_data_broadcast(broadcast).await;
+                }
+                
+                // Handle data load request (workers query DB directly)
+                Ok(load_request) = data_load_receiver.recv() => {
+                    self.handle_data_load_request(load_request).await;
                 }
                 
                 // Handle chromosome evaluation request
@@ -194,6 +202,148 @@ impl DistributedGAWorker {
         };
         
         let _ = self.broker.publish_data_ack(ack).await;
+    }
+    
+    /// Handle data load request by querying the database directly
+    /// 
+    /// This is the preferred method for large datasets. The coordinator sends
+    /// query parameters (~200 bytes) and each worker loads data from the database.
+    /// This avoids serializing/transferring 500MB+ over the message broker.
+    async fn handle_data_load_request(
+        &self,
+        request: protocol::broker::messages::DataLoadRequest,
+    ) {
+        log_info_structured!(MAIN_LOGGER, "GA_WORKER_DATA_LOAD_START",
+            "event" => "GA_WORKER_DATA_LOAD_START",
+            "worker_id" => &self.worker_id,
+            "cache_key" => &request.cache_key,
+            "symbols" => format!("{:?}", request.symbols),
+            "exchange" => &request.exchange,
+            "start_time" => &request.start_time,
+            "end_time" => &request.end_time
+        );
+        
+        let start = Instant::now();
+        
+        // Load data from database
+        #[cfg(feature = "postgres")]
+        let market_data = match &self.db_pool {
+            Some(pool) => {
+                match self.load_data_from_db(
+                    pool.as_ref(),
+                    &request.symbols,
+                    &request.exchange,
+                    &request.start_time,
+                    &request.end_time,
+                ).await {
+                    Ok(data) => data,
+                    Err(e) => {
+                        log_error_structured!(MAIN_LOGGER, "GA_WORKER_DB_LOAD_FAIL",
+                            "event" => "GA_WORKER_DB_LOAD_FAIL",
+                            "worker_id" => &self.worker_id,
+                            "error" => e.to_string()
+                        );
+                        // Send failure ack
+                        let ack = protocol::broker::messages::DataCacheAck {
+                            cache_key: request.cache_key,
+                            worker_id: self.worker_id.clone(),
+                            success: false,
+                            capacity: 0,
+                        };
+                        let _ = self.broker.publish_data_ack(ack).await;
+                        return;
+                    }
+                }
+            }
+            None => {
+                log_error_structured!(MAIN_LOGGER, "GA_WORKER_NO_DB_POOL",
+                    "event" => "GA_WORKER_NO_DB_POOL",
+                    "worker_id" => &self.worker_id
+                );
+                return;
+            }
+        };
+        
+        #[cfg(not(feature = "postgres"))]
+        let market_data: Vec<MarketData> = {
+            log_error_structured!(MAIN_LOGGER, "GA_WORKER_NO_POSTGRES_FEATURE",
+                "event" => "GA_WORKER_NO_POSTGRES_FEATURE",
+                "worker_id" => &self.worker_id
+            );
+            return;
+        };
+        
+        let data_len = market_data.len();
+        let expires_at = Instant::now() + Duration::from_secs(request.ttl_seconds as u64);
+        
+        // Store in cache
+        {
+            let mut cache = self.data_cache.write().await;
+            cache.insert(request.cache_key.clone(), CacheEntry {
+                data: Arc::new(market_data),
+                expires_at,
+            });
+        }
+        
+        let elapsed = start.elapsed();
+        log_info_structured!(MAIN_LOGGER, "GA_WORKER_DATA_LOADED",
+            "event" => "GA_WORKER_DATA_LOADED",
+            "worker_id" => &self.worker_id,
+            "cache_key" => &request.cache_key,
+            "data_points" => data_len,
+            "load_time_ms" => elapsed.as_millis()
+        );
+        
+        // Send success acknowledgment
+        let ack = protocol::broker::messages::DataCacheAck {
+            cache_key: request.cache_key,
+            worker_id: self.worker_id.clone(),
+            success: true,
+            capacity: MAX_CONCURRENT_EVALS as i32,
+        };
+        
+        let _ = self.broker.publish_data_ack(ack).await;
+    }
+    
+    /// Load market data from database using parallel loader
+    #[cfg(feature = "postgres")]
+    async fn load_data_from_db(
+        &self,
+        pool: &diesel_async::pooled_connection::deadpool::Pool<diesel_async::AsyncPgConnection>,
+        symbols: &[String],
+        exchange: &str,
+        _start_time: &str,
+        _end_time: &str,
+    ) -> Result<Vec<MarketData>, WorkerError> {
+        use crate::streaming::ParallelDataLoader;
+        
+        let symbol = symbols.first().cloned().unwrap_or_default();
+        
+        log_info_structured!(MAIN_LOGGER, "GA_WORKER_DB_QUERY",
+            "event" => "GA_WORKER_DB_QUERY",
+            "worker_id" => &self.worker_id,
+            "symbol" => &symbol,
+            "exchange" => exchange
+        );
+        
+        // Use parallel loader with 10 workers for faster loading
+        const NUM_WORKERS: usize = 10;
+        let loader = ParallelDataLoader::new(
+            std::sync::Arc::new(pool.clone()),
+            NUM_WORKERS,
+        );
+        
+        // Load all data using time-based partitioning for parallelism
+        let market_data = loader.load_all(&symbol, exchange).await
+            .map_err(|e| WorkerError::DatabaseError(e.to_string()))?;
+        
+        log_info_structured!(MAIN_LOGGER, "GA_WORKER_DB_QUERY_COMPLETE",
+            "event" => "GA_WORKER_DB_QUERY_COMPLETE",
+            "worker_id" => &self.worker_id,
+            "rows_loaded" => market_data.len()
+        );
+        
+        Ok(market_data)
     }
     
     /// Process a chromosome evaluation request
@@ -425,6 +575,8 @@ impl DistributedGAWorker {
 pub enum WorkerError {
     BrokerError(String),
     CacheError(String),
+    DatabaseError(String),
+    InvalidTimestamp(String),
 }
 
 impl std::fmt::Display for WorkerError {
@@ -432,6 +584,8 @@ impl std::fmt::Display for WorkerError {
         match self {
             WorkerError::BrokerError(e) => write!(f, "Broker error: {}", e),
             WorkerError::CacheError(e) => write!(f, "Cache error: {}", e),
+            WorkerError::DatabaseError(e) => write!(f, "Database error: {}", e),
+            WorkerError::InvalidTimestamp(e) => write!(f, "Invalid timestamp: {}", e),
         }
     }
 }

@@ -23,7 +23,7 @@ use tokio::io::AsyncWriteExt;
 use protocol::broker::messages::{
     BacktestChunk, BacktestChunkResult, BacktestProgress, 
     BacktestCancelRequest, ChromosomeEvalRequest, ChromosomeEvalResult,
-    DataBroadcastRequest, DataCacheAck,
+    DataBroadcastRequest, DataLoadRequest, DataCacheAck,
 };
 use prost::Message;
 
@@ -89,6 +89,7 @@ pub mod topics {
     pub const CHROMOSOME_REQUESTS: &str = "ga.chromosome.requests";
     pub const CHROMOSOME_RESULTS: &str = "ga.chromosome.results";
     pub const DATA_BROADCAST: &str = "ga.data.broadcast";
+    pub const DATA_LOAD: &str = "ga.data.load"; // Workers load data from DB
     pub const DATA_ACK: &str = "ga.data.ack";
     pub const BACKTEST_CHUNKS: &str = "backtest.chunks";
     pub const BACKTEST_RESULTS: &str = "backtest.results";
@@ -118,8 +119,10 @@ pub struct BacktestBrokerClient {
     chromosome_request_sender: broadcast::Sender<ChromosomeEvalRequest>,
     /// Channel for chromosome evaluation results (workers -> coordinator)
     chromosome_result_sender: broadcast::Sender<ChromosomeEvalResult>,
-    /// Channel for data broadcast requests
+    /// Channel for data broadcast requests (deprecated - use data_load for large datasets)
     data_broadcast_sender: broadcast::Sender<DataBroadcastRequest>,
+    /// Channel for data load requests (workers query DB directly)
+    data_load_sender: broadcast::Sender<DataLoadRequest>,
     /// Channel for data cache acknowledgments
     data_ack_sender: broadcast::Sender<DataCacheAck>,
     
@@ -143,6 +146,7 @@ impl BacktestBrokerClient {
         let (chromosome_request_sender, _) = broadcast::channel(1_000);
         let (chromosome_result_sender, _) = broadcast::channel(1_000);
         let (data_broadcast_sender, _) = broadcast::channel(100);
+        let (data_load_sender, _) = broadcast::channel(100);
         let (data_ack_sender, _) = broadcast::channel(100);
         
         // Note: Logging skipped in constructor to avoid Lazy initialization issues during tests
@@ -159,6 +163,7 @@ impl BacktestBrokerClient {
             chromosome_request_sender,
             chromosome_result_sender,
             data_broadcast_sender,
+            data_load_sender,
             data_ack_sender,
             tcp_connection: Arc::new(Mutex::new(None)),
             is_connected: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -330,7 +335,8 @@ impl BacktestBrokerClient {
                     ],
                     BrokerRole::Worker => vec![
                         topics::CHROMOSOME_REQUESTS, // Receive evaluation requests from coordinator
-                        topics::DATA_BROADCAST,      // Receive market data broadcasts
+                        topics::DATA_BROADCAST,      // Receive market data broadcasts (legacy)
+                        topics::DATA_LOAD,           // Receive data load requests (new - workers query DB)
                     ],
                 };
                 
@@ -355,6 +361,7 @@ impl BacktestBrokerClient {
                 let chromosome_request_sender = self.chromosome_request_sender.clone();
                 let chromosome_result_sender = self.chromosome_result_sender.clone();
                 let data_broadcast_sender = self.data_broadcast_sender.clone();
+                let data_load_sender = self.data_load_sender.clone();
                 let data_ack_sender = self.data_ack_sender.clone();
                 
                 tokio::spawn(async move {
@@ -363,6 +370,7 @@ impl BacktestBrokerClient {
                         chromosome_request_sender,
                         chromosome_result_sender,
                         data_broadcast_sender,
+                        data_load_sender,
                         data_ack_sender,
                     ).await;
                 });
@@ -378,6 +386,7 @@ impl BacktestBrokerClient {
         chromosome_request_sender: broadcast::Sender<ChromosomeEvalRequest>,
         chromosome_result_sender: broadcast::Sender<ChromosomeEvalResult>,
         data_broadcast_sender: broadcast::Sender<DataBroadcastRequest>,
+        data_load_sender: broadcast::Sender<DataLoadRequest>,
         data_ack_sender: broadcast::Sender<DataCacheAck>,
     ) {
         use tokio::io::AsyncReadExt;
@@ -431,6 +440,11 @@ impl BacktestBrokerClient {
                 t if t == topics::DATA_BROADCAST => {
                     if let Ok(broadcast) = DataBroadcastRequest::decode(&data[..]) {
                         let _ = data_broadcast_sender.send(broadcast);
+                    }
+                }
+                t if t == topics::DATA_LOAD => {
+                    if let Ok(load_request) = DataLoadRequest::decode(&data[..]) {
+                        let _ = data_load_sender.send(load_request);
                     }
                 }
                 t if t == topics::DATA_ACK => {
@@ -720,9 +734,33 @@ impl BacktestBrokerClient {
         }
     }
     
-    /// Subscribe to data broadcast requests (workers)
+    /// Subscribe to data broadcast requests (workers) - DEPRECATED: use subscribe_data_load_requests
     pub fn subscribe_data_broadcasts(&self) -> broadcast::Receiver<DataBroadcastRequest> {
         self.data_broadcast_sender.subscribe()
+    }
+    
+    /// Publish a data load request (coordinator -> workers)
+    /// Workers will load data from database directly (no large payload over broker)
+    pub async fn publish_data_load_request(&self, request: DataLoadRequest) -> Result<(), BrokerError> {
+        match &self.mode {
+            BrokerMode::InProcess => {
+                self.data_load_sender.send(request)
+                    .map_err(|_| BrokerError::SendFailed)?;
+                Ok(())
+            }
+            BrokerMode::Network { .. } => {
+                let data = request.encode_to_vec();
+                self.publish_tcp(topics::DATA_LOAD, &data).await?;
+                // Also publish locally
+                let _ = self.data_load_sender.send(request);
+                Ok(())
+            }
+        }
+    }
+    
+    /// Subscribe to data load requests (workers load from DB)
+    pub fn subscribe_data_load_requests(&self) -> broadcast::Receiver<DataLoadRequest> {
+        self.data_load_sender.subscribe()
     }
     
     /// Publish a data cache acknowledgment (worker -> coordinator)
@@ -761,6 +799,7 @@ impl Clone for BacktestBrokerClient {
             chromosome_request_sender: self.chromosome_request_sender.clone(),
             chromosome_result_sender: self.chromosome_result_sender.clone(),
             data_broadcast_sender: self.data_broadcast_sender.clone(),
+            data_load_sender: self.data_load_sender.clone(),
             data_ack_sender: self.data_ack_sender.clone(),
             tcp_connection: Arc::clone(&self.tcp_connection),
             is_connected: Arc::clone(&self.is_connected),

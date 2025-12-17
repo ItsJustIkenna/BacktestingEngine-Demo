@@ -65,6 +65,10 @@ pub struct DistributedGAConfig {
     pub initial_capital: f64,
     /// Data cache TTL in seconds
     pub cache_ttl_seconds: i64,
+    /// Start time for data query (ISO 8601 format)
+    pub start_time: String,
+    /// End time for data query (ISO 8601 format)
+    pub end_time: String,
 }
 
 /// Worker capacity tracking
@@ -120,11 +124,107 @@ impl DistributedGACoordinator {
         self.workers.read().await.values().map(|w| w.capacity).sum()
     }
     
-    /// Broadcast market data to all workers for caching
+    /// Request workers to load market data from database
     /// 
-    /// This should be called once before running the GA.
-    /// Workers will cache the data and subsequent chromosome evaluations
-    /// will be fast. Returns cache key and number of workers that acknowledged.
+    /// This sends a small message (~200 bytes) with query parameters.
+    /// Workers will load data directly from the database, avoiding the need
+    /// to serialize/compress/transfer 500MB+ over the message broker.
+    /// 
+    /// Returns cache key and number of workers that acknowledged.
+    pub async fn request_data_load(&mut self) -> Result<String, CoordinatorError> {
+        let cache_key = format!(
+            "{}:{}:{}",
+            self.config.symbol,
+            self.config.exchange,
+            chrono::Utc::now().timestamp()
+        );
+        
+        log_info_structured!(MAIN_LOGGER, "GA_DATA_LOAD_REQUEST",
+            "event" => "GA_DATA_LOAD_REQUEST",
+            "job_id" => &self.job_id,
+            "cache_key" => &cache_key,
+            "symbol" => &self.config.symbol,
+            "exchange" => &self.config.exchange,
+            "start_time" => &self.config.start_time,
+            "end_time" => &self.config.end_time
+        );
+        
+        // Create lightweight load request with query parameters only
+        let request = protocol::broker::messages::DataLoadRequest {
+            cache_key: cache_key.clone(),
+            symbols: vec![self.config.symbol.clone()],
+            exchange: self.config.exchange.clone(),
+            start_time: self.config.start_time.clone(),
+            end_time: self.config.end_time.clone(),
+            ttl_seconds: self.config.cache_ttl_seconds,
+            initial_capital: self.config.initial_capital,
+            job_id: self.job_id.clone(),
+        };
+        
+        // Publish to data load topic - message is only ~200 bytes!
+        self.broker.publish_data_load_request(request).await
+            .map_err(|e| CoordinatorError::BrokerError(e.to_string()))?;
+        
+        self.data_cache_key = Some(cache_key.clone());
+        
+        // Subscribe to worker acknowledgments
+        let mut ack_receiver = self.broker.subscribe_data_acks();
+        let workers = Arc::clone(&self.workers);
+        let cache_key_clone = cache_key.clone();
+        
+        // Wait for workers to acknowledge (with longer timeout since they're loading from DB)
+        let ack_timeout = Duration::from_secs(60); // Give workers time to query DB
+        let ack_deadline = Instant::now() + ack_timeout;
+        
+        log_info_structured!(MAIN_LOGGER, "GA_WAITING_FOR_WORKERS",
+            "event" => "GA_WAITING_FOR_WORKERS",
+            "timeout_seconds" => 60
+        );
+        
+        while Instant::now() < ack_deadline {
+            match tokio::time::timeout(
+                Duration::from_millis(500),
+                ack_receiver.recv()
+            ).await {
+                Ok(Ok(ack)) => {
+                    if ack.cache_key == cache_key_clone && ack.success {
+                        let mut w = workers.write().await;
+                        w.insert(ack.worker_id.clone(), WorkerInfo {
+                            worker_id: ack.worker_id.clone(),
+                            capacity: ack.capacity,
+                            last_seen: Instant::now(),
+                        });
+                        log_info_structured!(MAIN_LOGGER, "GA_WORKER_READY",
+                            "event" => "GA_WORKER_READY",
+                            "worker_id" => ack.worker_id,
+                            "capacity" => ack.capacity
+                        );
+                    }
+                }
+                Ok(Err(_)) => break, // Channel closed
+                Err(_) => continue, // Timeout, keep waiting
+            }
+        }
+        
+        let worker_count = self.workers.read().await.len();
+        log_info_structured!(MAIN_LOGGER, "GA_DATA_LOAD_COMPLETE",
+            "event" => "GA_DATA_LOAD_COMPLETE",
+            "cache_key" => &cache_key,
+            "workers_ready" => worker_count,
+            "total_capacity" => self.total_capacity().await
+        );
+        
+        if worker_count == 0 {
+            log_warn!(MAIN_LOGGER, "No workers acknowledged data load request - falling back to local evaluation");
+        }
+        
+        Ok(cache_key)
+    }
+    
+    /// DEPRECATED: Use request_data_load() instead
+    /// This method serializes and sends all data over the broker which fails for large datasets
+    #[deprecated(note = "Use request_data_load() instead - this fails for datasets > 16MB")]
+    #[allow(dead_code)]
     pub async fn broadcast_data(
         &mut self,
         data: &[dataloader::MarketData],
@@ -612,11 +712,13 @@ impl DistributedGARunner {
             job_id,
         );
         
-        // Broadcast data and wait for workers
-        eprintln!("🌐 DISTRIBUTED: Broadcasting {} data points to workers...", market_data.len());
-        match coordinator.broadcast_data(market_data).await {
+        // Request workers to load data from database (sends ~200 bytes instead of 500MB+)
+        eprintln!("🌐 DISTRIBUTED: Requesting workers to load data from database...");
+        eprintln!("🌐 DISTRIBUTED: Query params - symbol={}, exchange={}, start={}, end={}",
+            config.symbol, config.exchange, config.start_time, config.end_time);
+        match coordinator.request_data_load().await {
             Ok(cache_key) => {
-                eprintln!("🌐 DISTRIBUTED: Data broadcast complete, cache_key={}", cache_key);
+                eprintln!("🌐 DISTRIBUTED: Data load request sent, cache_key={}", cache_key);
                 let worker_count = coordinator.worker_count().await;
                 eprintln!("🌐 DISTRIBUTED: worker_count={}, min_workers={}", worker_count, mode.min_workers);
                 if worker_count >= mode.min_workers {
@@ -648,8 +750,8 @@ impl DistributedGARunner {
                 }
             }
             Err(e) => {
-                eprintln!("🌐 DISTRIBUTED: Data broadcast failed: {}. Falling back to local.", e);
-                log_warn!(MAIN_LOGGER, "Data broadcast failed: {}. Falling back to local GA.", e);
+                eprintln!("🌐 DISTRIBUTED: Data load request failed: {}. Falling back to local.", e);
+                log_warn!(MAIN_LOGGER, "Data load request failed: {}. Falling back to local GA.", e);
             }
         }
         
