@@ -420,8 +420,12 @@ impl BacktestBrokerClient {
         
         loop {
             // Read incoming messages: [topic_len: u32][topic][data_len: u32][data]
+            println!("🔄 [BROKER] Receiver loop: waiting to read topic_len...");
             let topic_len = match buf_reader.read_u32_le().await {
-                Ok(len) => len as usize,
+                Ok(len) => {
+                    println!("🔄 [BROKER] Receiver loop: got topic_len = {}", len);
+                    len as usize
+                },
                 Err(e) => {
                     println!("❌ [BROKER] Receiver loop error reading topic_len: {}", e);
                     break;
