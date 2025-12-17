@@ -46,7 +46,7 @@ use genetic::{Chromosome, FitnessResult};
 use genetic::chromosome::AvellanedaStoikovChromosome;
 
 use super::broker_client::BacktestBrokerClient;
-use crate::{log_info_structured, log_warn, log_debug};
+use crate::{log_info_structured, log_warn, log_debug, log_error};
 use crate::logging_facade::MAIN_LOGGER;
 
 /// Timeout for waiting for all chromosome results
@@ -161,13 +161,9 @@ impl DistributedGACoordinator {
             job_id: self.job_id.clone(),
         };
         
-        // Publish to data load topic - message is only ~200 bytes!
-        self.broker.publish_data_load_request(request).await
-            .map_err(|e| CoordinatorError::BrokerError(e.to_string()))?;
-        
         self.data_cache_key = Some(cache_key.clone());
         
-        // Subscribe to worker acknowledgments
+        // Subscribe to worker acknowledgments BEFORE publishing
         let mut ack_receiver = self.broker.subscribe_data_acks();
         let workers = Arc::clone(&self.workers);
         let cache_key_clone = cache_key.clone();
@@ -176,12 +172,30 @@ impl DistributedGACoordinator {
         let ack_timeout = Duration::from_secs(60); // Give workers time to query DB
         let ack_deadline = Instant::now() + ack_timeout;
         
+        // Retry publishing every 5 seconds until we get worker acknowledgments
+        // This handles the race condition where workers haven't subscribed yet
+        let mut last_publish = Instant::now() - Duration::from_secs(10); // Force immediate first publish
+        let publish_interval = Duration::from_secs(5);
+        let min_workers_needed = self.config.min_workers.unwrap_or(2) as usize;
+        
         log_info_structured!(MAIN_LOGGER, "GA_WAITING_FOR_WORKERS",
             "event" => "GA_WAITING_FOR_WORKERS",
-            "timeout_seconds" => 60
+            "timeout_seconds" => 60,
+            "min_workers" => min_workers_needed
         );
         
         while Instant::now() < ack_deadline {
+            // Republish periodically to catch workers that subscribed late
+            if last_publish.elapsed() >= publish_interval {
+                eprintln!("📤 [COORDINATOR] Publishing data load request (attempt)...");
+                if let Err(e) = self.broker.publish_data_load_request(request.clone()).await {
+                    log_error!(MAIN_LOGGER, "Failed to publish data load request: {}", e);
+                } else {
+                    eprintln!("✅ [COORDINATOR] Data load request published");
+                }
+                last_publish = Instant::now();
+            }
+            
             match tokio::time::timeout(
                 Duration::from_millis(500),
                 ack_receiver.recv()
@@ -194,11 +208,18 @@ impl DistributedGACoordinator {
                             capacity: ack.capacity,
                             last_seen: Instant::now(),
                         });
+                        eprintln!("✅ [COORDINATOR] Worker {} acknowledged (capacity={})", ack.worker_id, ack.capacity);
                         log_info_structured!(MAIN_LOGGER, "GA_WORKER_READY",
                             "event" => "GA_WORKER_READY",
                             "worker_id" => ack.worker_id,
                             "capacity" => ack.capacity
                         );
+                        
+                        // Check if we have enough workers now
+                        if w.len() >= min_workers_needed {
+                            eprintln!("✅ [COORDINATOR] Got {} workers, enough to proceed", w.len());
+                            break;
+                        }
                     }
                 }
                 Ok(Err(_)) => break, // Channel closed
