@@ -9,10 +9,20 @@ use tower::ServiceExt;
 use program::api::build_router;
 use program::job_queue::{BacktestJobParams, BacktestJob, BacktestResult, JobQueue, JobStatus};
 use async_trait::async_trait;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 use std::collections::HashMap;
 use chrono::Utc;
 use uuid::Uuid;
+
+/// Initialize test environment (disable auth for tests)
+static INIT: Once = Once::new();
+
+fn init_test_env() {
+    INIT.call_once(|| {
+        // Disable API authentication for tests
+        std::env::set_var("API_AUTH_REQUIRED", "false");
+    });
+}
 
 /// Simple in-memory job queue for testing
 struct InMemoryJobQueue {
@@ -119,6 +129,7 @@ impl JobQueue for InMemoryJobQueue {
 
 /// Helper to create test router with in-memory job queue
 fn create_test_app() -> axum::Router {
+    init_test_env();
     let job_queue = Arc::new(InMemoryJobQueue::new());
     build_router(job_queue)
 }

@@ -23,63 +23,71 @@ use axum::{
 };
 use metrics_core::{counter, gauge, histogram, describe_counter, describe_gauge, describe_histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+/// Global static for the metrics handle - ensures we only initialize once
+static METRICS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 
 /// Initialize the Prometheus metrics recorder
 /// 
-/// Call this once at application startup.
+/// This function is idempotent - it can be called multiple times safely.
+/// Only the first call actually installs the recorder; subsequent calls
+/// return a clone of the existing handle.
+/// 
 /// Returns a handle for the /metrics endpoint.
 pub fn init_metrics() -> PrometheusHandle {
-    let builder = PrometheusBuilder::new();
-    let handle = builder
-        .install_recorder()
-        .expect("Failed to install Prometheus recorder");
-    
-    // Describe all metrics for documentation
-    describe_counter!(
-        "backtest_jobs_submitted_total",
-        "Total number of backtest jobs submitted"
-    );
-    describe_counter!(
-        "backtest_jobs_completed_total",
-        "Total number of backtest jobs completed successfully"
-    );
-    describe_counter!(
-        "backtest_jobs_failed_total",
-        "Total number of backtest jobs that failed"
-    );
-    describe_gauge!(
-        "backtest_queue_depth",
-        "Current number of jobs waiting in queue"
-    );
-    describe_gauge!(
-        "backtest_workers_active",
-        "Number of workers currently processing jobs"
-    );
-    describe_histogram!(
-        "backtest_job_duration_seconds",
-        "Time taken to complete a backtest job"
-    );
-    describe_histogram!(
-        "backtest_api_request_duration_seconds",
-        "API request latency in seconds"
-    );
-    describe_histogram!(
-        "backtest_data_prep_duration_seconds",
-        "Time taken to prepare binary data files"
-    );
-    describe_counter!(
-        "backtest_data_prep_bytes_total",
-        "Total bytes of data prepared"
-    );
-    describe_gauge!(
-        "backtest_binary_files_count",
-        "Number of binary data files available"
-    );
-    
-    tracing::info!("📊 Prometheus metrics initialized");
-    
-    handle
+    METRICS_HANDLE.get_or_init(|| {
+        let builder = PrometheusBuilder::new();
+        let handle = builder
+            .install_recorder()
+            .expect("Failed to install Prometheus recorder");
+        
+        // Describe all metrics for documentation
+        describe_counter!(
+            "backtest_jobs_submitted_total",
+            "Total number of backtest jobs submitted"
+        );
+        describe_counter!(
+            "backtest_jobs_completed_total",
+            "Total number of backtest jobs completed successfully"
+        );
+        describe_counter!(
+            "backtest_jobs_failed_total",
+            "Total number of backtest jobs that failed"
+        );
+        describe_gauge!(
+            "backtest_queue_depth",
+            "Current number of jobs waiting in queue"
+        );
+        describe_gauge!(
+            "backtest_workers_active",
+            "Number of workers currently processing jobs"
+        );
+        describe_histogram!(
+            "backtest_job_duration_seconds",
+            "Time taken to complete a backtest job"
+        );
+        describe_histogram!(
+            "backtest_api_request_duration_seconds",
+            "API request latency in seconds"
+        );
+        describe_histogram!(
+            "backtest_data_prep_duration_seconds",
+            "Time taken to prepare binary data files"
+        );
+        describe_counter!(
+            "backtest_data_prep_bytes_total",
+            "Total bytes of data prepared"
+        );
+        describe_gauge!(
+            "backtest_binary_files_count",
+            "Number of binary data files available"
+        );
+        
+        tracing::info!("📊 Prometheus metrics initialized");
+        
+        handle
+    }).clone()
 }
 
 /// Metrics handle for dependency injection
