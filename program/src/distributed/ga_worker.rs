@@ -13,9 +13,10 @@
 //! MAX_CONCURRENT_EVALS). The semaphore prevents OOM by limiting parallelism.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{RwLock, Semaphore};
+use tokio::sync::{RwLock, Semaphore, Mutex};
 
 use dataloader::MarketData;
 use genetic::chromosome::AvellanedaStoikovChromosome;
@@ -46,6 +47,8 @@ pub struct DistributedGAWorker {
     broker: Arc<BacktestBrokerClient>,
     /// Cached market data by cache key
     data_cache: Arc<RwLock<HashMap<String, CacheEntry>>>,
+    /// Track which cache keys are currently being loaded (to avoid duplicate loads)
+    loading_in_progress: Arc<Mutex<HashSet<String>>>,
     /// Semaphore for limiting concurrent evaluations
     eval_semaphore: Arc<Semaphore>,
     /// Database pool for loading data if not cached
@@ -60,6 +63,7 @@ impl DistributedGAWorker {
             worker_id,
             broker,
             data_cache: Arc::new(RwLock::new(HashMap::new())),
+            loading_in_progress: Arc::new(Mutex::new(HashSet::new())),
             eval_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_EVALS)),
             #[cfg(feature = "postgres")]
             db_pool: None,
@@ -213,11 +217,62 @@ impl DistributedGAWorker {
     /// This is the preferred method for large datasets. The coordinator sends
     /// query parameters (~200 bytes) and each worker loads data from the database.
     /// This avoids serializing/transferring 500MB+ over the message broker.
+    /// 
+    /// Only ONE worker per pod should load data to avoid OOM. Others wait.
     async fn handle_data_load_request(
         &self,
         request: protocol::broker::messages::DataLoadRequest,
     ) {
-        println!("🔄 [WORKER {}] handle_data_load_request starting for cache_key={}", self.worker_id, request.cache_key);
+        let cache_key = request.cache_key.clone();
+        println!("🔄 [WORKER {}] handle_data_load_request starting for cache_key={}", self.worker_id, cache_key);
+        
+        // Check if data is already cached
+        {
+            let cache = self.data_cache.read().await;
+            if cache.contains_key(&cache_key) {
+                println!("✅ [WORKER {}] Data already cached for {}, sending ACK", self.worker_id, cache_key);
+                let ack = protocol::broker::messages::DataCacheAck {
+                    cache_key,
+                    worker_id: self.worker_id.clone(),
+                    success: true,
+                    capacity: MAX_CONCURRENT_EVALS as i32,
+                };
+                let _ = self.broker.publish_data_ack(ack).await;
+                return;
+            }
+        }
+        
+        // Check if another worker in this pod is already loading this data
+        {
+            let mut loading = self.loading_in_progress.lock().await;
+            if loading.contains(&cache_key) {
+                // Another worker is loading, wait for it
+                println!("⏳ [WORKER {}] Another worker is loading {}, waiting...", self.worker_id, cache_key);
+                drop(loading);
+                
+                // Poll until data is available (max 120 seconds)
+                for _ in 0..240 {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    let cache = self.data_cache.read().await;
+                    if cache.contains_key(&cache_key) {
+                        println!("✅ [WORKER {}] Data now available for {}", self.worker_id, cache_key);
+                        let ack = protocol::broker::messages::DataCacheAck {
+                            cache_key,
+                            worker_id: self.worker_id.clone(),
+                            success: true,
+                            capacity: MAX_CONCURRENT_EVALS as i32,
+                        };
+                        let _ = self.broker.publish_data_ack(ack).await;
+                        return;
+                    }
+                }
+                println!("❌ [WORKER {}] Timeout waiting for data load", self.worker_id);
+                return;
+            }
+            // Mark as loading
+            loading.insert(cache_key.clone());
+            println!("🔒 [WORKER {}] Acquired loading lock for {}", self.worker_id, cache_key);
+        }
         
         log_info_structured!(MAIN_LOGGER, "GA_WORKER_DATA_LOAD_START",
             "event" => "GA_WORKER_DATA_LOAD_START",
@@ -256,6 +311,11 @@ impl DistributedGAWorker {
                                 "worker_id" => &self.worker_id,
                                 "error" => e.to_string()
                             );
+                            // Release loading lock on error
+                            {
+                                let mut loading = self.loading_in_progress.lock().await;
+                                loading.remove(&request.cache_key);
+                            }
                             // Send failure ack
                             let ack = protocol::broker::messages::DataCacheAck {
                                 cache_key: request.cache_key,
@@ -274,6 +334,11 @@ impl DistributedGAWorker {
                         "event" => "GA_WORKER_NO_DB_POOL",
                         "worker_id" => &self.worker_id
                     );
+                    // Release loading lock on error
+                    {
+                        let mut loading = self.loading_in_progress.lock().await;
+                        loading.remove(&request.cache_key);
+                    }
                     return;
                 }
             }
@@ -298,6 +363,13 @@ impl DistributedGAWorker {
                 data: Arc::new(market_data),
                 expires_at,
             });
+        }
+        
+        // Release loading lock
+        {
+            let mut loading = self.loading_in_progress.lock().await;
+            loading.remove(&request.cache_key);
+            println!("🔓 [WORKER {}] Released loading lock for {}", self.worker_id, request.cache_key);
         }
         
         let elapsed = start.elapsed();
@@ -592,6 +664,7 @@ impl DistributedGAWorker {
             worker_id: self.worker_id.clone(),
             broker: Arc::clone(&self.broker),
             data_cache: Arc::clone(&self.data_cache),
+            loading_in_progress: Arc::clone(&self.loading_in_progress),
             eval_semaphore: Arc::clone(&self.eval_semaphore),
             #[cfg(feature = "postgres")]
             db_pool: self.db_pool.clone(),
