@@ -31,7 +31,7 @@ use crate::logging_facade::MAIN_LOGGER;
 const MAX_CONCURRENT_EVALS: usize = 6;
 
 /// Data cache entry with TTL
-struct CacheEntry {
+pub struct CacheEntry {
     data: Arc<Vec<MarketData>>,
     expires_at: Instant,
 }
@@ -64,6 +64,24 @@ impl DistributedGAWorker {
             broker,
             data_cache: Arc::new(RwLock::new(HashMap::new())),
             loading_in_progress: Arc::new(Mutex::new(HashSet::new())),
+            eval_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_EVALS)),
+            #[cfg(feature = "postgres")]
+            db_pool: None,
+        }
+    }
+    
+    /// Create a new GA worker with shared cache and loading lock (for multi-worker pods)
+    pub fn new_with_shared_state(
+        worker_id: String,
+        broker: Arc<BacktestBrokerClient>,
+        shared_cache: Arc<RwLock<HashMap<String, CacheEntry>>>,
+        shared_loading_lock: Arc<Mutex<HashSet<String>>>,
+    ) -> Self {
+        Self {
+            worker_id,
+            broker,
+            data_cache: shared_cache,
+            loading_in_progress: shared_loading_lock,
             eval_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_EVALS)),
             #[cfg(feature = "postgres")]
             db_pool: None,

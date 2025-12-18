@@ -167,20 +167,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             println!("📡 Connected to message broker, subscribed to topics");
             
+            // Create shared state for all GA workers in this pod
+            // This prevents multiple workers from loading the same data
+            let shared_cache = std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new()));
+            let shared_loading_lock = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
+            
             // Spawn GA workers (for chromosome evaluation)
             let mut handles = Vec::with_capacity(workers * 2);
             for i in 0..workers {
                 let worker_id = format!("{}-ga-{}", prefix, i);
                 let broker_clone = Arc::clone(&broker);
+                let cache_clone = Arc::clone(&shared_cache);
+                let lock_clone = Arc::clone(&shared_loading_lock);
                 #[cfg(feature = "postgres")]
                 let pool_clone = Arc::clone(&db_pool);
                 
                 let handle = tokio::spawn(async move {
                     #[cfg(feature = "postgres")]
-                    let worker = DistributedGAWorker::new(worker_id, broker_clone)
-                        .with_db_pool(pool_clone);
+                    let worker = DistributedGAWorker::new_with_shared_state(
+                        worker_id, 
+                        broker_clone,
+                        cache_clone,
+                        lock_clone,
+                    ).with_db_pool(pool_clone);
                     #[cfg(not(feature = "postgres"))]
-                    let worker = DistributedGAWorker::new(worker_id, broker_clone);
+                    let worker = DistributedGAWorker::new_with_shared_state(
+                        worker_id,
+                        broker_clone,
+                        cache_clone,
+                        lock_clone,
+                    );
                     let _ = worker.run().await;
                 });
                 handles.push(handle);
