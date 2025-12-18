@@ -2,6 +2,18 @@
 //!
 //! High-performance backtesting engine with SIMD-accelerated calculations
 //! and adaptive optimization strategies.
+//!
+//! # Architecture
+//!
+//! The backtest engine supports two simulation paths:
+//!
+//! 1. **Full Simulation** (`SimulationLoop`) - For production backtests with full
+//!    order book reconstruction, accurate fill modeling, and comprehensive metrics.
+//!    Uses `&[MarketData]` in-memory.
+//!
+//! 2. **Lightweight Simulation** (`LightweightSim`) - For GA optimization with
+//!    memory-efficient processing of large datasets via `TickSource` trait.
+//!    Supports memory-mapped binary files for millions of ticks.
 
 // Include logging macros first
 #[macro_use]
@@ -15,13 +27,16 @@ pub mod html_export;
 pub mod latency;
 pub mod simd_utils;
 pub mod fast_simulation;
+pub mod lightweight_sim;
 
 // Re-export main types for easy access
 pub use engine::{BacktestEngine, BacktestResults, AnalysisMetadata, WalkForwardSummary};
 pub use types::{BacktestResult, BacktestEvent};
+pub use simulation::SimulationLoop;
 pub use html_export::HtmlExporter;
 pub use latency::{LatencySampler, sample_latency};
 pub use fast_simulation::{FastSimulator, MarketFeatures, FastASParams, FastSimResult};
+pub use lightweight_sim::{LightweightSim, LightweightSimConfig};
 
 // Utility functions for report generation
 use metrics::{ReportConfig, ReportFormat};

@@ -259,7 +259,7 @@ fn test_output_config_custom() {
 
 #[test]
 fn test_orderbook_config_default() {
-    let config = OrderBookConfig::default();
+    let _config = OrderBookConfig::default();
     
     // Should have reasonable defaults
     assert!(true, "OrderBookConfig default created");

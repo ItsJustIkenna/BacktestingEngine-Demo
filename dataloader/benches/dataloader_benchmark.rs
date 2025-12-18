@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use dataloader::{DataLoader, MarketData, Candle, TradeData};
+use dataloader::{MarketData, Candle, TradeData};
 use chrono::Utc;
 use bigdecimal::{BigDecimal, FromPrimitive};
 
@@ -81,6 +81,7 @@ fn bench_market_data_processing(c: &mut Criterion) {
                     MarketData::Trade(trade) => {
                         sum += &trade.price;
                     }
+                    #[allow(unreachable_patterns)]
                     _ => {} // Handle Order/Snapshot variants when postgres is enabled
                 }
             }

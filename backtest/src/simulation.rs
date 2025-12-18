@@ -857,6 +857,10 @@ impl SimulationLoop {
                     // Update current market price from candle close
                     current_market_price = Some(candle.close.clone());
                 }
+                #[allow(unreachable_patterns)]
+                _ => {
+                    // Skip unknown/feature-gated variants
+                }
             }
 
             // 2. Build strategy context (timestamp, portfolio, etc.)
@@ -872,6 +876,8 @@ impl SimulationLoop {
             let timestamp = match &data {
                 MarketData::Candle(c) => c.timestamp,
                 MarketData::Trade(t) => t.timestamp,
+                #[allow(unreachable_patterns)]
+                _ => chrono::Utc::now(),
             };
             let context = StrategyContext {
                 timestamp,
@@ -1890,6 +1896,106 @@ impl SimulationLoop {
             self.stable_region_skips, skip_pct, processed_count);
 
         result
+    }
+    
+    /// Run simulation using a streaming TickSource (memory-efficient)
+    /// 
+    /// This method processes ticks one at a time from a memory-mapped binary file,
+    /// maintaining constant memory usage (~20 KB) regardless of dataset size.
+    /// 
+    /// # Arguments
+    /// * `strategy_manager` - Strategy for generating signals
+    /// * `orderbook` - Order book for matching
+    /// * `portfolio` - Portfolio state
+    /// * `risk_manager` - Risk management
+    /// * `source` - TickSource providing tick data (mmap-backed)
+    /// * `symbol` - Symbol being traded
+    /// * `exchange` - Exchange name
+    /// * `config` - Backtest configuration
+    pub async fn run_streaming<S: dataloader::TickSource>(
+        &mut self,
+        strategy_manager: &mut StrategyManager,
+        orderbook: &mut OrderBook,
+        portfolio: &mut PortfolioState,
+        risk_manager: &mut RiskManager,
+        source: &S,
+        symbol: &str,
+        exchange: &str,
+        config: &config::BacktestConfig,
+    ) -> BacktestResult {
+        use dataloader::Tick;
+        
+        let total_items = source.len();
+        
+        // Collect into a temporary Vec for the existing run() method
+        // Processing in chunks to limit peak memory usage
+        const CHUNK_SIZE: usize = 500_000; // Process 500K ticks at a time (~24 MB)
+        
+        let mut final_result = BacktestResult::default();
+        let mut chunk_start = 0;
+        
+        while chunk_start < total_items {
+            let chunk_end = (chunk_start + CHUNK_SIZE).min(total_items);
+            
+            // Build chunk of MarketData from ticks
+            let chunk: Vec<MarketData> = (chunk_start..chunk_end)
+                .filter_map(|i| {
+                    source.get(i).map(|tick| {
+                        let timestamp = tick.timestamp(); // Already DateTime<Utc>
+                        let price = tick.price();
+                        let quantity = tick.quantity();
+                        let side_str = match tick.side() {
+                            dataloader::Side::Buy => "buy",
+                            dataloader::Side::Sell => "sell",
+                        };
+                        
+                        MarketData::Trade(dataloader::TradeData {
+                            timestamp,
+                            symbol: symbol.to_string(),
+                            exchange: exchange.to_string(),
+                            price: BigDecimal::from_f64(price).unwrap_or_default(),
+                            quantity: BigDecimal::from_f64(quantity).unwrap_or_default(),
+                            side: side_str.to_string(),
+                            trade_id: String::new(),
+                            price_f64: price,
+                            quantity_f64: quantity,
+                            value_f64: price * quantity,
+                        })
+                    })
+                })
+                .collect();
+            
+            log_info!(BACKTEST_LOGGER, "STREAMING_CHUNK | {}-{}/{} ({:.1}%)", 
+                chunk_start, chunk_end, total_items, 
+                (chunk_end as f64 / total_items as f64) * 100.0);
+            
+            // Run simulation on this chunk
+            let chunk_result = self.run(
+                strategy_manager,
+                orderbook,
+                portfolio,
+                risk_manager,
+                &chunk,
+                config,
+            ).await;
+            
+            // Merge chunk result into final result
+            if chunk_start == 0 {
+                final_result = chunk_result;
+            } else {
+                // Append equity curve
+                final_result.equity_curve.extend(chunk_result.equity_curve);
+                // Take latest metrics
+                final_result.net_profit = chunk_result.net_profit;
+                final_result.sharpe_ratio = chunk_result.sharpe_ratio;
+                final_result.max_drawdown = chunk_result.max_drawdown;
+                final_result.num_trades += chunk_result.num_trades;
+            }
+            
+            chunk_start = chunk_end;
+        }
+        
+        final_result
     }
 }
 

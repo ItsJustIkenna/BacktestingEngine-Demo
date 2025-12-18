@@ -526,7 +526,7 @@ mod tests {
         let result = create_test_result(1.5, 5000.0, 0.10, 50);
         
         // May fail strict criteria due to higher thresholds
-        let profitability = criteria.is_profitable(&result);
+        let _profitability = criteria.is_profitable(&result);
         // This might fail because strict requires sharpe >= 1.5 and min_trades >= 50
         // but we're right at the edge
     }

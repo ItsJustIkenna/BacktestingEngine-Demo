@@ -52,8 +52,10 @@ pub mod aggregator;
 pub mod broker_client;
 pub mod ga_coordinator;
 pub mod ga_worker;
+pub mod tick_cache;
 
 pub use chunking::{ChunkCalculator, BacktestChunkInfo, ChunkingStrategy};
+pub use tick_cache::{TickCache, TickSource};
 pub use coordinator::DistributedCoordinator;
 pub use worker::DistributedWorker;
 pub use aggregator::ResultAggregator;

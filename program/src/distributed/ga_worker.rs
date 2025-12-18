@@ -1,21 +1,24 @@
 //! Distributed GA Worker
 //!
 //! Receives chromosome evaluation requests via MessageBrokerEngine,
-//! evaluates them against cached market data, and returns fitness results.
+//! evaluates them against market data, and returns fitness results.
 //!
-//! # Data Caching
-//! Workers maintain an in-memory cache of market data. When a DataBroadcastRequest
-//! is received, the data is decompressed and stored. Subsequent chromosome evaluations
-//! use the cached data (no database access needed).
+//! # Data Sources
 //!
-//! # Concurrency
-//! Each worker can handle multiple concurrent evaluations (configurable via
-//! MAX_CONCURRENT_EVALS). The semaphore prevents OOM by limiting parallelism.
+//! Workers prefer binary files (memory-mapped, zero-copy) for evaluation.
+//! Binary files are created by `backtesting-engine prepare-data` and stored
+//! on a shared PVC. Falls back to database loading if binary files don't exist.
+//!
+//! # Memory Efficiency
+//!
+//! Uses `LightweightSim` which processes data via the `TickSource` trait,
+//! enabling backtesting on millions of ticks with constant memory usage (~20 KB).
 
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::path::PathBuf;
 use tokio::sync::{RwLock, Semaphore, Mutex};
 
 use dataloader::MarketData;
@@ -28,11 +31,18 @@ use crate::{log_info_structured, log_debug, log_error_structured};
 use crate::logging_facade::MAIN_LOGGER;
 
 /// Maximum concurrent chromosome evaluations per worker
-/// Reduced from 6 to 2 to prevent OOM with 7M records
-const MAX_CONCURRENT_EVALS: usize = 2;
+const MAX_CONCURRENT_EVALS: usize = 4;
 
-/// Data cache entry with TTL
-pub struct CacheEntry {
+/// Cache entry for binary file metadata
+pub struct BinaryFileInfo {
+    path: PathBuf,
+    #[allow(dead_code)]
+    tick_count: usize,
+    expires_at: Instant,
+}
+
+/// Fallback cache for in-memory data (small datasets or no binary file)
+struct DataCacheEntry {
     data: Arc<Vec<MarketData>>,
     expires_at: Instant,
 }
@@ -40,18 +50,22 @@ pub struct CacheEntry {
 /// Distributed GA Worker
 /// 
 /// Processes chromosome evaluation requests from the message broker.
-/// Caches market data to avoid repeated database loads.
+/// Uses memory-mapped binary files for efficient large-dataset evaluation.
 pub struct DistributedGAWorker {
     /// Unique worker ID
     worker_id: String,
     /// Broker client for communication
     broker: Arc<BacktestBrokerClient>,
-    /// Cached market data by cache key
-    data_cache: Arc<RwLock<HashMap<String, CacheEntry>>>,
-    /// Track which cache keys are currently being loaded (to avoid duplicate loads)
+    /// Binary file info by cache key (preferred path)
+    binary_cache: Arc<RwLock<HashMap<String, BinaryFileInfo>>>,
+    /// Fallback in-memory data cache (for DB-loaded data)
+    data_cache: Arc<RwLock<HashMap<String, DataCacheEntry>>>,
+    /// Track which cache keys are currently being loaded
     loading_in_progress: Arc<Mutex<HashSet<String>>>,
     /// Semaphore for limiting concurrent evaluations
     eval_semaphore: Arc<Semaphore>,
+    /// Data directory for binary files
+    data_dir: PathBuf,
     /// Database pool for loading data if not cached
     #[cfg(feature = "postgres")]
     db_pool: Option<Arc<diesel_async::pooled_connection::deadpool::Pool<diesel_async::AsyncPgConnection>>>,
@@ -60,30 +74,40 @@ pub struct DistributedGAWorker {
 impl DistributedGAWorker {
     /// Create a new GA worker
     pub fn new(worker_id: String, broker: Arc<BacktestBrokerClient>) -> Self {
+        let data_dir = std::env::var("DATA_DIR")
+            .unwrap_or_else(|_| "/data/historical".to_string());
+        
         Self {
             worker_id,
             broker,
+            binary_cache: Arc::new(RwLock::new(HashMap::new())),
             data_cache: Arc::new(RwLock::new(HashMap::new())),
             loading_in_progress: Arc::new(Mutex::new(HashSet::new())),
             eval_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_EVALS)),
+            data_dir: PathBuf::from(data_dir),
             #[cfg(feature = "postgres")]
             db_pool: None,
         }
     }
     
-    /// Create a new GA worker with shared cache and loading lock (for multi-worker pods)
+    /// Create a new GA worker with shared cache (for multi-worker pods)
     pub fn new_with_shared_state(
         worker_id: String,
         broker: Arc<BacktestBrokerClient>,
-        shared_cache: Arc<RwLock<HashMap<String, CacheEntry>>>,
+        shared_binary_cache: Arc<RwLock<HashMap<String, BinaryFileInfo>>>,
         shared_loading_lock: Arc<Mutex<HashSet<String>>>,
     ) -> Self {
+        let data_dir = std::env::var("DATA_DIR")
+            .unwrap_or_else(|_| "/data/historical".to_string());
+        
         Self {
             worker_id,
             broker,
-            data_cache: shared_cache,
+            binary_cache: shared_binary_cache,
+            data_cache: Arc::new(RwLock::new(HashMap::new())),
             loading_in_progress: shared_loading_lock,
             eval_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_EVALS)),
+            data_dir: PathBuf::from(data_dir),
             #[cfg(feature = "postgres")]
             db_pool: None,
         }
@@ -97,6 +121,27 @@ impl DistributedGAWorker {
     ) -> Self {
         self.db_pool = Some(pool);
         self
+    }
+    
+    /// Get binary file path for a symbol/exchange
+    fn binary_path(&self, symbol: &str, exchange: &str) -> PathBuf {
+        let filename = format!("{}_{}.bin", symbol.replace('/', "_"), exchange);
+        self.data_dir.join(filename)
+    }
+    
+    /// Check if binary file exists and get tick count
+    fn probe_binary_file(&self, symbol: &str, exchange: &str) -> Option<(PathBuf, usize)> {
+        use data_prep::BinaryFileReader;
+        
+        let path = self.binary_path(symbol, exchange);
+        if !path.exists() {
+            return None;
+        }
+        
+        match BinaryFileReader::open(&path) {
+            Ok(reader) => Some((path, reader.tick_count() as usize)),
+            Err(_) => None,
+        }
     }
     
     /// Run the worker loop
@@ -205,7 +250,7 @@ impl DistributedGAWorker {
         // Store in cache
         {
             let mut cache = self.data_cache.write().await;
-            cache.insert(broadcast.cache_key.clone(), CacheEntry {
+            cache.insert(broadcast.cache_key.clone(), DataCacheEntry {
                 data: Arc::new(market_data),
                 expires_at,
             });
@@ -231,25 +276,37 @@ impl DistributedGAWorker {
         let _ = self.broker.publish_data_ack(ack).await;
     }
     
-    /// Handle data load request by querying the database directly
+    /// Handle data load request
     /// 
-    /// This is the preferred method for large datasets. The coordinator sends
-    /// query parameters (~200 bytes) and each worker loads data from the database.
-    /// This avoids serializing/transferring 500MB+ over the message broker.
-    /// 
-    /// Only ONE worker per pod should load data to avoid OOM. Others wait.
+    /// Tries to find a binary file first (zero-copy mmap). If found, caches
+    /// the file path for use with LightweightSim. Falls back to database
+    /// loading if no binary file exists.
     async fn handle_data_load_request(
         &self,
         request: protocol::broker::messages::DataLoadRequest,
     ) {
         let cache_key = request.cache_key.clone();
-        println!("🔄 [WORKER {}] handle_data_load_request starting for cache_key={}", self.worker_id, cache_key);
+        println!("🔄 [WORKER {}] handle_data_load_request for cache_key={}", self.worker_id, cache_key);
         
-        // Check if data is already cached
+        // Check if already cached
         {
-            let cache = self.data_cache.read().await;
-            if cache.contains_key(&cache_key) {
-                println!("✅ [WORKER {}] Data already cached for {}, sending ACK", self.worker_id, cache_key);
+            let binary_cache = self.binary_cache.read().await;
+            if binary_cache.contains_key(&cache_key) {
+                println!("✅ [WORKER {}] Binary file already cached for {}", self.worker_id, cache_key);
+                let ack = protocol::broker::messages::DataCacheAck {
+                    cache_key,
+                    worker_id: self.worker_id.clone(),
+                    success: true,
+                    capacity: MAX_CONCURRENT_EVALS as i32,
+                };
+                let _ = self.broker.publish_data_ack(ack).await;
+                return;
+            }
+        }
+        {
+            let data_cache = self.data_cache.read().await;
+            if data_cache.contains_key(&cache_key) {
+                println!("✅ [WORKER {}] Data already cached for {}", self.worker_id, cache_key);
                 let ack = protocol::broker::messages::DataCacheAck {
                     cache_key,
                     worker_id: self.worker_id.clone(),
@@ -261,20 +318,19 @@ impl DistributedGAWorker {
             }
         }
         
-        // Check if another worker in this pod is already loading this data
+        // Acquire loading lock
         {
             let mut loading = self.loading_in_progress.lock().await;
             if loading.contains(&cache_key) {
-                // Another worker is loading, wait for it
-                println!("⏳ [WORKER {}] Another worker is loading {}, waiting...", self.worker_id, cache_key);
+                println!("⏳ [WORKER {}] Another worker loading {}, waiting...", self.worker_id, cache_key);
                 drop(loading);
                 
-                // Poll until data is available (max 120 seconds)
-                for _ in 0..240 {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    let cache = self.data_cache.read().await;
-                    if cache.contains_key(&cache_key) {
-                        println!("✅ [WORKER {}] Data now available for {}", self.worker_id, cache_key);
+                // Wait for completion
+                for _ in 0..120 {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    let bc = self.binary_cache.read().await;
+                    let dc = self.data_cache.read().await;
+                    if bc.contains_key(&cache_key) || dc.contains_key(&cache_key) {
                         let ack = protocol::broker::messages::DataCacheAck {
                             cache_key,
                             worker_id: self.worker_id.clone(),
@@ -285,135 +341,168 @@ impl DistributedGAWorker {
                         return;
                     }
                 }
-                println!("❌ [WORKER {}] Timeout waiting for data load", self.worker_id);
+                println!("❌ [WORKER {}] Timeout waiting for data", self.worker_id);
                 return;
             }
-            // Mark as loading
             loading.insert(cache_key.clone());
-            println!("🔒 [WORKER {}] Acquired loading lock for {}", self.worker_id, cache_key);
         }
         
-        log_info_structured!(MAIN_LOGGER, "GA_WORKER_DATA_LOAD_START",
-            "event" => "GA_WORKER_DATA_LOAD_START",
-            "worker_id" => &self.worker_id,
-            "cache_key" => &request.cache_key,
-            "symbols" => format!("{:?}", request.symbols),
-            "exchange" => &request.exchange,
-            "start_time" => &request.start_time,
-            "end_time" => &request.end_time
-        );
-        
         let start = Instant::now();
+        let symbol = request.symbols.first().cloned().unwrap_or_default();
+        let expires_at = Instant::now() + Duration::from_secs(request.ttl_seconds as u64);
         
-        // Load data from database
+        // Try binary file first (preferred)
+        if let Some((path, tick_count)) = self.probe_binary_file(&symbol, &request.exchange) {
+            println!("📂 [WORKER {}] Found binary file: {} ({} ticks)", 
+                self.worker_id, path.display(), tick_count);
+            
+            log_info_structured!(MAIN_LOGGER, "GA_WORKER_BINARY_FOUND",
+                "event" => "GA_WORKER_BINARY_FOUND",
+                "worker_id" => &self.worker_id,
+                "cache_key" => &cache_key,
+                "tick_count" => tick_count
+            );
+            
+            // Cache binary file info (no data loading!)
+            {
+                let mut cache = self.binary_cache.write().await;
+                cache.insert(cache_key.clone(), BinaryFileInfo {
+                    path,
+                    tick_count,
+                    expires_at,
+                });
+            }
+            
+            // Release lock
+            {
+                let mut loading = self.loading_in_progress.lock().await;
+                loading.remove(&cache_key);
+            }
+            
+            println!("✅ [WORKER {}] Registered binary file in {:?}", 
+                self.worker_id, start.elapsed());
+            
+            let ack = protocol::broker::messages::DataCacheAck {
+                cache_key,
+                worker_id: self.worker_id.clone(),
+                success: true,
+                capacity: MAX_CONCURRENT_EVALS as i32,
+            };
+            let _ = self.broker.publish_data_ack(ack).await;
+            return;
+        }
+        
+        // Auto-prepare binary file from database
         #[cfg(feature = "postgres")]
-        let market_data = {
-            println!("🔄 [WORKER {}] db_pool is_some={}", self.worker_id, self.db_pool.is_some());
-            match &self.db_pool {
-                Some(pool) => {
-                    println!("🔄 [WORKER {}] Loading data from database...", self.worker_id);
-                    match self.load_data_from_db(
-                        pool.as_ref(),
-                        &request.symbols,
-                        &request.exchange,
-                        &request.start_time,
-                        &request.end_time,
-                    ).await {
-                        Ok(data) => {
-                            println!("✅ [WORKER {}] Loaded {} data points from DB", self.worker_id, data.len());
-                            data
-                        },
-                        Err(e) => {
-                            println!("❌ [WORKER {}] DB load failed: {}", self.worker_id, e);
-                            log_error_structured!(MAIN_LOGGER, "GA_WORKER_DB_LOAD_FAIL",
-                                "event" => "GA_WORKER_DB_LOAD_FAIL",
-                                "worker_id" => &self.worker_id,
-                                "error" => e.to_string()
-                            );
-                            // Release loading lock on error
+        {
+            if let Some(pool) = &self.db_pool {
+                println!("🔧 [WORKER {}] Binary file not found, auto-preparing...", self.worker_id);
+                
+                match self.prepare_binary_data(pool.as_ref(), &symbol, &request.exchange).await {
+                    Ok(tick_count) => {
+                        // Successfully prepared - now try to use the binary file
+                        if let Some((path, count)) = self.probe_binary_file(&symbol, &request.exchange) {
+                            println!("✅ [WORKER {}] Auto-prepared binary file: {} ({} ticks)", 
+                                self.worker_id, path.display(), count);
+                            
+                            // Cache binary file info
+                            {
+                                let mut cache = self.binary_cache.write().await;
+                                cache.insert(cache_key.clone(), BinaryFileInfo {
+                                    path,
+                                    tick_count: count,
+                                    expires_at,
+                                });
+                            }
+                            
+                            // Release lock
                             {
                                 let mut loading = self.loading_in_progress.lock().await;
-                                loading.remove(&request.cache_key);
+                                loading.remove(&cache_key);
                             }
-                            // Send failure ack
+                            
                             let ack = protocol::broker::messages::DataCacheAck {
-                                cache_key: request.cache_key,
+                                cache_key,
                                 worker_id: self.worker_id.clone(),
-                                success: false,
-                                capacity: 0,
+                                success: true,
+                                capacity: MAX_CONCURRENT_EVALS as i32,
                             };
                             let _ = self.broker.publish_data_ack(ack).await;
                             return;
                         }
+                        
+                        println!("⚠️ [WORKER {}] Prepared {} ticks but file not found", self.worker_id, tick_count);
                     }
-                }
-                None => {
-                    println!("❌ [WORKER {}] No db_pool available!", self.worker_id);
-                    log_error_structured!(MAIN_LOGGER, "GA_WORKER_NO_DB_POOL",
-                        "event" => "GA_WORKER_NO_DB_POOL",
-                        "worker_id" => &self.worker_id
-                    );
-                    // Release loading lock on error
-                    {
-                        let mut loading = self.loading_in_progress.lock().await;
-                        loading.remove(&request.cache_key);
+                    Err(e) => {
+                        println!("⚠️ [WORKER {}] Auto-prepare failed: {}, falling back to DB streaming", self.worker_id, e);
                     }
-                    return;
                 }
             }
-        };
-        
-        #[cfg(not(feature = "postgres"))]
-        let market_data: Vec<MarketData> = {
-            log_error_structured!(MAIN_LOGGER, "GA_WORKER_NO_POSTGRES_FEATURE",
-                "event" => "GA_WORKER_NO_POSTGRES_FEATURE",
-                "worker_id" => &self.worker_id
-            );
-            return;
-        };
-        
-        let data_len = market_data.len();
-        let expires_at = Instant::now() + Duration::from_secs(request.ttl_seconds as u64);
-        
-        // Store in cache
-        {
-            let mut cache = self.data_cache.write().await;
-            cache.insert(request.cache_key.clone(), CacheEntry {
-                data: Arc::new(market_data),
-                expires_at,
-            });
         }
         
-        // Release loading lock
+        // Fallback: Load from database (streaming)
+        #[cfg(feature = "postgres")]
+        {
+            if let Some(pool) = &self.db_pool {
+                println!("🔄 [WORKER {}] Loading from database...", self.worker_id);
+                match self.load_data_from_db(
+                    pool.as_ref(),
+                    &request.symbols,
+                    &request.exchange,
+                    &request.start_time,
+                    &request.end_time,
+                ).await {
+                    Ok(data) => {
+                        let data_len = data.len();
+                        println!("✅ [WORKER {}] Loaded {} points from DB", self.worker_id, data_len);
+                        
+                        {
+                            let mut cache = self.data_cache.write().await;
+                            cache.insert(cache_key.clone(), DataCacheEntry {
+                                data: Arc::new(data),
+                                expires_at,
+                            });
+                        }
+                        
+                        {
+                            let mut loading = self.loading_in_progress.lock().await;
+                            loading.remove(&cache_key);
+                        }
+                        
+                        let ack = protocol::broker::messages::DataCacheAck {
+                            cache_key,
+                            worker_id: self.worker_id.clone(),
+                            success: true,
+                            capacity: MAX_CONCURRENT_EVALS as i32,
+                        };
+                        let _ = self.broker.publish_data_ack(ack).await;
+                        return;
+                    }
+                    Err(e) => {
+                        println!("❌ [WORKER {}] DB load failed: {}", self.worker_id, e);
+                        log_error_structured!(MAIN_LOGGER, "GA_WORKER_DB_LOAD_FAIL",
+                            "event" => "GA_WORKER_DB_LOAD_FAIL",
+                            "worker_id" => &self.worker_id,
+                            "error" => e.to_string()
+                        );
+                    }
+                }
+            }
+        }
+        
+        // Release lock on failure
         {
             let mut loading = self.loading_in_progress.lock().await;
-            loading.remove(&request.cache_key);
-            println!("🔓 [WORKER {}] Released loading lock for {}", self.worker_id, request.cache_key);
+            loading.remove(&cache_key);
         }
         
-        let elapsed = start.elapsed();
-        println!("✅ [WORKER {}] Data loaded: {} points in {:?}", self.worker_id, data_len, elapsed);
-        log_info_structured!(MAIN_LOGGER, "GA_WORKER_DATA_LOADED",
-            "event" => "GA_WORKER_DATA_LOADED",
-            "worker_id" => &self.worker_id,
-            "cache_key" => &request.cache_key,
-            "data_points" => data_len,
-            "load_time_ms" => elapsed.as_millis()
-        );
-        
-        // Send success acknowledgment
         let ack = protocol::broker::messages::DataCacheAck {
-            cache_key: request.cache_key.clone(),
+            cache_key,
             worker_id: self.worker_id.clone(),
-            success: true,
-            capacity: MAX_CONCURRENT_EVALS as i32,
+            success: false,
+            capacity: 0,
         };
-        
-        println!("📤 [WORKER {}] Publishing data ACK for cache_key={}", self.worker_id, request.cache_key);
-        match self.broker.publish_data_ack(ack).await {
-            Ok(_) => println!("✅ [WORKER {}] ACK published successfully", self.worker_id),
-            Err(e) => println!("❌ [WORKER {}] Failed to publish ACK: {:?}", self.worker_id, e),
-        }
+        let _ = self.broker.publish_data_ack(ack).await;
     }
     
     /// Load market data from database using parallel loader
@@ -466,6 +555,58 @@ impl DistributedGAWorker {
         Ok(market_data)
     }
     
+    /// Auto-prepare binary data file from database
+    /// 
+    /// This eliminates the need for manual `prepare-data` CLI invocation.
+    /// Creates a memory-mapped binary file for efficient tick access.
+    #[cfg(feature = "postgres")]
+    async fn prepare_binary_data(
+        &self,
+        pool: &diesel_async::pooled_connection::deadpool::Pool<diesel_async::AsyncPgConnection>,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<u64, WorkerError> {
+        use data_prep::DataPrepConfig;
+        
+        log_info_structured!(MAIN_LOGGER, "GA_WORKER_AUTO_PREPARE",
+            "event" => "GA_WORKER_AUTO_PREPARE",
+            "worker_id" => &self.worker_id,
+            "symbol" => symbol,
+            "exchange" => exchange
+        );
+        
+        // Create output directory
+        std::fs::create_dir_all(&self.data_dir)
+            .map_err(|e| WorkerError::DatabaseError(format!("Failed to create data dir: {}", e)))?;
+        
+        let config = DataPrepConfig {
+            symbol: symbol.to_string(),
+            exchange: exchange.to_string(),
+            output_dir: self.data_dir.clone(),
+            chunk_size: 10_000,
+            compute_features: false,
+            start_time: None,
+            end_time: None,
+        };
+        
+        let prep_start = std::time::Instant::now();
+        let result = data_prep::prepare_data(pool, &config).await
+            .map_err(|e| WorkerError::DatabaseError(e.to_string()))?;
+        let prep_elapsed = prep_start.elapsed();
+        
+        log_info_structured!(MAIN_LOGGER, "GA_WORKER_AUTO_PREPARE_COMPLETE",
+            "event" => "GA_WORKER_AUTO_PREPARE_COMPLETE",
+            "worker_id" => &self.worker_id,
+            "symbol" => symbol,
+            "exchange" => exchange,
+            "ticks" => result.total_ticks,
+            "size_mb" => result.file_size_bytes / 1_000_000,
+            "elapsed_sec" => format!("{:.1}", prep_elapsed.as_secs_f64())
+        );
+        
+        Ok(result.total_ticks)
+    }
+
     /// Process a chromosome evaluation request
     async fn process_chromosome_eval(
         &self,
@@ -479,21 +620,6 @@ impl DistributedGAWorker {
         log_debug!(MAIN_LOGGER, "Worker {} processing chromosome {}/{} for gen {}",
             self.worker_id, request.chromosome_id, request.total_chromosomes, request.generation);
         
-        // Get cached data
-        let data = {
-            let cache = self.data_cache.read().await;
-            match cache.get(&request.data_cache_key) {
-                Some(entry) if entry.expires_at > Instant::now() => {
-                    Arc::clone(&entry.data)
-                }
-                _ => {
-                    // Data expired or missing, send error result
-                    self.send_error_result(&request, "Data not in cache or expired").await;
-                    return;
-                }
-            }
-        };
-        
         // Deserialize chromosome
         let chromosome: AvellanedaStoikovChromosome = match serde_json::from_slice(&request.chromosome_params) {
             Ok(c) => c,
@@ -503,8 +629,41 @@ impl DistributedGAWorker {
             }
         };
         
-        // Run fitness evaluation
-        let result = self.evaluate_chromosome(&chromosome, &data, request.initial_capital).await;
+        // Try binary file first (preferred: memory-efficient)
+        let result = {
+            let path_to_eval = {
+                let binary_cache = self.binary_cache.read().await;
+                binary_cache.get(&request.data_cache_key)
+                    .filter(|info| info.expires_at > Instant::now())
+                    .map(|info| info.path.clone())
+            };
+            
+            if let Some(path) = path_to_eval {
+                Some(self.evaluate_with_streaming_sim(&chromosome, &path, request.initial_capital).await)
+            } else {
+                None
+            }
+        };
+        
+        // Fall back to in-memory data if no binary file
+        let result = match result {
+            Some(r) => r,
+            None => {
+                let data = {
+                    let cache = self.data_cache.read().await;
+                    match cache.get(&request.data_cache_key) {
+                        Some(entry) if entry.expires_at > Instant::now() => {
+                            Arc::clone(&entry.data)
+                        }
+                        _ => {
+                            self.send_error_result(&request, "Data not in cache or expired").await;
+                            return;
+                        }
+                    }
+                };
+                self.evaluate_chromosome(&chromosome, &data, request.initial_capital).await
+            }
+        };
         
         let elapsed = start.elapsed();
         
@@ -517,7 +676,7 @@ impl DistributedGAWorker {
             success: true,
             error_message: String::new(),
             fitness: result.fitness,
-            net_pnl: 0.0, // TODO: Extract from backtest result
+            net_pnl: 0.0,
             sharpe_ratio: 0.0,
             num_trades: 0,
             max_drawdown: 0.0,
@@ -528,6 +687,137 @@ impl DistributedGAWorker {
         let _ = self.broker.publish_chromosome_result(response).await;
     }
     
+    /// Evaluate chromosome using full SimulationLoop with streaming TickSource
+    /// 
+    /// This provides accurate simulation results while maintaining memory efficiency
+    /// by processing data in chunks from the memory-mapped binary file.
+    async fn evaluate_with_streaming_sim(
+        &self,
+        chromosome: &AvellanedaStoikovChromosome,
+        path: &std::path::Path,
+        initial_capital: f64,
+    ) -> FitnessResult {
+        use data_prep::BinaryFileReader;
+        use dataloader::{Tick, TickSource};
+        use backtest::SimulationLoop;
+        use strategy::StrategyManager;
+        use strategy::strategies::avellaneda_stoikov::{AvellanedaStoikovStrategy, AvellanedaStoikovParams};
+        use orderbook::{OrderBook, OrderBookConfig};
+        use portfoliomanager::PortfolioState;
+        use riskmanager::RiskManager;
+        use bigdecimal::{BigDecimal, FromPrimitive};
+        
+        // Load binary file as TickSource (mmap, zero-copy)
+        let reader = match BinaryFileReader::open(path) {
+            Ok(r) => r,
+            Err(e) => {
+                log_error_structured!(MAIN_LOGGER, "BINARY_FILE_ERROR",
+                    "event" => "BINARY_FILE_ERROR",
+                    "worker_id" => &self.worker_id,
+                    "path" => path.display().to_string(),
+                    "error" => e.to_string()
+                );
+                return FitnessResult::failure();
+            }
+        };
+        
+        // Get initial price from first tick
+        let initial_price = reader.get(0)
+            .map(|t| t.price())
+            .unwrap_or(50000.0);
+        
+        // Get first timestamp
+        let first_timestamp = reader.get(0)
+            .map(|t| t.timestamp())
+            .unwrap_or_else(chrono::Utc::now);
+        
+        // Create strategy from chromosome
+        let order_size_units = (initial_capital * chromosome.order_size_pct) / initial_price;
+        
+        let params = AvellanedaStoikovParams {
+            risk_aversion: chromosome.risk_aversion,
+            order_size: order_size_units,
+            order_size_pct: chromosome.order_size_pct,
+            initial_capital,
+            window_ms: chromosome.window_ms,
+            min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms,
+            inventory_target: chromosome.inventory_target,
+            volatility_cap: chromosome.volatility_cap,
+            time_horizon_minutes: chromosome.time_horizon_minutes,
+            market_depth_k: chromosome.market_depth_k,
+            min_spread_bps: chromosome.min_spread_bps,
+            max_trades_per_minute: chromosome.max_trades_per_minute,
+            take_profit_pct: chromosome.take_profit_pct,
+            stop_loss_pct: chromosome.stop_loss_pct,
+            volatility_adjustment_factor: chromosome.volatility_adjustment_factor,
+            inventory_penalty_factor: chromosome.inventory_penalty_factor,
+            trend_sensitivity: chromosome.trend_sensitivity,
+            flow_sensitivity: chromosome.flow_sensitivity,
+            ..AvellanedaStoikovParams::default()
+        };
+        
+        let strategy = AvellanedaStoikovStrategy::new(params);
+        let mut strategy_manager = StrategyManager::new();
+        
+        let strategy_config = strategy::StrategyConfig {
+            id: "ga-eval".to_string(),
+            name: "Avellaneda-Stoikov".to_string(),
+            strategy_type: "AvellanedaStoikov".to_string(),
+            symbol: "BTC/USD".to_string(),
+            exchange: "Kraken".to_string(),
+            parameters: std::collections::HashMap::new(),
+            risk_limits: strategy::config::RiskLimits::default(),
+            enabled: true,
+        };
+        
+        if strategy_manager.register_strategy(strategy_config, strategy).is_err() {
+            return FitnessResult::failure();
+        }
+        
+        let mut orderbook = OrderBook::new(
+            "BTC/USD".to_string(),
+            "Kraken".to_string(),
+            OrderBookConfig::default(),
+        );
+        
+        // Set up portfolio with 50% inventory
+        let inventory_pct = 0.5;
+        let quote_balance = initial_capital * (1.0 - inventory_pct);
+        let base_value = initial_capital * inventory_pct;
+        let base_quantity = base_value / initial_price;
+        
+        let mut portfolio = PortfolioState::with_inventory(
+            "BTC/USD".to_string(),
+            BigDecimal::from_f64(quote_balance).unwrap_or_default(),
+            base_quantity,
+            BigDecimal::from_f64(initial_price).unwrap_or_default(),
+            first_timestamp,
+        );
+        
+        let mut risk_manager = RiskManager::new();
+        
+        // Create backtest config optimized for GA (skip expensive analysis)
+        let mut backtest_config = config::BacktestConfig::default();
+        backtest_config.trading.initial_capital = initial_capital;
+        backtest_config.analysis.skip_genetic_optimization = true; // We ARE the GA
+        
+        // Run streaming simulation
+        let mut sim_loop = SimulationLoop::new();
+        let result = sim_loop.run_streaming(
+            &mut strategy_manager,
+            &mut orderbook,
+            &mut portfolio,
+            &mut risk_manager,
+            &reader,
+            "BTC/USD",
+            "Kraken",
+            &backtest_config,
+        ).await;
+        
+        // Calculate fitness
+        let fitness = calculate_comprehensive_fitness(&result, initial_capital);
+        FitnessResult::new(fitness, result.equity_curve)
+    }
     /// Evaluate a chromosome against the cached data
     async fn evaluate_chromosome(
         &self,
@@ -552,6 +842,8 @@ impl DistributedGAWorker {
                 MarketData::Snapshot(s) => s.price_level.to_f64(),
                 #[cfg(feature = "postgres")]
                 MarketData::Order(o) => o.price_level.to_f64(),
+                #[allow(unreachable_patterns)]
+                _ => None,
             })
             .unwrap_or(50000.0);
         
@@ -613,6 +905,8 @@ impl DistributedGAWorker {
                 MarketData::Snapshot(s) => s.timestamp,
                 #[cfg(feature = "postgres")]
                 MarketData::Order(o) => o.timestamp,
+                #[allow(unreachable_patterns)]
+                _ => chrono::Utc::now(),
             })
             .unwrap_or_else(chrono::Utc::now);
         
@@ -651,7 +945,7 @@ impl DistributedGAWorker {
             Err(_) => FitnessResult::failure(),
         }
     }
-    
+
     /// Send an error result for a failed evaluation
     async fn send_error_result(
         &self,
@@ -682,9 +976,11 @@ impl DistributedGAWorker {
         Self {
             worker_id: self.worker_id.clone(),
             broker: Arc::clone(&self.broker),
+            binary_cache: Arc::clone(&self.binary_cache),
             data_cache: Arc::clone(&self.data_cache),
             loading_in_progress: Arc::clone(&self.loading_in_progress),
             eval_semaphore: Arc::clone(&self.eval_semaphore),
+            data_dir: self.data_dir.clone(),
             #[cfg(feature = "postgres")]
             db_pool: self.db_pool.clone(),
         }

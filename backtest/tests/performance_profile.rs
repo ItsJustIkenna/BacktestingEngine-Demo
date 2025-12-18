@@ -33,8 +33,8 @@ impl ProfileTimings {
             let count = samples.len();
             let total: Duration = samples.iter().sum();
             let avg = total / count as u32;
-            let min = samples.iter().min().unwrap_or(&Duration::ZERO);
-            let max = samples.iter().max().unwrap_or(&Duration::ZERO);
+            let _min = samples.iter().min().unwrap_or(&Duration::ZERO);
+            let _max = samples.iter().max().unwrap_or(&Duration::ZERO);
             
             // Calculate percentiles
             let mut sorted = samples.clone();
@@ -278,7 +278,7 @@ fn profile_vector_operations() {
 
 #[test]
 fn profile_datetime_operations() {
-    use chrono::{DateTime, Utc, Duration};
+    use chrono::{Utc, Duration};
     
     let mut timings = ProfileTimings::default();
     const ITERATIONS: usize = 100_000;
@@ -326,6 +326,7 @@ fn profile_iterator_chains() {
     
     // Simulate order_trackers structure
     #[derive(Clone)]
+    #[allow(dead_code)]
     struct OrderTracker {
         order_id: String,
         side: bool, // true = bid

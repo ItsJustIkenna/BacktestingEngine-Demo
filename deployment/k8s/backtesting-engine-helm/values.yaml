@@ -434,24 +434,33 @@ distributedWorker:
   # Enable distributed worker deployment
   enabled: true
   
-  # Number of worker replicas (reduced for Docker Desktop - increase for production)
-  replicaCount: 2
+  # Number of worker replicas - increased to compensate for reduced parallelism
+  replicaCount: 4
   
   # Number of threads per worker pod
-  # Reduced from 4 to 2 to prevent OOM - each worker runs MAX_CONCURRENT_EVALS=2 backtests
-  threads: 2
+  # Reduced to 1 to prevent OOM - each backtest uses ~1.5GB+ memory with 7M data points
+  threads: 1
   
   # Note: MessageBrokerEngine URL is configured in distributedGA.brokerUrl
   
+  # Historical data configuration
+  # Workers load pre-prepared binary files via mmap for 10x memory reduction
+  historicalData:
+    enabled: true
+    # PVC containing binary files from data-prep cronjob
+    pvcName: "historical-data-pvc"
+    # Mount path (also set as DATA_DIR env var)
+    mountPath: "/data/historical"
+  
   # Resource limits for distributed workers
-  # Workers cache broadcasted market data and evaluate chromosomes
+  # With mmap binary files: 336MB data + evaluation headroom
   resources:
     limits:
       cpu: "4000m"        # 4 cores for parallel chromosome evaluation
-      memory: "6Gi"       # Cache market data + evaluation headroom
+      memory: "4Gi"       # Reduced - mmap files don't count toward RSS
     requests:
       cpu: "1000m"        # Increased request for better scheduling
-      memory: "2Gi"       # Increased request for data caching
+      memory: "1Gi"       # Reduced - mmap files are shared
   
   # Autoscaling configuration
   autoscaling:

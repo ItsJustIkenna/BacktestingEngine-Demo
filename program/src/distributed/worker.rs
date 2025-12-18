@@ -390,6 +390,8 @@ impl DistributedWorker {
                 MarketData::Snapshot(s) => s.price_level.to_f64().unwrap_or(0.0),
                 MarketData::Candle(c) => c.close.to_f64().unwrap_or(0.0),
                 MarketData::Trade(t) => t.price.to_f64().unwrap_or(0.0),
+                #[allow(unreachable_patterns)]
+                _ => 0.0,
             }
         }).unwrap_or(0.0)
     }
@@ -404,6 +406,8 @@ impl DistributedWorker {
                 MarketData::Snapshot(s) => s.timestamp,
                 MarketData::Candle(c) => c.timestamp,
                 MarketData::Trade(t) => t.timestamp,
+                #[allow(unreachable_patterns)]
+                _ => Utc::now(),
             }
         }).unwrap_or_else(Utc::now)
     }

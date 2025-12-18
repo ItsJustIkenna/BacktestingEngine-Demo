@@ -319,9 +319,9 @@ mod tests {
     #[tokio::test]
     async fn test_job_broker_submit_and_receive() {
         let broker = JobBroker::new();
-        let mut receiver = JobReceiver::new(Arc::new(broker.clone()), 1);
+        let _receiver = JobReceiver::new(Arc::new(broker.clone()), 1);
 
-        let params = BacktestJobParams {
+        let _params = BacktestJobParams {
             symbol: "BTC/USD".to_string(),
             exchange: "Kraken".to_string(),
             strategy_type: "market_making".to_string(),

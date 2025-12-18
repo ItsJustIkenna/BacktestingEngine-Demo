@@ -500,6 +500,19 @@ impl Worker {
             log_error!(MAIN_LOGGER, "Job {} failed to set initial phase: {}", job.id, e);
         }
         
+        // ============================================================================
+        // AUTO DATA PREPARATION
+        // ============================================================================
+        // Automatically prepare binary data files if they don't exist.
+        // This eliminates the manual `prepare-data` CLI step.
+        #[cfg(feature = "postgres")]
+        {
+            if let Err(e) = self.ensure_binary_data(&job).await {
+                log_error!(MAIN_LOGGER, "Job {} failed to prepare binary data: {}", job.id, e);
+                // Continue anyway - the job will fall back to database streaming
+            }
+        }
+        
         let result = match job.params.optimization_method.as_str() {
             "genetic" => {
                 log_info_structured!(GENETIC_LOGGER, "GENETIC_OPTIMIZATION_START",
@@ -2209,6 +2222,8 @@ impl Worker {
             match d {
                 MarketData::Candle(c) => c.close.to_f64().unwrap_or(100_000.0),
                 MarketData::Trade(t) => t.price.to_f64().unwrap_or(100_000.0),
+                #[allow(unreachable_patterns)]
+                _ => 100_000.0,
             }
         }).unwrap_or(100_000.0)
     }
@@ -2233,6 +2248,8 @@ impl Worker {
             match d {
                 MarketData::Candle(c) => c.timestamp,
                 MarketData::Trade(t) => t.timestamp,
+                #[allow(unreachable_patterns)]
+                _ => Utc::now(),
             }
         }).unwrap_or_else(Utc::now)
     }
@@ -2253,6 +2270,8 @@ impl Worker {
         match data {
             MarketData::Candle(c) => c.timestamp,
             MarketData::Trade(t) => t.timestamp,
+            #[allow(unreachable_patterns)]
+            _ => Utc::now(),
         }
     }
     
@@ -3201,6 +3220,99 @@ impl Worker {
             risk_halt_reason: None,
             metrics_profile: Some(Self::build_metrics_profile("market_making")),
         })
+    }
+    
+    // ============================================================================
+    // AUTO DATA PREPARATION
+    // ============================================================================
+    
+    /// Ensure binary data files exist for the given symbol/exchange.
+    /// If they don't exist, automatically prepare them from the database.
+    /// 
+    /// This eliminates the need for the manual `prepare-data` CLI step.
+    #[cfg(feature = "postgres")]
+    async fn ensure_binary_data(
+        &self,
+        job: &BacktestJob,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        use data_prep::{DataPrepConfig, BinaryFileReader};
+        
+        let symbol = &job.params.symbol;
+        let exchange = &job.params.exchange;
+        
+        // Get data directory from environment or use default
+        let data_dir = std::env::var("DATA_DIR")
+            .unwrap_or_else(|_| "/data/historical".to_string());
+        let data_path = PathBuf::from(&data_dir);
+        
+        // Check if binary file already exists
+        let filename = format!("{}_{}.bin", symbol.replace('/', "_"), exchange);
+        let binary_path = data_path.join(&filename);
+        
+        if binary_path.exists() {
+            // Verify file is valid
+            match BinaryFileReader::open(&binary_path) {
+                Ok(reader) => {
+                    let tick_count = reader.tick_count();
+                    if tick_count > 0 {
+                        log_info!(MAIN_LOGGER, "Job {} binary data exists: {} ({} ticks)", 
+                            job.id, binary_path.display(), tick_count);
+                        return Ok(());
+                    }
+                    log_warn!(MAIN_LOGGER, "Job {} binary file has 0 ticks, will regenerate", job.id);
+                }
+                Err(e) => {
+                    log_warn!(MAIN_LOGGER, "Job {} binary file invalid ({}), will regenerate", job.id, e);
+                }
+            }
+        }
+        
+        // Binary file doesn't exist or is invalid - prepare it
+        log_info!(MAIN_LOGGER, "Job {} preparing binary data for {}/{} -> {}", 
+            job.id, symbol, exchange, binary_path.display());
+        
+        // Update job phase to show we're preparing data
+        let _ = self.job_queue.update_phase(&job.id, "preparing_data", serde_json::json!({
+            "symbol": symbol,
+            "exchange": exchange,
+            "output_path": binary_path.display().to_string(),
+        })).await;
+        let _ = self.job_queue.update_progress(&job.id, 1.0).await;
+        
+        // Get database pool
+        let pool = self.job_queue.get_pool()
+            .ok_or("Database pool not available for data preparation")?;
+        
+        // Create output directory
+        std::fs::create_dir_all(&data_path)?;
+        
+        // Prepare data configuration
+        let config = DataPrepConfig {
+            symbol: symbol.clone(),
+            exchange: exchange.clone(),
+            output_dir: data_path,
+            chunk_size: 10_000,
+            compute_features: false, // Skip feature computation for speed
+            start_time: None,
+            end_time: None,
+        };
+        
+        // Run data preparation
+        let prep_start = std::time::Instant::now();
+        let result = data_prep::prepare_data(&pool, &config).await?;
+        let prep_elapsed = prep_start.elapsed();
+        
+        log_info!(MAIN_LOGGER, "Job {} binary data prepared in {:.1}s: {} ticks, {} MB", 
+            job.id, 
+            prep_elapsed.as_secs_f64(),
+            result.total_ticks,
+            result.file_size_bytes / 1_000_000
+        );
+        
+        // Update progress
+        let _ = self.job_queue.update_progress(&job.id, 2.0).await;
+        
+        Ok(())
     }
     
     /// Load market data intelligently based on strategy type

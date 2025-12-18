@@ -6,7 +6,6 @@ use signal::{
 };
 use bigdecimal::{BigDecimal, FromPrimitive};
 use chrono::Utc;
-use std::collections::HashMap;
 
 // ============================================================================
 // SIGNAL CREATION TESTS

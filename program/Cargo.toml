@@ -5,7 +5,7 @@ edition = "2021"
 
 [features]
 default = []
-postgres = ["dataloader/postgres", "strategy/postgres", "orderbook/postgres", "walkforward/postgres", "backtest/postgres"]
+postgres = ["dataloader/postgres", "strategy/postgres", "orderbook/postgres", "walkforward/postgres", "backtest/postgres", "data_prep/postgres"]
 
 [dependencies]
 # CLI framework
@@ -17,11 +17,18 @@ tokio = { version = "1.0", features = ["full"] }
 # Web framework
 axum = { version = "0.7", features = ["ws"] }
 tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "trace"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "request-id"] }
 serde_json = "1.0"
 futures = "0.3"
 async-trait = "0.1"
 uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Logging and tracing
+tracing = "0.1"
+
+# Prometheus Metrics (using package alias to avoid conflict with internal metrics crate)
+metrics_core = { version = "0.22", package = "metrics" }
+metrics-exporter-prometheus = "0.13"
 
 # Database
 deadpool-postgres = "0.10"
@@ -67,6 +74,7 @@ config = { path = "../config" }
 metrics = { path = "../metrics" }
 dataloader = { path = "../dataloader" }
 genetic = { path = "../genetic" }
+data_prep = { path = "../data_prep" }
 databaseschema = { path = "../../databaseschema" }
 
 # Logging

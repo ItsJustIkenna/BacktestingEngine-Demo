@@ -91,6 +91,18 @@ spec:
               value: "false"
             {{- end }}
             
+            # API Authentication configuration
+            - name: API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
+                  key: API_KEYS
+            - name: API_AUTH_REQUIRED
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
+                  key: API_AUTH_REQUIRED
+            
             # Distributed GA configuration
             {{- if .Values.distributedGA.enabled }}
             - name: DISTRIBUTED_GA_ENABLED

@@ -19,6 +19,7 @@ members = [
     
     # Data & Configuration
     "dataloader",        # Market data loading from database
+    "data_prep",         # Data preparation for backtesting (binary files)
     "config",            # Configuration management
     
     # Applications

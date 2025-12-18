@@ -421,7 +421,7 @@ fn test_liquidation_price_concept() {
     // For a long position, liquidation happens when:
     // equity = initial_margin * (1 - maintenance_rate)
     let position_value = entry_price * quantity;
-    let initial_margin = position_value / leverage;
+    let _initial_margin = position_value / leverage;
     
     // Approximate liquidation price (simplified)
     let liq_price = entry_price * (1.0 - 1.0/leverage + maintenance_margin_rate);

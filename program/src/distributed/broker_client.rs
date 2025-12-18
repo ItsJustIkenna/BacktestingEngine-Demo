@@ -291,6 +291,7 @@ impl BacktestBrokerClient {
     }
     
     /// Subscribe to a topic via TCP
+    #[allow(dead_code)]
     async fn subscribe_tcp(&self, topic_pattern: &str) -> Result<(), BrokerError> {
         let mut conn = self.tcp_connection.lock().await;
         if let Some(ref mut stream) = *conn {

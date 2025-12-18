@@ -2,14 +2,13 @@
 //! Covers strategy management, signals, indicators, and metrics
 
 use strategy::{
-    Strategy, StrategyContext, StrategyMetrics,
+    StrategyMetrics,
     Signal, SignalType, SignalStrength, SignalReason,
     StrategyManager, IndicatorValue,
     ParameterValue, StrategyConfig, StrategyRiskLimits,
 };
 use std::collections::HashMap;
 use chrono::Utc;
-use bigdecimal::BigDecimal;
 
 // ============================================================================
 // STRATEGY MANAGER TESTS
@@ -17,14 +16,14 @@ use bigdecimal::BigDecimal;
 
 #[test]
 fn test_strategy_manager_creation() {
-    let manager = StrategyManager::new();
+    let _manager = StrategyManager::new();
     
     assert!(true, "Strategy manager created successfully");
 }
 
 #[test]
 fn test_strategy_manager_operations() {
-    let mut manager = StrategyManager::new();
+    let _manager = StrategyManager::new();
     
     // Manager should be able to handle operations
     assert!(true, "Strategy manager operations work");
@@ -300,7 +299,7 @@ fn test_parameter_value_as_int() {
 
 #[test]
 fn test_strategy_risk_limits_default() {
-    let limits = StrategyRiskLimits::default();
+    let _limits = StrategyRiskLimits::default();
     
     // Should have sensible defaults
     assert!(true, "Risk limits created with defaults");

@@ -381,7 +381,7 @@ impl DistributedGACoordinator {
         
         let mut best = population[0].clone();
         let mut best_fitness = 0.0;
-        let mut best_equity_curve = Vec::new();
+        let mut _best_equity_curve = Vec::<f64>::new();
         let mut generations_without_improvement = 0;
         const CONVERGENCE_THRESHOLD: usize = 5;
         
@@ -445,7 +445,7 @@ impl DistributedGACoordinator {
                 .map(|i| results.remove(&i).unwrap_or_else(FitnessResult::failure))
                 .collect();
             
-            let mut fitnesses: Vec<f64> = fitness_results.iter().map(|r| r.fitness).collect();
+            let fitnesses: Vec<f64> = fitness_results.iter().map(|r| r.fitness).collect();
             
             // Sort population by fitness
             let mut indexed: Vec<(usize, &AvellanedaStoikovChromosome, f64, &FitnessResult)> = 
@@ -466,7 +466,7 @@ impl DistributedGACoordinator {
                 if indexed[i].2 > best_fitness {
                     best = indexed[i].1.clone();
                     best_fitness = indexed[i].2;
-                    best_equity_curve = indexed[i].3.equity_curve.clone();
+                    _best_equity_curve = indexed[i].3.equity_curve.clone();
                 }
             }
             
@@ -653,7 +653,7 @@ impl DistributedGARunner {
     pub async fn run_with_fallback<F>(
         mode: &DistributedMode,
         config: &DistributedGAConfig,
-        market_data: &[dataloader::MarketData],
+        _market_data: &[dataloader::MarketData],
         local_fitness_fn: F,
     ) -> (AvellanedaStoikovChromosome, f64)
     where

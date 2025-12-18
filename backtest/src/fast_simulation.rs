@@ -91,6 +91,8 @@ impl MarketFeatures {
                     volumes.push(o.quantity.to_f64().unwrap_or(0.0));
                     trade_sides.push(0.0);
                 }
+                #[allow(unreachable_patterns)]
+                _ => {} // Fallback for any other variants
             }
             processed += 1;
             if processed % 1_000_000 == 0 {

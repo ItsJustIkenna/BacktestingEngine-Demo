@@ -2,7 +2,7 @@
 //! Covers order book management, matching engine, and slippage calculation
 
 use orderbook::{
-    OrderBook, OrderBookEvent, BookSide, Fill, SlippageConfig, SnapshotLevel,
+    OrderBook, OrderBookEvent, BookSide, SlippageConfig, SnapshotLevel,
 };
 use config::OrderBookConfig;
 use bigdecimal::BigDecimal;
@@ -29,7 +29,7 @@ fn test_orderbook_creation() {
 #[test]
 fn test_orderbook_with_symbol() {
     let config = OrderBookConfig::default();
-    let orderbook = OrderBook::new(
+    let _orderbook = OrderBook::new(
         "ETH-PERP".to_string(),
         "binance".to_string(),
         config

@@ -58,6 +58,28 @@ enum Commands {
         #[arg(long, default_value = "true")]
         distributed: bool,
     },
+    /// Prepare historical data for backtesting (converts DB to binary format)
+    PrepareData {
+        /// Trading symbol (e.g., "BTC/USD")
+        #[arg(long)]
+        symbol: String,
+        
+        /// Exchange name (e.g., "Kraken")
+        #[arg(long)]
+        exchange: String,
+        
+        /// Output directory for binary files
+        #[arg(long, default_value = "/data/historical")]
+        output_dir: String,
+        
+        /// Number of rows per database chunk
+        #[arg(long, default_value = "10000")]
+        chunk_size: usize,
+        
+        /// Compute features (volatility, EMA, imbalance)
+        #[arg(long, default_value = "true")]
+        compute_features: bool,
+    },
 }
 
 #[tokio::main]
@@ -269,6 +291,75 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             
             println!("✅ Coordinator ready at http://{}", bind_addr);
             axum::serve(listener, app).await?;
+        }
+        
+        Commands::PrepareData { 
+            symbol: _symbol, 
+            exchange: _exchange, 
+            output_dir: _output_dir, 
+            chunk_size: _chunk_size, 
+            compute_features: _compute_features 
+        } => {
+            #[cfg(feature = "postgres")]
+            {
+                use diesel_async::pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool};
+                use diesel_async::AsyncPgConnection;
+                use data_prep::{DataPrepConfig, prepare_data};
+                use std::path::PathBuf;
+                
+                // Re-bind variables for use inside postgres block
+                let symbol = _symbol;
+                let exchange = _exchange;
+                let output_dir = _output_dir;
+                let chunk_size = _chunk_size;
+                let compute_features = _compute_features;
+                
+                let database_url = std::env::var("DATABASE_URL")
+                    .expect("DATABASE_URL must be set");
+
+                println!("📊 Preparing data for backtesting...");
+                println!("   Symbol: {}", symbol);
+                println!("   Exchange: {}", exchange);
+                println!("   Output: {}", output_dir);
+                println!("   Chunk size: {}", chunk_size);
+                println!("   Compute features: {}", compute_features);
+
+                // Create database pool
+                let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(&database_url);
+                let pool = Pool::builder(manager)
+                    .max_size(4)
+                    .build()
+                    .expect("Failed to create database pool");
+
+                let config = DataPrepConfig {
+                    symbol,
+                    exchange,
+                    output_dir: PathBuf::from(output_dir),
+                    chunk_size,
+                    compute_features,
+                    start_time: None,
+                    end_time: None,
+                };
+
+                match prepare_data(&pool, &config).await {
+                    Ok(result) => {
+                        println!("✅ Data preparation complete!");
+                        println!("   Output file: {}", result.output_path.display());
+                        println!("   Total ticks: {}", result.total_ticks);
+                        println!("   File size: {} MB", result.file_size_bytes / 1_000_000);
+                    }
+                    Err(e) => {
+                        eprintln!("❌ Data preparation failed: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            
+            #[cfg(not(feature = "postgres"))]
+            {
+                eprintln!("❌ PrepareData requires the 'postgres' feature");
+                std::process::exit(1);
+            }
         }
     }
 

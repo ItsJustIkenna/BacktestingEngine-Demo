@@ -520,7 +520,7 @@ mod tests {
             monitor.add_return("GOLD", -base * 0.5 + 0.002); // Negatively correlated
         }
         
-        let alerts = monitor.update();
+        let _alerts = monitor.update();
         
         // Check correlations
         let btc_eth = monitor.get_correlation("BTC", "ETH").unwrap();

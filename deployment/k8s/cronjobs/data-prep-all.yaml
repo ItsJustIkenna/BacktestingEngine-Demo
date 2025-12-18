@@ -1,0 +1,135 @@
+# Nightly data preparation cronjob
+# 
+# This job calls the API endpoint to prepare binary data files for ALL
+# symbol/exchange pairs in the database. Much simpler than per-symbol jobs.
+#
+# Features:
+# - Prepares all symbols in one job
+# - Skips files that already exist (unless force=true)
+# - Uses curl to call the API endpoint
+#
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: data-prep-all
+  namespace: backtesting
+  labels:
+    app: backtesting-engine
+    component: data-prep
+spec:
+  # Run at 2 AM UTC daily
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid  # Don't run if previous job still running
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 14400  # 4 hour timeout (handles all symbols)
+      template:
+        metadata:
+          labels:
+            app: backtesting-engine
+            component: data-prep
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: data-prep
+              image: curlimages/curl:latest
+              env:
+                - name: API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: backtesting-secrets
+                      key: CRON_API_KEY
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  echo "Starting nightly data preparation..."
+                  
+                  # Call the API to prepare all symbols
+                  # force=false means only prepare new/missing files
+                  response=$(curl -s -X POST \
+                    http://backtesting-api:8080/api/data/prepare \
+                    -H "Content-Type: application/json" \
+                    -H "X-API-Key: ${API_KEY}" \
+                    -d '{"force": false}')
+                  
+                  echo "Response: $response"
+                  
+                  # Check if successful
+                  success=$(echo "$response" | grep -o '"success":true')
+                  if [ -n "$success" ]; then
+                    echo "Data preparation completed successfully"
+                    exit 0
+                  else
+                    echo "Data preparation failed"
+                    exit 1
+                  fi
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "128Mi"
+                  cpu: "100m"
+---
+# Weekly force rebuild to ensure data consistency
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: data-prep-rebuild
+  namespace: backtesting
+  labels:
+    app: backtesting-engine
+    component: data-prep
+spec:
+  # Run at 3 AM UTC every Sunday
+  schedule: "0 3 * * 0"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 4
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 21600  # 6 hour timeout for full rebuild
+      template:
+        metadata:
+          labels:
+            app: backtesting-engine
+            component: data-prep
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: data-prep
+              image: curlimages/curl:latest
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  echo "Starting weekly full data rebuild..."
+                  
+                  # Force rebuild all binary files
+                  response=$(curl -s -X POST \
+                    http://backtesting-api:8080/api/data/prepare \
+                    -H "Content-Type: application/json" \
+                    -d '{"force": true}')
+                  
+                  echo "Response: $response"
+                  
+                  success=$(echo "$response" | grep -o '"success":true')
+                  if [ -n "$success" ]; then
+                    echo "Weekly rebuild completed successfully"
+                    exit 0
+                  else
+                    echo "Weekly rebuild failed"
+                    exit 1
+                  fi
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "128Mi"
+                  cpu: "100m"

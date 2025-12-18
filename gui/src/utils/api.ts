@@ -3,6 +3,7 @@
  */
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || '/api';
+const API_KEY = process.env.REACT_APP_API_KEY || '';
 const API_TIMEOUT = 30000; // 30 seconds
 
 export interface ApiError {
@@ -81,6 +82,12 @@ class ApiClient {
       'Content-Type': 'application/json',
     };
 
+    // Include API key for authentication
+    if (API_KEY) {
+      headers['X-API-Key'] = API_KEY;
+    }
+
+    // Also include Bearer token if set (for future user-level auth)
     if (this.authToken) {
       headers['Authorization'] = `Bearer ${this.authToken}`;
     }

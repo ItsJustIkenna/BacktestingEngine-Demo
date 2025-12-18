@@ -107,16 +107,32 @@ spec:
                   name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
                   key: ELASTIC_CLOUD_PASSWORD
             {{- end }}
+            
+            # Historical data directory for binary files (memory-mapped)
+            {{- if .Values.distributedWorker.historicalData.enabled }}
+            - name: DATA_DIR
+              value: {{ .Values.distributedWorker.historicalData.mountPath | default "/data/historical" }}
+            {{- end }}
           resources:
             {{- toYaml .Values.distributedWorker.resources | nindent 12 }}
           volumeMounts:
             - name: config
               mountPath: /app/config
               readOnly: true
+            {{- if .Values.distributedWorker.historicalData.enabled }}
+            - name: historical-data
+              mountPath: {{ .Values.distributedWorker.historicalData.mountPath | default "/data/historical" }}
+              readOnly: true  # Workers only read, data-prep job writes
+            {{- end }}
       volumes:
         - name: config
           configMap:
             name: {{ include "backtesting-engine.fullname" . }}-config
+        {{- if .Values.distributedWorker.historicalData.enabled }}
+        - name: historical-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.distributedWorker.historicalData.pvcName | default "historical-data-pvc" }}
+        {{- end }}
       {{- with .Values.distributedWorker.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

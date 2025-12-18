@@ -87,6 +87,8 @@ impl BacktestEngine {
                 MarketData::Snapshot(s) => s.price_level.to_f64(),
                 MarketData::Candle(c) => c.close.to_f64(),
                 MarketData::Trade(t) => t.price.to_f64(),
+                #[allow(unreachable_patterns)]
+                _ => None,
             }
         })
     }
@@ -413,6 +415,8 @@ impl BacktestEngine {
                         dataloader::MarketData::Snapshot(s) => s.timestamp,
                         #[cfg(feature = "postgres")]
                         dataloader::MarketData::Order(o) => o.timestamp,
+                        #[allow(unreachable_patterns)]
+                        _ => chrono::Utc::now(),
                     })
                     .unwrap_or_else(chrono::Utc::now);
                 
@@ -748,6 +752,8 @@ impl BacktestEngine {
             let first_ts = match &market_data[0] {
                 MarketData::Candle(c) => c.timestamp,
                 MarketData::Trade(t) => t.timestamp,
+                #[allow(unreachable_patterns)]
+                _ => chrono::Utc::now(),
             };
             
             #[cfg(feature = "postgres")]
@@ -761,6 +767,8 @@ impl BacktestEngine {
             let last_ts = match &market_data[market_data.len() - 1] {
                 MarketData::Candle(c) => c.timestamp,
                 MarketData::Trade(t) => t.timestamp,
+                #[allow(unreachable_patterns)]
+                _ => first_ts,
             };
             
             (last_ts - first_ts).num_days()
@@ -794,6 +802,8 @@ impl BacktestEngine {
         let start_date = match &market_data[0] {
             MarketData::Candle(c) => c.timestamp,
             MarketData::Trade(t) => t.timestamp,
+            #[allow(unreachable_patterns)]
+            _ => chrono::Utc::now(),
         };
         
         #[cfg(feature = "postgres")]
@@ -807,6 +817,8 @@ impl BacktestEngine {
         let end_date = match &market_data[market_data.len() - 1] {
             MarketData::Candle(c) => c.timestamp,
             MarketData::Trade(t) => t.timestamp,
+            #[allow(unreachable_patterns)]
+            _ => start_date,
         };
         
         // Use larger step size to create fewer windows (3 windows max for efficiency)
@@ -871,6 +883,8 @@ impl BacktestEngine {
                         let ts = match md {
                             MarketData::Candle(c) => c.timestamp,
                             MarketData::Trade(t) => t.timestamp,
+                            #[allow(unreachable_patterns)]
+                            _ => return false,
                         };
                         ts >= window.test_window.start_date && ts < window.test_window.end_date
                     })
@@ -1205,6 +1219,8 @@ impl BacktestEngine {
         match data {
             MarketData::Candle(c) => Some(c.timestamp),
             MarketData::Trade(t) => Some(t.timestamp),
+            #[allow(unreachable_patterns)]
+            _ => None,
         }
     }
     
@@ -1356,6 +1372,8 @@ impl BacktestEngine {
                 filled.quantity = BigDecimal::from_str("0").unwrap(); // Zero quantity indicates synthetic data
                 MarketData::Trade(filled)
             }
+            #[allow(unreachable_patterns)]
+            _ => source.clone(), // Fallback for other variants
         }
     }
     

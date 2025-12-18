@@ -1,6 +1,9 @@
 pub mod cache;
 pub mod aggregation;
 pub mod query;
+pub mod tick;
+
+pub use tick::{Tick, TickSource, Side, MarketDataSlice};
 
 #[cfg(feature = "postgres")]
 use anyhow::Result;
@@ -133,6 +136,115 @@ impl TradeData {
             value_f64: price_f64 * quantity_f64,
         }
     }
+}
+
+/// Lightweight tick data for memory-efficient backtesting simulation
+/// Only 40 bytes vs ~400 bytes for full HistoricalOrder
+/// Use this when running distributed backtests with large datasets
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[repr(C)]
+pub struct SimulationTick {
+    /// Timestamp as Unix milliseconds (8 bytes)
+    pub timestamp_ms: i64,
+    /// Price as f64 (8 bytes)
+    pub price: f64,
+    /// Quantity as f64 (8 bytes)
+    pub quantity: f64,
+    /// Side: 0 = Buy, 1 = Sell (1 byte + 7 padding)
+    pub side: u8,
+}
+
+impl SimulationTick {
+    /// Create from price and quantity
+    pub fn new(timestamp_ms: i64, price: f64, quantity: f64, is_sell: bool) -> Self {
+        Self {
+            timestamp_ms,
+            price,
+            quantity,
+            side: if is_sell { 1 } else { 0 },
+        }
+    }
+
+    /// Check if this is a sell order
+    #[inline]
+    pub fn is_sell(&self) -> bool {
+        self.side == 1
+    }
+
+    /// Check if this is a buy order
+    #[inline]
+    pub fn is_buy(&self) -> bool {
+        self.side == 0
+    }
+
+    /// Get timestamp as DateTime<Utc>
+    pub fn timestamp(&self) -> DateTime<Utc> {
+        DateTime::from_timestamp_millis(self.timestamp_ms)
+            .unwrap_or_else(|| DateTime::UNIX_EPOCH)
+    }
+}
+
+#[cfg(feature = "postgres")]
+impl From<&HistoricalOrder> for SimulationTick {
+    fn from(order: &HistoricalOrder) -> Self {
+        use bigdecimal::ToPrimitive;
+        Self {
+            timestamp_ms: order.timestamp.timestamp_millis(),
+            price: order.price_level.to_f64().unwrap_or(0.0),
+            quantity: order.quantity.to_f64().unwrap_or(0.0),
+            side: if order.side.eq_ignore_ascii_case("sell") || order.side.eq_ignore_ascii_case("ask") { 1 } else { 0 },
+        }
+    }
+}
+
+impl From<&TradeData> for SimulationTick {
+    fn from(trade: &TradeData) -> Self {
+        Self {
+            timestamp_ms: trade.timestamp.timestamp_millis(),
+            price: trade.price_f64,
+            quantity: trade.quantity_f64,
+            side: if trade.side.eq_ignore_ascii_case("sell") || trade.side.eq_ignore_ascii_case("ask") { 1 } else { 0 },
+        }
+    }
+}
+
+impl From<&Candle> for SimulationTick {
+    fn from(candle: &Candle) -> Self {
+        use bigdecimal::ToPrimitive;
+        Self {
+            timestamp_ms: candle.timestamp.timestamp_millis(),
+            price: candle.close.to_f64().unwrap_or(0.0),
+            quantity: candle.volume.to_f64().unwrap_or(0.0),
+            side: 0, // Candles don't have a side, default to buy
+        }
+    }
+}
+
+impl From<&MarketData> for SimulationTick {
+    fn from(data: &MarketData) -> Self {
+        match data {
+            #[cfg(feature = "postgres")]
+            MarketData::Order(o) => SimulationTick::from(o),
+            #[cfg(feature = "postgres")]
+            MarketData::Snapshot(s) => {
+                use bigdecimal::ToPrimitive;
+                SimulationTick {
+                    timestamp_ms: s.timestamp.timestamp_millis(),
+                    price: s.price_level.to_f64().unwrap_or(0.0),
+                    quantity: s.quantity.to_f64().unwrap_or(0.0),
+                    side: if s.side.eq_ignore_ascii_case("sell") || s.side.eq_ignore_ascii_case("ask") { 1 } else { 0 },
+                }
+            }
+            MarketData::Candle(c) => SimulationTick::from(c),
+            MarketData::Trade(t) => SimulationTick::from(t),
+        }
+    }
+}
+
+/// Convert a slice of MarketData to Vec<SimulationTick>
+/// This reduces memory by ~10x for large datasets
+pub fn to_simulation_ticks(data: &[MarketData]) -> Vec<SimulationTick> {
+    data.iter().map(SimulationTick::from).collect()
 }
 
 /// Query parameters for data retrieval

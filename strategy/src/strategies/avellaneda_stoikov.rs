@@ -1127,6 +1127,18 @@ impl Strategy for AvellanedaStoikovStrategy {
                 // Use trade price - leverage pre-computed f64 for performance
                 (trade.price.clone(), trade.price_f64)
             }
+            // Handle Order and Snapshot variants (requires postgres feature)
+            #[allow(unreachable_patterns)]
+            _ => {
+                // Fallback for other market data types - use price history if available
+                if !self.price_history.is_empty() {
+                    let last = self.price_history.last().unwrap();
+                    let mid_f64 = last.1.to_f64().unwrap_or(0.0);
+                    (last.1.clone(), mid_f64)
+                } else {
+                    return Ok(vec![]); // No price data available
+                }
+            }
         };
         self.price_history.push((now, mid.clone()));
         // Remove old prices outside window
@@ -1411,6 +1423,8 @@ impl Strategy for AvellanedaStoikovStrategy {
                 dataloader::MarketData::Snapshot(s) => s.price_level.to_f64().unwrap_or(0.0),
                 #[cfg(feature = "postgres")]
                 dataloader::MarketData::Order(o) => o.price_level.to_f64().unwrap_or(0.0),
+                #[allow(unreachable_patterns)]
+                _ => 0.0,
             };
             self.avg_entry_price = Some(current_price);
         } else if self.inventory.abs() < 1e-8 && old_inventory.abs() > 1e-8 {
@@ -1423,6 +1437,8 @@ impl Strategy for AvellanedaStoikovStrategy {
                     dataloader::MarketData::Snapshot(s) => s.price_level.to_f64().unwrap_or(0.0),
                     #[cfg(feature = "postgres")]
                     dataloader::MarketData::Order(o) => o.price_level.to_f64().unwrap_or(0.0),
+                    #[allow(unreachable_patterns)]
+                    _ => 0.0,
                 };
                 // Calculate P&L (positive for profitable trades)
                 let pnl = if old_inventory > 0.0 {
