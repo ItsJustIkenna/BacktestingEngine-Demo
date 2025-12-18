@@ -339,6 +339,8 @@ impl DistributedGAWorker {
         
         let symbol = symbols.first().cloned().unwrap_or_default();
         
+        println!("🔍 [WORKER {}] Starting DB query for {} on {}", self.worker_id, symbol, exchange);
+        
         log_info_structured!(MAIN_LOGGER, "GA_WORKER_DB_QUERY",
             "event" => "GA_WORKER_DB_QUERY",
             "worker_id" => &self.worker_id,
@@ -346,16 +348,23 @@ impl DistributedGAWorker {
             "exchange" => exchange
         );
         
-        // Use parallel loader with 10 workers for faster loading
-        const NUM_WORKERS: usize = 10;
+        // Use parallel loader with fewer workers to avoid overwhelming DB
+        const NUM_WORKERS: usize = 4;
+        println!("🔍 [WORKER {}] Creating ParallelDataLoader with {} workers", self.worker_id, NUM_WORKERS);
         let loader = ParallelDataLoader::new(
             std::sync::Arc::new(pool.clone()),
             NUM_WORKERS,
         );
         
         // Load all data using time-based partitioning for parallelism
+        println!("🔍 [WORKER {}] Calling loader.load_all()...", self.worker_id);
         let market_data = loader.load_all(&symbol, exchange).await
-            .map_err(|e| WorkerError::DatabaseError(e.to_string()))?;
+            .map_err(|e| {
+                println!("❌ [WORKER {}] DB load error: {}", self.worker_id, e);
+                WorkerError::DatabaseError(e.to_string())
+            })?;
+        
+        println!("✅ [WORKER {}] DB query complete: {} rows", self.worker_id, market_data.len());
         
         log_info_structured!(MAIN_LOGGER, "GA_WORKER_DB_QUERY_COMPLETE",
             "event" => "GA_WORKER_DB_QUERY_COMPLETE",
