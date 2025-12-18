@@ -217,6 +217,8 @@ impl DistributedGAWorker {
         &self,
         request: protocol::broker::messages::DataLoadRequest,
     ) {
+        println!("🔄 [WORKER {}] handle_data_load_request starting for cache_key={}", self.worker_id, request.cache_key);
+        
         log_info_structured!(MAIN_LOGGER, "GA_WORKER_DATA_LOAD_START",
             "event" => "GA_WORKER_DATA_LOAD_START",
             "worker_id" => &self.worker_id,
@@ -231,40 +233,49 @@ impl DistributedGAWorker {
         
         // Load data from database
         #[cfg(feature = "postgres")]
-        let market_data = match &self.db_pool {
-            Some(pool) => {
-                match self.load_data_from_db(
-                    pool.as_ref(),
-                    &request.symbols,
-                    &request.exchange,
-                    &request.start_time,
-                    &request.end_time,
-                ).await {
-                    Ok(data) => data,
-                    Err(e) => {
-                        log_error_structured!(MAIN_LOGGER, "GA_WORKER_DB_LOAD_FAIL",
-                            "event" => "GA_WORKER_DB_LOAD_FAIL",
-                            "worker_id" => &self.worker_id,
-                            "error" => e.to_string()
-                        );
-                        // Send failure ack
-                        let ack = protocol::broker::messages::DataCacheAck {
-                            cache_key: request.cache_key,
-                            worker_id: self.worker_id.clone(),
-                            success: false,
-                            capacity: 0,
-                        };
-                        let _ = self.broker.publish_data_ack(ack).await;
-                        return;
+        let market_data = {
+            println!("🔄 [WORKER {}] db_pool is_some={}", self.worker_id, self.db_pool.is_some());
+            match &self.db_pool {
+                Some(pool) => {
+                    println!("🔄 [WORKER {}] Loading data from database...", self.worker_id);
+                    match self.load_data_from_db(
+                        pool.as_ref(),
+                        &request.symbols,
+                        &request.exchange,
+                        &request.start_time,
+                        &request.end_time,
+                    ).await {
+                        Ok(data) => {
+                            println!("✅ [WORKER {}] Loaded {} data points from DB", self.worker_id, data.len());
+                            data
+                        },
+                        Err(e) => {
+                            println!("❌ [WORKER {}] DB load failed: {}", self.worker_id, e);
+                            log_error_structured!(MAIN_LOGGER, "GA_WORKER_DB_LOAD_FAIL",
+                                "event" => "GA_WORKER_DB_LOAD_FAIL",
+                                "worker_id" => &self.worker_id,
+                                "error" => e.to_string()
+                            );
+                            // Send failure ack
+                            let ack = protocol::broker::messages::DataCacheAck {
+                                cache_key: request.cache_key,
+                                worker_id: self.worker_id.clone(),
+                                success: false,
+                                capacity: 0,
+                            };
+                            let _ = self.broker.publish_data_ack(ack).await;
+                            return;
+                        }
                     }
                 }
-            }
-            None => {
-                log_error_structured!(MAIN_LOGGER, "GA_WORKER_NO_DB_POOL",
-                    "event" => "GA_WORKER_NO_DB_POOL",
-                    "worker_id" => &self.worker_id
-                );
-                return;
+                None => {
+                    println!("❌ [WORKER {}] No db_pool available!", self.worker_id);
+                    log_error_structured!(MAIN_LOGGER, "GA_WORKER_NO_DB_POOL",
+                        "event" => "GA_WORKER_NO_DB_POOL",
+                        "worker_id" => &self.worker_id
+                    );
+                    return;
+                }
             }
         };
         
