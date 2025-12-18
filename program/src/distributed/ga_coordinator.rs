@@ -169,7 +169,8 @@ impl DistributedGACoordinator {
         let cache_key_clone = cache_key.clone();
         
         // Wait for workers to acknowledge (with longer timeout since they're loading from DB)
-        let ack_timeout = Duration::from_secs(60); // Give workers time to query DB
+        // Workers load 7M+ records which takes ~40 seconds
+        let ack_timeout = Duration::from_secs(120); // Give workers time to query DB
         let ack_deadline = Instant::now() + ack_timeout;
         
         // Retry publishing every 5 seconds until we get worker acknowledgments
@@ -180,7 +181,7 @@ impl DistributedGACoordinator {
         
         log_info_structured!(MAIN_LOGGER, "GA_WAITING_FOR_WORKERS",
             "event" => "GA_WAITING_FOR_WORKERS",
-            "timeout_seconds" => 60,
+            "timeout_seconds" => 120,
             "min_workers" => min_workers_needed
         );
         

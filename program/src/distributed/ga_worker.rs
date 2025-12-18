@@ -301,6 +301,7 @@ impl DistributedGAWorker {
         }
         
         let elapsed = start.elapsed();
+        println!("✅ [WORKER {}] Data loaded: {} points in {:?}", self.worker_id, data_len, elapsed);
         log_info_structured!(MAIN_LOGGER, "GA_WORKER_DATA_LOADED",
             "event" => "GA_WORKER_DATA_LOADED",
             "worker_id" => &self.worker_id,
@@ -311,13 +312,17 @@ impl DistributedGAWorker {
         
         // Send success acknowledgment
         let ack = protocol::broker::messages::DataCacheAck {
-            cache_key: request.cache_key,
+            cache_key: request.cache_key.clone(),
             worker_id: self.worker_id.clone(),
             success: true,
             capacity: MAX_CONCURRENT_EVALS as i32,
         };
         
-        let _ = self.broker.publish_data_ack(ack).await;
+        println!("📤 [WORKER {}] Publishing data ACK for cache_key={}", self.worker_id, request.cache_key);
+        match self.broker.publish_data_ack(ack).await {
+            Ok(_) => println!("✅ [WORKER {}] ACK published successfully", self.worker_id),
+            Err(e) => println!("❌ [WORKER {}] Failed to publish ACK: {:?}", self.worker_id, e),
+        }
     }
     
     /// Load market data from database using parallel loader
