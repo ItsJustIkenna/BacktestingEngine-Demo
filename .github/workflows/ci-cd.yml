@@ -519,7 +519,7 @@ jobs:
           $secretNames = @(
             "POSTGRES-HOST","POSTGRES-PORT","POSTGRES-USER","POSTGRES-PASSWORD","POSTGRES-DB",
             "ELASTIC-CLOUD-ENDPOINT","ELASTIC-CLOUD-USERNAME","ELASTIC-CLOUD-PASSWORD",
-            "BACKTESTING-UI-API-KEY","BACKTESTING-CRON-API-KEY"
+            "UI-API-KEY","CRON-API-KEY"
           )
           
           Write-Host "[INFO] Fetching $($secretNames.Count) secrets..."
@@ -571,7 +571,7 @@ jobs:
           $databaseUrl = "postgresql://$($env:POSTGRES_USER):$($env:POSTGRES_PASSWORD)@$($env:POSTGRES_HOST):$($env:POSTGRES_PORT)/$($env:POSTGRES_DB)"
           
           # Build API_KEYS from UI and CRON keys
-          $apiKeys = "$($env:BACKTESTING_UI_API_KEY),$($env:BACKTESTING_CRON_API_KEY)"
+          $apiKeys = "$($env:UI_API_KEY),$($env:CRON_API_KEY)"
           
           kubectl create secret generic backtesting-secrets `
             --from-literal=database-username="$($env:POSTGRES_USER)" `
@@ -588,8 +588,8 @@ jobs:
             --from-literal=ELASTIC_CLOUD_PASSWORD="$($env:ELASTIC_CLOUD_PASSWORD)" `
             --from-literal=API_KEYS="$apiKeys" `
             --from-literal=API_AUTH_REQUIRED="true" `
-            --from-literal=UI_API_KEY="$($env:BACKTESTING_UI_API_KEY)" `
-            --from-literal=CRON_API_KEY="$($env:BACKTESTING_CRON_API_KEY)" `
+            --from-literal=UI_API_KEY="$($env:UI_API_KEY)" `
+            --from-literal=CRON_API_KEY="$($env:CRON_API_KEY)" `
             --namespace=backtestingengine `
             --dry-run=client -o yaml | kubectl apply -f -
           
