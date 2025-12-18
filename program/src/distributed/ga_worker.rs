@@ -28,7 +28,8 @@ use crate::{log_info_structured, log_debug, log_error_structured};
 use crate::logging_facade::MAIN_LOGGER;
 
 /// Maximum concurrent chromosome evaluations per worker
-const MAX_CONCURRENT_EVALS: usize = 6;
+/// Reduced from 6 to 2 to prevent OOM with 7M records
+const MAX_CONCURRENT_EVALS: usize = 2;
 
 /// Data cache entry with TTL
 pub struct CacheEntry {

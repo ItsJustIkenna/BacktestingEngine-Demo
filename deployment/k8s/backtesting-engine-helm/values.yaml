@@ -438,7 +438,8 @@ distributedWorker:
   replicaCount: 2
   
   # Number of threads per worker pod
-  threads: 4
+  # Reduced from 4 to 2 to prevent OOM - each worker runs MAX_CONCURRENT_EVALS=2 backtests
+  threads: 2
   
   # Note: MessageBrokerEngine URL is configured in distributedGA.brokerUrl
   
