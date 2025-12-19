@@ -188,10 +188,16 @@ impl DistributedGAWorker {
                     let has_data = {
                         let binary_cache = self.binary_cache.read().await;
                         let data_cache = self.data_cache.read().await;
-                        binary_cache.contains_key(&request.data_cache_key) || data_cache.contains_key(&request.data_cache_key)
+                        let in_binary = binary_cache.contains_key(&request.data_cache_key);
+                        let in_data = data_cache.contains_key(&request.data_cache_key);
+                        println!("🔍 [WORKER {}] Checking cache for {}: binary={}, data={}", 
+                            self.worker_id, request.data_cache_key, in_binary, in_data);
+                        in_binary || in_data
                     };
                     
                     if has_data {
+                        println!("✅ [WORKER {}] Processing chromosome {}/{} for job {}", 
+                            self.worker_id, request.chromosome_id, request.total_chromosomes, request.job_id);
                         // Spawn evaluation task with semaphore
                         let worker = self.clone_for_task();
                         let request_clone = request.clone();
@@ -200,7 +206,7 @@ impl DistributedGAWorker {
                             worker.process_chromosome_eval(request_clone).await;
                         });
                     } else {
-                        log_debug!(MAIN_LOGGER, "Worker {} missing data for cache_key {}, skipping",
+                        println!("⏭️ [WORKER {}] Skipping chromosome - no data for cache_key {}", 
                             self.worker_id, request.data_cache_key);
                         // Don't process - another worker with the data will handle it
                     }
