@@ -1,0 +1,118 @@
+{{- if and .Values.distributedWorker.enabled .Values.distributedWorker.historicalData.enabled .Values.distributedWorker.historicalData.initJob.enabled }}
+# One-time job to populate historical-data-pvc on first deployment
+# Uses Helm hook to run after PVC is created but before workers start
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "backtesting-engine.fullname" . }}-data-prep-init
+  labels:
+    {{- include "backtesting-engine.labels" . | nindent 4 }}
+    app.kubernetes.io/component: data-prep-init
+  namespace: {{ .Release.Namespace | quote }}
+  annotations:
+    # Run as a post-install/post-upgrade hook
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "-5"
+    # Delete previous job before creating new one
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 2
+  activeDeadlineSeconds: 7200  # 2 hour timeout
+  ttlSecondsAfterFinished: 86400  # Clean up after 24 hours
+  template:
+    metadata:
+      labels:
+        {{- include "backtesting-engine.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: data-prep-init
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "backtesting-engine.serviceAccountName" . }}
+      initContainers:
+        - name: wait-for-postgresql
+          image: "postgres:15-alpine"
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h {{ include "backtesting-engine.postgresql.servicename" . }} -p {{ include "backtesting-engine.postgresql.port" . }} -U {{ include "backtesting-engine.postgresql.username" . }}; do
+                echo "Waiting for PostgreSQL to be ready..."
+                sleep 2
+              done
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
+                  key: database-password
+        - name: check-if-needed
+          image: "busybox:1.36"
+          command:
+            - sh
+            - -c
+            - |
+              # Check if binary files already exist
+              if ls {{ .Values.distributedWorker.historicalData.mountPath }}/*.bin 2>/dev/null; then
+                echo "Binary files already exist, skipping data-prep"
+                # Create a marker file to signal main container to skip
+                touch /shared/skip-data-prep
+              else
+                echo "No binary files found, will run data-prep"
+              fi
+          volumeMounts:
+            - name: historical-data
+              mountPath: {{ .Values.distributedWorker.historicalData.mountPath }}
+            - name: shared
+              mountPath: /shared
+      containers:
+        - name: data-prep
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              if [ -f /shared/skip-data-prep ]; then
+                echo "Skipping data-prep - binary files already exist"
+                exit 0
+              fi
+              echo "Running data-prep to generate binary files..."
+              /bin/server prepare-data \
+                --symbol "{{ .Values.distributedWorker.historicalData.initJob.symbol }}" \
+                --exchange "{{ .Values.distributedWorker.historicalData.initJob.exchange }}" \
+                --output-dir {{ .Values.distributedWorker.historicalData.mountPath }}
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
+                  key: DATABASE_URL
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.existingSecret | default (printf "%s-secret" (include "backtesting-engine.fullname" .)) }}
+                  key: database-password
+            - name: RUST_LOG
+              value: "info,data_prep=debug"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+          volumeMounts:
+            - name: historical-data
+              mountPath: {{ .Values.distributedWorker.historicalData.mountPath }}
+            - name: shared
+              mountPath: /shared
+      volumes:
+        - name: historical-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.distributedWorker.historicalData.pvcName | default "historical-data-pvc" }}
+        - name: shared
+          emptyDir: {}
+{{- end }}
