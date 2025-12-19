@@ -71,6 +71,7 @@ spec:
   {{- end }}
   volumeMode: {{ .Values.persistence.logs.volumeMode | default "Filesystem" }}
 {{- end }}
+{{- end }}
 
 {{- if .Values.distributedWorker.historicalData.enabled }}
 ---
@@ -98,5 +99,4 @@ spec:
   {{- end }}
   {{- end }}
   volumeMode: Filesystem
-{{- end }}
 {{- end }}
