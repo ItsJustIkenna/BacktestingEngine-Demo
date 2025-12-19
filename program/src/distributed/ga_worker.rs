@@ -184,10 +184,11 @@ impl DistributedGAWorker {
                 
                 // Handle chromosome evaluation request
                 Ok(request) = eval_receiver.recv() => {
-                    // Check if we have the required data cached
+                    // Check if we have the required data cached (either binary file path or in-memory data)
                     let has_data = {
-                        let cache = self.data_cache.read().await;
-                        cache.contains_key(&request.data_cache_key)
+                        let binary_cache = self.binary_cache.read().await;
+                        let data_cache = self.data_cache.read().await;
+                        binary_cache.contains_key(&request.data_cache_key) || data_cache.contains_key(&request.data_cache_key)
                     };
                     
                     if has_data {
