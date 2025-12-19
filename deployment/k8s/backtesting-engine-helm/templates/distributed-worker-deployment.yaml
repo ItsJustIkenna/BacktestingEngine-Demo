@@ -54,13 +54,10 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           # Run in distributed-worker mode - processes chunks from message broker
-          command: ["/bin/server"]
+          command: ["/bin/sh", "-c"]
           args: 
-            - "distributed-worker"
-            - "--workers"
-            - {{ .Values.distributedWorker.threads | default 4 | quote }}
-            - "--prefix"
-            - "k8s-worker"
+            - |
+              /bin/server distributed-worker --workers {{ .Values.distributedWorker.threads | default 4 }} --prefix "${WORKER_ID}"
           env:
             - name: DATABASE_PASSWORD
               valueFrom:
