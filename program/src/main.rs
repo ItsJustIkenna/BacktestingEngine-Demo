@@ -254,6 +254,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         Commands::Coordinator { host, port, distributed } => {
             use program::distributed::broker_client::{init_broker_client, BrokerRole};
+            use program::distributed::ga_coordinator::{DistributedGACoordinator, DistributedGAConfig};
+            use program::job_queue::JobStatus;
             
             let database_url = std::env::var("DATABASE_URL")
                 .expect("DATABASE_URL must be set");
@@ -263,7 +265,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .map_err(|e| format!("Failed to connect: {}", e))?;
             let job_queue: Arc<dyn JobQueue> = Arc::new(postgres_queue);
 
-            if distributed {
+            let broker = if distributed {
                 println!("🌐 Coordinator mode with distributed processing");
                 
                 // Initialize broker connection for distributed mode
@@ -278,10 +280,158 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("   Requests published to: ga.chromosome.requests");
                 println!("   Results collected from: ga.chromosome.results");
                 
-                // Note: Job processing is handled by the main 'worker' deployment
-                // The coordinator only provides API + broker coordination
+                Some(broker)
             } else {
                 println!("📡 Coordinator mode with local processing");
+                None
+            };
+
+            // Spawn job processing loop
+            if let Some(broker) = broker {
+                let job_queue_clone = Arc::clone(&job_queue);
+                tokio::spawn(async move {
+                    println!("🔄 Starting job processing loop...");
+                    loop {
+                        // Poll for queued jobs
+                        match job_queue_clone.get_next_job().await {
+                            Ok(Some(job)) => {
+                                eprintln!("📋 [COORDINATOR] Claimed job: {} (status now running)", job.id);
+                                
+                                // Create GA config from job params
+                                let genetic_config = config::GeneticConfig {
+                                    population_size: job.params.population_size,
+                                    generations: job.params.generations,
+                                    mutation_rate: 0.1,  // Default
+                                    crossover_rate: 0.8, // Default
+                                    use_monte_carlo_fitness: false,
+                                    mc_sample_size: 50,
+                                    top_percentile_threshold: 0.1,
+                                };
+                                
+                                let config = DistributedGAConfig {
+                                    genetic_config,
+                                    symbol: job.params.symbol.clone(),
+                                    exchange: job.params.exchange.clone(),
+                                    start_time: job.params.start_date.clone().unwrap_or_default(),
+                                    end_time: job.params.end_date.clone().unwrap_or_default(),
+                                    initial_capital: job.params.initial_capital,
+                                    cache_ttl_seconds: 3600,
+                                };
+                                
+                                let mut coordinator = DistributedGACoordinator::new(
+                                    Arc::clone(&broker),
+                                    config,
+                                    job.id.clone(),
+                                );
+                                
+                                // First request workers to load data
+                                eprintln!("📤 [COORDINATOR] Requesting data load for job {}", job.id);
+                                match coordinator.request_data_load().await {
+                                    Ok(cache_key) => {
+                                        eprintln!("✅ [COORDINATOR] Data loaded with cache_key: {}", cache_key);
+                                        
+                                        // Now run the distributed GA
+                                        match coordinator.run().await {
+                                            Ok((best_chromosome, best_fitness)) => {
+                                                eprintln!("✅ [COORDINATOR] Job {} completed: fitness={:.4}", job.id, best_fitness);
+                                                
+                                                // Create a BacktestResult from the GA output
+                                                let result = program::job_queue::BacktestResult {
+                                                    job_id: job.id.clone(),
+                                                    strategy_type: Some(job.params.strategy_type.clone()),
+                                                    total_pnl: best_fitness * job.params.initial_capital, // Approximate
+                                                    sharpe_ratio: best_fitness, // Fitness is based on Sharpe
+                                                    max_drawdown: 0.0, // Not available from GA
+                                                    win_rate: 0.0,
+                                                    total_trades: 0,
+                                                    profit_factor: 1.0,
+                                                    equity_curve: vec![],
+                                                    completed_at: chrono::Utc::now(),
+                                                    strategy_params: Some(serde_json::json!({
+                                                        "risk_aversion": best_chromosome.risk_aversion,
+                                                        "order_size_pct": best_chromosome.order_size_pct,
+                                                        "window_ms": best_chromosome.window_ms,
+                                                        "inventory_target": best_chromosome.inventory_target,
+                                                        "time_horizon_minutes": best_chromosome.time_horizon_minutes,
+                                                        "market_depth_k": best_chromosome.market_depth_k,
+                                                        "take_profit_pct": best_chromosome.take_profit_pct,
+                                                        "stop_loss_pct": best_chromosome.stop_loss_pct,
+                                                        "fitness": best_fitness,
+                                                    })),
+                                                    start_date: job.params.start_date.clone(),
+                                                    end_date: job.params.end_date.clone(),
+                                                    // Default all other fields
+                                                    closed_trades: None,
+                                                    open_positions: None,
+                                                    realized_pnl: None,
+                                                    unrealized_pnl: None,
+                                                    annualized_return: None,
+                                                    volatility: None,
+                                                    sortino_ratio: None,
+                                                    calmar_ratio: None,
+                                                    avg_trade_return: None,
+                                                    best_trade: None,
+                                                    worst_trade: None,
+                                                    avg_time_in_trade: None,
+                                                    value_at_risk_95: None,
+                                                    expected_shortfall_95: None,
+                                                    max_drawdown_duration_days: None,
+                                                    current_drawdown: None,
+                                                    avg_drawdown: None,
+                                                    total_orders: None,
+                                                    filled_orders: None,
+                                                    cancelled_orders: None,
+                                                    avg_slippage: None,
+                                                    total_commission_paid: None,
+                                                    monte_carlo: None,
+                                                    walk_forward: None,
+                                                    inventory_metrics: None,
+                                                    execution_metrics: None,
+                                                    risk_halt_reason: None,
+                                                    metrics_profile: None,
+                                                };
+                                                
+                                                // Save result
+                                                if let Err(e) = job_queue_clone.store_result(&result).await {
+                                                    eprintln!("❌ [COORDINATOR] Failed to save result: {}", e);
+                                                }
+                                                
+                                                // Update status to completed
+                                                if let Err(e) = job_queue_clone.update_job_status(&job.id, JobStatus::Completed, None).await {
+                                                    eprintln!("❌ [COORDINATOR] Failed to update status: {}", e);
+                                                }
+                                            }
+                                            Err(e) => {
+                                                eprintln!("❌ [COORDINATOR] Job {} GA failed: {:?}", job.id, e);
+                                                let _ = job_queue_clone.update_job_status(
+                                                    &job.id, 
+                                                    JobStatus::Failed, 
+                                                    Some(format!("GA error: {:?}", e))
+                                                ).await;
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("❌ [COORDINATOR] Job {} data load failed: {:?}", job.id, e);
+                                        let _ = job_queue_clone.update_job_status(
+                                            &job.id, 
+                                            JobStatus::Failed, 
+                                            Some(format!("Data load error: {:?}", e))
+                                        ).await;
+                                    }
+                                }
+                            }
+                            Ok(None) => {
+                                // No jobs available, wait before polling again
+                                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                            }
+                            Err(e) => {
+                                eprintln!("❌ [COORDINATOR] Error polling for jobs: {}", e);
+                                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                            }
+                        }
+                    }
+                });
             }
 
             // Build and start the API server with coordinator support
