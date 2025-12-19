@@ -433,6 +433,7 @@ impl DistributedGAWorker {
                                 worker_id: self.worker_id.clone(),
                                 success: true,
                                 capacity: MAX_CONCURRENT_EVALS as i32,
+                                tick_count: 0,
                             };
                             let _ = self.broker.publish_data_ack(ack).await;
                             return;
@@ -481,6 +482,7 @@ impl DistributedGAWorker {
                             worker_id: self.worker_id.clone(),
                             success: true,
                             capacity: MAX_CONCURRENT_EVALS as i32,
+                            tick_count: 0,
                         };
                         let _ = self.broker.publish_data_ack(ack).await;
                         return;
