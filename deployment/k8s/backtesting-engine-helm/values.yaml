@@ -451,6 +451,8 @@ distributedWorker:
     pvcName: "historical-data-pvc"
     # Mount path (also set as DATA_DIR env var)
     mountPath: "/data/historical"
+    # Storage size for binary data files
+    size: "10Gi"
   
   # Resource limits for distributed workers
   # With mmap binary files: 336MB data + evaluation headroom

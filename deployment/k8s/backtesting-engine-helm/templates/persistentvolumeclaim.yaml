@@ -71,4 +71,32 @@ spec:
   {{- end }}
   volumeMode: {{ .Values.persistence.logs.volumeMode | default "Filesystem" }}
 {{- end }}
+
+{{- if .Values.distributedWorker.historicalData.enabled }}
+---
+# Historical data PVC for distributed workers
+# Used to store pre-prepared binary market data files for memory-mapped access
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.distributedWorker.historicalData.pvcName | default "historical-data-pvc" }}
+  labels:
+    {{- include "backtesting-engine.labels" . | nindent 4 }}
+    app.kubernetes.io/component: historical-data
+  namespace: {{ .Release.Namespace | quote }}
+spec:
+  accessModes:
+    - "ReadWriteOnce"
+  resources:
+    requests:
+      storage: {{ .Values.distributedWorker.historicalData.size | default "10Gi" | quote }}
+  {{- if .Values.persistence.storageClass }}
+  {{- if (eq "-" .Values.persistence.storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  {{- end }}
+  volumeMode: Filesystem
+{{- end }}
 {{- end }}
