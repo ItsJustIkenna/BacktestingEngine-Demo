@@ -711,6 +711,8 @@ fn create_strategy_with_params(_params: AvellanedaStoikovParams) -> Result<std::
 /// * `train_days` - Number of days for training windows (default: 30)
 /// * `test_days` - Number of days for test windows (default: 7)
 /// * `step_days` - Step size between windows (default: 7)
+/// * `start_idx` - Optional start index for the data range (for train/test/validate splits)
+/// * `end_idx` - Optional end index for the data range (for train/test/validate splits)
 /// 
 /// # Returns
 /// WalkForwardSummary with performance across all windows
@@ -723,6 +725,8 @@ pub async fn run_walkforward_for_chromosome(
     train_days: Option<i64>,
     test_days: Option<i64>,
     step_days: Option<i64>,
+    start_idx: Option<usize>,
+    end_idx: Option<usize>,
 ) -> WalkForwardSummary {
     use dataloader::{TickSource, Tick};
     use crate::window::generate_windows;
@@ -731,20 +735,24 @@ pub async fn run_walkforward_for_chromosome(
     let test_days = test_days.unwrap_or(7);
     let step_days = step_days.unwrap_or(7);
     
-    // Get data boundaries from binary file
-    let total_ticks = reader.len();
+    // Get data boundaries from binary file, respecting optional range limits
+    let full_len = reader.len();
+    let start_idx = start_idx.unwrap_or(0).min(full_len);
+    let end_idx = end_idx.unwrap_or(full_len).min(full_len);
+    let total_ticks = end_idx.saturating_sub(start_idx);
+    
     if total_ticks == 0 {
-        crate::log_warn!(WALKFORWARD_LOGGER, "WALKFORWARD_EMPTY_DATA | No ticks in binary file");
+        crate::log_warn!(WALKFORWARD_LOGGER, "WALKFORWARD_EMPTY_DATA | No ticks in specified range");
         return WalkForwardSummary::new(vec![]);
     }
     
-    let first_tick = reader.get(0).expect("has ticks");
-    let last_tick = reader.get(total_ticks - 1).expect("has ticks");
+    let first_tick = reader.get(start_idx).expect("has ticks");
+    let last_tick = reader.get(end_idx.saturating_sub(1)).expect("has ticks");
     let start_date = first_tick.timestamp().date_naive();
     let end_date = last_tick.timestamp().date_naive();
     
-    crate::log_info!(WALKFORWARD_LOGGER, "WALKFORWARD_START | {} to {} | train={}d test={}d step={}d",
-        start_date, end_date, train_days, test_days, step_days);
+    crate::log_info!(WALKFORWARD_LOGGER, "WALKFORWARD_START | {} to {} | train={}d test={}d step={}d | ticks [{}, {})",
+        start_date, end_date, train_days, test_days, step_days, start_idx, end_idx);
     
     // Generate windows
     let train_size = chrono::Duration::days(train_days);
@@ -759,10 +767,10 @@ pub async fn run_walkforward_for_chromosome(
     
     crate::log_info!(WALKFORWARD_LOGGER, "WALKFORWARD_WINDOWS | {} windows generated", windows.len());
     
-    // Build date->index mapping for efficient slicing
+    // Build date->index mapping for efficient slicing (respecting start_idx offset)
     let mut date_indices: std::collections::BTreeMap<NaiveDate, usize> = std::collections::BTreeMap::new();
     let mut last_date: Option<NaiveDate> = None;
-    for i in 0..total_ticks {
+    for i in start_idx..end_idx {
         if let Some(tick) = reader.get(i) {
             let tick_date = tick.timestamp().date_naive();
             if last_date.map_or(true, |d| d != tick_date) {

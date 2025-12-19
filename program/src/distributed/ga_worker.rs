@@ -273,6 +273,7 @@ impl DistributedGAWorker {
             worker_id: self.worker_id.clone(),
             success: true,
             capacity: MAX_CONCURRENT_EVALS as i32,
+            tick_count: 0,
         };
         
         let _ = self.broker.publish_data_ack(ack).await;
@@ -300,6 +301,7 @@ impl DistributedGAWorker {
                     worker_id: self.worker_id.clone(),
                     success: true,
                     capacity: MAX_CONCURRENT_EVALS as i32,
+                    tick_count: 0,
                 };
                 let _ = self.broker.publish_data_ack(ack).await;
                 return;
@@ -314,6 +316,7 @@ impl DistributedGAWorker {
                     worker_id: self.worker_id.clone(),
                     success: true,
                     capacity: MAX_CONCURRENT_EVALS as i32,
+                    tick_count: 0,
                 };
                 let _ = self.broker.publish_data_ack(ack).await;
                 return;
@@ -338,6 +341,7 @@ impl DistributedGAWorker {
                             worker_id: self.worker_id.clone(),
                             success: true,
                             capacity: MAX_CONCURRENT_EVALS as i32,
+                            tick_count: 0,
                         };
                         let _ = self.broker.publish_data_ack(ack).await;
                         return;
@@ -389,6 +393,7 @@ impl DistributedGAWorker {
                 worker_id: self.worker_id.clone(),
                 success: true,
                 capacity: MAX_CONCURRENT_EVALS as i32,
+                tick_count: 0,
             };
             let _ = self.broker.publish_data_ack(ack).await;
             return;
@@ -503,6 +508,7 @@ impl DistributedGAWorker {
             worker_id: self.worker_id.clone(),
             success: false,
             capacity: 0,
+            tick_count: 0,
         };
         let _ = self.broker.publish_data_ack(ack).await;
     }
@@ -643,6 +649,7 @@ impl DistributedGAWorker {
         }
         
         // Regular GA evaluation - try binary file first (preferred: memory-efficient)
+        // Use only train portion of data (0 to train_end_idx)
         let result = {
             let path_to_eval = {
                 let binary_cache = self.binary_cache.read().await;
@@ -652,7 +659,12 @@ impl DistributedGAWorker {
             };
             
             if let Some(path) = path_to_eval {
-                Some(self.evaluate_with_streaming_sim(&chromosome, &path, request.initial_capital).await)
+                Some(self.evaluate_with_streaming_sim(
+                    &chromosome, 
+                    &path, 
+                    request.initial_capital,
+                    request.train_end_idx, // Use only train data for GA fitness
+                ).await)
             } else {
                 None
             }
@@ -715,13 +727,16 @@ impl DistributedGAWorker {
     /// 
     /// This provides accurate simulation results while maintaining memory efficiency
     /// by processing data in chunks from the memory-mapped binary file.
+    /// 
+    /// If `train_end_idx` > 0, only the first `train_end_idx` ticks are used for training.
     async fn evaluate_with_streaming_sim(
         &self,
         chromosome: &AvellanedaStoikovChromosome,
         path: &std::path::Path,
         initial_capital: f64,
+        train_end_idx: i64,
     ) -> FitnessResult {
-        use data_prep::BinaryFileReader;
+        use data_prep::{BinaryFileReader, SlicedTickSource};
         use dataloader::{Tick, TickSource};
         use backtest::SimulationLoop;
         use strategy::StrategyManager;
@@ -825,18 +840,34 @@ impl DistributedGAWorker {
         backtest_config.trading.initial_capital = initial_capital;
         backtest_config.analysis.skip_genetic_optimization = true; // We ARE the GA
         
-        // Run streaming simulation
+        // Run streaming simulation - use SlicedTickSource if train_end_idx is set
         let mut sim_loop = SimulationLoop::new();
-        let result = sim_loop.run_streaming(
-            &mut strategy_manager,
-            &mut orderbook,
-            &mut portfolio,
-            &mut risk_manager,
-            &reader,
-            "BTC/USD",
-            "Kraken",
-            &backtest_config,
-        ).await;
+        let result = if train_end_idx > 0 {
+            // Use only train portion of data
+            let sliced = SlicedTickSource::new(&reader, 0, train_end_idx as usize);
+            sim_loop.run_streaming(
+                &mut strategy_manager,
+                &mut orderbook,
+                &mut portfolio,
+                &mut risk_manager,
+                &sliced,
+                "BTC/USD",
+                "Kraken",
+                &backtest_config,
+            ).await
+        } else {
+            // Use full data (backward compatibility)
+            sim_loop.run_streaming(
+                &mut strategy_manager,
+                &mut orderbook,
+                &mut portfolio,
+                &mut risk_manager,
+                &reader,
+                "BTC/USD",
+                "Kraken",
+                &backtest_config,
+            ).await
+        };
         
         // Calculate fitness and extract metrics
         let fitness = calculate_comprehensive_fitness(&result, initial_capital);
@@ -1028,7 +1059,7 @@ impl DistributedGAWorker {
         request: &protocol::broker::messages::ChromosomeEvalRequest,
         chromosome: &AvellanedaStoikovChromosome,
     ) {
-        use data_prep::BinaryFileReader;
+        use data_prep::{BinaryFileReader, SlicedTickSource};
         use dataloader::TickSource;
         use backtest::SimulationLoop;
         use strategy::StrategyManager;
@@ -1144,18 +1175,42 @@ impl DistributedGAWorker {
         backtest_config.trading.initial_capital = request.initial_capital;
         backtest_config.analysis.skip_genetic_optimization = true;
         
-        // Run full streaming simulation
+        // Run final backtest on VALIDATE portion of data (test_end_idx to total_ticks)
+        // This is the held-out data that was never seen during training or walk-forward
         let mut sim_loop = SimulationLoop::new();
-        let backtest_result = sim_loop.run_streaming(
-            &mut strategy_manager,
-            &mut orderbook,
-            &mut portfolio,
-            &mut risk_manager,
-            &reader,
-            &request.symbol,
-            &request.exchange,
-            &backtest_config,
-        ).await;
+        let backtest_result = if request.test_end_idx > 0 && request.total_ticks > request.test_end_idx {
+            // Use only validate portion: [test_end_idx, total_ticks)
+            let validate_source = SlicedTickSource::new(
+                &reader, 
+                request.test_end_idx as usize, 
+                request.total_ticks as usize,
+            );
+            log_info!(MAIN_LOGGER, "Final backtest on VALIDATE data: ticks [{}, {})", 
+                request.test_end_idx, request.total_ticks);
+            sim_loop.run_streaming(
+                &mut strategy_manager,
+                &mut orderbook,
+                &mut portfolio,
+                &mut risk_manager,
+                &validate_source,
+                &request.symbol,
+                &request.exchange,
+                &backtest_config,
+            ).await
+        } else {
+            // Backward compatibility: use full data
+            log_info!(MAIN_LOGGER, "Final backtest on full data (no split configured)");
+            sim_loop.run_streaming(
+                &mut strategy_manager,
+                &mut orderbook,
+                &mut portfolio,
+                &mut risk_manager,
+                &reader,
+                &request.symbol,
+                &request.exchange,
+                &backtest_config,
+            ).await
+        };
         
         // Extract metrics from backtest result
         let net_pnl = backtest_result.total_pnl.to_f64().unwrap_or(0.0);
@@ -1193,9 +1248,18 @@ impl DistributedGAWorker {
         };
         
         // Run Walk-Forward analysis if requested
+        // Walk-forward runs on the TEST portion of data: [train_end_idx, test_end_idx)
         let walk_forward_results = if request.run_walk_forward {
-            log_info!(MAIN_LOGGER, "Running Walk-Forward analysis for job {}", request.job_id);
+            log_info!(MAIN_LOGGER, "Running Walk-Forward analysis for job {} on TEST data [{}, {})", 
+                request.job_id, request.train_end_idx, request.test_end_idx);
             let wf_start = Instant::now();
+            
+            // Specify the test data range for walk-forward
+            let (wf_start_idx, wf_end_idx) = if request.train_end_idx > 0 && request.test_end_idx > request.train_end_idx {
+                (Some(request.train_end_idx as usize), Some(request.test_end_idx as usize))
+            } else {
+                (None, None) // Use full data (backward compatibility)
+            };
             
             // Use 30-day train, 7-day test windows with 7-day steps
             let wf_summary = walkforward::run_walkforward_for_chromosome(
@@ -1207,6 +1271,8 @@ impl DistributedGAWorker {
                 Some(30), // train_days
                 Some(7),  // test_days
                 Some(7),  // step_days
+                wf_start_idx,
+                wf_end_idx,
             ).await;
             
             log_info!(MAIN_LOGGER, "Walk-Forward complete: windows={}, avg_sharpe={:.4}, consistency={:.4}, elapsed={:.2}s",

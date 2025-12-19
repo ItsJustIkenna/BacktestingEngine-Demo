@@ -69,6 +69,12 @@ pub struct DistributedGAConfig {
     pub start_time: String,
     /// End time for data query (ISO 8601 format)
     pub end_time: String,
+    /// Train data ratio (default 0.6 = 60%)
+    pub train_ratio: f64,
+    /// Test data ratio for walk-forward (default 0.2 = 20%)
+    pub test_ratio: f64,
+    /// Validate data ratio for final held-out test (default 0.2 = 20%)
+    pub validate_ratio: f64,
 }
 
 /// Worker capacity tracking
@@ -96,6 +102,12 @@ pub struct DistributedGACoordinator {
     workers: Arc<RwLock<HashMap<String, WorkerInfo>>>,
     /// Data cache key (set after broadcasting data)
     data_cache_key: Option<String>,
+    /// Train data end index (GA uses [0, train_end_idx))
+    train_end_idx: i64,
+    /// Test data end index (walk-forward uses [train_end_idx, test_end_idx))
+    test_end_idx: i64,
+    /// Total tick count in the dataset
+    total_ticks: i64,
 }
 
 impl DistributedGACoordinator {
@@ -111,6 +123,49 @@ impl DistributedGACoordinator {
             job_id,
             workers: Arc::new(RwLock::new(HashMap::new())),
             data_cache_key: None,
+            train_end_idx: 0,
+            test_end_idx: 0,
+            total_ticks: 0,
+        }
+    }
+    
+    /// Set data split indices (called after data is loaded)
+    pub fn set_data_splits(&mut self, total_ticks: i64) {
+        let train_ratio = self.config.train_ratio;
+        let test_ratio = self.config.test_ratio;
+        
+        self.total_ticks = total_ticks;
+        self.train_end_idx = (total_ticks as f64 * train_ratio) as i64;
+        self.test_end_idx = (total_ticks as f64 * (train_ratio + test_ratio)) as i64;
+        
+        log_info_structured!(MAIN_LOGGER, "GA_DATA_SPLIT_CONFIG",
+            "event" => "GA_DATA_SPLIT_CONFIG",
+            "job_id" => &self.job_id,
+            "total_ticks" => total_ticks,
+            "train_end_idx" => self.train_end_idx,
+            "test_end_idx" => self.test_end_idx,
+            "train_ratio" => train_ratio,
+            "test_ratio" => test_ratio,
+            "validate_ratio" => self.config.validate_ratio
+        );
+    }
+    
+    /// Probe binary file to get tick count for data splits
+    pub fn probe_tick_count(&self) -> Option<i64> {
+        let data_dir = std::env::var("DATA_DIR")
+            .unwrap_or_else(|_| "/data/historical".to_string());
+        let filename = format!("{}_{}.bin", 
+            self.config.symbol.replace('/', "_"), 
+            self.config.exchange);
+        let path = std::path::PathBuf::from(data_dir).join(filename);
+        
+        if path.exists() {
+            match data_prep::BinaryFileReader::open(&path) {
+                Ok(reader) => Some(reader.tick_count() as i64),
+                Err(_) => None,
+            }
+        } else {
+            None
         }
     }
     
@@ -565,6 +620,10 @@ impl DistributedGACoordinator {
             is_final_evaluation: false,
             run_monte_carlo: false,
             run_walk_forward: false,
+            // Pass data split indices for train/test/validate separation
+            train_end_idx: self.train_end_idx,
+            test_end_idx: self.test_end_idx,
+            total_ticks: self.total_ticks,
         })
     }
     
@@ -597,6 +656,10 @@ impl DistributedGACoordinator {
             is_final_evaluation: true,
             run_monte_carlo,
             run_walk_forward,
+            // Pass data split indices for train/test/validate separation
+            train_end_idx: self.train_end_idx,
+            test_end_idx: self.test_end_idx,
+            total_ticks: self.total_ticks,
         };
         
         log_info_structured!(MAIN_LOGGER, "GA_FINAL_EVAL_REQUEST",

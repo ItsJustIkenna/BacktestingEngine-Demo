@@ -367,6 +367,9 @@ mod tests {
             stop_loss_pct: 0.003,
             min_spread_bps: 15.0,
             max_trades_per_minute: 30.0,
+            train_ratio: 0.6,
+            test_ratio: 0.2,
+            validate_ratio: 0.2,
         };
 
         // Need to set up default for BacktestJobParams
@@ -424,6 +427,9 @@ mod tests {
             stop_loss_pct: 0.003,
             min_spread_bps: 15.0,
             max_trades_per_minute: 30.0,
+            train_ratio: 0.6,
+            test_ratio: 0.2,
+            validate_ratio: 0.2,
         };
 
         let job_id = broker.submit_job(params).await;

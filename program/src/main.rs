@@ -319,6 +319,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     end_time: job.params.end_date.clone().unwrap_or_default(),
                                     initial_capital: job.params.initial_capital,
                                     cache_ttl_seconds: 3600,
+                                    // Data split ratios for train/test/validate
+                                    train_ratio: job.params.train_ratio,
+                                    test_ratio: job.params.test_ratio,
+                                    validate_ratio: job.params.validate_ratio,
                                 };
                                 
                                 let mut coordinator = DistributedGACoordinator::new(
@@ -332,6 +336,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 match coordinator.request_data_load().await {
                                     Ok(cache_key) => {
                                         eprintln!("✅ [COORDINATOR] Data loaded with cache_key: {}", cache_key);
+                                        
+                                        // Set up data splits for train/test/validate
+                                        if let Some(tick_count) = coordinator.probe_tick_count() {
+                                            coordinator.set_data_splits(tick_count);
+                                            eprintln!("📊 [COORDINATOR] Data split: {} ticks, train=60%, test=20%, validate=20%", tick_count);
+                                        } else {
+                                            eprintln!("⚠️ [COORDINATOR] Could not probe tick count - using full data for all phases");
+                                        }
                                         
                                         // Now run the distributed GA
                                         match coordinator.run().await {

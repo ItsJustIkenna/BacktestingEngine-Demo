@@ -47,7 +47,7 @@ pub mod feature_compute;
 pub mod tick;
 
 // Re-export main types
-pub use binary_format::{BinaryFileHeader, BinaryFileWriter, BinaryFileReader, HEADER_SIZE};
+pub use binary_format::{BinaryFileHeader, BinaryFileWriter, BinaryFileReader, SlicedTickSource, HEADER_SIZE};
 pub use db_streamer::DatabaseStreamer;
 pub use feature_compute::FeatureComputer;
 pub use tick::SimulationTick;

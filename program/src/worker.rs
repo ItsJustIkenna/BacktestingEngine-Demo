@@ -1472,6 +1472,9 @@ impl Worker {
                 cache_ttl_seconds: 3600, // 1 hour cache TTL
                 start_time: params.start_date.clone().unwrap_or_else(|| "2024-01-01T00:00:00Z".to_string()),
                 end_time: params.end_date.clone().unwrap_or_else(|| "2024-12-31T23:59:59Z".to_string()),
+                train_ratio: params.train_ratio,
+                test_ratio: params.test_ratio,
+                validate_ratio: params.validate_ratio,
             };
             eprintln!("🧬 Created DistributedGAConfig with start_time={}, end_time={}", 
                 distributed_config.start_time, distributed_config.end_time);

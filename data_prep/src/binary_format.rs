@@ -319,6 +319,44 @@ impl dataloader::TickSource for BinaryFileReader {
     }
 }
 
+/// A sliced view of a BinaryFileReader that only exposes a subset of ticks.
+/// Used for train/test/validate data splits.
+pub struct SlicedTickSource<'a> {
+    reader: &'a BinaryFileReader,
+    start_idx: usize,
+    end_idx: usize,
+}
+
+impl<'a> SlicedTickSource<'a> {
+    /// Create a new sliced view of the tick source.
+    /// Only ticks in range [start_idx, end_idx) will be accessible.
+    pub fn new(reader: &'a BinaryFileReader, start_idx: usize, end_idx: usize) -> Self {
+        let end_idx = end_idx.min(reader.tick_count() as usize);
+        let start_idx = start_idx.min(end_idx);
+        Self { reader, start_idx, end_idx }
+    }
+}
+
+impl<'a> dataloader::TickSource for SlicedTickSource<'a> {
+    type TickType = SimulationTick;
+    
+    fn len(&self) -> usize {
+        self.end_idx.saturating_sub(self.start_idx)
+    }
+    
+    fn get(&self, index: usize) -> Option<&Self::TickType> {
+        if index < self.len() {
+            self.reader.get(self.start_idx + index)
+        } else {
+            None
+        }
+    }
+    
+    fn iter(&self) -> impl Iterator<Item = &Self::TickType> {
+        (0..self.len()).filter_map(|i| self.get(i))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

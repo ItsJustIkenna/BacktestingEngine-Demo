@@ -182,6 +182,10 @@ impl PostgresQueue {
                 monte_carlo_enabled: true,
                 monte_carlo_runs: 1000,
                 walk_forward_enabled: true,
+                // Data split ratios - defaults for train/test/validate
+                train_ratio: 0.6,
+                test_ratio: 0.2,
+                validate_ratio: 0.2,
                 // Profitability criteria - use defaults when loading from DB
                 auto_save_profitable: true,
                 min_sharpe_ratio: 1.0,
@@ -1042,6 +1046,9 @@ mod tests {
             stop_loss_pct: 0.003,
             min_spread_bps: 15.0,
             max_trades_per_minute: 30.0,
+            train_ratio: 0.6,
+            test_ratio: 0.2,
+            validate_ratio: 0.2,
         };
         
         let job_id = queue.submit_job(params).await.unwrap();

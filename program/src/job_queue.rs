@@ -107,6 +107,17 @@ pub struct BacktestJobParams {
     #[serde(default = "default_walk_forward_enabled")]
     pub walk_forward_enabled: bool,
     
+    // Data split configuration for train/test/validate
+    /// Fraction of data used for GA training (default 0.6 = 60%)
+    #[serde(default = "default_train_ratio")]
+    pub train_ratio: f64,
+    /// Fraction of data used for walk-forward testing (default 0.2 = 20%)
+    #[serde(default = "default_test_ratio")]
+    pub test_ratio: f64,
+    /// Fraction of data used for final validation (default 0.2 = 20%)
+    #[serde(default = "default_validate_ratio")]
+    pub validate_ratio: f64,
+    
     // Profitability criteria for auto-saving strategies to database
     #[serde(default = "default_auto_save_enabled")]
     pub auto_save_profitable: bool,
@@ -162,6 +173,9 @@ fn default_max_trades_per_minute() -> f64 { 30.0 }  // 30 trades per minute max
 fn default_monte_carlo_enabled() -> bool { true }
 fn default_monte_carlo_runs() -> usize { 1000 }
 fn default_walk_forward_enabled() -> bool { true } // Re-enabled - now uses sampled data (200K events/window max)
+fn default_train_ratio() -> f64 { 0.6 }  // 60% for GA optimization
+fn default_test_ratio() -> f64 { 0.2 }   // 20% for walk-forward analysis
+fn default_validate_ratio() -> f64 { 0.2 }  // 20% for final held-out validation
 fn default_auto_save_enabled() -> bool { true }
 fn default_min_sharpe_ratio() -> f64 { 1.0 }
 fn default_min_profit_factor() -> f64 { 1.2 }
@@ -201,6 +215,9 @@ impl Default for BacktestJobParams {
             monte_carlo_enabled: default_monte_carlo_enabled(),
             monte_carlo_runs: default_monte_carlo_runs(),
             walk_forward_enabled: default_walk_forward_enabled(),
+            train_ratio: default_train_ratio(),
+            test_ratio: default_test_ratio(),
+            validate_ratio: default_validate_ratio(),
             auto_save_profitable: default_auto_save_enabled(),
             min_sharpe_ratio: default_min_sharpe_ratio(),
             min_profit_factor: default_min_profit_factor(),
