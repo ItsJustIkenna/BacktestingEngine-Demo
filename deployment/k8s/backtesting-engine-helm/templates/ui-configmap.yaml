@@ -43,6 +43,9 @@ data:
             proxy_set_header X-Forwarded-Proto $scheme;
             proxy_cache_bypass $http_upgrade;
             
+            # Inject API key for backend authentication (from environment)
+            proxy_set_header X-API-Key "${UI_API_KEY}";
+            
             # Timeouts for long-running backtests
             proxy_connect_timeout 60s;
             proxy_send_timeout 300s;
