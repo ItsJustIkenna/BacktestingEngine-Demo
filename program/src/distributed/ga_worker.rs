@@ -757,10 +757,17 @@ impl DistributedGAWorker {
         use riskmanager::RiskManager;
         use bigdecimal::{BigDecimal, FromPrimitive};
         
+        let sim_start = std::time::Instant::now();
+        println!("🚀 [WORKER {}] Starting streaming sim, train_end_idx={}", self.worker_id, train_end_idx);
+        
         // Load binary file as TickSource (mmap, zero-copy)
         let reader = match BinaryFileReader::open(path) {
-            Ok(r) => r,
+            Ok(r) => {
+                println!("📂 [WORKER {}] Binary file opened, {} ticks total", self.worker_id, r.len());
+                r
+            }
             Err(e) => {
+                println!("❌ [WORKER {}] Binary file error: {}", self.worker_id, e);
                 log_error_structured!(MAIN_LOGGER, "BINARY_FILE_ERROR",
                     "event" => "BINARY_FILE_ERROR",
                     "worker_id" => &self.worker_id,
@@ -851,11 +858,14 @@ impl DistributedGAWorker {
         backtest_config.trading.initial_capital = initial_capital;
         backtest_config.analysis.skip_genetic_optimization = true; // We ARE the GA
         
+        println!("⚙️ [WORKER {}] Strategy setup complete, starting simulation...", self.worker_id);
+        
         // Run streaming simulation - use SlicedTickSource if train_end_idx is set
         let mut sim_loop = SimulationLoop::new();
         let result = if train_end_idx > 0 {
             // Use only train portion of data
             let sliced = SlicedTickSource::new(&reader, 0, train_end_idx as usize);
+            println!("📊 [WORKER {}] Running sim on {} ticks (sliced)", self.worker_id, sliced.len());
             sim_loop.run_streaming(
                 &mut strategy_manager,
                 &mut orderbook,
@@ -868,6 +878,7 @@ impl DistributedGAWorker {
             ).await
         } else {
             // Use full data (backward compatibility)
+            println!("📊 [WORKER {}] Running sim on full {} ticks", self.worker_id, reader.len());
             sim_loop.run_streaming(
                 &mut strategy_manager,
                 &mut orderbook,
@@ -880,6 +891,9 @@ impl DistributedGAWorker {
             ).await
         };
         
+        let sim_elapsed = sim_start.elapsed();
+        println!("✅ [WORKER {}] Simulation complete in {:?}, calculating fitness...", self.worker_id, sim_elapsed);
+        
         // Calculate fitness and extract metrics
         let fitness = calculate_comprehensive_fitness(&result, initial_capital);
         let net_pnl = result.total_pnl.to_f64().unwrap_or(0.0);
@@ -888,6 +902,8 @@ impl DistributedGAWorker {
         let max_dd = result.max_drawdown.to_f64().unwrap_or(0.0);
         let win_rate = result.win_rate.unwrap_or(0.0);
         let profit_factor = result.profit_factor.unwrap_or(0.0);
+        
+        println!("📈 [WORKER {}] Fitness={:.4}, PnL={:.2}, Trades={}", self.worker_id, fitness, net_pnl, num_trades);
         
         FitnessResult::with_metrics(
             fitness,
