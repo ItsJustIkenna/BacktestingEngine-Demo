@@ -696,3 +696,312 @@ fn create_strategy_with_params(_params: AvellanedaStoikovParams) -> Result<std::
     
     Ok(Arc::new(strategy))
 }
+
+/// Walk-forward analysis for a specific chromosome using binary tick data
+/// 
+/// This is used in the final evaluation after GA optimization to validate
+/// that the best chromosome performs well out-of-sample across multiple time periods.
+/// 
+/// # Arguments
+/// * `reader` - BinaryFileReader providing tick data
+/// * `chromosome` - The chromosome (parameters) to validate
+/// * `symbol` - Trading symbol
+/// * `exchange` - Exchange name  
+/// * `initial_capital` - Starting capital
+/// * `train_days` - Number of days for training windows (default: 30)
+/// * `test_days` - Number of days for test windows (default: 7)
+/// * `step_days` - Step size between windows (default: 7)
+/// 
+/// # Returns
+/// WalkForwardSummary with performance across all windows
+pub async fn run_walkforward_for_chromosome(
+    reader: &data_prep::BinaryFileReader,
+    chromosome: &AvellanedaStoikovChromosome,
+    symbol: &str,
+    exchange: &str,
+    initial_capital: f64,
+    train_days: Option<i64>,
+    test_days: Option<i64>,
+    step_days: Option<i64>,
+) -> WalkForwardSummary {
+    use dataloader::{TickSource, Tick};
+    use crate::window::generate_windows;
+    
+    let train_days = train_days.unwrap_or(30);
+    let test_days = test_days.unwrap_or(7);
+    let step_days = step_days.unwrap_or(7);
+    
+    // Get data boundaries from binary file
+    let total_ticks = reader.len();
+    if total_ticks == 0 {
+        crate::log_warn!(WALKFORWARD_LOGGER, "WALKFORWARD_EMPTY_DATA | No ticks in binary file");
+        return WalkForwardSummary::new(vec![]);
+    }
+    
+    let first_tick = reader.get(0).expect("has ticks");
+    let last_tick = reader.get(total_ticks - 1).expect("has ticks");
+    let start_date = first_tick.timestamp().date_naive();
+    let end_date = last_tick.timestamp().date_naive();
+    
+    crate::log_info!(WALKFORWARD_LOGGER, "WALKFORWARD_START | {} to {} | train={}d test={}d step={}d",
+        start_date, end_date, train_days, test_days, step_days);
+    
+    // Generate windows
+    let train_size = chrono::Duration::days(train_days);
+    let test_size = chrono::Duration::days(test_days);
+    let step_size = chrono::Duration::days(step_days);
+    let windows = generate_windows(start_date, end_date, train_size, test_size, step_size);
+    
+    if windows.is_empty() {
+        crate::log_warn!(WALKFORWARD_LOGGER, "WALKFORWARD_NO_WINDOWS | Data range too short for walk-forward");
+        return WalkForwardSummary::new(vec![]);
+    }
+    
+    crate::log_info!(WALKFORWARD_LOGGER, "WALKFORWARD_WINDOWS | {} windows generated", windows.len());
+    
+    // Build date->index mapping for efficient slicing
+    let mut date_indices: std::collections::BTreeMap<NaiveDate, usize> = std::collections::BTreeMap::new();
+    let mut last_date: Option<NaiveDate> = None;
+    for i in 0..total_ticks {
+        if let Some(tick) = reader.get(i) {
+            let tick_date = tick.timestamp().date_naive();
+            if last_date.map_or(true, |d| d != tick_date) {
+                date_indices.entry(tick_date).or_insert(i);
+                last_date = Some(tick_date);
+            }
+        }
+    }
+    
+    // Convert chromosome to params
+    let first_price = first_tick.price();
+    let order_size_units = (initial_capital * chromosome.order_size_pct) / first_price;
+    let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(exchange);
+    
+    let params = AvellanedaStoikovParams {
+        risk_aversion: chromosome.risk_aversion,
+        order_size: order_size_units,
+        order_size_pct: chromosome.order_size_pct,
+        initial_capital,
+        window_ms: chromosome.window_ms,
+        min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms,
+        fee_rate: exchange_fee_config.maker_fee,
+        inventory_target: chromosome.inventory_target,
+        volatility_cap: chromosome.volatility_cap,
+        time_horizon_minutes: chromosome.time_horizon_minutes,
+        market_depth_k: chromosome.market_depth_k,
+        min_spread_bps: chromosome.min_spread_bps,
+        max_trades_per_minute: chromosome.max_trades_per_minute,
+        take_profit_pct: chromosome.take_profit_pct,
+        stop_loss_pct: chromosome.stop_loss_pct,
+        volatility_adjustment_factor: chromosome.volatility_adjustment_factor,
+        inventory_penalty_factor: chromosome.inventory_penalty_factor,
+        trend_sensitivity: chromosome.trend_sensitivity,
+        flow_sensitivity: chromosome.flow_sensitivity,
+        ..AvellanedaStoikovParams::default()
+    };
+    
+    // Process each window
+    let mut window_results = Vec::with_capacity(windows.len());
+    
+    for (window_idx, window) in windows.iter().enumerate() {
+        crate::log_info!(WALKFORWARD_LOGGER, "WALKFORWARD_WINDOW | {}/{} | test={} to {}",
+            window_idx + 1, windows.len(), window.test_start, window.test_end);
+        
+        // Find tick range for test window only (we're validating the chromosome, not reoptimizing)
+        let test_start_idx = date_indices.range(..=window.test_start).next_back()
+            .map(|(_, &idx)| idx).unwrap_or(0);
+        let test_end_idx = date_indices.range(window.test_end..).next()
+            .map(|(_, &idx)| idx).unwrap_or(total_ticks);
+        
+        // Run backtest on test window with the chromosome's parameters
+        let test_metrics = run_backtest_on_range(
+            reader,
+            test_start_idx,
+            test_end_idx,
+            &params,
+            initial_capital,
+        );
+        
+        window_results.push(WalkForwardWindowResult {
+            train_start: window.train_start,
+            train_end: window.train_end,
+            test_start: window.test_start,
+            test_end: window.test_end,
+            best_params: serde_json::json!({
+                "risk_aversion": chromosome.risk_aversion,
+                "order_size_pct": chromosome.order_size_pct,
+                "window_ms": chromosome.window_ms,
+                "inventory_target": chromosome.inventory_target,
+                "volatility_cap": chromosome.volatility_cap,
+                "time_horizon_minutes": chromosome.time_horizon_minutes,
+            }),
+            test_metrics,
+        });
+    }
+    
+    let summary = WalkForwardSummary::new(window_results);
+    
+    crate::log_info!(WALKFORWARD_LOGGER, "WALKFORWARD_COMPLETE | windows={} | avg_sharpe={:.4} | consistency={:.4}",
+        summary.num_windows, summary.average_test_sharpe, summary.consistency_score);
+    
+    summary
+}
+
+/// Run backtest on a specific tick index range
+fn run_backtest_on_range(
+    reader: &data_prep::BinaryFileReader,
+    start_idx: usize,
+    end_idx: usize,
+    params: &AvellanedaStoikovParams,
+    initial_capital: f64,
+) -> PerformanceMetrics {
+    use dataloader::{TickSource, Tick};
+    
+    let range_len = end_idx.saturating_sub(start_idx);
+    if range_len == 0 {
+        return PerformanceMetrics::default();
+    }
+    
+    // Get initial price
+    let first_tick = match reader.get(start_idx) {
+        Some(t) => t,
+        None => return PerformanceMetrics::default(),
+    };
+    let initial_price = first_tick.price();
+    
+    // Initialize portfolio state
+    let inventory_pct = 0.5;
+    let mut cash = initial_capital * (1.0 - inventory_pct);
+    let mut inventory = (initial_capital * inventory_pct) / initial_price;
+    
+    let mut equity_curve: Vec<f64> = Vec::with_capacity(range_len / 1000 + 1);
+    let mut num_trades = 0;
+    let mut wins = 0;
+    let mut max_equity = initial_capital;
+    let mut max_drawdown = 0.0f64;
+    
+    // Volatility tracking
+    let mut price_window: Vec<f64> = Vec::with_capacity(100);
+    
+    equity_curve.push(initial_capital);
+    
+    for i in start_idx..end_idx {
+        let tick = match reader.get(i) {
+            Some(t) => t,
+            None => continue,
+        };
+        
+        let price = tick.price();
+        let quantity = tick.quantity();
+        let is_sell = matches!(tick.side(), dataloader::Side::Sell);
+        
+        // Update volatility estimate
+        price_window.push(price);
+        if price_window.len() > 100 {
+            price_window.remove(0);
+        }
+        
+        let volatility = if price_window.len() > 1 {
+            let returns: Vec<f64> = price_window.windows(2)
+                .map(|w| (w[1] / w[0]).ln())
+                .collect();
+            let mean = returns.iter().sum::<f64>() / returns.len() as f64;
+            let variance = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / returns.len() as f64;
+            variance.sqrt().min(params.volatility_cap)
+        } else {
+            0.01
+        };
+        
+        // Calculate A-S optimal spread
+        let inventory_ratio = inventory / (initial_capital / price);
+        let inventory_skew = params.risk_aversion * inventory_ratio * volatility * volatility;
+        let base_spread = params.risk_aversion * volatility * volatility;
+        
+        let bid_offset = base_spread + inventory_skew;
+        let ask_offset = base_spread - inventory_skew;
+        
+        let our_bid = price * (1.0 - bid_offset.max(params.min_spread_bps / 10000.0));
+        let our_ask = price * (1.0 + ask_offset.max(params.min_spread_bps / 10000.0));
+        
+        // Simulate fills based on market trades
+        if is_sell && price <= our_bid {
+            // Market sell hits our bid - we buy
+            let fill_qty = quantity.min(cash / price);
+            if fill_qty > 0.0 {
+                let trade_cost = fill_qty * price * (1.0 + params.fee_rate);
+                cash -= trade_cost;
+                inventory += fill_qty;
+                num_trades += 1;
+            }
+        } else if !is_sell && price >= our_ask {
+            // Market buy hits our ask - we sell
+            let fill_qty = quantity.min(inventory);
+            if fill_qty > 0.0 {
+                let trade_proceeds = fill_qty * price * (1.0 - params.fee_rate);
+                let cost_basis = fill_qty * initial_price; // Simplified
+                if trade_proceeds > cost_basis {
+                    wins += 1;
+                }
+                cash += trade_proceeds;
+                inventory -= fill_qty;
+                num_trades += 1;
+            }
+        }
+        
+        // Track equity (every 1000 ticks)
+        if (i - start_idx) % 1000 == 0 {
+            let equity = cash + inventory * price;
+            equity_curve.push(equity);
+            
+            if equity > max_equity {
+                max_equity = equity;
+            }
+            let drawdown = (max_equity - equity) / max_equity;
+            if drawdown > max_drawdown {
+                max_drawdown = drawdown;
+            }
+        }
+    }
+    
+    // Final equity calculation
+    let final_price = reader.get(end_idx.saturating_sub(1))
+        .map(|t| t.price())
+        .unwrap_or(initial_price);
+    let final_equity = cash + inventory * final_price;
+    let total_pnl = final_equity - initial_capital;
+    
+    // Calculate Sharpe ratio from equity curve
+    let sharpe = if equity_curve.len() > 1 {
+        let returns: Vec<f64> = equity_curve.windows(2)
+            .map(|w| (w[1] - w[0]) / w[0])
+            .collect();
+        let mean_return = returns.iter().sum::<f64>() / returns.len() as f64;
+        let std_return = {
+            let variance = returns.iter().map(|r| (r - mean_return).powi(2)).sum::<f64>() / returns.len() as f64;
+            variance.sqrt()
+        };
+        if std_return > 0.0 {
+            mean_return / std_return * (252.0_f64).sqrt() // Annualized
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
+    
+    let win_rate = if num_trades > 0 {
+        wins as f64 / num_trades as f64
+    } else {
+        0.0
+    };
+    
+    PerformanceMetrics {
+        net_profit: total_pnl,
+        sharpe_ratio: sharpe,
+        max_drawdown,
+        number_of_trades: num_trades,
+        average_trade_return: if num_trades > 0 { total_pnl / num_trades as f64 } else { 0.0 },
+        win_rate,
+        ..Default::default()
+    }
+}

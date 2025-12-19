@@ -562,7 +562,94 @@ impl DistributedGACoordinator {
             exchange: self.config.exchange.clone(),
             initial_capital: self.config.initial_capital,
             data_cache_key: cache_key.to_string(),
+            is_final_evaluation: false,
+            run_monte_carlo: false,
+            run_walk_forward: false,
         })
+    }
+    
+    /// Send a final evaluation request for the best chromosome
+    /// 
+    /// This runs a full backtest with Monte Carlo and Walk-Forward analysis
+    /// to get comprehensive metrics for the final result.
+    pub async fn run_final_evaluation(
+        &mut self,
+        chromosome: &AvellanedaStoikovChromosome,
+        run_monte_carlo: bool,
+        run_walk_forward: bool,
+    ) -> Result<protocol::broker::messages::ChromosomeEvalResult, CoordinatorError> {
+        let cache_key = self.data_cache_key.clone()
+            .ok_or(CoordinatorError::DataNotBroadcast)?;
+        
+        let params = serde_json::to_vec(chromosome)
+            .map_err(|e| CoordinatorError::SerializationError(e.to_string()))?;
+        
+        let request = protocol::broker::messages::ChromosomeEvalRequest {
+            job_id: self.job_id.clone(),
+            generation: -1, // Indicates final evaluation
+            chromosome_id: 0,
+            total_chromosomes: 1,
+            chromosome_params: params,
+            symbol: self.config.symbol.clone(),
+            exchange: self.config.exchange.clone(),
+            initial_capital: self.config.initial_capital,
+            data_cache_key: cache_key,
+            is_final_evaluation: true,
+            run_monte_carlo,
+            run_walk_forward,
+        };
+        
+        log_info_structured!(MAIN_LOGGER, "GA_FINAL_EVAL_REQUEST",
+            "event" => "GA_FINAL_EVAL_REQUEST",
+            "job_id" => &self.job_id,
+            "run_monte_carlo" => run_monte_carlo,
+            "run_walk_forward" => run_walk_forward
+        );
+        
+        // Subscribe to results channel
+        let mut result_receiver = self.broker.subscribe_chromosome_results();
+        
+        // Publish the request
+        self.broker.publish_chromosome_request(request).await
+            .map_err(|e| CoordinatorError::BrokerError(e.to_string()))?;
+        
+        // Wait for result with timeout
+        let timeout = Duration::from_secs(EVAL_TIMEOUT_SECS);
+        let start = Instant::now();
+        
+        loop {
+            match tokio::time::timeout(
+                Duration::from_secs(30),
+                result_receiver.recv()
+            ).await {
+                Ok(Ok(result)) => {
+                    if result.job_id == self.job_id && result.is_final_evaluation {
+                        log_info_structured!(MAIN_LOGGER, "GA_FINAL_EVAL_COMPLETE",
+                            "event" => "GA_FINAL_EVAL_COMPLETE",
+                            "job_id" => &self.job_id,
+                            "net_pnl" => result.net_pnl,
+                            "sharpe_ratio" => result.sharpe_ratio,
+                            "num_trades" => result.num_trades
+                        );
+                        return Ok(result);
+                    }
+                }
+                Ok(Err(_)) => {
+                    return Err(CoordinatorError::BrokerError(
+                        "Channel closed while waiting for final evaluation".to_string()
+                    ));
+                }
+                Err(_) => {
+                    // Timeout on this recv, check overall timeout
+                    if start.elapsed() > timeout {
+                        return Err(CoordinatorError::Timeout(
+                            "Timeout waiting for final evaluation result".to_string()
+                        ));
+                    }
+                    continue;
+                }
+            }
+        }
     }
 }
 

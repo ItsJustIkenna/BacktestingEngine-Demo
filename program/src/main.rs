@@ -8,6 +8,9 @@ use program::api;
 use program::distributed::DistributedWorker;
 use program::distributed::ga_worker::DistributedGAWorker;
 
+// Walk-forward analysis
+use walkforward;
+
 #[derive(Parser)]
 #[command(name = "backtesting-engine")]
 #[command(version, about = "High-performance backtesting and optimization engine", long_about = None)]
@@ -333,62 +336,180 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         // Now run the distributed GA
                                         match coordinator.run().await {
                                             Ok((best_chromosome, best_fitness)) => {
-                                                eprintln!("✅ [COORDINATOR] Job {} completed: fitness={:.4}", job.id, best_fitness);
+                                                eprintln!("✅ [COORDINATOR] Job {} GA completed: fitness={:.4}", job.id, best_fitness);
+                                                eprintln!("🔄 [COORDINATOR] Running final evaluation with full backtest...");
                                                 
-                                                // Create a BacktestResult from the GA output
-                                                let result = program::job_queue::BacktestResult {
-                                                    job_id: job.id.clone(),
-                                                    strategy_type: Some(job.params.strategy_type.clone()),
-                                                    total_pnl: best_fitness * job.params.initial_capital, // Approximate
-                                                    sharpe_ratio: best_fitness, // Fitness is based on Sharpe
-                                                    max_drawdown: 0.0, // Not available from GA
-                                                    win_rate: 0.0,
-                                                    total_trades: 0,
-                                                    profit_factor: 1.0,
-                                                    equity_curve: vec![],
-                                                    completed_at: chrono::Utc::now(),
-                                                    strategy_params: Some(serde_json::json!({
-                                                        "risk_aversion": best_chromosome.risk_aversion,
-                                                        "order_size_pct": best_chromosome.order_size_pct,
-                                                        "window_ms": best_chromosome.window_ms,
-                                                        "inventory_target": best_chromosome.inventory_target,
-                                                        "time_horizon_minutes": best_chromosome.time_horizon_minutes,
-                                                        "market_depth_k": best_chromosome.market_depth_k,
-                                                        "take_profit_pct": best_chromosome.take_profit_pct,
-                                                        "stop_loss_pct": best_chromosome.stop_loss_pct,
-                                                        "fitness": best_fitness,
-                                                    })),
-                                                    start_date: job.params.start_date.clone(),
-                                                    end_date: job.params.end_date.clone(),
-                                                    // Default all other fields
-                                                    closed_trades: None,
-                                                    open_positions: None,
-                                                    realized_pnl: None,
-                                                    unrealized_pnl: None,
-                                                    annualized_return: None,
-                                                    volatility: None,
-                                                    sortino_ratio: None,
-                                                    calmar_ratio: None,
-                                                    avg_trade_return: None,
-                                                    best_trade: None,
-                                                    worst_trade: None,
-                                                    avg_time_in_trade: None,
-                                                    value_at_risk_95: None,
-                                                    expected_shortfall_95: None,
-                                                    max_drawdown_duration_days: None,
-                                                    current_drawdown: None,
-                                                    avg_drawdown: None,
-                                                    total_orders: None,
-                                                    filled_orders: None,
-                                                    cancelled_orders: None,
-                                                    avg_slippage: None,
-                                                    total_commission_paid: None,
-                                                    monte_carlo: None,
-                                                    walk_forward: None,
-                                                    inventory_metrics: None,
-                                                    execution_metrics: None,
-                                                    risk_halt_reason: None,
-                                                    metrics_profile: None,
+                                                // Run final evaluation to get real metrics
+                                                let final_result = coordinator.run_final_evaluation(
+                                                    &best_chromosome,
+                                                    job.params.monte_carlo_enabled,
+                                                    job.params.walk_forward_enabled,
+                                                ).await;
+                                                
+                                                let result = match final_result {
+                                                    Ok(eval_result) => {
+                                                        eprintln!("✅ [COORDINATOR] Final evaluation complete: PnL={:.2}, Sharpe={:.4}, trades={}",
+                                                            eval_result.net_pnl, eval_result.sharpe_ratio, eval_result.num_trades);
+                                                        
+                                                        // Parse Monte Carlo results if present - convert to MonteCarloSummary
+                                                        let monte_carlo: Option<program::job_queue::MonteCarloSummary> = if !eval_result.monte_carlo_results.is_empty() {
+                                                            serde_json::from_slice::<backtest::monte_carlo::MonteCarloResult>(&eval_result.monte_carlo_results)
+                                                                .ok()
+                                                                .map(|mc| program::job_queue::MonteCarloSummary {
+                                                                    num_runs: mc.num_runs,
+                                                                    mean_sharpe: mc.mean_metrics.sharpe_ratio,
+                                                                    stddev_sharpe: mc.stddev_metrics.sharpe_ratio,
+                                                                    var_95: mc.var_95,
+                                                                    cvar_95: mc.cvar_95,
+                                                                    confidence_lower: mc.percentile_metrics.get(&5).map(|m| m.sharpe_ratio).unwrap_or(0.0),
+                                                                    confidence_upper: mc.percentile_metrics.get(&95).map(|m| m.sharpe_ratio).unwrap_or(0.0),
+                                                                    data_points: mc.data_points,
+                                                                    var_unreliable: mc.var_unreliable,
+                                                                    p5_total_pnl: None,
+                                                                    p50_total_pnl: None,
+                                                                    p95_total_pnl: None,
+                                                                    p5_max_drawdown: None,
+                                                                    p50_max_drawdown: None,
+                                                                    p95_max_drawdown: None,
+                                                                    p50_sharpe: None,
+                                                                    p5_win_rate: None,
+                                                                    p50_win_rate: None,
+                                                                    p95_win_rate: None,
+                                                                })
+                                                        } else {
+                                                            None
+                                                        };
+                                                        
+                                                        // Parse Walk-Forward results if present - convert to job_queue WalkForwardSummary
+                                                        let walk_forward: Option<program::job_queue::WalkForwardSummary> = if !eval_result.walk_forward_results.is_empty() {
+                                                            serde_json::from_slice::<walkforward::WalkForwardSummary>(&eval_result.walk_forward_results)
+                                                                .ok()
+                                                                .map(|wf| program::job_queue::WalkForwardSummary {
+                                                                    periods_tested: wf.num_windows,
+                                                                    average_performance: wf.average_test_sharpe,
+                                                                    consistency_score: wf.consistency_score,
+                                                                    out_of_sample_degradation: 1.0 - wf.out_of_sample_performance_ratio,
+                                                                })
+                                                        } else {
+                                                            None
+                                                        };
+                                                        
+                                                        // Parse equity curve
+                                                        let equity_curve: Vec<f64> = serde_json::from_slice(&eval_result.equity_curve)
+                                                            .unwrap_or_default();
+                                                        
+                                                        program::job_queue::BacktestResult {
+                                                            job_id: job.id.clone(),
+                                                            strategy_type: Some(job.params.strategy_type.clone()),
+                                                            total_pnl: eval_result.net_pnl,
+                                                            sharpe_ratio: eval_result.sharpe_ratio,
+                                                            max_drawdown: eval_result.max_drawdown,
+                                                            win_rate: eval_result.win_rate,
+                                                            total_trades: eval_result.num_trades as usize,
+                                                            profit_factor: eval_result.profit_factor,
+                                                            equity_curve,
+                                                            completed_at: chrono::Utc::now(),
+                                                            strategy_params: Some(serde_json::json!({
+                                                                "risk_aversion": best_chromosome.risk_aversion,
+                                                                "order_size_pct": best_chromosome.order_size_pct,
+                                                                "window_ms": best_chromosome.window_ms,
+                                                                "inventory_target": best_chromosome.inventory_target,
+                                                                "time_horizon_minutes": best_chromosome.time_horizon_minutes,
+                                                                "market_depth_k": best_chromosome.market_depth_k,
+                                                                "take_profit_pct": best_chromosome.take_profit_pct,
+                                                                "stop_loss_pct": best_chromosome.stop_loss_pct,
+                                                                "fitness": best_fitness,
+                                                            })),
+                                                            start_date: job.params.start_date.clone(),
+                                                            end_date: job.params.end_date.clone(),
+                                                            closed_trades: Some(eval_result.closed_trades as usize),
+                                                            open_positions: None,
+                                                            realized_pnl: Some(eval_result.net_pnl),
+                                                            unrealized_pnl: None,
+                                                            annualized_return: None,
+                                                            volatility: None,
+                                                            sortino_ratio: None,
+                                                            calmar_ratio: None,
+                                                            avg_trade_return: None,
+                                                            best_trade: None,
+                                                            worst_trade: None,
+                                                            avg_time_in_trade: None,
+                                                            value_at_risk_95: None,
+                                                            expected_shortfall_95: None,
+                                                            max_drawdown_duration_days: None,
+                                                            current_drawdown: None,
+                                                            avg_drawdown: None,
+                                                            total_orders: Some(eval_result.total_orders),
+                                                            filled_orders: Some(eval_result.num_trades),
+                                                            cancelled_orders: None,
+                                                            avg_slippage: None,
+                                                            total_commission_paid: None,
+                                                            monte_carlo,
+                                                            walk_forward,
+                                                            inventory_metrics: None,
+                                                            execution_metrics: None,
+                                                            risk_halt_reason: None,
+                                                            metrics_profile: None,
+                                                        }
+                                                    }
+                                                    Err(e) => {
+                                                        eprintln!("⚠️ [COORDINATOR] Final evaluation failed: {:?}, using GA fitness only", e);
+                                                        // Fallback to basic result if final eval fails
+                                                        program::job_queue::BacktestResult {
+                                                            job_id: job.id.clone(),
+                                                            strategy_type: Some(job.params.strategy_type.clone()),
+                                                            total_pnl: best_fitness * job.params.initial_capital,
+                                                            sharpe_ratio: best_fitness,
+                                                            max_drawdown: 0.0,
+                                                            win_rate: 0.0,
+                                                            total_trades: 0,
+                                                            profit_factor: 1.0,
+                                                            equity_curve: vec![],
+                                                            completed_at: chrono::Utc::now(),
+                                                            strategy_params: Some(serde_json::json!({
+                                                                "risk_aversion": best_chromosome.risk_aversion,
+                                                                "order_size_pct": best_chromosome.order_size_pct,
+                                                                "window_ms": best_chromosome.window_ms,
+                                                                "inventory_target": best_chromosome.inventory_target,
+                                                                "time_horizon_minutes": best_chromosome.time_horizon_minutes,
+                                                                "market_depth_k": best_chromosome.market_depth_k,
+                                                                "take_profit_pct": best_chromosome.take_profit_pct,
+                                                                "stop_loss_pct": best_chromosome.stop_loss_pct,
+                                                                "fitness": best_fitness,
+                                                                "final_eval_error": format!("{:?}", e),
+                                                            })),
+                                                            start_date: job.params.start_date.clone(),
+                                                            end_date: job.params.end_date.clone(),
+                                                            closed_trades: None,
+                                                            open_positions: None,
+                                                            realized_pnl: None,
+                                                            unrealized_pnl: None,
+                                                            annualized_return: None,
+                                                            volatility: None,
+                                                            sortino_ratio: None,
+                                                            calmar_ratio: None,
+                                                            avg_trade_return: None,
+                                                            best_trade: None,
+                                                            worst_trade: None,
+                                                            avg_time_in_trade: None,
+                                                            value_at_risk_95: None,
+                                                            expected_shortfall_95: None,
+                                                            max_drawdown_duration_days: None,
+                                                            current_drawdown: None,
+                                                            avg_drawdown: None,
+                                                            total_orders: None,
+                                                            filled_orders: None,
+                                                            cancelled_orders: None,
+                                                            avg_slippage: None,
+                                                            total_commission_paid: None,
+                                                            monte_carlo: None,
+                                                            walk_forward: None,
+                                                            inventory_metrics: None,
+                                                            execution_metrics: None,
+                                                            risk_halt_reason: None,
+                                                            metrics_profile: None,
+                                                        }
+                                                    }
                                                 };
                                                 
                                                 // Save result

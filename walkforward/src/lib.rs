@@ -10,6 +10,10 @@ pub mod result;
 pub mod auto_export;
 pub mod logging_facade;
 
+// Re-export key functions for external use
+pub use runner::run_walkforward_for_chromosome;
+pub use result::{WalkForwardSummary, WalkForwardWindowResult};
+
 // Trading performance metrics for walkforward analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TradingMetrics {

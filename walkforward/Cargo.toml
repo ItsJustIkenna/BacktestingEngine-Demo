@@ -30,6 +30,7 @@ futures = "0.3"  # For async execution in Rayon threads
 genetic = { path = "../genetic" }
 config = { path = "../config" }
 dataloader = { path = "../dataloader" }
+data_prep = { path = "../data_prep" }
 orderbook = { path = "../orderbook" }
 portfoliomanager = { path = "../portfoliomanager" }
 riskmanager = { path = "../riskmanager" }

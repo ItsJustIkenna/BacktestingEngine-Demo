@@ -22,6 +22,8 @@ use std::path::PathBuf;
 use tokio::sync::{RwLock, Semaphore, Mutex};
 
 use dataloader::MarketData;
+use dataloader::Tick; // Needed for price() method
+use bigdecimal::ToPrimitive; // Needed for to_f64()
 use genetic::chromosome::AvellanedaStoikovChromosome;
 use genetic::FitnessResult;
 
@@ -617,8 +619,13 @@ impl DistributedGAWorker {
         
         let start = Instant::now();
         
-        log_debug!(MAIN_LOGGER, "Worker {} processing chromosome {}/{} for gen {}",
-            self.worker_id, request.chromosome_id, request.total_chromosomes, request.generation);
+        if request.is_final_evaluation {
+            log_info!(MAIN_LOGGER, "Worker {} running FINAL evaluation for job {} (MC={}, WF={})",
+                self.worker_id, request.job_id, request.run_monte_carlo, request.run_walk_forward);
+        } else {
+            log_debug!(MAIN_LOGGER, "Worker {} processing chromosome {}/{} for gen {}",
+                self.worker_id, request.chromosome_id, request.total_chromosomes, request.generation);
+        }
         
         // Deserialize chromosome
         let chromosome: AvellanedaStoikovChromosome = match serde_json::from_slice(&request.chromosome_params) {
@@ -629,7 +636,13 @@ impl DistributedGAWorker {
             }
         };
         
-        // Try binary file first (preferred: memory-efficient)
+        // For final evaluation, we need the full backtest result for Monte Carlo
+        if request.is_final_evaluation {
+            self.process_final_evaluation(&request, &chromosome).await;
+            return;
+        }
+        
+        // Regular GA evaluation - try binary file first (preferred: memory-efficient)
         let result = {
             let path_to_eval = {
                 let binary_cache = self.binary_cache.read().await;
@@ -667,7 +680,7 @@ impl DistributedGAWorker {
         
         let elapsed = start.elapsed();
         
-        // Send result
+        // Send result with actual metrics from FitnessResult
         let response = protocol::broker::messages::ChromosomeEvalResult {
             job_id: request.job_id,
             generation: request.generation,
@@ -676,12 +689,23 @@ impl DistributedGAWorker {
             success: true,
             error_message: String::new(),
             fitness: result.fitness,
-            net_pnl: 0.0,
-            sharpe_ratio: 0.0,
-            num_trades: 0,
-            max_drawdown: 0.0,
+            net_pnl: result.net_pnl,
+            sharpe_ratio: result.sharpe_ratio,
+            num_trades: result.num_trades,
+            max_drawdown: result.max_drawdown,
             equity_curve: serde_json::to_vec(&result.equity_curve).unwrap_or_default(),
             processing_duration_ms: elapsed.as_millis() as i64,
+            win_rate: result.win_rate,
+            profit_factor: result.profit_factor,
+            closed_trades: result.num_trades, // Same as num_trades for now
+            total_orders: 0, // Not tracked in FitnessResult
+            starting_capital: request.initial_capital,
+            ending_capital: request.initial_capital + result.net_pnl,
+            total_return_pct: (result.net_pnl / request.initial_capital) * 100.0,
+            monte_carlo_results: Vec::new(), // Only populated in final evaluation
+            walk_forward_results: Vec::new(), // Only populated in final evaluation
+            closed_trades_data: Vec::new(), // Only populated in final evaluation
+            is_final_evaluation: false,
         };
         
         let _ = self.broker.publish_chromosome_result(response).await;
@@ -814,9 +838,25 @@ impl DistributedGAWorker {
             &backtest_config,
         ).await;
         
-        // Calculate fitness
+        // Calculate fitness and extract metrics
         let fitness = calculate_comprehensive_fitness(&result, initial_capital);
-        FitnessResult::new(fitness, result.equity_curve)
+        let net_pnl = result.total_pnl.to_f64().unwrap_or(0.0);
+        let sharpe = result.sharpe_ratio.unwrap_or(0.0);
+        let num_trades = result.num_trades as i32;
+        let max_dd = result.max_drawdown.to_f64().unwrap_or(0.0);
+        let win_rate = result.win_rate.unwrap_or(0.0);
+        let profit_factor = result.profit_factor.unwrap_or(0.0);
+        
+        FitnessResult::with_metrics(
+            fitness,
+            result.equity_curve,
+            net_pnl,
+            sharpe,
+            num_trades,
+            max_dd,
+            win_rate,
+            profit_factor,
+        )
     }
     /// Evaluate a chromosome against the cached data
     async fn evaluate_chromosome(
@@ -966,6 +1006,251 @@ impl DistributedGAWorker {
             max_drawdown: 0.0,
             equity_curve: Vec::new(),
             processing_duration_ms: 0,
+            win_rate: 0.0,
+            profit_factor: 0.0,
+            closed_trades: 0,
+            total_orders: 0,
+            starting_capital: request.initial_capital,
+            ending_capital: request.initial_capital,
+            total_return_pct: 0.0,
+            monte_carlo_results: Vec::new(),
+            walk_forward_results: Vec::new(),
+            closed_trades_data: Vec::new(),
+            is_final_evaluation: false,
+        };
+        
+        let _ = self.broker.publish_chromosome_result(response).await;
+    }
+
+    /// Process a final evaluation request with full backtest, Monte Carlo, and Walk-Forward
+    async fn process_final_evaluation(
+        &self,
+        request: &protocol::broker::messages::ChromosomeEvalRequest,
+        chromosome: &AvellanedaStoikovChromosome,
+    ) {
+        use data_prep::BinaryFileReader;
+        use dataloader::TickSource;
+        use backtest::SimulationLoop;
+        use strategy::StrategyManager;
+        use strategy::strategies::avellaneda_stoikov::{AvellanedaStoikovStrategy, AvellanedaStoikovParams};
+        use orderbook::{OrderBook, OrderBookConfig};
+        use portfoliomanager::PortfolioState;
+        use riskmanager::RiskManager;
+        use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
+        
+        let start = Instant::now();
+        
+        // Get binary file path
+        let path = {
+            let binary_cache = self.binary_cache.read().await;
+            binary_cache.get(&request.data_cache_key)
+                .filter(|info| info.expires_at > Instant::now())
+                .map(|info| info.path.clone())
+        };
+        
+        let path = match path {
+            Some(p) => p,
+            None => {
+                self.send_error_result(request, "Binary data not in cache for final evaluation").await;
+                return;
+            }
+        };
+        
+        // Load binary file as TickSource
+        let reader = match BinaryFileReader::open(&path) {
+            Ok(r) => r,
+            Err(e) => {
+                self.send_error_result(request, &format!("Failed to open binary file: {}", e)).await;
+                return;
+            }
+        };
+        
+        // Get initial price from first tick (same pattern as evaluate_with_streaming_sim)
+        let initial_price = reader.get(0)
+            .map(|t| t.price())
+            .unwrap_or(50000.0);
+        
+        // Get first timestamp
+        let first_timestamp = reader.get(0)
+            .map(|t| t.timestamp())
+            .unwrap_or_else(chrono::Utc::now);
+        
+        // Setup strategy with chromosome params
+        let order_size_units = (request.initial_capital * chromosome.order_size_pct) / initial_price;
+        
+        let params = AvellanedaStoikovParams {
+            risk_aversion: chromosome.risk_aversion,
+            order_size: order_size_units,
+            order_size_pct: chromosome.order_size_pct,
+            initial_capital: request.initial_capital,
+            window_ms: chromosome.window_ms,
+            min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms,
+            inventory_target: chromosome.inventory_target,
+            volatility_cap: chromosome.volatility_cap,
+            time_horizon_minutes: chromosome.time_horizon_minutes,
+            market_depth_k: chromosome.market_depth_k,
+            min_spread_bps: chromosome.min_spread_bps,
+            max_trades_per_minute: chromosome.max_trades_per_minute,
+            take_profit_pct: chromosome.take_profit_pct,
+            stop_loss_pct: chromosome.stop_loss_pct,
+            volatility_adjustment_factor: chromosome.volatility_adjustment_factor,
+            inventory_penalty_factor: chromosome.inventory_penalty_factor,
+            trend_sensitivity: chromosome.trend_sensitivity,
+            flow_sensitivity: chromosome.flow_sensitivity,
+            ..AvellanedaStoikovParams::default()
+        };
+        
+        let strategy = AvellanedaStoikovStrategy::new(params);
+        let mut strategy_manager = StrategyManager::new();
+        
+        let strategy_config = strategy::StrategyConfig {
+            id: "final-eval".to_string(),
+            name: "Avellaneda-Stoikov".to_string(),
+            strategy_type: "AvellanedaStoikov".to_string(),
+            symbol: request.symbol.clone(),
+            exchange: request.exchange.clone(),
+            parameters: std::collections::HashMap::new(),
+            risk_limits: strategy::config::RiskLimits::default(),
+            enabled: true,
+        };
+        
+        if strategy_manager.register_strategy(strategy_config, strategy).is_err() {
+            self.send_error_result(request, "Failed to register strategy").await;
+            return;
+        }
+        
+        let mut orderbook = OrderBook::new(
+            request.symbol.clone(),
+            request.exchange.clone(),
+            OrderBookConfig::default(),
+        );
+        
+        // Set up portfolio with 50% inventory (same as GA evaluation)
+        let inventory_pct = 0.5;
+        let quote_balance = request.initial_capital * (1.0 - inventory_pct);
+        let base_value = request.initial_capital * inventory_pct;
+        let base_quantity = base_value / initial_price;
+        
+        let mut portfolio = PortfolioState::with_inventory(
+            request.symbol.clone(),
+            BigDecimal::from_f64(quote_balance).unwrap_or_default(),
+            base_quantity,
+            BigDecimal::from_f64(initial_price).unwrap_or_default(),
+            first_timestamp,
+        );
+        let mut risk_manager = RiskManager::new();
+        
+        let mut backtest_config = config::BacktestConfig::default();
+        backtest_config.trading.initial_capital = request.initial_capital;
+        backtest_config.analysis.skip_genetic_optimization = true;
+        
+        // Run full streaming simulation
+        let mut sim_loop = SimulationLoop::new();
+        let backtest_result = sim_loop.run_streaming(
+            &mut strategy_manager,
+            &mut orderbook,
+            &mut portfolio,
+            &mut risk_manager,
+            &reader,
+            &request.symbol,
+            &request.exchange,
+            &backtest_config,
+        ).await;
+        
+        // Extract metrics from backtest result
+        let net_pnl = backtest_result.total_pnl.to_f64().unwrap_or(0.0);
+        let sharpe = backtest_result.sharpe_ratio.unwrap_or(0.0);
+        let num_trades = backtest_result.num_trades as i32;
+        let max_dd = backtest_result.max_drawdown.to_f64().unwrap_or(0.0);
+        let win_rate = backtest_result.win_rate.unwrap_or(0.0);
+        let profit_factor = backtest_result.profit_factor.unwrap_or(0.0);
+        let closed_trades = backtest_result.closed_trades as i32;
+        let total_orders = (backtest_result.num_trades * 2) as i32; // Estimate
+        let ending_capital = request.initial_capital + net_pnl;
+        let total_return_pct = (net_pnl / request.initial_capital) * 100.0;
+        let fitness = calculate_comprehensive_fitness(&backtest_result, request.initial_capital);
+        
+        // Run Monte Carlo if requested
+        let monte_carlo_results = if request.run_monte_carlo {
+            log_info!(MAIN_LOGGER, "Running Monte Carlo simulation for job {}", request.job_id);
+            match backtest::monte_carlo::run_monte_carlo_simulation(&backtest_result, 1000) {
+                Ok(mc_result) => {
+                    log_info!(MAIN_LOGGER, "Monte Carlo complete: VaR95={:.2}, CVaR95={:.2}", 
+                        mc_result.var_95, mc_result.cvar_95);
+                    serde_json::to_vec(&mc_result).unwrap_or_default()
+                }
+                Err(e) => {
+                    log_error_structured!(MAIN_LOGGER, "MONTE_CARLO_ERROR",
+                        "event" => "MONTE_CARLO_ERROR",
+                        "job_id" => &request.job_id,
+                        "error" => e.to_string()
+                    );
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        
+        // Run Walk-Forward analysis if requested
+        let walk_forward_results = if request.run_walk_forward {
+            log_info!(MAIN_LOGGER, "Running Walk-Forward analysis for job {}", request.job_id);
+            let wf_start = Instant::now();
+            
+            // Use 30-day train, 7-day test windows with 7-day steps
+            let wf_summary = walkforward::run_walkforward_for_chromosome(
+                &reader,
+                chromosome,
+                &request.symbol,
+                &request.exchange,
+                request.initial_capital,
+                Some(30), // train_days
+                Some(7),  // test_days
+                Some(7),  // step_days
+            ).await;
+            
+            log_info!(MAIN_LOGGER, "Walk-Forward complete: windows={}, avg_sharpe={:.4}, consistency={:.4}, elapsed={:.2}s",
+                wf_summary.num_windows, wf_summary.average_test_sharpe, wf_summary.consistency_score, wf_start.elapsed().as_secs_f64());
+            
+            serde_json::to_vec(&wf_summary).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        
+        // Serialize trade returns for storage
+        let closed_trades_data = serde_json::to_vec(&backtest_result.trade_returns).unwrap_or_default();
+        
+        let elapsed = start.elapsed();
+        
+        log_info!(MAIN_LOGGER, "Final evaluation complete for job {}: PnL={:.2}, Sharpe={:.4}, trades={}, elapsed={:.2}s",
+            request.job_id, net_pnl, sharpe, num_trades, elapsed.as_secs_f64());
+        
+        // Send comprehensive result
+        let response = protocol::broker::messages::ChromosomeEvalResult {
+            job_id: request.job_id.clone(),
+            generation: request.generation,
+            chromosome_id: request.chromosome_id,
+            worker_id: self.worker_id.clone(),
+            success: true,
+            error_message: String::new(),
+            fitness,
+            net_pnl,
+            sharpe_ratio: sharpe,
+            num_trades,
+            max_drawdown: max_dd,
+            equity_curve: serde_json::to_vec(&backtest_result.equity_curve).unwrap_or_default(),
+            processing_duration_ms: elapsed.as_millis() as i64,
+            win_rate,
+            profit_factor,
+            closed_trades,
+            total_orders,
+            starting_capital: request.initial_capital,
+            ending_capital,
+            total_return_pct,
+            monte_carlo_results,
+            walk_forward_results,
+            closed_trades_data,
+            is_final_evaluation: true,
         };
         
         let _ = self.broker.publish_chromosome_result(response).await;

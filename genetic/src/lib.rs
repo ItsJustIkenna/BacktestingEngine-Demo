@@ -119,19 +119,58 @@ pub trait Chromosome: Clone + Send + Sync {
 }
 
 /// Fitness result containing both the raw fitness and equity curve for robustness analysis
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct FitnessResult {
     pub fitness: f64,
     pub equity_curve: Vec<f64>,
+    /// Additional backtest metrics for reporting
+    pub net_pnl: f64,
+    pub sharpe_ratio: f64,
+    pub num_trades: i32,
+    pub max_drawdown: f64,
+    pub win_rate: f64,
+    pub profit_factor: f64,
 }
 
 impl FitnessResult {
     pub fn new(fitness: f64, equity_curve: Vec<f64>) -> Self {
-        Self { fitness, equity_curve }
+        Self { 
+            fitness, 
+            equity_curve,
+            net_pnl: 0.0,
+            sharpe_ratio: 0.0,
+            num_trades: 0,
+            max_drawdown: 0.0,
+            win_rate: 0.0,
+            profit_factor: 0.0,
+        }
+    }
+    
+    /// Create a FitnessResult with full metrics from a backtest
+    pub fn with_metrics(
+        fitness: f64,
+        equity_curve: Vec<f64>,
+        net_pnl: f64,
+        sharpe_ratio: f64,
+        num_trades: i32,
+        max_drawdown: f64,
+        win_rate: f64,
+        profit_factor: f64,
+    ) -> Self {
+        Self {
+            fitness,
+            equity_curve,
+            net_pnl,
+            sharpe_ratio,
+            num_trades,
+            max_drawdown,
+            win_rate,
+            profit_factor,
+        }
     }
     
     pub fn failure() -> Self {
-        Self { fitness: 0.0, equity_curve: Vec::new() }
+        Self::default()
     }
 }
 
