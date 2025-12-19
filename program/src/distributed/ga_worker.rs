@@ -729,6 +729,8 @@ impl DistributedGAWorker {
             is_final_evaluation: false,
         };
         
+        println!("📤 [WORKER {}] Sending result for chromosome {}/{} fitness={:.4} in {:?}", 
+            self.worker_id, request.chromosome_id, request.total_chromosomes, result.fitness, elapsed);
         let _ = self.broker.publish_chromosome_result(response).await;
     }
     
