@@ -108,6 +108,8 @@ pub struct DistributedGACoordinator {
     test_end_idx: i64,
     /// Total tick count in the dataset
     total_ticks: i64,
+    /// Progress callback for reporting granular progress
+    progress_callback: Option<Arc<dyn Fn(f64, String) + Send + Sync>>,
 }
 
 impl DistributedGACoordinator {
@@ -126,6 +128,31 @@ impl DistributedGACoordinator {
             train_end_idx: 0,
             test_end_idx: 0,
             total_ticks: 0,
+            progress_callback: None,
+        }
+    }
+    
+    /// Set progress callback for granular progress updates
+    /// Callback receives (progress_pct: f64, phase_detail: String)
+    pub fn set_progress_callback<F>(&mut self, callback: F)
+    where
+        F: Fn(f64, String) + Send + Sync + 'static,
+    {
+        self.progress_callback = Some(Arc::new(callback));
+    }
+    
+    /// Report progress to callback if set
+    fn report_progress(&self, progress: f64, detail: String) {
+        // Log to Kibana for visibility
+        log_info_structured!(MAIN_LOGGER, "GA_PROGRESS_UPDATE",
+            "event" => "GA_PROGRESS_UPDATE",
+            "job_id" => &self.job_id,
+            "progress_pct" => format!("{:.1}", progress),
+            "detail" => &detail
+        );
+        
+        if let Some(cb) = &self.progress_callback {
+            cb(progress, detail);
         }
     }
     
@@ -455,6 +482,15 @@ impl DistributedGACoordinator {
                 "population_size" => population.len()
             );
             
+            // Report generation start progress
+            // Progress range: 5% to 85% for genetic phase
+            // Each generation gets an equal slice of this range
+            let gen_progress_start = 5.0 + (generation as f64 / config.generations as f64) * 80.0;
+            self.report_progress(
+                gen_progress_start,
+                format!("Generation {}/{}: evaluating chromosomes", generation + 1, config.generations)
+            );
+            
             // Publish chromosome evaluation requests
             for (idx, chromo) in population.iter().enumerate() {
                 let request = self.create_eval_request(generation as i32, idx as i32, chromo, cache_key)?;
@@ -465,6 +501,8 @@ impl DistributedGACoordinator {
             // Collect results with timeout
             let mut results: HashMap<i32, FitnessResult> = HashMap::new();
             let deadline = Instant::now() + Duration::from_secs(EVAL_TIMEOUT_SECS);
+            let pop_size = population.len();
+            let gen_progress_range = 80.0 / config.generations as f64; // Progress range for this generation
             
             while results.len() < population.len() && Instant::now() < deadline {
                 match tokio::time::timeout(
@@ -478,6 +516,15 @@ impl DistributedGACoordinator {
                                 serde_json::from_slice(&result.equity_curve).unwrap_or_default()
                             );
                             results.insert(result.chromosome_id, fitness_result);
+                            
+                            // Granular progress update for each chromosome result
+                            let chromo_progress = gen_progress_start + 
+                                (results.len() as f64 / pop_size as f64) * gen_progress_range;
+                            self.report_progress(
+                                chromo_progress,
+                                format!("Generation {}/{}: {}/{} evaluated", 
+                                    generation + 1, config.generations, results.len(), pop_size)
+                            );
                             
                             if results.len() % 5 == 0 {
                                 log_debug!(MAIN_LOGGER, "{}Gen {}: {}/{} results collected",

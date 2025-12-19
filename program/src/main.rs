@@ -331,6 +331,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     job.id.clone(),
                                 );
                                 
+                                // Set up granular progress callback
+                                let job_queue_for_progress = Arc::clone(&job_queue_clone);
+                                let job_id_for_progress = job.id.clone();
+                                coordinator.set_progress_callback(move |progress, detail| {
+                                    let jq = Arc::clone(&job_queue_for_progress);
+                                    let jid = job_id_for_progress.clone();
+                                    let det = detail.clone();
+                                    // Spawn a task to update progress (non-blocking)
+                                    tokio::spawn(async move {
+                                        let _ = jq.update_progress(&jid, progress).await;
+                                        let _ = jq.update_phase(&jid, "genetic_optimization", 
+                                            serde_json::json!({"detail": det})).await;
+                                    });
+                                });
+                                
                                 // First request workers to load data
                                 eprintln!("📤 [COORDINATOR] Requesting data load for job {}", job.id);
                                 match coordinator.request_data_load().await {
