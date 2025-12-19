@@ -90,6 +90,17 @@ spec:
             - name: USE_ELASTICSEARCH_LOGGING
               value: "false"
             {{- end }}
+            # API Authentication
+            - name: API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: backtesting-secrets
+                  key: API_KEYS
+            - name: API_AUTH_REQUIRED
+              valueFrom:
+                secretKeyRef:
+                  name: backtesting-secrets
+                  key: API_AUTH_REQUIRED
           envFrom:
             - configMapRef:
                 name: {{ include "backtesting-engine.fullname" . }}-config
