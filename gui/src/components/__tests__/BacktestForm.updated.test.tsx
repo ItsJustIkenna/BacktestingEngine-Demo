@@ -57,8 +57,13 @@ describe('BacktestForm', () => {
       expect(mockApiClient.get).toHaveBeenCalledWith('/exchanges', expect.any(AbortSignal));
     });
 
+    // Wait for the symbols to be loaded and rendered
+    await waitFor(() => {
+      const symbolSelect = screen.getByLabelText(/symbol/i) as HTMLSelectElement;
+      expect(symbolSelect.options).toHaveLength(2);
+    });
+
     const symbolSelect = screen.getByLabelText(/symbol/i) as HTMLSelectElement;
-    expect(symbolSelect.options).toHaveLength(2);
     // React may encode forward slashes in option values
     expect(symbolSelect.options[0]?.value).toMatch(/BTC.*USD/);
     expect(symbolSelect.options[1]?.value).toMatch(/ETH.*USD/);
