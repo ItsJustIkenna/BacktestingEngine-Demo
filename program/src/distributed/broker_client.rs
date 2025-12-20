@@ -253,8 +253,69 @@ impl BacktestBrokerClient {
         }
     }
     
-    /// Publish raw bytes to a topic via TCP
+    /// Publish raw bytes to a topic via TCP with retry and reconnection
     async fn publish_tcp(&self, topic: &str, data: &[u8]) -> Result<(), BrokerError> {
+        const MAX_RETRIES: usize = 3;
+        let mut last_error = None;
+        
+        for attempt in 0..MAX_RETRIES {
+            // Try to reconnect if not connected
+            if !self.is_connected.load(std::sync::atomic::Ordering::Relaxed) {
+                println!("🔄 [BROKER] Reconnecting before publish (attempt {}/{})", attempt + 1, MAX_RETRIES);
+                if let Err(e) = self.reconnect_tcp().await {
+                    println!("❌ [BROKER] Reconnection failed: {}", e);
+                    last_error = Some(e);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    continue;
+                }
+            }
+            
+            // Try to publish
+            match self.publish_tcp_inner(topic, data).await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    println!("❌ [BROKER] Publish failed (attempt {}/{}): {}", attempt + 1, MAX_RETRIES, e);
+                    last_error = Some(e);
+                    self.is_connected.store(false, std::sync::atomic::Ordering::Relaxed);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                }
+            }
+        }
+        
+        Err(last_error.unwrap_or(BrokerError::ConnectionFailed("Max retries exceeded".to_string())))
+    }
+    
+    /// Reconnect the TCP publish connection
+    async fn reconnect_tcp(&self) -> Result<(), BrokerError> {
+        if let BrokerMode::Network { host, port } = &self.mode {
+            let addr = format!("{}:{}", host, port);
+            println!("🔌 [BROKER] Attempting TCP reconnection to {}", addr);
+            
+            match tokio::time::timeout(
+                tokio::time::Duration::from_secs(10),
+                tokio::net::TcpStream::connect(&addr)
+            ).await {
+                Ok(Ok(stream)) => {
+                    let mut conn = self.tcp_connection.lock().await;
+                    *conn = Some(stream);
+                    self.is_connected.store(true, std::sync::atomic::Ordering::Relaxed);
+                    println!("✅ [BROKER] TCP reconnection successful");
+                    Ok(())
+                }
+                Ok(Err(e)) => {
+                    Err(BrokerError::ConnectionFailed(e.to_string()))
+                }
+                Err(_) => {
+                    Err(BrokerError::Timeout)
+                }
+            }
+        } else {
+            Ok(()) // InProcess mode doesn't need reconnection
+        }
+    }
+    
+    /// Inner publish without retry logic
+    async fn publish_tcp_inner(&self, topic: &str, data: &[u8]) -> Result<(), BrokerError> {
         let mut conn = self.tcp_connection.lock().await;
         if let Some(ref mut stream) = *conn {
             // Wire format: [msg_type: u8][topic_len: u32][topic: bytes][data_len: u32][data: bytes]

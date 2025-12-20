@@ -35,6 +35,28 @@ use crate::logging_facade::MAIN_LOGGER;
 /// Maximum concurrent chromosome evaluations per worker
 const MAX_CONCURRENT_EVALS: usize = 4;
 
+/// Maximum equity curve points to include in results (prevents 90MB+ payloads)
+const MAX_EQUITY_CURVE_POINTS: usize = 1000;
+
+/// Sample an equity curve down to a maximum number of points
+/// Preserves first and last points, samples evenly in between
+fn sample_equity_curve<T: Clone>(curve: &[T], max_points: usize) -> Vec<T> {
+    if curve.len() <= max_points {
+        return curve.to_vec();
+    }
+    
+    let mut sampled = Vec::with_capacity(max_points);
+    let step = (curve.len() - 1) as f64 / (max_points - 1) as f64;
+    
+    for i in 0..max_points {
+        let idx = (i as f64 * step).round() as usize;
+        let idx = idx.min(curve.len() - 1);
+        sampled.push(curve[idx].clone());
+    }
+    
+    sampled
+}
+
 /// Cache entry for binary file metadata
 pub struct BinaryFileInfo {
     path: PathBuf,
@@ -701,6 +723,9 @@ impl DistributedGAWorker {
         
         let elapsed = start.elapsed();
         
+        // Sample equity curve to avoid 90MB+ payloads
+        let sampled_curve = sample_equity_curve(&result.equity_curve, MAX_EQUITY_CURVE_POINTS);
+        
         // Send result with actual metrics from FitnessResult
         let response = protocol::broker::messages::ChromosomeEvalResult {
             job_id: request.job_id,
@@ -714,7 +739,7 @@ impl DistributedGAWorker {
             sharpe_ratio: result.sharpe_ratio,
             num_trades: result.num_trades,
             max_drawdown: result.max_drawdown,
-            equity_curve: serde_json::to_vec(&result.equity_curve).unwrap_or_default(),
+            equity_curve: serde_json::to_vec(&sampled_curve).unwrap_or_default(),
             processing_duration_ms: elapsed.as_millis() as i64,
             win_rate: result.win_rate,
             profit_factor: result.profit_factor,
@@ -1318,6 +1343,9 @@ impl DistributedGAWorker {
         log_info!(MAIN_LOGGER, "Final evaluation complete for job {}: PnL={:.2}, Sharpe={:.4}, trades={}, elapsed={:.2}s",
             request.job_id, net_pnl, sharpe, num_trades, elapsed.as_secs_f64());
         
+        // Sample equity curve to avoid huge payloads
+        let sampled_curve = sample_equity_curve(&backtest_result.equity_curve, MAX_EQUITY_CURVE_POINTS);
+        
         // Send comprehensive result
         let response = protocol::broker::messages::ChromosomeEvalResult {
             job_id: request.job_id.clone(),
@@ -1331,7 +1359,7 @@ impl DistributedGAWorker {
             sharpe_ratio: sharpe,
             num_trades,
             max_drawdown: max_dd,
-            equity_curve: serde_json::to_vec(&backtest_result.equity_curve).unwrap_or_default(),
+            equity_curve: serde_json::to_vec(&sampled_curve).unwrap_or_default(),
             processing_duration_ms: elapsed.as_millis() as i64,
             win_rate,
             profit_factor,
