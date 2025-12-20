@@ -177,6 +177,12 @@ spec:
               mountPath: /app/config/config.yaml
               subPath: config.yaml
               readOnly: true
+            {{- if .Values.distributedGA.enabled }}
+            # Mount historical data PVC for tick count probing (data splits)
+            - name: historical-data
+              mountPath: /data/historical
+              readOnly: true
+            {{- end }}
             {{- if .Values.persistence.enabled }}
             - name: data-volume
               mountPath: {{ .Values.config.output.results_dir }}
@@ -235,6 +241,12 @@ spec:
             items:
               - key: config.yaml
                 path: config.yaml
+        {{- if .Values.distributedGA.enabled }}
+        # Historical data PVC for tick count probing (data splits)
+        - name: historical-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.distributedWorker.historicalData.pvcName | default "historical-data-pvc" }}
+        {{- end }}
         {{- if .Values.persistence.enabled }}
         - name: data-volume
           persistentVolumeClaim:
