@@ -803,6 +803,18 @@ impl DistributedGAWorker {
             }
         };
         
+        // FALLBACK: If coordinator didn't set train_end_idx, calculate it from tick count
+        // Use 60% of data for training (matches the default train_ratio in ga_coordinator)
+        let effective_train_end_idx = if train_end_idx == 0 {
+            let total_ticks = reader.len() as i64;
+            let calculated_idx = (total_ticks as f64 * 0.6) as i64;
+            println!("⚠️ [WORKER {}] train_end_idx=0, using fallback: 60% of {} = {} ticks", 
+                self.worker_id, total_ticks, calculated_idx);
+            calculated_idx
+        } else {
+            train_end_idx
+        };
+        
         // Get initial price from first tick
         let initial_price = reader.get(0)
             .map(|t| t.price())
@@ -885,11 +897,11 @@ impl DistributedGAWorker {
         
         println!("⚙️ [WORKER {}] Strategy setup complete, starting simulation...", self.worker_id);
         
-        // Run streaming simulation - use SlicedTickSource if train_end_idx is set
+        // Run streaming simulation - use SlicedTickSource with effective_train_end_idx
         let mut sim_loop = SimulationLoop::new();
-        let result = if train_end_idx > 0 {
+        let result = if effective_train_end_idx > 0 {
             // Use only train portion of data
-            let sliced = SlicedTickSource::new(&reader, 0, train_end_idx as usize);
+            let sliced = SlicedTickSource::new(&reader, 0, effective_train_end_idx as usize);
             println!("📊 [WORKER {}] Running sim on {} ticks (sliced)", self.worker_id, sliced.len());
             sim_loop.run_streaming(
                 &mut strategy_manager,
