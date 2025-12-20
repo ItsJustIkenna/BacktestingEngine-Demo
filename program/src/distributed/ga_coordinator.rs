@@ -184,14 +184,31 @@ impl DistributedGACoordinator {
         let filename = format!("{}_{}.bin", 
             self.config.symbol.replace('/', "_"), 
             self.config.exchange);
-        let path = std::path::PathBuf::from(data_dir).join(filename);
+        let path = std::path::PathBuf::from(&data_dir).join(&filename);
+        
+        eprintln!("🔍 [COORDINATOR] probe_tick_count: data_dir={}, filename={}, full_path={:?}", 
+            data_dir, filename, path);
         
         if path.exists() {
+            eprintln!("✅ [COORDINATOR] Binary file exists at {:?}", path);
             match data_prep::BinaryFileReader::open(&path) {
-                Ok(reader) => Some(reader.tick_count() as i64),
-                Err(_) => None,
+                Ok(reader) => {
+                    let count = reader.tick_count() as i64;
+                    eprintln!("✅ [COORDINATOR] Binary file opened, tick_count={}", count);
+                    Some(count)
+                },
+                Err(e) => {
+                    eprintln!("❌ [COORDINATOR] Failed to open binary file: {:?}", e);
+                    None
+                },
             }
         } else {
+            eprintln!("❌ [COORDINATOR] Binary file NOT found at {:?}", path);
+            // List what files ARE in the directory
+            if let Ok(entries) = std::fs::read_dir(&data_dir) {
+                eprintln!("📂 [COORDINATOR] Files in {}: {:?}", data_dir, 
+                    entries.filter_map(|e| e.ok()).map(|e| e.file_name()).collect::<Vec<_>>());
+            }
             None
         }
     }
