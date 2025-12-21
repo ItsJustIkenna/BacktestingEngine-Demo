@@ -334,15 +334,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // Set up granular progress callback
                                 let job_queue_for_progress = Arc::clone(&job_queue_clone);
                                 let job_id_for_progress = job.id.clone();
+                                let total_generations = job.params.generations;
                                 coordinator.set_progress_callback(move |progress, detail| {
                                     let jq = Arc::clone(&job_queue_for_progress);
                                     let jid = job_id_for_progress.clone();
                                     let det = detail.clone();
+                                    
+                                    // Parse detail to extract structured info
+                                    // Examples: 
+                                    //   "Generation 5/10: evaluating chromosomes"
+                                    //   "Generation 5/10: 25/50 evaluated"
+                                    //   "Generation 5/10 complete, best_fitness=0.1234"
+                                    let mut phase_details = serde_json::json!({
+                                        "detail": &det,
+                                        "total_generations": total_generations
+                                    });
+                                    
+                                    // Try to parse generation info (handles both "Generation 5/10:" and "Generation 5/10 complete")
+                                    if det.starts_with("Generation ") {
+                                        let gen_str = det.trim_start_matches("Generation ");
+                                        // Find where the generation part ends (either ":" or " complete")
+                                        let gen_part = gen_str.split(|c| c == ':' || c == ' ').next().unwrap_or("");
+                                        if let Some((current, total)) = gen_part.split_once('/') {
+                                            if let (Ok(cur), Ok(tot)) = (current.trim().parse::<i32>(), total.trim().parse::<i32>()) {
+                                                phase_details["current_generation"] = serde_json::json!(cur);
+                                                phase_details["total_generations"] = serde_json::json!(tot);
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Try to parse best_fitness from completion message
+                                    if det.contains("best_fitness=") {
+                                        if let Some(fitness_str) = det.split("best_fitness=").nth(1) {
+                                            if let Some(fitness_val) = fitness_str.split_whitespace().next() {
+                                                if let Ok(fitness) = fitness_val.parse::<f64>() {
+                                                    phase_details["best_fitness"] = serde_json::json!(fitness);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Try to parse chromosome progress
+                                    if det.contains("evaluated") && det.contains('/') {
+                                        if let Some(eval_part) = det.split(": ").nth(1) {
+                                            if let Some((cur, rest)) = eval_part.split_once('/') {
+                                                if let Some(tot) = rest.split_whitespace().next() {
+                                                    if let (Ok(cur_val), Ok(tot_val)) = (cur.trim().parse::<i32>(), tot.trim().parse::<i32>()) {
+                                                        phase_details["chromosomes_evaluated"] = serde_json::json!(cur_val);
+                                                        phase_details["total_chromosomes"] = serde_json::json!(tot_val);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Set stage based on message content
+                                    if det.contains("evaluating") {
+                                        phase_details["stage"] = serde_json::json!("Evaluating");
+                                    } else if det.contains("complete") {
+                                        phase_details["stage"] = serde_json::json!("Generation Complete");
+                                    }
+                                    
                                     // Spawn a task to update progress (non-blocking)
                                     tokio::spawn(async move {
                                         let _ = jq.update_progress(&jid, progress).await;
-                                        let _ = jq.update_phase(&jid, "genetic_optimization", 
-                                            serde_json::json!({"detail": det})).await;
+                                        let _ = jq.update_phase(&jid, "genetic_optimization", phase_details).await;
                                     });
                                 });
                                 

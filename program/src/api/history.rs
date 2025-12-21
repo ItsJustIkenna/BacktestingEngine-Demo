@@ -51,6 +51,17 @@ pub struct BacktestSummary {
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
     
+    // Phase tracking for better visibility
+    pub current_phase: String,
+    pub phase_details: serde_json::Value,
+    
+    // Generation progress (for GA jobs)
+    pub current_generation: Option<i32>,
+    pub total_generations: Option<i32>,
+    
+    // Error message (for failed jobs)
+    pub error_message: Option<String>,
+    
     // Results (if completed)
     pub total_pnl: Option<f64>,
     pub sharpe_ratio: Option<f64>,

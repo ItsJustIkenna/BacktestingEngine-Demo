@@ -15,6 +15,16 @@ interface BacktestJob {
   win_rate?: number;
   current_generation?: number;
   total_generations?: number;
+  current_phase?: string;
+  phase_details?: {
+    current_generation?: number;
+    total_generations?: number;
+    best_fitness?: number;
+    chromosomes_evaluated?: number;
+    total_chromosomes?: number;
+    elapsed_time?: string;
+    stage?: string;
+  };
   error_message?: string;
 }
 
@@ -188,12 +198,64 @@ export const JobList: React.FC<JobListProps> = ({
     return `~${hours}h ${remainingMinutes}m remaining`;
   };
 
-  const getProgressStage = (progress: number): string => {
+  const getProgressStage = (job: BacktestJob): string => {
+    // Use actual phase from backend if available
+    if (job.current_phase) {
+      const phaseIcons: { [key: string]: string } = {
+        'initializing': '⏳',
+        'loading_data': '📂',
+        'data_ready': '✅',
+        'optimizing': '🧬',
+        'genetic_optimization': '🧬',
+        'final_evaluation': '🎯',
+        'calculating_metrics': '📊',
+        'completed': '✅',
+        'failed': '❌',
+        'pending': '⏳',
+      };
+      const icon = phaseIcons[job.current_phase] || '🔄';
+      const phaseName = job.current_phase.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      return `${icon} ${phaseName}`;
+    }
+    
+    // Fallback to progress-based estimation
+    const progress = job.progress;
     if (progress < 15) return '📂 Loading data...';
     if (progress < 25) return '⚙️ Initializing...';
     if (progress < 90) return '🚀 Running backtest...';
     if (progress < 95) return '📊 Calculating metrics...';
     return '✅ Finalizing...';
+  };
+
+  const getPhaseDetails = (job: BacktestJob): string | null => {
+    const details = job.phase_details;
+    if (!details) return null;
+    
+    const parts: string[] = [];
+    
+    // Generation progress
+    if (details.current_generation !== undefined && details.total_generations !== undefined) {
+      parts.push(`Gen ${details.current_generation}/${details.total_generations}`);
+    } else if (job.current_generation !== undefined && job.total_generations !== undefined) {
+      parts.push(`Gen ${job.current_generation}/${job.total_generations}`);
+    }
+    
+    // Chromosome progress within generation
+    if (details.chromosomes_evaluated !== undefined && details.total_chromosomes !== undefined) {
+      parts.push(`Chromo ${details.chromosomes_evaluated}/${details.total_chromosomes}`);
+    }
+    
+    // Best fitness so far
+    if (details.best_fitness !== undefined) {
+      parts.push(`Best: ${details.best_fitness.toFixed(2)}`);
+    }
+    
+    // Stage within phase
+    if (details.stage) {
+      parts.push(details.stage);
+    }
+    
+    return parts.length > 0 ? parts.join(' • ') : null;
   };
 
   const handlePageChange = (newPage: number) => {
@@ -436,16 +498,16 @@ export const JobList: React.FC<JobListProps> = ({
                           {job.progress.toFixed(0)}%
                         </span>
                       </div>
-                      {/* Generation progress */}
-                      {job.current_generation !== undefined && job.total_generations !== undefined && job.total_generations > 0 && (
-                        <div style={{ fontSize: '11px', color: '#6c757d' }}>
-                          Generation {job.current_generation} of {job.total_generations}
+                      {/* Phase and stage description */}
+                      {(job.status === 'running' || job.status === 'queued') && (
+                        <div style={{ fontSize: '11px', color: '#17a2b8', fontWeight: 500 }}>
+                          {getProgressStage(job)}
                         </div>
                       )}
-                      {/* Stage description */}
-                      {(job.status === 'running' || job.status === 'queued') && (
+                      {/* Detailed phase info (generation, chromosomes, best fitness) */}
+                      {(job.status === 'running' || job.status === 'queued') && getPhaseDetails(job) && (
                         <div style={{ fontSize: '11px', color: '#6c757d' }}>
-                          {getProgressStage(job.progress)}
+                          {getPhaseDetails(job)}
                         </div>
                       )}
                       {/* Elapsed time and ETA */}

@@ -800,6 +800,15 @@ impl DistributedGACoordinator {
             }
             
             let gen_elapsed = generation_start.elapsed().as_secs_f64();
+            
+            // Report generation completion with best fitness
+            let gen_complete_progress = 5.0 + ((generation + 1) as f64 / config.generations as f64) * 80.0;
+            self.report_progress(
+                gen_complete_progress,
+                format!("Generation {}/{} complete, best_fitness={:.4}", 
+                    generation + 1, config.generations, best_fitness)
+            );
+            
             log_info_structured!(MAIN_LOGGER, "DISTRIBUTED_GA_GEN_COMPLETE",
                 "event" => "DISTRIBUTED_GA_GEN_COMPLETE",
                 "generation" => generation + 1,

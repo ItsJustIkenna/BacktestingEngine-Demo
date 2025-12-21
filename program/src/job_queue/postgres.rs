@@ -958,15 +958,33 @@ impl PostgresQueue {
         // Convert to summaries and fetch results if completed
         let mut summaries = Vec::new();
         for job in jobs {
+            // Parse phase_details from JSONB
+            let phase_details = job.phase_details
+                .clone()
+                .unwrap_or_else(|| serde_json::json!({}));
+            
+            // Extract generation info from phase_details if present
+            let current_generation = phase_details.get("current_generation")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
+            let total_generations = phase_details.get("total_generations")
+                .and_then(|v| v.as_i64())
+                .map(|v| v as i32);
+            
             let mut summary = crate::api::history::BacktestSummary {
                 job_id: job.job_id.clone(),
                 symbol: job.symbol,
                 exchange: job.exchange,
-                status: job.status,
+                status: job.status.clone(),
                 progress: job.progress.to_string().parse().unwrap_or(0.0),
                 created_at: job.created_at.to_rfc3339(),
                 started_at: job.started_at.map(|dt| dt.to_rfc3339()),
                 completed_at: job.completed_at.map(|dt| dt.to_rfc3339()),
+                current_phase: job.current_phase.unwrap_or_else(|| "initializing".to_string()),
+                phase_details,
+                current_generation,
+                total_generations,
+                error_message: job.error_message.clone(),
                 total_pnl: None,
                 sharpe_ratio: None,
                 max_drawdown: None,
