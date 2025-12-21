@@ -318,7 +318,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     start_time: job.params.start_date.clone().unwrap_or_default(),
                                     end_time: job.params.end_date.clone().unwrap_or_default(),
                                     initial_capital: job.params.initial_capital,
-                                    cache_ttl_seconds: 3600,
+                                    cache_ttl_seconds: 14400, // 4 hours - enough for long GA runs + final evaluation
                                     // Data split ratios for train/test/validate
                                     train_ratio: job.params.train_ratio,
                                     test_ratio: job.params.test_ratio,

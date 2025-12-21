@@ -1141,23 +1141,41 @@ impl DistributedGAWorker {
         println!("🔬 [WORKER {}] Data splits: train_end_idx={}, test_end_idx={}, total_ticks={}",
             self.worker_id, request.train_end_idx, request.test_end_idx, request.total_ticks);
         
-        // Get binary file path
+        // Get binary file path - for final evaluation, also check if file exists even if cache expired
         let path = {
             let binary_cache = self.binary_cache.read().await;
+            // First try to get from cache (may be expired)
             binary_cache.get(&request.data_cache_key)
-                .filter(|info| info.expires_at > Instant::now())
                 .map(|info| info.path.clone())
         };
         
         let path = match path {
             Some(p) => {
-                println!("🔬 [WORKER {}] Binary file path: {:?}", self.worker_id, p);
-                p
+                // Verify the file still exists on disk
+                if std::path::Path::new(&p).exists() {
+                    println!("🔬 [WORKER {}] Binary file path: {:?} (file exists)", self.worker_id, p);
+                    p
+                } else {
+                    println!("❌ [WORKER {}] Binary file {:?} no longer exists on disk!", self.worker_id, p);
+                    self.send_error_result(request, "Binary file no longer exists on disk").await;
+                    return;
+                }
             }
             None => {
-                println!("❌ [WORKER {}] Binary data NOT in cache for final evaluation!", self.worker_id);
-                self.send_error_result(request, "Binary data not in cache for final evaluation").await;
-                return;
+                // Fallback: try to find the file in the data directory
+                let fallback_path = format!("{}/historical/{}_{}_Kraken.bin", 
+                    self.data_dir, 
+                    request.symbol.replace("/", "_"),
+                    request.exchange);
+                if std::path::Path::new(&fallback_path).exists() {
+                    println!("🔬 [WORKER {}] Using fallback binary path: {:?}", self.worker_id, fallback_path);
+                    fallback_path
+                } else {
+                    println!("❌ [WORKER {}] Binary data NOT in cache and fallback {:?} not found!", 
+                        self.worker_id, fallback_path);
+                    self.send_error_result(request, "Binary data not in cache for final evaluation").await;
+                    return;
+                }
             }
         };
         
