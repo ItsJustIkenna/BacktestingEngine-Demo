@@ -1135,6 +1135,12 @@ impl DistributedGAWorker {
         
         let start = Instant::now();
         
+        println!("🔬 [WORKER {}] FINAL EVALUATION started for job {}", self.worker_id, request.job_id);
+        println!("🔬 [WORKER {}] Chromosome: risk_aversion={:.4}, order_size_pct={:.4}, inventory_target={:.4}",
+            self.worker_id, chromosome.risk_aversion, chromosome.order_size_pct, chromosome.inventory_target);
+        println!("🔬 [WORKER {}] Data splits: train_end_idx={}, test_end_idx={}, total_ticks={}",
+            self.worker_id, request.train_end_idx, request.test_end_idx, request.total_ticks);
+        
         // Get binary file path
         let path = {
             let binary_cache = self.binary_cache.read().await;
@@ -1144,8 +1150,12 @@ impl DistributedGAWorker {
         };
         
         let path = match path {
-            Some(p) => p,
+            Some(p) => {
+                println!("🔬 [WORKER {}] Binary file path: {:?}", self.worker_id, p);
+                p
+            }
             None => {
+                println!("❌ [WORKER {}] Binary data NOT in cache for final evaluation!", self.worker_id);
                 self.send_error_result(request, "Binary data not in cache for final evaluation").await;
                 return;
             }
@@ -1153,8 +1163,12 @@ impl DistributedGAWorker {
         
         // Load binary file as TickSource
         let reader = match BinaryFileReader::open(&path) {
-            Ok(r) => r,
+            Ok(r) => {
+                println!("🔬 [WORKER {}] Binary file opened, {} ticks available", self.worker_id, r.len());
+                r
+            }
             Err(e) => {
+                println!("❌ [WORKER {}] Failed to open binary file: {}", self.worker_id, e);
                 self.send_error_result(request, &format!("Failed to open binary file: {}", e)).await;
                 return;
             }
@@ -1263,6 +1277,7 @@ impl DistributedGAWorker {
             ).await
         } else {
             // Backward compatibility: use full data
+            println!("🔬 [WORKER {}] Final backtest on FULL data (no split configured)", self.worker_id);
             log_info!(MAIN_LOGGER, "Final backtest on full data (no split configured)");
             sim_loop.run_streaming(
                 &mut strategy_manager,
@@ -1289,16 +1304,25 @@ impl DistributedGAWorker {
         let total_return_pct = (net_pnl / request.initial_capital) * 100.0;
         let fitness = calculate_comprehensive_fitness(&backtest_result, request.initial_capital);
         
+        println!("🔬 [WORKER {}] FINAL BACKTEST COMPLETE: PnL={:.2}, Sharpe={:.4}, trades={}, max_dd={:.4}",
+            self.worker_id, net_pnl, sharpe, num_trades, max_dd);
+        println!("🔬 [WORKER {}] equity_curve length={}, fitness={:.6}",
+            self.worker_id, backtest_result.equity_curve.len(), fitness);
+        
         // Run Monte Carlo if requested
         let monte_carlo_results = if request.run_monte_carlo {
+            println!("🔬 [WORKER {}] Running Monte Carlo simulation...", self.worker_id);
             log_info!(MAIN_LOGGER, "Running Monte Carlo simulation for job {}", request.job_id);
             match backtest::monte_carlo::run_monte_carlo_simulation(&backtest_result, 1000) {
                 Ok(mc_result) => {
+                    println!("🔬 [WORKER {}] Monte Carlo complete: VaR95={:.2}, CVaR95={:.2}", 
+                        self.worker_id, mc_result.var_95, mc_result.cvar_95);
                     log_info!(MAIN_LOGGER, "Monte Carlo complete: VaR95={:.2}, CVaR95={:.2}", 
                         mc_result.var_95, mc_result.cvar_95);
                     serde_json::to_vec(&mc_result).unwrap_or_default()
                 }
                 Err(e) => {
+                    println!("❌ [WORKER {}] Monte Carlo ERROR: {}", self.worker_id, e);
                     log_error_structured!(MAIN_LOGGER, "MONTE_CARLO_ERROR",
                         "event" => "MONTE_CARLO_ERROR",
                         "job_id" => &request.job_id,
@@ -1386,7 +1410,13 @@ impl DistributedGAWorker {
             is_final_evaluation: true,
         };
         
-        let _ = self.broker.publish_chromosome_result(response).await;
+        println!("📤 [WORKER {}] Publishing FINAL result: job={}, pnl={:.2}, trades={}, is_final=true",
+            self.worker_id, request.job_id, net_pnl, num_trades);
+        
+        match self.broker.publish_chromosome_result(response).await {
+            Ok(_) => println!("✅ [WORKER {}] Final result published successfully", self.worker_id),
+            Err(e) => println!("❌ [WORKER {}] Failed to publish final result: {}", self.worker_id, e),
+        }
     }
     
     /// Create a lightweight clone for spawning tasks

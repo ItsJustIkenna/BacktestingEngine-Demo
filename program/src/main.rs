@@ -364,7 +364,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         match coordinator.run().await {
                                             Ok((best_chromosome, best_fitness)) => {
                                                 eprintln!("✅ [COORDINATOR] Job {} GA completed: fitness={:.4}", job.id, best_fitness);
-                                                eprintln!("🔄 [COORDINATOR] Running final evaluation with full backtest...");
+                                                eprintln!("� [COORDINATOR] Best chromosome: risk_aversion={:.4}, order_size_pct={:.4}, inventory_target={:.4}",
+                                                    best_chromosome.risk_aversion, best_chromosome.order_size_pct, best_chromosome.inventory_target);
+                                                eprintln!("🔄 [COORDINATOR] Sending final evaluation request (MC={}, WF={})...",
+                                                    job.params.monte_carlo_enabled, job.params.walk_forward_enabled);
+                                                
+                                                let final_eval_start = std::time::Instant::now();
                                                 
                                                 // Run final evaluation to get real metrics
                                                 let final_result = coordinator.run_final_evaluation(
@@ -372,6 +377,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     job.params.monte_carlo_enabled,
                                                     job.params.walk_forward_enabled,
                                                 ).await;
+                                                
+                                                eprintln!("⏱️ [COORDINATOR] Final evaluation took {:.2}s", final_eval_start.elapsed().as_secs_f64());
                                                 
                                                 let result = match final_result {
                                                     Ok(eval_result) => {
@@ -480,7 +487,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         }
                                                     }
                                                     Err(e) => {
-                                                        eprintln!("⚠️ [COORDINATOR] Final evaluation failed: {:?}, using GA fitness only", e);
+                                                        eprintln!("❌ [COORDINATOR] Final evaluation FAILED: {:?}", e);
+                                                        eprintln!("❌ [COORDINATOR] Using fallback result with fitness={:.4}, initial_capital={}", 
+                                                            best_fitness, job.params.initial_capital);
                                                         // Fallback to basic result if final eval fails
                                                         program::job_queue::BacktestResult {
                                                             job_id: job.id.clone(),
