@@ -581,10 +581,16 @@ impl JobQueue for PostgresQueue {
             total_commission_paid: cap_opt(result.total_commission_paid)
                 .unwrap_or(BigDecimal::from(0)),
             avg_fill_time_seconds: None,
+            // Use optimized strategy_params if provided, otherwise fall back to job defaults
             strategy_metrics: Some(serde_json::json!({
-                "risk_aversion": job.risk_aversion.to_string(),
-                "inventory_target": job.inventory_target.to_string(),
-                "order_size": job.order_size.to_string(),
+                // Merge optimized params with other data
+                "optimized_params": result.strategy_params,
+                // Keep original job params for reference
+                "original_params": {
+                    "risk_aversion": job.risk_aversion.to_string(),
+                    "inventory_target": job.inventory_target.to_string(),
+                    "order_size": job.order_size.to_string(),
+                },
                 "equity_curve": equity_curve_downsampled,
                 "monte_carlo": result.monte_carlo.as_ref().map(|mc| serde_json::json!({
                     "num_runs": mc.num_runs,
@@ -783,14 +789,24 @@ impl JobQueue for PostgresQueue {
                             })
                         });
                     
-                    // Extract strategy parameters
-                    let params = serde_json::json!({
-                        "risk_aversion": metrics.get("risk_aversion"),
-                        "inventory_target": metrics.get("inventory_target"),
-                        "order_size": metrics.get("order_size")
-                    });
+                    // Extract strategy parameters - prefer optimized_params, fall back to original_params or legacy format
+                    let params = metrics.get("optimized_params")
+                        .filter(|v| !v.is_null())
+                        .cloned()
+                        .or_else(|| {
+                            // Fall back to original_params if no optimized
+                            metrics.get("original_params").cloned()
+                        })
+                        .or_else(|| {
+                            // Legacy format: params stored at root level
+                            Some(serde_json::json!({
+                                "risk_aversion": metrics.get("risk_aversion"),
+                                "inventory_target": metrics.get("inventory_target"),
+                                "order_size": metrics.get("order_size")
+                            }))
+                        });
                     
-                    (equity, mc, wf, Some(params))
+                    (equity, mc, wf, params)
                 } else {
                     (Vec::new(), None, None, None)
                 };
