@@ -38,8 +38,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use std::path::PathBuf;
+use std::io::{Read, Write};
 use tokio::sync::RwLock;
 use rand::SeedableRng;
+use serde::{Serialize, Deserialize};
 
 use config::GeneticConfig;
 use genetic::{Chromosome, FitnessResult};
@@ -48,6 +51,113 @@ use genetic::chromosome::AvellanedaStoikovChromosome;
 use super::broker_client::BacktestBrokerClient;
 use crate::{log_info_structured, log_warn, log_debug, log_error};
 use crate::logging_facade::MAIN_LOGGER;
+
+/// Checkpoint for resuming GA optimization after restart
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GACheckpoint {
+    /// Job ID this checkpoint belongs to
+    pub job_id: String,
+    /// Current generation (0-indexed, next generation to run)
+    pub generation: usize,
+    /// Current population
+    pub population: Vec<AvellanedaStoikovChromosome>,
+    /// Best chromosome found so far
+    pub best: AvellanedaStoikovChromosome,
+    /// Best fitness score
+    pub best_fitness: f64,
+    /// Generations without improvement counter
+    pub generations_without_improvement: usize,
+    /// Data cache key
+    pub data_cache_key: String,
+    /// RNG seed for reproducibility
+    pub rng_seed: u64,
+    /// Timestamp when checkpoint was created
+    pub created_at: i64,
+}
+
+impl GACheckpoint {
+    /// Get the checkpoint directory path
+    fn checkpoint_dir() -> PathBuf {
+        let data_dir = std::env::var("DATA_DIR")
+            .unwrap_or_else(|_| "/data/historical".to_string());
+        PathBuf::from(data_dir).join("checkpoints")
+    }
+    
+    /// Get the checkpoint file path for a job
+    fn checkpoint_path(job_id: &str) -> PathBuf {
+        Self::checkpoint_dir().join(format!("{}.checkpoint.json", job_id))
+    }
+    
+    /// Save checkpoint to disk
+    pub fn save(&self) -> Result<(), std::io::Error> {
+        let dir = Self::checkpoint_dir();
+        std::fs::create_dir_all(&dir)?;
+        
+        let path = Self::checkpoint_path(&self.job_id);
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        
+        // Write to temp file first, then rename for atomic operation
+        let temp_path = path.with_extension("tmp");
+        let mut file = std::fs::File::create(&temp_path)?;
+        file.write_all(json.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temp_path, &path)?;
+        
+        eprintln!("💾 [CHECKPOINT] Saved checkpoint for job {} at generation {}", 
+            self.job_id, self.generation);
+        
+        Ok(())
+    }
+    
+    /// Load checkpoint from disk if it exists
+    pub fn load(job_id: &str) -> Option<Self> {
+        let path = Self::checkpoint_path(job_id);
+        
+        if !path.exists() {
+            eprintln!("📂 [CHECKPOINT] No checkpoint found for job {}", job_id);
+            return None;
+        }
+        
+        match std::fs::File::open(&path) {
+            Ok(mut file) => {
+                let mut contents = String::new();
+                if file.read_to_string(&mut contents).is_err() {
+                    eprintln!("❌ [CHECKPOINT] Failed to read checkpoint file");
+                    return None;
+                }
+                
+                match serde_json::from_str::<GACheckpoint>(&contents) {
+                    Ok(checkpoint) => {
+                        eprintln!("✅ [CHECKPOINT] Loaded checkpoint for job {} at generation {}", 
+                            checkpoint.job_id, checkpoint.generation);
+                        Some(checkpoint)
+                    }
+                    Err(e) => {
+                        eprintln!("❌ [CHECKPOINT] Failed to parse checkpoint: {:?}", e);
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("❌ [CHECKPOINT] Failed to open checkpoint file: {:?}", e);
+                None
+            }
+        }
+    }
+    
+    /// Delete checkpoint file after successful completion
+    pub fn delete(job_id: &str) {
+        let path = Self::checkpoint_path(job_id);
+        if path.exists() {
+            if let Err(e) = std::fs::remove_file(&path) {
+                eprintln!("⚠️ [CHECKPOINT] Failed to delete checkpoint: {:?}", e);
+            } else {
+                eprintln!("🗑️ [CHECKPOINT] Deleted checkpoint for job {}", job_id);
+            }
+        }
+    }
+}
 
 /// Timeout for waiting for all chromosome results
 const EVAL_TIMEOUT_SECS: u64 = 900; // 15 minutes per generation max
@@ -455,7 +565,7 @@ impl DistributedGACoordinator {
     /// Run distributed genetic optimization
     /// 
     /// This runs the GA algorithm, distributing chromosome evaluations
-    /// across all available workers.
+    /// across all available workers. Supports checkpointing for restart recovery.
     pub async fn run(&self) -> Result<(AvellanedaStoikovChromosome, f64), CoordinatorError> {
         let cache_key = self.data_cache_key.as_ref()
             .ok_or(CoordinatorError::DataNotBroadcast)?;
@@ -464,24 +574,55 @@ impl DistributedGACoordinator {
         let job_tag = format!("[Job {}] ", self.job_id);
         let optimization_start = Instant::now();
         
-        log_info_structured!(MAIN_LOGGER, "DISTRIBUTED_GA_START",
-            "event" => "DISTRIBUTED_GA_START",
-            "job_id" => &self.job_id,
-            "population" => config.population_size,
-            "generations" => config.generations
-        );
+        // Try to load checkpoint for resume
+        let checkpoint = GACheckpoint::load(&self.job_id);
+        let start_generation: usize;
+        let mut rng: rand::rngs::StdRng;
+        let mut population: Vec<AvellanedaStoikovChromosome>;
+        let mut best: AvellanedaStoikovChromosome;
+        let mut best_fitness: f64;
+        let mut generations_without_improvement: usize;
         
-        let mut rng = rand::rngs::StdRng::from_entropy();
+        if let Some(cp) = checkpoint {
+            // Resume from checkpoint
+            log_info_structured!(MAIN_LOGGER, "DISTRIBUTED_GA_RESUME",
+                "event" => "DISTRIBUTED_GA_RESUME",
+                "job_id" => &self.job_id,
+                "resume_generation" => cp.generation,
+                "best_fitness" => cp.best_fitness
+            );
+            eprintln!("🔄 [GA] RESUMING from checkpoint at generation {}/{}", 
+                cp.generation, config.generations);
+            
+            start_generation = cp.generation;
+            rng = rand::rngs::StdRng::seed_from_u64(cp.rng_seed);
+            population = cp.population;
+            best = cp.best;
+            best_fitness = cp.best_fitness;
+            generations_without_improvement = cp.generations_without_improvement;
+        } else {
+            // Fresh start
+            log_info_structured!(MAIN_LOGGER, "DISTRIBUTED_GA_START",
+                "event" => "DISTRIBUTED_GA_START",
+                "job_id" => &self.job_id,
+                "population" => config.population_size,
+                "generations" => config.generations
+            );
+            
+            start_generation = 0;
+            rng = rand::rngs::StdRng::from_entropy();
+            
+            // Initialize population
+            population = (0..config.population_size)
+                .map(|_| AvellanedaStoikovChromosome::random(&mut rng))
+                .collect();
+            
+            best = population[0].clone();
+            best_fitness = 0.0;
+            generations_without_improvement = 0;
+        }
         
-        // Initialize population
-        let mut population: Vec<AvellanedaStoikovChromosome> = (0..config.population_size)
-            .map(|_| AvellanedaStoikovChromosome::random(&mut rng))
-            .collect();
-        
-        let mut best = population[0].clone();
-        let mut best_fitness = 0.0;
         let mut _best_equity_curve = Vec::<f64>::new();
-        let mut generations_without_improvement = 0;
         const CONVERGENCE_THRESHOLD: usize = 5;
         
         let elite_size = (config.population_size as f64 * 0.05).ceil() as usize;
@@ -489,7 +630,7 @@ impl DistributedGACoordinator {
         // Subscribe to results channel
         let mut result_receiver = self.broker.subscribe_chromosome_results();
         
-        for generation in 0..config.generations {
+        for generation in start_generation..config.generations {
             let generation_start = Instant::now();
             
             log_info_structured!(MAIN_LOGGER, "DISTRIBUTED_GA_GEN_START",
@@ -608,6 +749,8 @@ impl DistributedGACoordinator {
                     "generation" => generation + 1,
                     "best_fitness" => best_fitness
                 );
+                // Delete checkpoint on convergence
+                GACheckpoint::delete(&self.job_id);
                 break;
             }
             
@@ -637,7 +780,24 @@ impl DistributedGACoordinator {
                 }
             }
             
-            population = new_population;
+            population = new_population.clone();
+            
+            // Save checkpoint after each generation
+            let checkpoint = GACheckpoint {
+                job_id: self.job_id.clone(),
+                generation: generation + 1, // Next generation to run
+                population: new_population,
+                best: best.clone(),
+                best_fitness,
+                generations_without_improvement,
+                data_cache_key: cache_key.clone(),
+                rng_seed: rand::Rng::gen(&mut rng), // Save a seed for RNG state
+                created_at: chrono::Utc::now().timestamp(),
+            };
+            
+            if let Err(e) = checkpoint.save() {
+                log_warn!(MAIN_LOGGER, "Failed to save checkpoint: {:?}", e);
+            }
             
             let gen_elapsed = generation_start.elapsed().as_secs_f64();
             log_info_structured!(MAIN_LOGGER, "DISTRIBUTED_GA_GEN_COMPLETE",
@@ -648,6 +808,9 @@ impl DistributedGACoordinator {
                 "chromosomes_per_sec" => self.config.genetic_config.population_size as f64 / gen_elapsed
             );
         }
+        
+        // Delete checkpoint on successful completion
+        GACheckpoint::delete(&self.job_id);
         
         let total_time = optimization_start.elapsed().as_secs_f64();
         log_info_structured!(MAIN_LOGGER, "DISTRIBUTED_GA_COMPLETE",
