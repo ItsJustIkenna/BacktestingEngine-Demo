@@ -1149,10 +1149,10 @@ impl DistributedGAWorker {
                 .map(|info| info.path.clone())
         };
         
-        let path = match path {
+        let path: std::path::PathBuf = match path {
             Some(p) => {
                 // Verify the file still exists on disk
-                if std::path::Path::new(&p).exists() {
+                if p.exists() {
                     println!("🔬 [WORKER {}] Binary file path: {:?} (file exists)", self.worker_id, p);
                     p
                 } else {
@@ -1163,11 +1163,11 @@ impl DistributedGAWorker {
             }
             None => {
                 // Fallback: try to find the file in the data directory
-                let fallback_path = format!("{}/historical/{}_{}_Kraken.bin", 
-                    self.data_dir, 
-                    request.symbol.replace("/", "_"),
-                    request.exchange);
-                if std::path::Path::new(&fallback_path).exists() {
+                let fallback_path = self.data_dir.join("historical")
+                    .join(format!("{}_{}_Kraken.bin", 
+                        request.symbol.replace("/", "_"),
+                        request.exchange));
+                if fallback_path.exists() {
                     println!("🔬 [WORKER {}] Using fallback binary path: {:?}", self.worker_id, fallback_path);
                     fallback_path
                 } else {
