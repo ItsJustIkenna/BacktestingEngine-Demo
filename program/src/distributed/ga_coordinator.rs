@@ -736,13 +736,18 @@ impl DistributedGACoordinator {
         // Subscribe to results channel
         let mut result_receiver = self.broker.subscribe_chromosome_results();
         
+        println!("📤 [COORDINATOR] Publishing final evaluation request for job {}", self.job_id);
+        
         // Publish the request
         self.broker.publish_chromosome_request(request).await
             .map_err(|e| CoordinatorError::BrokerError(e.to_string()))?;
         
+        println!("📤 [COORDINATOR] Final evaluation request published, waiting for response...");
+        
         // Wait for result with timeout
         let timeout = Duration::from_secs(EVAL_TIMEOUT_SECS);
         let start = Instant::now();
+        let mut results_seen = 0u32;
         
         loop {
             match tokio::time::timeout(
@@ -750,7 +755,12 @@ impl DistributedGACoordinator {
                 result_receiver.recv()
             ).await {
                 Ok(Ok(result)) => {
+                    results_seen += 1;
+                    println!("📥 [COORDINATOR] Received result #{}: job={}, is_final={}, worker={}, trades={}",
+                        results_seen, result.job_id, result.is_final_evaluation, result.worker_id, result.num_trades);
+                    
                     if result.job_id == self.job_id && result.is_final_evaluation {
+                        println!("✅ [COORDINATOR] This is our FINAL result! PnL={:.2}", result.net_pnl);
                         log_info_structured!(MAIN_LOGGER, "GA_FINAL_EVAL_COMPLETE",
                             "event" => "GA_FINAL_EVAL_COMPLETE",
                             "job_id" => &self.job_id,
@@ -759,16 +769,23 @@ impl DistributedGACoordinator {
                             "num_trades" => result.num_trades
                         );
                         return Ok(result);
+                    } else {
+                        println!("⏭️ [COORDINATOR] Ignoring result (wrong job or not final)");
                     }
                 }
                 Ok(Err(_)) => {
+                    println!("❌ [COORDINATOR] Channel closed while waiting for final evaluation");
                     return Err(CoordinatorError::BrokerError(
                         "Channel closed while waiting for final evaluation".to_string()
                     ));
                 }
                 Err(_) => {
                     // Timeout on this recv, check overall timeout
+                    println!("⏳ [COORDINATOR] No result in 30s, elapsed={:.1}s/{:.1}s, seen {} results",
+                        start.elapsed().as_secs_f64(), timeout.as_secs_f64(), results_seen);
                     if start.elapsed() > timeout {
+                        println!("❌ [COORDINATOR] TIMEOUT waiting for final evaluation after {:.1}s",
+                            start.elapsed().as_secs_f64());
                         return Err(CoordinatorError::Timeout(
                             "Timeout waiting for final evaluation result".to_string()
                         ));
