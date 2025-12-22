@@ -416,15 +416,38 @@ impl JobQueue for PostgresQueue {
         let phase_details_str = serde_json::to_string(&phase_details)?;
         let mut conn = self.get_conn_with_timeout().await?;
         
-        // Use raw SQL to update JSONB field
-        diesel::sql_query(
-            "UPDATE backtest_jobs SET current_phase = $1, phase_details = $2::jsonb WHERE job_id = $3"
-        )
-        .bind::<diesel::sql_types::Text, _>(phase)
-        .bind::<diesel::sql_types::Text, _>(&phase_details_str)
-        .bind::<diesel::sql_types::Text, _>(job_id)
-        .execute(&mut conn)
-        .await?;
+        // Extract generation info from phase_details if present
+        let current_gen = phase_details.get("current_generation")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32);
+        let total_gen = phase_details.get("total_generations")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32);
+        
+        // Update phase and phase_details, and optionally generation columns
+        if let (Some(cur), Some(tot)) = (current_gen, total_gen) {
+            // Update all fields including generation
+            diesel::sql_query(
+                "UPDATE backtest_jobs SET current_phase = $1, phase_details = $2::jsonb, current_generation = $3, total_generations = $4 WHERE job_id = $5"
+            )
+            .bind::<diesel::sql_types::Text, _>(phase)
+            .bind::<diesel::sql_types::Text, _>(&phase_details_str)
+            .bind::<diesel::sql_types::Integer, _>(cur)
+            .bind::<diesel::sql_types::Integer, _>(tot)
+            .bind::<diesel::sql_types::Text, _>(job_id)
+            .execute(&mut conn)
+            .await?;
+        } else {
+            // Just update phase and phase_details
+            diesel::sql_query(
+                "UPDATE backtest_jobs SET current_phase = $1, phase_details = $2::jsonb WHERE job_id = $3"
+            )
+            .bind::<diesel::sql_types::Text, _>(phase)
+            .bind::<diesel::sql_types::Text, _>(&phase_details_str)
+            .bind::<diesel::sql_types::Text, _>(job_id)
+            .execute(&mut conn)
+            .await?;
+        }
         
         Ok(())
     }
