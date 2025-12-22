@@ -429,10 +429,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                         
                                         // Now run the distributed GA
+                                        eprintln!("🚀 [COORDINATOR] Starting GA run at {:?}", chrono::Utc::now());
                                         match coordinator.run().await {
                                             Ok((best_chromosome, best_fitness)) => {
-                                                eprintln!("✅ [COORDINATOR] Job {} GA completed: fitness={:.4}", job.id, best_fitness);
-                                                eprintln!("� [COORDINATOR] Best chromosome: risk_aversion={:.4}, order_size_pct={:.4}, inventory_target={:.4}",
+                                                eprintln!("✅ [COORDINATOR] Job {} GA completed at {:?}: fitness={:.4}", job.id, chrono::Utc::now(), best_fitness);
+                                                eprintln!("🏆 [COORDINATOR] Best chromosome: risk_aversion={:.4}, order_size_pct={:.4}, inventory_target={:.4}",
                                                     best_chromosome.risk_aversion, best_chromosome.order_size_pct, best_chromosome.inventory_target);
                                                 eprintln!("🔄 [COORDINATOR] Sending final evaluation request (MC={}, WF={})...",
                                                     job.params.monte_carlo_enabled, job.params.walk_forward_enabled);
