@@ -364,6 +364,16 @@ pub struct FastSimResult {
     pub annualized_return: f64,
     /// Number of trading days in the simulation
     pub trading_days: f64,
+    /// Best single trade P&L
+    pub best_trade: f64,
+    /// Worst single trade P&L
+    pub worst_trade: f64,
+    /// Sortino ratio (downside deviation only)
+    pub sortino_ratio: f64,
+    /// Calmar ratio (annualized return / max drawdown)
+    pub calmar_ratio: f64,
+    /// Individual trade P&L values for Monte Carlo
+    pub trade_returns: Vec<f64>,
 }
 
 impl Default for FastSimResult {
@@ -382,6 +392,11 @@ impl Default for FastSimResult {
             volatility: 0.0,
             annualized_return: 0.0,
             trading_days: 0.0,
+            best_trade: 0.0,
+            worst_trade: 0.0,
+            sortino_ratio: 0.0,
+            calmar_ratio: 0.0,
+            trade_returns: vec![],
         }
     }
 }
@@ -628,6 +643,24 @@ impl<'a> FastSimulator<'a> {
             0.0
         };
         
+        // Best and worst trade from round-trip P&Ls
+        let best_trade = round_trip_pnls.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let worst_trade = round_trip_pnls.iter().cloned().fold(f64::INFINITY, f64::min);
+        let best_trade = if best_trade.is_finite() { best_trade } else { 0.0 };
+        let worst_trade = if worst_trade.is_finite() { worst_trade } else { 0.0 };
+        
+        // Sortino ratio: like Sharpe but only penalizes downside volatility
+        let sortino_ratio = calculate_sortino_ratio(&equity_curve, trading_days);
+        
+        // Calmar ratio: annualized return / max drawdown
+        let calmar_ratio = if max_drawdown > 0.001 {
+            annualized_return / max_drawdown
+        } else if annualized_return > 0.0 {
+            10.0 // Cap at 10 for very low drawdown
+        } else {
+            0.0
+        };
+        
         FastSimResult {
             total_pnl,
             sharpe_ratio,
@@ -642,6 +675,11 @@ impl<'a> FastSimulator<'a> {
             volatility,
             annualized_return,
             trading_days,
+            best_trade,
+            worst_trade,
+            sortino_ratio,
+            calmar_ratio,
+            trade_returns: round_trip_pnls,
         }
     }
 }
@@ -690,6 +728,55 @@ fn calculate_sharpe_and_volatility(equity: &[f64], trading_days: f64) -> (f64, f
     (sharpe, annualized_volatility)
 }
 
+/// Calculate Sortino ratio from equity curve
+/// Like Sharpe but only penalizes downside volatility
+fn calculate_sortino_ratio(equity: &[f64], trading_days: f64) -> f64 {
+    if equity.len() < 2 {
+        return 0.0;
+    }
+    
+    // Calculate returns
+    let mut returns = Vec::with_capacity(equity.len() - 1);
+    for i in 1..equity.len() {
+        if equity[i - 1] > 0.0 {
+            returns.push((equity[i] - equity[i - 1]) / equity[i - 1]);
+        }
+    }
+    
+    if returns.is_empty() {
+        return 0.0;
+    }
+    
+    // Mean of all returns
+    let mean: f64 = returns.iter().sum::<f64>() / returns.len() as f64;
+    
+    // Downside deviation: only negative returns
+    let downside_returns: Vec<f64> = returns.iter()
+        .filter(|&&r| r < 0.0)
+        .cloned()
+        .collect();
+    
+    if downside_returns.is_empty() {
+        // All positive returns - return high Sortino
+        return if mean > 0.0 { 10.0 } else { 0.0 };
+    }
+    
+    let downside_variance: f64 = downside_returns.iter()
+        .map(|r| r.powi(2))
+        .sum::<f64>() / returns.len() as f64; // Use total count for proper weighting
+    let downside_std = downside_variance.sqrt();
+    
+    if downside_std < 1e-10 {
+        return 0.0;
+    }
+    
+    // Annualize
+    let samples_per_day = returns.len() as f64 / trading_days.max(0.01);
+    let annualization = (252.0 * samples_per_day).sqrt().min(50.0);
+    
+    (mean / downside_std) * annualization
+}
+
 /// Convert FastSimResult to standard BacktestResult for compatibility
 impl From<FastSimResult> for crate::types::BacktestResult {
     fn from(fast: FastSimResult) -> Self {
@@ -723,6 +810,18 @@ impl From<FastSimResult> for crate::types::BacktestResult {
             commission_by_exchange: Default::default(),
         });
         result.net_profit = Some(fast.total_pnl);
+        result.volatility = Some(fast.volatility);
+        
+        // New metrics
+        result.sortino_ratio = Some(fast.sortino_ratio);
+        result.calmar_ratio = Some(fast.calmar_ratio);
+        result.trade_returns = fast.trade_returns;
+        
+        // Avg trade return
+        if fast.num_trades > 0 && !result.trade_returns.is_empty() {
+            let avg = result.trade_returns.iter().sum::<f64>() / result.trade_returns.len() as f64;
+            result.avg_trade_return = Some(avg);
+        }
         
         result
     }

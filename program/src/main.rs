@@ -501,6 +501,61 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         let equity_curve: Vec<f64> = serde_json::from_slice(&eval_result.equity_curve)
                                                             .unwrap_or_default();
                                                         
+                                                        // Parse closed trades data to get individual trade P&Ls
+                                                        let trade_returns: Vec<f64> = serde_json::from_slice(&eval_result.closed_trades_data)
+                                                            .unwrap_or_default();
+                                                        
+                                                        // Calculate best/worst trade from trade returns
+                                                        let best_trade = trade_returns.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                                                        let worst_trade = trade_returns.iter().cloned().fold(f64::INFINITY, f64::min);
+                                                        let best_trade = if best_trade.is_finite() { Some(best_trade) } else { None };
+                                                        let worst_trade = if worst_trade.is_finite() { Some(worst_trade) } else { None };
+                                                        
+                                                        // Calculate Sortino ratio (only penalizes downside volatility)
+                                                        let sortino_ratio = if equity_curve.len() > 1 {
+                                                            let returns: Vec<f64> = equity_curve.windows(2)
+                                                                .filter_map(|w| if w[0] > 0.0 { Some((w[1] - w[0]) / w[0]) } else { None })
+                                                                .collect();
+                                                            if !returns.is_empty() {
+                                                                let mean: f64 = returns.iter().sum::<f64>() / returns.len() as f64;
+                                                                let downside_variance: f64 = returns.iter()
+                                                                    .filter(|&&r| r < 0.0)
+                                                                    .map(|r| r.powi(2))
+                                                                    .sum::<f64>() / returns.len() as f64;
+                                                                let downside_std = downside_variance.sqrt();
+                                                                if downside_std > 1e-10 {
+                                                                    Some((mean / downside_std) * (252.0_f64).sqrt())
+                                                                } else if mean > 0.0 {
+                                                                    Some(10.0) // All positive returns
+                                                                } else {
+                                                                    Some(0.0)
+                                                                }
+                                                            } else {
+                                                                None
+                                                            }
+                                                        } else {
+                                                            None
+                                                        };
+                                                        
+                                                        // Calculate Calmar ratio (annualized return / max drawdown)
+                                                        let calmar_ratio = if equity_curve.len() > 1 && eval_result.max_drawdown > 0.001 {
+                                                            let total_return = eval_result.net_pnl / eval_result.starting_capital;
+                                                            // Assume ~252 trading days per year, scale by actual period
+                                                            let annualized = ((1.0 + total_return).powf(252.0 / (equity_curve.len() as f64 / 100.0).max(1.0)) - 1.0);
+                                                            Some(annualized / eval_result.max_drawdown)
+                                                        } else {
+                                                            None
+                                                        };
+                                                        
+                                                        // Calculate average trade return
+                                                        let avg_trade_return = if !trade_returns.is_empty() {
+                                                            Some(trade_returns.iter().sum::<f64>() / trade_returns.len() as f64)
+                                                        } else if eval_result.num_trades > 0 {
+                                                            Some(eval_result.net_pnl / eval_result.num_trades as f64)
+                                                        } else {
+                                                            None
+                                                        };
+                                                        
                                                         program::job_queue::BacktestResult {
                                                             job_id: job.id.clone(),
                                                             strategy_type: Some(job.params.strategy_type.clone()),
@@ -531,15 +586,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                             unrealized_pnl: None,
                                                             annualized_return: None, // Computed from equity curve in save_result
                                                             volatility: None, // Computed from equity curve in save_result
-                                                            sortino_ratio: None,
-                                                            calmar_ratio: None,
-                                                            avg_trade_return: if eval_result.num_trades > 0 {
-                                                                Some(eval_result.net_pnl / eval_result.num_trades as f64)
-                                                            } else {
-                                                                None
-                                                            },
-                                                            best_trade: None,
-                                                            worst_trade: None,
+                                                            sortino_ratio,
+                                                            calmar_ratio,
+                                                            avg_trade_return,
+                                                            best_trade,
+                                                            worst_trade,
                                                             avg_time_in_trade: None,
                                                             value_at_risk_95: None,
                                                             expected_shortfall_95: None,
