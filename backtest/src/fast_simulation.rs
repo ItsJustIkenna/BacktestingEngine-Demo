@@ -189,6 +189,55 @@ impl MarketFeatures {
             cum_sell_volume,
         }
     }
+    
+    /// Create MarketFeatures from a TickSource with a specific range
+    /// 
+    /// # Arguments
+    /// * `source` - A TickSource (typically BinaryFileReader)
+    /// * `start_idx` - Starting tick index (inclusive)
+    /// * `end_idx` - Ending tick index (exclusive)
+    pub fn from_tick_source_range<T: dataloader::TickSource>(source: &T, start_idx: usize, end_idx: usize) -> Self {
+        let n = end_idx.saturating_sub(start_idx).min(source.len().saturating_sub(start_idx));
+        let mut prices = Vec::with_capacity(n);
+        let mut timestamps = Vec::with_capacity(n);
+        let mut trade_sides = Vec::with_capacity(n);
+        let mut volumes = Vec::with_capacity(n);
+        
+        // Extract data from tick source in the specified range
+        for i in start_idx..end_idx.min(source.len()) {
+            if let Some(tick) = source.get(i) {
+                prices.push(tick.price());
+                timestamps.push(tick.timestamp().timestamp_millis());
+                volumes.push(tick.quantity());
+                trade_sides.push(match tick.side() {
+                    dataloader::Side::Buy => 1.0,
+                    dataloader::Side::Sell => -1.0,
+                });
+            }
+            
+            let processed = i - start_idx;
+            if processed > 0 && processed % 1_000_000 == 0 {
+                eprintln!("  ... extracted {}/{}M tick features (range)", processed / 1_000_000, n / 1_000_000);
+            }
+        }
+        eprintln!("  Tick feature extraction complete: {} records (range [{}, {}))", prices.len(), start_idx, end_idx);
+        
+        // Compute derived features
+        let log_returns = compute_log_returns(&prices);
+        let volatility = compute_ewma_volatility(&log_returns, 0.94);
+        let (cum_buy_volume, cum_sell_volume) = compute_cumulative_volumes(&volumes, &trade_sides);
+        
+        Self {
+            prices,
+            timestamps,
+            log_returns,
+            volatility,
+            trade_sides,
+            volumes,
+            cum_buy_volume,
+            cum_sell_volume,
+        }
+    }
 }
 
 /// Compute log returns from prices (vectorized)

@@ -1009,15 +1009,10 @@ impl DistributedGAWorker {
         request: &protocol::broker::messages::ChromosomeEvalRequest,
         chromosome: &AvellanedaStoikovChromosome,
     ) {
-        use data_prep::{BinaryFileReader, SlicedTickSource};
-        use dataloader::TickSource;
-        use backtest::SimulationLoop;
-        use strategy::StrategyManager;
-        use strategy::strategies::avellaneda_stoikov::{AvellanedaStoikovStrategy, AvellanedaStoikovParams};
-        use orderbook::{OrderBook, OrderBookConfig};
-        use portfoliomanager::PortfolioState;
-        use riskmanager::RiskManager;
-        use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
+        use data_prep::BinaryFileReader;
+        use dataloader::{Tick, TickSource};
+        use backtest::fast_simulation::{FastSimulator, FastASParams, MarketFeatures};
+        use bigdecimal::ToPrimitive;
         
         let start = Instant::now();
         
@@ -1078,131 +1073,51 @@ impl DistributedGAWorker {
             }
         };
         
-        // Get initial price from first tick (same pattern as evaluate_with_streaming_sim)
-        let initial_price = reader.get(0)
-            .map(|t| t.price())
-            .unwrap_or(50000.0);
+        let total_ticks = reader.len();
         
-        // Get first timestamp
-        let first_timestamp = reader.get(0)
-            .map(|t| t.timestamp())
-            .unwrap_or_else(chrono::Utc::now);
-        
-        // Setup strategy with chromosome params
-        let order_size_units = (request.initial_capital * chromosome.order_size_pct) / initial_price;
-        
-        let params = AvellanedaStoikovParams {
-            risk_aversion: chromosome.risk_aversion,
-            order_size: order_size_units,
-            order_size_pct: chromosome.order_size_pct,
-            initial_capital: request.initial_capital,
-            window_ms: chromosome.window_ms,
-            min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms,
-            inventory_target: chromosome.inventory_target,
-            volatility_cap: chromosome.volatility_cap,
-            time_horizon_minutes: chromosome.time_horizon_minutes,
-            market_depth_k: chromosome.market_depth_k,
-            min_spread_bps: chromosome.min_spread_bps,
-            max_trades_per_minute: chromosome.max_trades_per_minute,
-            take_profit_pct: chromosome.take_profit_pct,
-            stop_loss_pct: chromosome.stop_loss_pct,
-            volatility_adjustment_factor: chromosome.volatility_adjustment_factor,
-            inventory_penalty_factor: chromosome.inventory_penalty_factor,
-            trend_sensitivity: chromosome.trend_sensitivity,
-            flow_sensitivity: chromosome.flow_sensitivity,
-            ..AvellanedaStoikovParams::default()
-        };
-        
-        let strategy = AvellanedaStoikovStrategy::new(params);
-        let mut strategy_manager = StrategyManager::new();
-        
-        let strategy_config = strategy::StrategyConfig {
-            id: "final-eval".to_string(),
-            name: "Avellaneda-Stoikov".to_string(),
-            strategy_type: "AvellanedaStoikov".to_string(),
-            symbol: request.symbol.clone(),
-            exchange: request.exchange.clone(),
-            parameters: std::collections::HashMap::new(),
-            risk_limits: strategy::config::RiskLimits::default(),
-            enabled: true,
-        };
-        
-        if strategy_manager.register_strategy(strategy_config, strategy).is_err() {
-            self.send_error_result(request, "Failed to register strategy").await;
-            return;
-        }
-        
-        let mut orderbook = OrderBook::new(
-            request.symbol.clone(),
-            request.exchange.clone(),
-            OrderBookConfig::default(),
-        );
-        
-        // Set up portfolio with 50% inventory (same as GA evaluation)
-        let inventory_pct = 0.5;
-        let quote_balance = request.initial_capital * (1.0 - inventory_pct);
-        let base_value = request.initial_capital * inventory_pct;
-        let base_quantity = base_value / initial_price;
-        
-        let mut portfolio = PortfolioState::with_inventory(
-            request.symbol.clone(),
-            BigDecimal::from_f64(quote_balance).unwrap_or_default(),
-            base_quantity,
-            BigDecimal::from_f64(initial_price).unwrap_or_default(),
-            first_timestamp,
-        );
-        let mut risk_manager = RiskManager::new();
-        
-        let mut backtest_config = config::BacktestConfig::default();
-        backtest_config.trading.initial_capital = request.initial_capital;
-        backtest_config.analysis.skip_genetic_optimization = true;
-        
-        // Run final backtest on VALIDATE portion of data (test_end_idx to total_ticks)
-        // This is the held-out data that was never seen during training or walk-forward
-        let mut sim_loop = SimulationLoop::new();
-        let backtest_result = if request.test_end_idx > 0 && request.total_ticks > request.test_end_idx {
-            // Use only validate portion: [test_end_idx, total_ticks)
-            let validate_source = SlicedTickSource::new(
-                &reader, 
-                request.test_end_idx as usize, 
-                request.total_ticks as usize,
-            );
-            log_info!(MAIN_LOGGER, "Final backtest on VALIDATE data: ticks [{}, {})", 
-                request.test_end_idx, request.total_ticks);
-            sim_loop.run_streaming(
-                &mut strategy_manager,
-                &mut orderbook,
-                &mut portfolio,
-                &mut risk_manager,
-                &validate_source,
-                &request.symbol,
-                &request.exchange,
-                &backtest_config,
-            ).await
+        // Determine data range for final evaluation
+        // Use VALIDATE portion: [test_end_idx, total_ticks) if configured, else full data
+        let (start_idx, end_idx) = if request.test_end_idx > 0 && request.total_ticks > request.test_end_idx {
+            (request.test_end_idx as usize, request.total_ticks as usize)
         } else {
-            // Backward compatibility: use full data
-            println!("🔬 [WORKER {}] Final backtest on FULL data (no split configured)", self.worker_id);
-            log_info!(MAIN_LOGGER, "Final backtest on full data (no split configured)");
-            sim_loop.run_streaming(
-                &mut strategy_manager,
-                &mut orderbook,
-                &mut portfolio,
-                &mut risk_manager,
-                &reader,
-                &request.symbol,
-                &request.exchange,
-                &backtest_config,
-            ).await
+            (0, total_ticks)
         };
         
-        // Extract metrics from backtest result
-        let net_pnl = backtest_result.total_pnl.to_f64().unwrap_or(0.0);
-        let sharpe = backtest_result.sharpe_ratio.unwrap_or(0.0);
-        let num_trades = backtest_result.num_trades as i32;
-        let max_dd = backtest_result.max_drawdown.to_f64().unwrap_or(0.0);
-        let win_rate = backtest_result.win_rate.unwrap_or(0.0);
-        let profit_factor = backtest_result.profit_factor.unwrap_or(0.0);
-        let closed_trades = backtest_result.closed_trades as i32;
+        println!("🔬 [WORKER {}] Final backtest on ticks [{}, {}) - {} ticks", 
+            self.worker_id, start_idx, end_idx, end_idx - start_idx);
+        
+        // Build market features for the target data range
+        let features_start = std::time::Instant::now();
+        let features = MarketFeatures::from_tick_source_range(&reader, start_idx, end_idx);
+        println!("📊 [WORKER {}] Features computed in {:.2}s for {} points", 
+            self.worker_id, features_start.elapsed().as_secs_f64(), features.len());
+        
+        // Convert chromosome to fast simulation parameters
+        let fast_params = FastASParams {
+            risk_aversion: chromosome.risk_aversion,
+            inventory_target: chromosome.inventory_target,
+            order_size_pct: chromosome.order_size_pct,
+            volatility_cap: chromosome.volatility_cap,
+            min_spread_bps: chromosome.min_spread_bps,
+            time_horizon_minutes: chromosome.time_horizon_minutes,
+            fee_rate: 0.001, // Default 0.1% fee
+        };
+        
+        // Run vectorized simulation (fast!)
+        let simulator = FastSimulator::new(&features, request.initial_capital);
+        let fast_result = simulator.evaluate(&fast_params);
+        
+        // Convert to standard BacktestResult for fitness calculation
+        let backtest_result: backtest::types::BacktestResult = fast_result.clone().into();
+        
+        // Extract metrics
+        let net_pnl = fast_result.total_pnl;
+        let sharpe = fast_result.sharpe_ratio;
+        let num_trades = fast_result.num_trades as i32;
+        let max_dd = fast_result.max_drawdown;
+        let win_rate = fast_result.win_rate;
+        let profit_factor = fast_result.profit_factor;
+        let closed_trades = fast_result.num_trades as i32;
         let total_orders = (backtest_result.num_trades * 2) as i32; // Estimate
         let ending_capital = request.initial_capital + net_pnl;
         let total_return_pct = (net_pnl / request.initial_capital) * 100.0;
