@@ -18,6 +18,8 @@
 //! let result = simulator.evaluate(&chromosome);
 //! ```
 
+use dataloader::Tick;
+
 /// Pre-computed market features for fast simulation
 #[derive(Debug)]
 pub struct MarketFeatures {
@@ -136,6 +138,56 @@ impl MarketFeatures {
     /// Check if empty
     pub fn is_empty(&self) -> bool {
         self.prices.is_empty()
+    }
+    
+    /// Create MarketFeatures from a TickSource (mmap'd binary file)
+    /// 
+    /// This is optimized for distributed workers that read from binary files
+    /// rather than in-memory MarketData arrays.
+    /// 
+    /// # Arguments
+    /// * `source` - A TickSource (typically BinaryFileReader or SlicedTickSource)
+    /// * `max_ticks` - Maximum number of ticks to read (for train/test split)
+    pub fn from_tick_source<T: dataloader::TickSource>(source: &T, max_ticks: usize) -> Self {
+        let n = max_ticks.min(source.len());
+        let mut prices = Vec::with_capacity(n);
+        let mut timestamps = Vec::with_capacity(n);
+        let mut trade_sides = Vec::with_capacity(n);
+        let mut volumes = Vec::with_capacity(n);
+        
+        // Extract data from tick source
+        for i in 0..n {
+            if let Some(tick) = source.get(i) {
+                prices.push(tick.price());
+                timestamps.push(tick.timestamp().timestamp_millis());
+                volumes.push(tick.quantity());
+                trade_sides.push(match tick.side() {
+                    dataloader::Side::Buy => 1.0,
+                    dataloader::Side::Sell => -1.0,
+                });
+            }
+            
+            if i > 0 && i % 1_000_000 == 0 {
+                eprintln!("  ... extracted {}/{}M tick features", i / 1_000_000, n / 1_000_000);
+            }
+        }
+        eprintln!("  Tick feature extraction complete: {} records", prices.len());
+        
+        // Compute derived features
+        let log_returns = compute_log_returns(&prices);
+        let volatility = compute_ewma_volatility(&log_returns, 0.94);
+        let (cum_buy_volume, cum_sell_volume) = compute_cumulative_volumes(&volumes, &trade_sides);
+        
+        Self {
+            prices,
+            timestamps,
+            log_returns,
+            volatility,
+            trade_sides,
+            volumes,
+            cum_buy_volume,
+            cum_sell_volume,
+        }
     }
 }
 

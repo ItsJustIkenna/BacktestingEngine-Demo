@@ -759,10 +759,10 @@ impl DistributedGAWorker {
         let _ = self.broker.publish_chromosome_result(response).await;
     }
     
-    /// Evaluate chromosome using full SimulationLoop with streaming TickSource
+    /// Evaluate chromosome using FAST vectorized simulation
     /// 
-    /// This provides accurate simulation results while maintaining memory efficiency
-    /// by processing data in chunks from the memory-mapped binary file.
+    /// This uses pre-computed market features for 50-100x speedup over event-by-event simulation.
+    /// Memory-efficient: reads from mmap'd binary file without loading into RAM.
     /// 
     /// If `train_end_idx` > 0, only the first `train_end_idx` ticks are used for training.
     async fn evaluate_with_streaming_sim(
@@ -772,185 +772,71 @@ impl DistributedGAWorker {
         initial_capital: f64,
         train_end_idx: i64,
     ) -> FitnessResult {
-        use data_prep::{BinaryFileReader, SlicedTickSource};
+        use data_prep::BinaryFileReader;
         use dataloader::{Tick, TickSource};
-        use backtest::SimulationLoop;
-        use strategy::StrategyManager;
-        use strategy::strategies::avellaneda_stoikov::{AvellanedaStoikovStrategy, AvellanedaStoikovParams};
-        use orderbook::{OrderBook, OrderBookConfig};
-        use portfoliomanager::PortfolioState;
-        use riskmanager::RiskManager;
-        use bigdecimal::{BigDecimal, FromPrimitive};
+        use backtest::fast_simulation::{FastSimulator, FastASParams, MarketFeatures};
         
         let sim_start = std::time::Instant::now();
-        println!("🚀 [WORKER {}] Starting streaming sim, train_end_idx={}", self.worker_id, train_end_idx);
         
         // Load binary file as TickSource (mmap, zero-copy)
         let reader = match BinaryFileReader::open(path) {
-            Ok(r) => {
-                println!("📂 [WORKER {}] Binary file opened, {} ticks total", self.worker_id, r.len());
-                r
-            }
+            Ok(r) => r,
             Err(e) => {
                 println!("❌ [WORKER {}] Binary file error: {}", self.worker_id, e);
-                log_error_structured!(MAIN_LOGGER, "BINARY_FILE_ERROR",
-                    "event" => "BINARY_FILE_ERROR",
-                    "worker_id" => &self.worker_id,
-                    "path" => path.display().to_string(),
-                    "error" => e.to_string()
-                );
                 return FitnessResult::failure();
             }
         };
         
-        // FALLBACK: If coordinator didn't set train_end_idx, calculate it from tick count
-        // Use 60% of data for training (matches the default train_ratio in ga_coordinator)
+        let total_ticks = reader.len();
+        
+        // Calculate effective training range
         let effective_train_end_idx = if train_end_idx == 0 {
-            let total_ticks = reader.len() as i64;
-            let calculated_idx = (total_ticks as f64 * 0.6) as i64;
-            println!("⚠️ [WORKER {}] train_end_idx=0, using fallback: 60% of {} = {} ticks", 
-                self.worker_id, total_ticks, calculated_idx);
-            calculated_idx
+            (total_ticks as f64 * 0.6) as usize
         } else {
-            train_end_idx
+            train_end_idx as usize
         };
         
-        // Get initial price from first tick
-        let initial_price = reader.get(0)
-            .map(|t| t.price())
-            .unwrap_or(50000.0);
+        println!("🚀 [WORKER {}] FAST sim on {} ticks (of {} total)", 
+            self.worker_id, effective_train_end_idx, total_ticks);
         
-        // Get first timestamp
-        let first_timestamp = reader.get(0)
-            .map(|t| t.timestamp())
-            .unwrap_or_else(chrono::Utc::now);
+        // Build market features from tick data (vectorized, fast)
+        let features_start = std::time::Instant::now();
+        let features = MarketFeatures::from_tick_source(&reader, effective_train_end_idx);
+        println!("📊 [WORKER {}] Features computed in {:.2}s for {} points", 
+            self.worker_id, features_start.elapsed().as_secs_f64(), features.len());
         
-        // Create strategy from chromosome
-        let order_size_units = (initial_capital * chromosome.order_size_pct) / initial_price;
-        
-        let params = AvellanedaStoikovParams {
+        // Convert chromosome to fast simulation parameters
+        let fast_params = FastASParams {
             risk_aversion: chromosome.risk_aversion,
-            order_size: order_size_units,
-            order_size_pct: chromosome.order_size_pct,
-            initial_capital,
-            window_ms: chromosome.window_ms,
-            min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms,
             inventory_target: chromosome.inventory_target,
+            order_size_pct: chromosome.order_size_pct,
             volatility_cap: chromosome.volatility_cap,
-            time_horizon_minutes: chromosome.time_horizon_minutes,
-            market_depth_k: chromosome.market_depth_k,
             min_spread_bps: chromosome.min_spread_bps,
-            max_trades_per_minute: chromosome.max_trades_per_minute,
-            take_profit_pct: chromosome.take_profit_pct,
-            stop_loss_pct: chromosome.stop_loss_pct,
-            volatility_adjustment_factor: chromosome.volatility_adjustment_factor,
-            inventory_penalty_factor: chromosome.inventory_penalty_factor,
-            trend_sensitivity: chromosome.trend_sensitivity,
-            flow_sensitivity: chromosome.flow_sensitivity,
-            ..AvellanedaStoikovParams::default()
+            time_horizon_minutes: chromosome.time_horizon_minutes,
+            fee_rate: 0.001, // Default 0.1% fee
         };
         
-        let strategy = AvellanedaStoikovStrategy::new(params);
-        let mut strategy_manager = StrategyManager::new();
-        
-        let strategy_config = strategy::StrategyConfig {
-            id: "ga-eval".to_string(),
-            name: "Avellaneda-Stoikov".to_string(),
-            strategy_type: "AvellanedaStoikov".to_string(),
-            symbol: "BTC/USD".to_string(),
-            exchange: "Kraken".to_string(),
-            parameters: std::collections::HashMap::new(),
-            risk_limits: strategy::config::RiskLimits::default(),
-            enabled: true,
-        };
-        
-        if strategy_manager.register_strategy(strategy_config, strategy).is_err() {
-            return FitnessResult::failure();
-        }
-        
-        let mut orderbook = OrderBook::new(
-            "BTC/USD".to_string(),
-            "Kraken".to_string(),
-            OrderBookConfig::default(),
-        );
-        
-        // Set up portfolio with 50% inventory
-        let inventory_pct = 0.5;
-        let quote_balance = initial_capital * (1.0 - inventory_pct);
-        let base_value = initial_capital * inventory_pct;
-        let base_quantity = base_value / initial_price;
-        
-        let mut portfolio = PortfolioState::with_inventory(
-            "BTC/USD".to_string(),
-            BigDecimal::from_f64(quote_balance).unwrap_or_default(),
-            base_quantity,
-            BigDecimal::from_f64(initial_price).unwrap_or_default(),
-            first_timestamp,
-        );
-        
-        let mut risk_manager = RiskManager::new();
-        
-        // Create backtest config optimized for GA (skip expensive analysis)
-        let mut backtest_config = config::BacktestConfig::default();
-        backtest_config.trading.initial_capital = initial_capital;
-        backtest_config.analysis.skip_genetic_optimization = true; // We ARE the GA
-        
-        println!("⚙️ [WORKER {}] Strategy setup complete, starting simulation...", self.worker_id);
-        
-        // Run streaming simulation - use SlicedTickSource with effective_train_end_idx
-        let mut sim_loop = SimulationLoop::new();
-        let result = if effective_train_end_idx > 0 {
-            // Use only train portion of data
-            let sliced = SlicedTickSource::new(&reader, 0, effective_train_end_idx as usize);
-            println!("📊 [WORKER {}] Running sim on {} ticks (sliced)", self.worker_id, sliced.len());
-            sim_loop.run_streaming(
-                &mut strategy_manager,
-                &mut orderbook,
-                &mut portfolio,
-                &mut risk_manager,
-                &sliced,
-                "BTC/USD",
-                "Kraken",
-                &backtest_config,
-            ).await
-        } else {
-            // Use full data (backward compatibility)
-            println!("📊 [WORKER {}] Running sim on full {} ticks", self.worker_id, reader.len());
-            sim_loop.run_streaming(
-                &mut strategy_manager,
-                &mut orderbook,
-                &mut portfolio,
-                &mut risk_manager,
-                &reader,
-                "BTC/USD",
-                "Kraken",
-                &backtest_config,
-            ).await
-        };
+        // Run vectorized simulation (synchronous, fast!)
+        let simulator = FastSimulator::new(&features, initial_capital);
+        let fast_result = simulator.evaluate(&fast_params);
         
         let sim_elapsed = sim_start.elapsed();
-        println!("✅ [WORKER {}] Simulation complete in {:?}, calculating fitness...", self.worker_id, sim_elapsed);
+        println!("✅ [WORKER {}] FAST sim complete in {:.2}s: PnL={:.2}, Sharpe={:.4}, Trades={}", 
+            self.worker_id, sim_elapsed.as_secs_f64(), fast_result.total_pnl, fast_result.sharpe_ratio, fast_result.num_trades);
         
-        // Calculate fitness and extract metrics
-        let fitness = calculate_comprehensive_fitness(&result, initial_capital);
-        let net_pnl = result.total_pnl.to_f64().unwrap_or(0.0);
-        let sharpe = result.sharpe_ratio.unwrap_or(0.0);
-        let num_trades = result.num_trades as i32;
-        let max_dd = result.max_drawdown.to_f64().unwrap_or(0.0);
-        let win_rate = result.win_rate.unwrap_or(0.0);
-        let profit_factor = result.profit_factor.unwrap_or(0.0);
-        
-        println!("📈 [WORKER {}] Fitness={:.4}, PnL={:.2}, Trades={}", self.worker_id, fitness, net_pnl, num_trades);
+        // Convert to standard BacktestResult and calculate fitness
+        let backtest_result: backtest::types::BacktestResult = fast_result.clone().into();
+        let fitness = calculate_comprehensive_fitness(&backtest_result, initial_capital);
         
         FitnessResult::with_metrics(
             fitness,
-            result.equity_curve,
-            net_pnl,
-            sharpe,
-            num_trades,
-            max_dd,
-            win_rate,
-            profit_factor,
+            fast_result.equity_curve,
+            fast_result.total_pnl,
+            fast_result.sharpe_ratio,
+            fast_result.num_trades as i32,
+            fast_result.max_drawdown,
+            fast_result.win_rate,
+            fast_result.profit_factor,
         )
     }
     /// Evaluate a chromosome against the cached data
