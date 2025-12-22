@@ -744,6 +744,8 @@ impl JobQueue for PostgresQueue {
             i32,                                         // cancelled_orders
             bigdecimal::BigDecimal,                     // avg_slippage
             bigdecimal::BigDecimal,                     // total_commission_paid
+            chrono::DateTime<chrono::Utc>,              // start_date
+            chrono::DateTime<chrono::Utc>,              // end_date
         )> = 
             backtest_results::table
                 .filter(backtest_results::backtest_id.eq(backtest_uuid))
@@ -774,6 +776,8 @@ impl JobQueue for PostgresQueue {
                     backtest_results::cancelled_orders,
                     backtest_results::avg_slippage,
                     backtest_results::total_commission_paid,
+                    backtest_results::start_date,
+                    backtest_results::end_date,
                 ))
                 .first(&mut conn)
                 .await
@@ -786,7 +790,8 @@ impl JobQueue for PostgresQueue {
                   avg_trade_return, best_trade, worst_trade, avg_time_in_trade,
                   value_at_risk_95, expected_shortfall_95, max_drawdown_duration_days,
                   current_drawdown, avg_drawdown, total_orders, filled_orders,
-                  cancelled_orders, avg_slippage, total_commission_paid)) => {
+                  cancelled_orders, avg_slippage, total_commission_paid,
+                  result_start_date, result_end_date)) => {
                 
                 // Extract equity curve and advanced analysis from strategy_metrics JSON
                 let (equity_curve, monte_carlo, walk_forward, strategy_params) = if let Some(ref metrics) = strategy_metrics {
@@ -902,8 +907,8 @@ impl JobQueue for PostgresQueue {
                     strategy_params,
                     monte_carlo,
                     walk_forward,
-                    start_date: None,
-                    end_date: None,
+                    start_date: Some(result_start_date.to_rfc3339()),
+                    end_date: Some(result_end_date.to_rfc3339()),
                     risk_halt_reason: None, // Not stored in DB
                     inventory_metrics: None, // Not stored in DB (legacy)
                     execution_metrics: None, // Not stored in DB (legacy)
