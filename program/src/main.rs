@@ -538,11 +538,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         };
                                                         
                                                         // Calculate Calmar ratio (annualized return / max drawdown)
-                                                        let calmar_ratio = if equity_curve.len() > 1 && eval_result.max_drawdown > 0.001 {
-                                                            let total_return = eval_result.net_pnl / eval_result.starting_capital;
-                                                            // Assume ~252 trading days per year, scale by actual period
-                                                            let annualized = ((1.0 + total_return).powf(252.0 / (equity_curve.len() as f64 / 100.0).max(1.0)) - 1.0);
-                                                            Some(annualized / eval_result.max_drawdown)
+                                                        // First calculate annualized return and volatility
+                                                        let (annualized_return, volatility) = if equity_curve.len() > 1 {
+                                                            let returns: Vec<f64> = equity_curve.windows(2)
+                                                                .filter_map(|w| if w[0] > 0.0 { Some((w[1] - w[0]) / w[0]) } else { None })
+                                                                .collect();
+                                                            if !returns.is_empty() {
+                                                                let mean: f64 = returns.iter().sum::<f64>() / returns.len() as f64;
+                                                                let variance: f64 = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / returns.len() as f64;
+                                                                let std = variance.sqrt();
+                                                                // Annualize: assume ~100 samples per day (equity curve is sampled)
+                                                                let samples_per_day = (returns.len() as f64 / 1.0).max(1.0); // Conservative estimate
+                                                                let annualization = (252.0 * samples_per_day.min(100.0)).sqrt();
+                                                                let ann_return = mean * 252.0 * samples_per_day.min(100.0);
+                                                                let ann_vol = std * annualization;
+                                                                (Some(ann_return), Some(ann_vol))
+                                                            } else {
+                                                                (None, None)
+                                                            }
+                                                        } else {
+                                                            (None, None)
+                                                        };
+                                                        
+                                                        let calmar_ratio = if let Some(ann_ret) = annualized_return {
+                                                            if eval_result.max_drawdown > 0.001 {
+                                                                Some(ann_ret / eval_result.max_drawdown)
+                                                            } else if ann_ret > 0.0 {
+                                                                Some(10.0)
+                                                            } else {
+                                                                Some(0.0)
+                                                            }
                                                         } else {
                                                             None
                                                         };
@@ -554,6 +579,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                             Some(eval_result.net_pnl / eval_result.num_trades as f64)
                                                         } else {
                                                             None
+                                                        };
+                                                        
+                                                        // Calculate VaR (95%) and Expected Shortfall from equity curve
+                                                        let (value_at_risk_95, expected_shortfall_95) = if equity_curve.len() > 10 {
+                                                            let mut dollar_returns: Vec<f64> = equity_curve.windows(2)
+                                                                .map(|w| w[1] - w[0])
+                                                                .collect();
+                                                            dollar_returns.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                                                            let var_index = (dollar_returns.len() as f64 * 0.05).floor() as usize;
+                                                            let var_index = var_index.min(dollar_returns.len() - 1);
+                                                            let var_95 = -dollar_returns[var_index]; // Positive loss amount
+                                                            let tail_count = var_index.max(1);
+                                                            let es_95: f64 = -dollar_returns[..tail_count].iter().sum::<f64>() / tail_count as f64;
+                                                            (Some(var_95.max(0.0)), Some(es_95.max(0.0)))
+                                                        } else {
+                                                            (None, None)
+                                                        };
+                                                        
+                                                        // Calculate current drawdown and average drawdown from equity curve
+                                                        let (current_drawdown, avg_drawdown) = if equity_curve.len() > 1 {
+                                                            let mut peak = equity_curve[0];
+                                                            let mut dd_sum = 0.0;
+                                                            let mut current_dd = 0.0;
+                                                            for &equity in &equity_curve {
+                                                                if equity > peak { peak = equity; }
+                                                                let dd = if peak > 0.0 { (peak - equity) / peak } else { 0.0 };
+                                                                dd_sum += dd;
+                                                                current_dd = dd;
+                                                            }
+                                                            (Some(current_dd), Some(dd_sum / equity_curve.len() as f64))
+                                                        } else {
+                                                            (None, None)
                                                         };
                                                         
                                                         program::job_queue::BacktestResult {
@@ -584,24 +641,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                             open_positions: None,
                                                             realized_pnl: Some(eval_result.net_pnl),
                                                             unrealized_pnl: None,
-                                                            annualized_return: None, // Computed from equity curve in save_result
-                                                            volatility: None, // Computed from equity curve in save_result
+                                                            annualized_return,
+                                                            volatility,
                                                             sortino_ratio,
                                                             calmar_ratio,
                                                             avg_trade_return,
                                                             best_trade,
                                                             worst_trade,
                                                             avg_time_in_trade: None,
-                                                            value_at_risk_95: None,
-                                                            expected_shortfall_95: None,
-                                                            max_drawdown_duration_days: None,
-                                                            current_drawdown: None,
-                                                            avg_drawdown: None,
+                                                            value_at_risk_95,
+                                                            expected_shortfall_95,
+                                                            max_drawdown_duration_days: None, // Would need tracking in worker
+                                                            current_drawdown,
+                                                            avg_drawdown,
                                                             total_orders: Some(eval_result.total_orders),
                                                             filled_orders: Some(eval_result.num_trades),
                                                             cancelled_orders: None,
-                                                            avg_slippage: None,
-                                                            total_commission_paid: None,
+                                                            avg_slippage: None, // Would need tracking in worker
+                                                            total_commission_paid: None, // Would need tracking in worker
                                                             monte_carlo,
                                                             walk_forward,
                                                             inventory_metrics: None,

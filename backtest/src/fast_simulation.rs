@@ -374,6 +374,18 @@ pub struct FastSimResult {
     pub calmar_ratio: f64,
     /// Individual trade P&L values for Monte Carlo
     pub trade_returns: Vec<f64>,
+    /// Current drawdown at end of simulation
+    pub current_drawdown: f64,
+    /// Average drawdown during simulation
+    pub avg_drawdown: f64,
+    /// Maximum drawdown duration in days
+    pub max_drawdown_duration_days: f64,
+    /// Average time in trade (milliseconds)
+    pub avg_time_in_trade_ms: f64,
+    /// Value at Risk (95% confidence)
+    pub value_at_risk_95: f64,
+    /// Expected Shortfall / CVaR (95%)
+    pub expected_shortfall_95: f64,
 }
 
 impl Default for FastSimResult {
@@ -397,6 +409,12 @@ impl Default for FastSimResult {
             sortino_ratio: 0.0,
             calmar_ratio: 0.0,
             trade_returns: vec![],
+            current_drawdown: 0.0,
+            avg_drawdown: 0.0,
+            max_drawdown_duration_days: 0.0,
+            avg_time_in_trade_ms: 0.0,
+            value_at_risk_95: 0.0,
+            expected_shortfall_95: 0.0,
         }
     }
 }
@@ -434,6 +452,17 @@ impl<'a> FastSimulator<'a> {
         let mut total_commission = 0.0;
         let mut peak_equity = self.initial_capital;
         let mut max_drawdown = 0.0;
+        
+        // Drawdown tracking for avg_drawdown and max_drawdown_duration
+        let mut drawdown_sum = 0.0;
+        let mut drawdown_samples = 0usize;
+        let mut current_drawdown = 0.0;
+        let mut drawdown_start_ts: Option<i64> = None;
+        let mut max_drawdown_duration_ms: i64 = 0;
+        
+        // Trade timing tracking for avg_time_in_trade
+        let mut trade_entry_times: Vec<i64> = Vec::with_capacity(n / 20);
+        let mut trade_durations_ms: Vec<i64> = Vec::with_capacity(n / 20);
         
         // Round-trip tracking for market making
         // Track inventory cost basis to compute realized P&L on round trips
@@ -518,6 +547,11 @@ impl<'a> FastSimulator<'a> {
                         let realized_pnl = (fill_price - avg_cost) * closing_qty - commission;
                         round_trip_pnls.push(realized_pnl);
                         
+                        // Track trade duration if we have entry times
+                        if let Some(entry_ts) = trade_entry_times.pop() {
+                            trade_durations_ms.push(timestamp - entry_ts);
+                        }
+                        
                         // Reduce cost basis proportionally
                         let basis_reduction = avg_cost * closing_qty;
                         inventory_cost_basis = (inventory_cost_basis - basis_reduction).max(0.0);
@@ -552,6 +586,9 @@ impl<'a> FastSimulator<'a> {
                         // The overall equity change captures this correctly
                     }
                     
+                    // Track trade entry time for duration calculation
+                    trade_entry_times.push(timestamp);
+                    
                     // Add to cost basis for long position
                     inventory_cost_basis += trade_value;
                     total_buy_qty += fill_size;
@@ -567,13 +604,35 @@ impl<'a> FastSimulator<'a> {
             
             // Update equity and drawdown
             let current_equity = cash + inventory * price;
+            let timestamp = self.features.timestamps[i];
+            
             if current_equity > peak_equity {
                 peak_equity = current_equity;
+                // Exited drawdown
+                if let Some(start_ts) = drawdown_start_ts {
+                    let duration = timestamp - start_ts;
+                    if duration > max_drawdown_duration_ms {
+                        max_drawdown_duration_ms = duration;
+                    }
+                    drawdown_start_ts = None;
+                }
             }
+            
             let drawdown = (peak_equity - current_equity) / peak_equity;
+            current_drawdown = drawdown;
+            
+            // Track drawdown start for duration calculation
+            if drawdown > 0.001 && drawdown_start_ts.is_none() {
+                drawdown_start_ts = Some(timestamp);
+            }
+            
             if drawdown > max_drawdown {
                 max_drawdown = drawdown;
             }
+            
+            // Accumulate for average drawdown
+            drawdown_sum += drawdown;
+            drawdown_samples += 1;
             
             // Sample equity curve
             if i % sample_interval == 0 {
@@ -661,6 +720,26 @@ impl<'a> FastSimulator<'a> {
             0.0
         };
         
+        // Calculate average drawdown
+        let avg_drawdown = if drawdown_samples > 0 {
+            drawdown_sum / drawdown_samples as f64
+        } else {
+            0.0
+        };
+        
+        // Convert max drawdown duration from ms to days
+        let max_drawdown_duration_days = max_drawdown_duration_ms as f64 / (24.0 * 60.0 * 60.0 * 1000.0);
+        
+        // Calculate average time in trade (ms)
+        let avg_time_in_trade_ms = if !trade_durations_ms.is_empty() {
+            trade_durations_ms.iter().sum::<i64>() as f64 / trade_durations_ms.len() as f64
+        } else {
+            0.0
+        };
+        
+        // Calculate VaR and Expected Shortfall from equity returns
+        let (value_at_risk_95, expected_shortfall_95) = calculate_var_and_es(&equity_curve, self.initial_capital);
+        
         FastSimResult {
             total_pnl,
             sharpe_ratio,
@@ -680,6 +759,12 @@ impl<'a> FastSimulator<'a> {
             sortino_ratio,
             calmar_ratio,
             trade_returns: round_trip_pnls,
+            current_drawdown,
+            avg_drawdown,
+            max_drawdown_duration_days,
+            avg_time_in_trade_ms,
+            value_at_risk_95,
+            expected_shortfall_95,
         }
     }
 }
@@ -775,6 +860,42 @@ fn calculate_sortino_ratio(equity: &[f64], trading_days: f64) -> f64 {
     let annualization = (252.0 * samples_per_day).sqrt().min(50.0);
     
     (mean / downside_std) * annualization
+}
+
+/// Calculate Value at Risk (95%) and Expected Shortfall (CVaR 95%)
+/// Returns (VaR, ES) as positive values representing potential losses in USD
+fn calculate_var_and_es(equity: &[f64], initial_capital: f64) -> (f64, f64) {
+    if equity.len() < 10 {
+        return (0.0, 0.0);
+    }
+    
+    // Calculate dollar returns (not percentage)
+    let mut dollar_returns: Vec<f64> = Vec::with_capacity(equity.len() - 1);
+    for i in 1..equity.len() {
+        dollar_returns.push(equity[i] - equity[i - 1]);
+    }
+    
+    if dollar_returns.is_empty() {
+        return (0.0, 0.0);
+    }
+    
+    // Sort returns ascending (worst returns first)
+    dollar_returns.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    
+    // VaR at 95% = 5th percentile of returns (negated to make it positive for losses)
+    let var_index = (dollar_returns.len() as f64 * 0.05).floor() as usize;
+    let var_index = var_index.min(dollar_returns.len() - 1);
+    let var_95 = -dollar_returns[var_index]; // Negate because VaR is a positive loss amount
+    
+    // Expected Shortfall = average of returns below VaR threshold
+    let tail_count = var_index.max(1);
+    let es_95: f64 = -dollar_returns[..tail_count].iter().sum::<f64>() / tail_count as f64;
+    
+    // Ensure positive values (represent losses)
+    let var_95 = var_95.max(0.0);
+    let es_95 = es_95.max(0.0);
+    
+    (var_95, es_95)
 }
 
 /// Convert FastSimResult to standard BacktestResult for compatibility
