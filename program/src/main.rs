@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use std::sync::Arc;
+use futures::FutureExt;
 
 // Use the library's modules (they have access to macros properly)
 use program::job_queue::{JobQueue, PostgresQueue};
@@ -292,9 +293,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Spawn job processing loop
             if let Some(broker) = broker {
                 let job_queue_clone = Arc::clone(&job_queue);
-                tokio::spawn(async move {
+                let handle = tokio::spawn(async move {
                     println!("🔄 Starting job processing loop...");
-                    loop {
+                    eprintln!("🔄 [COORDINATOR] Job processing loop started (stderr)");
+                    
+                    let mut poll_count = 0u64;
+                    
+                    // Catch panics in the job processing loop
+                    let result = std::panic::AssertUnwindSafe(async {
+                        loop {
+                        poll_count += 1;
+                        if poll_count % 30 == 1 {  // Log every minute (30 * 2s sleep)
+                            eprintln!("🔍 [COORDINATOR] Polling for jobs... (poll #{})", poll_count);
+                        }
+                        
                         // Poll for queued jobs
                         match job_queue_clone.get_next_job().await {
                             Ok(Some(job)) => {
@@ -643,6 +655,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                             }
                         }
+                    }
+                    }).catch_unwind().await;
+                    
+                    match result {
+                        Ok(_) => eprintln!("⚠️ [COORDINATOR] Job processing loop exited normally (unexpected)"),
+                        Err(panic_info) => {
+                            let panic_msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                                s.to_string()
+                            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "Unknown panic".to_string()
+                            };
+                            eprintln!("💥 [COORDINATOR] Job processing loop PANICKED: {}", panic_msg);
+                        }
+                    }
+                });
+                
+                // Monitor the job processing task
+                tokio::spawn(async move {
+                    if let Err(e) = handle.await {
+                        eprintln!("💥 [COORDINATOR] Job processing task failed: {:?}", e);
                     }
                 });
             }
