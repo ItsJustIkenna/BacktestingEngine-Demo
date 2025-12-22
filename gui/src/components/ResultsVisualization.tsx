@@ -839,31 +839,37 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
           title="Sharpe Ratio"
           value={safeToFixed(result.sharpe_ratio, 4)}
           color={(result.sharpe_ratio ?? 0) > 1 ? '#28a745' : (result.sharpe_ratio ?? 0) > 0 ? '#ffc107' : '#dc3545'}
+          tooltip="Risk-adjusted return measure. Above 1 is good, above 2 is excellent. Higher values indicate better return per unit of risk taken."
         />
         <MetricCard
           title="Max Drawdown"
           value={`${safeToFixed((result.max_drawdown ?? 0) * 100, 2)}%`}
           color={(result.max_drawdown ?? 0) < 0.10 ? '#28a745' : (result.max_drawdown ?? 0) < 0.20 ? '#ffc107' : '#dc3545'}
+          tooltip="Largest peak-to-trough decline in portfolio value. Lower is better. Represents the worst-case loss you would have experienced."
         />
         <MetricCard
           title="Total P&L"
           value={safeToFixed(result.total_pnl, 2)}
           color={(result.total_pnl ?? 0) >= 0 ? '#28a745' : '#dc3545'}
+          tooltip="Net profit or loss after all trades. The absolute dollar return of the strategy over the backtest period."
         />
         <MetricCard
           title="Win Rate"
           value={`${safeToFixed((result.win_rate ?? 0) * 100, 2)}%`}
           color={(result.win_rate ?? 0) > 0.50 ? '#28a745' : '#ffc107'}
+          tooltip="Percentage of trades that were profitable. For market-making strategies, 50%+ is typical. Combine with avg trade size for full picture."
         />
         <MetricCard
           title="Profit Factor"
           value={safeToFixed(result.profit_factor, 2)}
           color={(result.profit_factor ?? 0) > 1.5 ? '#28a745' : (result.profit_factor ?? 0) > 1 ? '#ffc107' : '#dc3545'}
+          tooltip="Gross profit divided by gross loss. Above 1 means profitable. Above 1.5 is good, above 2.0 is excellent."
         />
         <MetricCard
           title="Total Trades"
           value={(result.total_trades ?? 0).toString()}
           color="#007bff"
+          tooltip="Number of completed round-trip trades. More trades = more statistical significance. Low trade count may indicate overfitting risk."
         />
       </div>
 
@@ -929,26 +935,31 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
               title="Mean Sharpe"
               value={safeToFixed(result.monte_carlo.mean_sharpe, 3)}
               color={result.monte_carlo.mean_sharpe > 1 ? '#28a745' : result.monte_carlo.mean_sharpe > 0 ? '#ffc107' : '#dc3545'}
+              tooltip="Average Sharpe Ratio across all Monte Carlo simulations. Represents expected risk-adjusted return accounting for randomness."
             />
             <MetricCard
               title="Sharpe Std Dev"
               value={safeToFixed(result.monte_carlo.stddev_sharpe, 3)}
               color={result.monte_carlo.stddev_sharpe < 0.5 ? '#28a745' : '#ffc107'}
+              tooltip="Standard deviation of Sharpe across simulations. Lower values indicate more consistent performance. High values suggest luck-dependent results."
             />
             <MetricCard
               title="VaR (95%)"
               value={`$${safeToFixed(result.monte_carlo.var_95, 2)} (${safeToFixed((result.monte_carlo.var_95 / (jobDetails?.initial_capital || 10000)) * 100, 2)}%)`}
               color={(result.monte_carlo.var_95 / (jobDetails?.initial_capital || 10000)) < 0.05 ? '#28a745' : (result.monte_carlo.var_95 / (jobDetails?.initial_capital || 10000)) < 0.10 ? '#ffc107' : '#dc3545'}
+              tooltip="Value at Risk at 95% confidence. The maximum expected loss under normal market conditions. 5% of outcomes will be worse than this."
             />
             <MetricCard
               title="CVaR (95%)"
               value={`$${safeToFixed(result.monte_carlo.cvar_95, 2)} (${safeToFixed((result.monte_carlo.cvar_95 / (jobDetails?.initial_capital || 10000)) * 100, 2)}%)`}
               color={(result.monte_carlo.cvar_95 / (jobDetails?.initial_capital || 10000)) < 0.08 ? '#28a745' : (result.monte_carlo.cvar_95 / (jobDetails?.initial_capital || 10000)) < 0.15 ? '#ffc107' : '#dc3545'}
+              tooltip="Expected Shortfall (Conditional VaR). Average loss when VaR is exceeded. Better captures tail risk than VaR alone."
             />
             <MetricCard
               title="Sharpe 95% CI"
               value={`[${safeToFixed(result.monte_carlo.confidence_lower, 2)}, ${safeToFixed(result.monte_carlo.confidence_upper, 2)}]`}
               color="#007bff"
+              tooltip="95% confidence interval for Sharpe Ratio. If lower bound > 0, strategy is likely profitable. Narrower range = more reliable estimate."
             />
           </div>
           
@@ -966,16 +977,19 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                   title="Worst Case (P5)"
                   value={`$${safeToFixed(result.monte_carlo.p5_total_pnl ?? 0, 0)}`}
                   color={(result.monte_carlo.p5_total_pnl ?? 0) > 0 ? '#28a745' : '#dc3545'}
+                  tooltip="5th percentile P&L. Only 5% of simulations performed worse than this. Your realistic downside scenario."
                 />
                 <MetricCard
                   title="Typical (P50)"
                   value={`$${safeToFixed(result.monte_carlo.p50_total_pnl ?? 0, 0)}`}
                   color={(result.monte_carlo.p50_total_pnl ?? 0) > 0 ? '#28a745' : '#dc3545'}
+                  tooltip="Median P&L across all simulations. The most likely outcome - half of simulations did better, half did worse."
                 />
                 <MetricCard
                   title="Best Case (P95)"
                   value={`$${safeToFixed(result.monte_carlo.p95_total_pnl ?? 0, 0)}`}
                   color={(result.monte_carlo.p95_total_pnl ?? 0) > 0 ? '#28a745' : '#ffc107'}
+                  tooltip="95th percentile P&L. Only 5% of simulations did better. Your optimistic upside scenario."
                 />
               </div>
             </>
@@ -995,16 +1009,19 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                   title="Best Case (P5)"
                   value={`${safeToFixed((result.monte_carlo.p5_max_drawdown ?? 0) * 100, 1)}%`}
                   color={(result.monte_carlo.p5_max_drawdown ?? 0) > -0.1 ? '#28a745' : '#ffc107'}
+                  tooltip="5th percentile drawdown. The smallest drawdown experienced in 95% of simulations. Best-case risk scenario."
                 />
                 <MetricCard
                   title="Typical (P50)"
                   value={`${safeToFixed((result.monte_carlo.p50_max_drawdown ?? 0) * 100, 1)}%`}
                   color={(result.monte_carlo.p50_max_drawdown ?? 0) > -0.2 ? '#28a745' : '#ffc107'}
+                  tooltip="Median drawdown across simulations. The drawdown you should typically expect to experience."
                 />
                 <MetricCard
                   title="Worst Case (P95)"
                   value={`${safeToFixed((result.monte_carlo.p95_max_drawdown ?? 0) * 100, 1)}%`}
                   color={(result.monte_carlo.p95_max_drawdown ?? 0) > -0.3 ? '#ffc107' : '#dc3545'}
+                  tooltip="95th percentile drawdown. Only 5% of simulations had worse drawdowns. Your stress-test scenario."
                 />
               </div>
             </>
@@ -1023,16 +1040,19 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                   title="Worst Case (P5)"
                   value={`${safeToFixed((result.monte_carlo.p5_win_rate ?? 0) * 100, 1)}%`}
                   color={(result.monte_carlo.p5_win_rate ?? 0) > 0.45 ? '#28a745' : (result.monte_carlo.p5_win_rate ?? 0) > 0.35 ? '#ffc107' : '#dc3545'}
+                  tooltip="5th percentile win rate. Only 5% of simulations had a lower win rate. Your pessimistic scenario."
                 />
                 <MetricCard
                   title="Typical (P50)"
                   value={`${safeToFixed((result.monte_carlo.p50_win_rate ?? 0) * 100, 1)}%`}
                   color={(result.monte_carlo.p50_win_rate ?? 0) > 0.5 ? '#28a745' : '#ffc107'}
+                  tooltip="Median win rate. The win rate you can most reliably expect across different market conditions."
                 />
                 <MetricCard
                   title="Best Case (P95)"
                   value={`${safeToFixed((result.monte_carlo.p95_win_rate ?? 0) * 100, 1)}%`}
                   color="#28a745"
+                  tooltip="95th percentile win rate. Only 5% of simulations achieved a higher win rate. Your optimistic scenario."
                 />
               </div>
             </>
@@ -1059,16 +1079,19 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
               title="Avg Performance"
               value={`${safeToFixed(result.walk_forward.average_performance * 100, 2)}%`}
               color={result.walk_forward.average_performance > 0 ? '#28a745' : '#dc3545'}
+              tooltip="Average return across all out-of-sample test periods. Measures how well the strategy performs on unseen data."
             />
             <MetricCard
               title="Consistency"
               value={`${safeToFixed(result.walk_forward.consistency_score * 100, 1)}%`}
               color={result.walk_forward.consistency_score > 0.7 ? '#28a745' : result.walk_forward.consistency_score > 0.5 ? '#ffc107' : '#dc3545'}
+              tooltip="Percentage of out-of-sample periods that were profitable. Higher = more reliable strategy across different time periods."
             />
             <MetricCard
               title="OOS Degradation"
               value={`${safeToFixed(result.walk_forward.out_of_sample_degradation * 100, 1)}%`}
               color={result.walk_forward.out_of_sample_degradation < 0.2 ? '#28a745' : result.walk_forward.out_of_sample_degradation < 0.4 ? '#ffc107' : '#dc3545'}
+              tooltip="Performance drop from in-sample to out-of-sample. Low = less overfitting. High = strategy may not generalize well."
             />
           </div>
         </div>
@@ -1094,6 +1117,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Avg Trade Return"
                 value={`$${safeToFixed(result.avg_trade_return, 2)}`}
                 color={(result.avg_trade_return ?? 0) > 0 ? '#28a745' : '#dc3545'}
+                tooltip="Average profit/loss per completed trade. Positive values needed for long-term profitability."
               />
             )}
             {result.best_trade !== undefined && (
@@ -1101,6 +1125,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Best Trade"
                 value={safeToFixed(result.best_trade, 2)}
                 color="#28a745"
+                tooltip="Largest single trade profit. Very high values may indicate outlier-dependent performance."
               />
             )}
             {result.worst_trade !== undefined && (
@@ -1108,6 +1133,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Worst Trade"
                 value={safeToFixed(result.worst_trade, 2)}
                 color="#dc3545"
+                tooltip="Largest single trade loss. Compare with position sizing to assess risk management."
               />
             )}
             {result.avg_time_in_trade !== undefined && (
@@ -1115,6 +1141,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Avg Time in Trade"
                 value={`${safeToFixed(result.avg_time_in_trade, 1)}h`}
                 color="#007bff"
+                tooltip="Average duration of each position. Shorter = higher turnover. Longer = more capital commitment."
               />
             )}
             {result.volatility !== undefined && (
@@ -1122,6 +1149,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Volatility"
                 value={`${safeToFixed((result.volatility ?? 0) * 100, 2)}%`}
                 color={(result.volatility ?? 0) < 0.20 ? '#28a745' : (result.volatility ?? 0) < 0.40 ? '#ffc107' : '#dc3545'}
+                tooltip="Annualized standard deviation of returns. Lower = smoother equity curve. Higher = more volatile performance."
               />
             )}
             {result.sortino_ratio !== undefined && (
@@ -1129,6 +1157,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Sortino Ratio"
                 value={safeToFixed(result.sortino_ratio, 2)}
                 color={result.sortino_ratio > 1.5 ? '#28a745' : result.sortino_ratio > 1 ? '#ffc107' : '#dc3545'}
+                tooltip="Like Sharpe, but only penalizes downside volatility. Better for asymmetric strategies. Above 1.5 is good."
               />
             )}
             {result.calmar_ratio !== undefined && (
@@ -1136,6 +1165,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Calmar Ratio"
                 value={safeToFixed(result.calmar_ratio, 2)}
                 color={result.calmar_ratio > 1 ? '#28a745' : result.calmar_ratio > 0.5 ? '#ffc107' : '#dc3545'}
+                tooltip="Annualized return divided by max drawdown. Higher = better return per unit of drawdown risk. Above 1 is good."
               />
             )}
           </div>
@@ -1162,6 +1192,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="VaR (95%)"
                 value={`$${safeToFixed(result.value_at_risk_95, 2)} (${safeToFixed((result.value_at_risk_95 / (jobDetails?.initial_capital ?? 10000)) * 100, 2)}%)`}
                 color={(result.value_at_risk_95 / (jobDetails?.initial_capital ?? 10000)) < 0.05 ? '#28a745' : (result.value_at_risk_95 / (jobDetails?.initial_capital ?? 10000)) < 0.10 ? '#ffc107' : '#dc3545'}
+                tooltip="Value at Risk - maximum expected daily loss at 95% confidence. 5% of days may have larger losses."
               />
             )}
             {result.expected_shortfall_95 !== undefined && (
@@ -1169,6 +1200,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Expected Shortfall"
                 value={`$${safeToFixed(result.expected_shortfall_95, 2)} (${safeToFixed((result.expected_shortfall_95 / (jobDetails?.initial_capital ?? 10000)) * 100, 2)}%)`}
                 color={(result.expected_shortfall_95 / (jobDetails?.initial_capital ?? 10000)) < 0.08 ? '#28a745' : (result.expected_shortfall_95 / (jobDetails?.initial_capital ?? 10000)) < 0.15 ? '#ffc107' : '#dc3545'}
+                tooltip="Average loss on the worst 5% of days. Also called CVaR - captures extreme tail risk better than VaR."
               />
             )}
             {result.current_drawdown !== undefined && (
@@ -1176,6 +1208,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Current Drawdown"
                 value={`${safeToFixed((result.current_drawdown ?? 0) * 100, 2)}%`}
                 color={(result.current_drawdown ?? 0) < 0.05 ? '#28a745' : (result.current_drawdown ?? 0) < 0.15 ? '#ffc107' : '#dc3545'}
+                tooltip="How far below the peak equity the portfolio currently sits. Shows if in a recovery phase."
               />
             )}
             {result.avg_drawdown !== undefined && (
@@ -1183,6 +1216,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Avg Drawdown"
                 value={`${safeToFixed((result.avg_drawdown ?? 0) * 100, 2)}%`}
                 color={(result.avg_drawdown ?? 0) < 0.05 ? '#28a745' : (result.avg_drawdown ?? 0) < 0.10 ? '#ffc107' : '#dc3545'}
+                tooltip="Mean drawdown across all drawdown periods. Lower = smoother equity curve with smaller dips."
               />
             )}
             {result.max_drawdown_duration_days !== undefined && (
@@ -1190,6 +1224,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Max DD Duration"
                 value={`${result.max_drawdown_duration_days} days`}
                 color={result.max_drawdown_duration_days < 30 ? '#28a745' : result.max_drawdown_duration_days < 90 ? '#ffc107' : '#dc3545'}
+                tooltip="Longest time spent in drawdown before recovering. Tests patience during losing periods."
               />
             )}
           </div>
@@ -1216,6 +1251,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Total Orders"
                 value={result.total_orders.toString()}
                 color="#007bff"
+                tooltip="Total number of orders submitted. Includes filled, cancelled, and rejected orders."
               />
             )}
             {result.filled_orders !== undefined && (
@@ -1223,6 +1259,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Filled Orders"
                 value={result.filled_orders.toString()}
                 color="#28a745"
+                tooltip="Number of orders that were successfully executed. Higher = better order placement."
               />
             )}
             {result.cancelled_orders !== undefined && (
@@ -1230,6 +1267,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Cancelled"
                 value={result.cancelled_orders.toString()}
                 color={result.cancelled_orders === 0 ? '#28a745' : '#ffc107'}
+                tooltip="Orders cancelled before execution. Some cancellations are normal for market makers adjusting quotes."
               />
             )}
             {result.avg_slippage !== undefined && (
@@ -1237,6 +1275,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Avg Slippage"
                 value={`${safeToFixed(result.avg_slippage * 100, 3)}%`}
                 color={result.avg_slippage < 0.001 ? '#28a745' : result.avg_slippage < 0.005 ? '#ffc107' : '#dc3545'}
+                tooltip="Average price difference between expected and actual fill. Lower = better execution quality."
               />
             )}
             {result.total_commission_paid !== undefined && (
@@ -1244,6 +1283,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Total Commission"
                 value={`$${safeToFixed(result.total_commission_paid, 2)}`}
                 color="#6c757d"
+                tooltip="Total fees paid for all trades. Compare with P&L to understand fee impact on returns."
               />
             )}
             {result.filled_orders !== undefined && result.total_orders !== undefined && result.total_orders > 0 && (
@@ -1251,6 +1291,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Fill Rate"
                 value={`${safeToFixed((result.filled_orders / result.total_orders) * 100, 1)}%`}
                 color={result.filled_orders / result.total_orders > 0.95 ? '#28a745' : result.filled_orders / result.total_orders > 0.8 ? '#ffc107' : '#dc3545'}
+                tooltip="Percentage of orders that got filled. Higher = more efficient order placement and better market access."
               />
             )}
           </div>
@@ -1281,6 +1322,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Risk Aversion (γ)"
                 value={safeToFixed(parseFloat(result.strategy_params.risk_aversion), 4)}
                 color="#6f42c1"
+                tooltip="Controls how aggressively the strategy manages inventory risk. Higher = wider spreads when holding inventory."
               />
             )}
             {result.strategy_params.inventory_target !== undefined && (
@@ -1288,6 +1330,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Inventory Target"
                 value={safeToFixed(parseFloat(result.strategy_params.inventory_target), 4)}
                 color="#6f42c1"
+                tooltip="Desired inventory level to maintain. Strategy skews quotes to move inventory toward this target."
               />
             )}
             {result.strategy_params.order_size !== undefined && (
@@ -1295,6 +1338,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Order Size (units)"
                 value={safeToFixed(parseFloat(result.strategy_params.order_size), 6)}
                 color="#6f42c1"
+                tooltip="Fixed size of each order in base units. Determines position sizing per trade."
               />
             )}
             {result.strategy_params.order_size_pct !== undefined && (
@@ -1302,6 +1346,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Order Size (%)"
                 value={`${safeToFixed(parseFloat(result.strategy_params.order_size_pct) * 100, 2)}%`}
                 color="#6f42c1"
+                tooltip="Order size as percentage of capital. Dynamic sizing based on portfolio value."
               />
             )}
             {result.strategy_params.market_depth_k !== undefined && (
@@ -1309,6 +1354,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Market Depth (k)"
                 value={safeToFixed(parseFloat(result.strategy_params.market_depth_k), 2)}
                 color="#6f42c1"
+                tooltip="Market impact parameter. Higher k = more liquid market, tighter optimal spreads."
               />
             )}
             {result.strategy_params.time_horizon_minutes !== undefined && (
@@ -1316,6 +1362,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Time Horizon"
                 value={`${safeToFixed(parseFloat(result.strategy_params.time_horizon_minutes), 1)} min`}
                 color="#6f42c1"
+                tooltip="Trading session length for quote calculations. Affects urgency of inventory management."
               />
             )}
             {result.strategy_params.initial_capital !== undefined && (
@@ -1323,6 +1370,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Initial Capital"
                 value={`$${formatLargeNumber(parseFloat(result.strategy_params.initial_capital))}`}
                 color="#6f42c1"
+                tooltip="Starting capital for the backtest. All returns are calculated relative to this amount."
               />
             )}
             {result.strategy_params.max_inventory_pct !== undefined && (
@@ -1330,6 +1378,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Max Inventory"
                 value={`${safeToFixed(parseFloat(result.strategy_params.max_inventory_pct) * 100, 1)}%`}
                 color="#6f42c1"
+                tooltip="Maximum position size as % of capital. Risk limit that prevents overexposure."
               />
             )}
             {result.strategy_params.inventory_skew_multiplier !== undefined && (
@@ -1337,6 +1386,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Inv Skew Mult"
                 value={`${safeToFixed(parseFloat(result.strategy_params.inventory_skew_multiplier), 2)}x`}
                 color="#6f42c1"
+                tooltip="How aggressively quotes skew based on inventory. Higher = more aggressive inventory control."
               />
             )}
           </div>
@@ -1354,6 +1404,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Min Spread"
                 value={`${safeToFixed(parseFloat(result.strategy_params.min_spread_bps), 1)} bps`}
                 color="#17a2b8"
+                tooltip="Minimum bid-ask spread in basis points. Floor prevents losses from fees."
               />
             )}
             {result.strategy_params.volatility_cap !== undefined && (
@@ -1361,6 +1412,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Volatility Cap"
                 value={`${safeToFixed(parseFloat(result.strategy_params.volatility_cap) * 100, 1)}%`}
                 color="#17a2b8"
+                tooltip="Maximum volatility used in spread calculation. Prevents extreme spreads during high volatility."
               />
             )}
             {result.strategy_params.volatility_adjustment_factor !== undefined && (
@@ -1368,6 +1420,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Vol Adjustment"
                 value={safeToFixed(parseFloat(result.strategy_params.volatility_adjustment_factor), 2)}
                 color="#17a2b8"
+                tooltip="Multiplier for volatility in spread calculation. Higher = wider spreads for given volatility."
               />
             )}
             {result.strategy_params.fee_rate !== undefined && (
@@ -1375,6 +1428,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 title="Fee Rate"
                 value={`${safeToFixed(parseFloat(result.strategy_params.fee_rate) * 100, 3)}%`}
                 color="#17a2b8"
+                tooltip="Trading fee per order. Used to calculate minimum profitable spread."
               />
             )}
           </div>
@@ -1396,6 +1450,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Inventory Penalty"
                     value={safeToFixed(parseFloat(result.strategy_params.inventory_penalty_factor), 2)}
                     color="#fd7e14"
+                    tooltip="Extra penalty for holding large inventory. Encourages faster inventory turnover."
                   />
                 )}
                 {result.strategy_params.trend_sensitivity !== undefined && (
@@ -1403,6 +1458,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Trend Sensitivity"
                     value={safeToFixed(parseFloat(result.strategy_params.trend_sensitivity), 2)}
                     color="#fd7e14"
+                    tooltip="How much quotes adjust based on price trend. Higher = more trend-following."
                   />
                 )}
                 {result.strategy_params.flow_sensitivity !== undefined && (
@@ -1410,6 +1466,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Flow Sensitivity"
                     value={safeToFixed(parseFloat(result.strategy_params.flow_sensitivity), 2)}
                     color="#fd7e14"
+                    tooltip="How much quotes adjust to order flow imbalance. Higher = more reactive to buying/selling pressure."
                   />
                 )}
               </div>
@@ -1432,6 +1489,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="K Vol Sensitivity"
                     value={safeToFixed(parseFloat(result.strategy_params.k_volatility_sensitivity), 2)}
                     color="#ff6b6b"
+                    tooltip="How much market depth parameter k adjusts with volatility. Higher = more conservative in volatile markets."
                   />
                 )}
                 {result.strategy_params.k_flow_sensitivity !== undefined && (
@@ -1439,6 +1497,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="K Flow Sensitivity"
                     value={safeToFixed(parseFloat(result.strategy_params.k_flow_sensitivity), 2)}
                     color="#ff6b6b"
+                    tooltip="How much k adjusts based on order flow. Higher = more adaptive to market activity."
                   />
                 )}
                 {result.strategy_params.k_min !== undefined && (
@@ -1446,6 +1505,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="K Min"
                     value={safeToFixed(parseFloat(result.strategy_params.k_min), 2)}
                     color="#ff6b6b"
+                    tooltip="Minimum allowed market depth parameter. Floor prevents too-tight spreads."
                   />
                 )}
                 {result.strategy_params.k_max !== undefined && (
@@ -1453,6 +1513,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="K Max"
                     value={safeToFixed(parseFloat(result.strategy_params.k_max), 2)}
                     color="#ff6b6b"
+                    tooltip="Maximum allowed market depth parameter. Cap prevents too-wide spreads."
                   />
                 )}
               </div>
@@ -1475,6 +1536,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="T Vol Sensitivity"
                     value={safeToFixed(parseFloat(result.strategy_params.time_horizon_vol_sensitivity), 2)}
                     color="#4ecdc4"
+                    tooltip="How time horizon adjusts with volatility. Higher = shorter horizons in volatile markets."
                   />
                 )}
                 {result.strategy_params.time_horizon_min !== undefined && (
@@ -1482,6 +1544,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="T Min (min)"
                     value={`${safeToFixed(parseFloat(result.strategy_params.time_horizon_min), 2)}`}
                     color="#4ecdc4"
+                    tooltip="Minimum time horizon in minutes. Prevents too-aggressive inventory management."
                   />
                 )}
                 {result.strategy_params.time_horizon_max !== undefined && (
@@ -1489,6 +1552,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="T Max (min)"
                     value={`${safeToFixed(parseFloat(result.strategy_params.time_horizon_max), 2)}`}
                     color="#4ecdc4"
+                    tooltip="Maximum time horizon in minutes. Prevents too-passive inventory management."
                   />
                 )}
               </div>
@@ -1511,6 +1575,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Spread Vol Sensitivity"
                     value={safeToFixed(parseFloat(result.strategy_params.min_spread_vol_sensitivity), 2)}
                     color="#95e1d3"
+                    tooltip="How min spread adjusts with volatility. Higher = wider minimum spreads in volatile markets."
                   />
                 )}
                 {result.strategy_params.min_spread_flow_sensitivity !== undefined && (
@@ -1518,6 +1583,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Spread Flow Sensitivity"
                     value={safeToFixed(parseFloat(result.strategy_params.min_spread_flow_sensitivity), 2)}
                     color="#95e1d3"
+                    tooltip="How min spread adjusts with order flow. Higher = wider spreads during heavy trading."
                   />
                 )}
                 {result.strategy_params.min_spread_min_bps !== undefined && (
@@ -1525,6 +1591,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Spread Floor"
                     value={`${safeToFixed(parseFloat(result.strategy_params.min_spread_min_bps), 1)} bps`}
                     color="#95e1d3"
+                    tooltip="Absolute minimum spread in basis points. Never go below this to ensure profitability."
                   />
                 )}
                 {result.strategy_params.min_spread_max_bps !== undefined && (
@@ -1532,6 +1599,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Spread Cap"
                     value={`${safeToFixed(parseFloat(result.strategy_params.min_spread_max_bps), 1)} bps`}
                     color="#95e1d3"
+                    tooltip="Maximum minimum spread in basis points. Prevents spreads from getting too wide."
                   />
                 )}
               </div>
@@ -1554,6 +1622,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Size Vol Sensitivity"
                     value={safeToFixed(parseFloat(result.strategy_params.size_vol_sensitivity), 2)}
                     color="#f9ca24"
+                    tooltip="How order size adjusts with volatility. Higher = smaller orders in volatile markets."
                   />
                 )}
                 {result.strategy_params.size_drawdown_sensitivity !== undefined && (
@@ -1561,6 +1630,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Size DD Sensitivity"
                     value={safeToFixed(parseFloat(result.strategy_params.size_drawdown_sensitivity), 2)}
                     color="#f9ca24"
+                    tooltip="How order size reduces during drawdowns. Higher = more conservative when losing."
                   />
                 )}
                 {result.strategy_params.size_win_boost !== undefined && (
@@ -1568,6 +1638,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Win Boost"
                     value={`${safeToFixed(parseFloat(result.strategy_params.size_win_boost) * 100, 1)}%`}
                     color="#f9ca24"
+                    tooltip="Size increase after winning streaks. Allows scaling up during good performance."
                   />
                 )}
                 {result.strategy_params.size_min_pct !== undefined && (
@@ -1575,6 +1646,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Size Min"
                     value={`${safeToFixed(parseFloat(result.strategy_params.size_min_pct) * 100, 2)}%`}
                     color="#f9ca24"
+                    tooltip="Minimum order size as % of capital. Ensures orders remain meaningful."
                   />
                 )}
                 {result.strategy_params.size_max_pct !== undefined && (
@@ -1582,6 +1654,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Size Max"
                     value={`${safeToFixed(parseFloat(result.strategy_params.size_max_pct) * 100, 2)}%`}
                     color="#f9ca24"
+                    tooltip="Maximum order size as % of capital. Risk limit per single order."
                   />
                 )}
               </div>
@@ -1604,6 +1677,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Rate Vol Sensitivity"
                     value={safeToFixed(parseFloat(result.strategy_params.rate_vol_sensitivity), 2)}
                     color="#a29bfe"
+                    tooltip="How quote refresh rate adjusts with volatility. Higher = faster updates in volatile markets."
                   />
                 )}
                 {result.strategy_params.rate_min !== undefined && (
@@ -1611,6 +1685,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Rate Min"
                     value={`${safeToFixed(parseFloat(result.strategy_params.rate_min), 0)}/min`}
                     color="#a29bfe"
+                    tooltip="Minimum quote updates per minute. Ensures quotes stay fresh."
                   />
                 )}
                 {result.strategy_params.rate_max !== undefined && (
@@ -1618,7 +1693,9 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Rate Max"
                     value={`${safeToFixed(parseFloat(result.strategy_params.rate_max), 0)}/min`}
                     color="#a29bfe"
+                    tooltip="Maximum quote updates per minute. Prevents excessive API calls and fees."
                   />
+                )}
                 )}
               </div>
             </>
@@ -1641,6 +1718,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="EWMA Window"
                     value={`${parseFloat(result.strategy_params.window_ms) / 1000}s`}
                     color="#20c997"
+                    tooltip="Exponentially weighted moving average window for volatility calculation."
                   />
                 )}
                 {result.strategy_params.min_quote_lifetime_ms !== undefined && (
@@ -1648,6 +1726,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Min Quote Life"
                     value={`${parseFloat(result.strategy_params.min_quote_lifetime_ms)}ms`}
                     color="#20c997"
+                    tooltip="Minimum time quotes remain active before cancellation. Prevents quote flickering."
                   />
                 )}
                 {result.strategy_params.max_trades_per_minute !== undefined && (
@@ -1655,6 +1734,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Max Trades/Min"
                     value={safeToFixed(parseFloat(result.strategy_params.max_trades_per_minute), 0)}
                     color="#20c997"
+                    tooltip="Maximum trade execution rate. Prevents over-trading during volatile periods."
                   />
                 )}
               </div>
@@ -1676,6 +1756,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Take Profit"
                     value={`${safeToFixed(parseFloat(result.strategy_params.take_profit_pct) * 100, 2)}%`}
                     color="#28a745"
+                    tooltip="Target profit percentage to close position. Locks in gains at this level."
                   />
                 )}
                 {result.strategy_params.stop_loss_pct !== undefined && (
@@ -1683,6 +1764,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Stop Loss"
                     value={`${safeToFixed(parseFloat(result.strategy_params.stop_loss_pct) * 100, 2)}%`}
                     color="#dc3545"
+                    tooltip="Maximum loss percentage before closing position. Protects from large losses."
                   />
                 )}
               </div>
@@ -1705,6 +1787,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="High Vol Threshold"
                     value={`${safeToFixed(parseFloat(result.strategy_params.regime_vol_threshold_high), 2)}x`}
                     color="#e83e8c"
+                    tooltip="Volatility multiple that triggers high-volatility regime adjustments."
                   />
                 )}
                 {result.strategy_params.regime_vol_threshold_low !== undefined && (
@@ -1712,6 +1795,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Low Vol Threshold"
                     value={`${safeToFixed(parseFloat(result.strategy_params.regime_vol_threshold_low), 2)}x`}
                     color="#e83e8c"
+                    tooltip="Volatility multiple that triggers low-volatility regime adjustments."
                   />
                 )}
                 {result.strategy_params.regime_trend_threshold !== undefined && (
@@ -1719,6 +1803,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Trend Threshold"
                     value={`${safeToFixed(parseFloat(result.strategy_params.regime_trend_threshold) * 100, 1)}%`}
                     color="#e83e8c"
+                    tooltip="Price change threshold that triggers trending regime detection."
                   />
                 )}
                 {result.strategy_params.regime_high_vol_spread_mult !== undefined && (
@@ -1726,6 +1811,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="High Vol Spread Mult"
                     value={`${safeToFixed(parseFloat(result.strategy_params.regime_high_vol_spread_mult), 2)}x`}
                     color="#e83e8c"
+                    tooltip="Spread multiplier during high-volatility regimes. Wider spreads = safer."
                   />
                 )}
                 {result.strategy_params.regime_low_vol_spread_mult !== undefined && (
@@ -1733,6 +1819,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Low Vol Spread Mult"
                     value={`${safeToFixed(parseFloat(result.strategy_params.regime_low_vol_spread_mult), 2)}x`}
                     color="#e83e8c"
+                    tooltip="Spread multiplier during low-volatility regimes. Tighter spreads = more competitive."
                   />
                 )}
                 {result.strategy_params.regime_trending_inv_mult !== undefined && (
@@ -1740,6 +1827,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Trending Inv Mult"
                     value={`${safeToFixed(parseFloat(result.strategy_params.regime_trending_inv_mult), 2)}x`}
                     color="#e83e8c"
+                    tooltip="Inventory skew multiplier during trending regimes. More aggressive inventory control."
                   />
                 )}
               </div>
@@ -1762,6 +1850,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Imbalance Sensitivity"
                     value={`${safeToFixed(parseFloat(result.strategy_params.orderbook_imbalance_sensitivity) * 100, 1)}%`}
                     color="#6610f2"
+                    tooltip="How much quotes adjust based on order book imbalance. Higher = more reactive to buy/sell pressure."
                   />
                 )}
                 {result.strategy_params.orderbook_depth_levels !== undefined && (
@@ -1769,6 +1858,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Depth Levels"
                     value={safeToFixed(parseFloat(result.strategy_params.orderbook_depth_levels), 0)}
                     color="#6610f2"
+                    tooltip="Number of orderbook levels analyzed for imbalance calculation."
                   />
                 )}
                 {result.strategy_params.imbalance_skew_factor !== undefined && (
@@ -1776,6 +1866,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Imbalance Skew"
                     value={`${safeToFixed(parseFloat(result.strategy_params.imbalance_skew_factor) * 100, 1)}%`}
                     color="#6610f2"
+                    tooltip="How much to skew quotes based on orderbook imbalance."
                   />
                 )}
               </div>
@@ -1797,6 +1888,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Detection Window"
                     value={`${parseFloat(result.strategy_params.informed_trader_prob_window_ms) / 1000}s`}
                     color="#d63384"
+                    tooltip="Time window for detecting informed/toxic order flow patterns."
                   />
                 )}
                 {result.strategy_params.adverse_selection_multiplier !== undefined && (
@@ -1804,6 +1896,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Adverse Sel. Mult"
                     value={`${safeToFixed(parseFloat(result.strategy_params.adverse_selection_multiplier), 2)}x`}
                     color="#d63384"
+                    tooltip="Spread multiplier when adverse selection is detected. Protects from informed traders."
                   />
                 )}
                 {result.strategy_params.toxic_flow_threshold !== undefined && (
@@ -1811,6 +1904,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     title="Toxic Flow Threshold"
                     value={`${safeToFixed(parseFloat(result.strategy_params.toxic_flow_threshold) * 100, 1)}%`}
                     color="#d63384"
+                    tooltip="Order flow toxicity level that triggers defensive spread widening."
                   />
                 )}
               </div>
@@ -1838,41 +1932,49 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
               title="Total Volume"
               value={`$${formatLargeNumber(result.inventory_metrics.total_volume)}`}
               color="#007bff"
+              tooltip="Total dollar volume traded (buys + sells). Higher = more trading activity."
             />
             <MetricCard
               title="Avg Inventory"
               value={`$${formatLargeNumber(result.inventory_metrics.avg_inventory_value)}`}
               color="#6c757d"
+              tooltip="Average inventory value held. Lower = less capital at risk."
             />
             <MetricCard
               title="Turnover/Day"
               value={`${safeToFixed(result.inventory_metrics.turnover_per_day, 2)}x`}
               color={result.inventory_metrics.turnover_per_day > 1 ? '#28a745' : '#ffc107'}
+              tooltip="Daily inventory turnover rate. Higher = faster inventory cycling."
             />
             <MetricCard
               title="Buy Fills"
               value={(result.inventory_metrics.buy_fills ?? 0).toString()}
               color="#28a745"
+              tooltip="Number of buy orders that got filled."
             />
             <MetricCard
               title="Sell Fills"
               value={(result.inventory_metrics.sell_fills ?? 0).toString()}
               color="#dc3545"
+              tooltip="Number of sell orders that got filled."
             />
             <MetricCard
               title="Buy Volume"
               value={`$${formatLargeNumber(result.inventory_metrics.buy_volume)}`}
               color="#28a745"
+              tooltip="Total dollar value of all buy orders filled."
             />
             <MetricCard
               title="Sell Volume"
               value={`$${formatLargeNumber(result.inventory_metrics.sell_volume)}`}
               color="#dc3545"
+              tooltip="Total dollar value of all sell orders filled."
             />
             <MetricCard
               title="Imbalance Ratio"
               value={`${safeToFixed(result.inventory_metrics.imbalance_ratio * 100, 2)}%`}
               color={Math.abs(result.inventory_metrics.imbalance_ratio) < 0.1 ? '#28a745' : Math.abs(result.inventory_metrics.imbalance_ratio) < 0.25 ? '#ffc107' : '#dc3545'}
+              tooltip="Buy vs Sell volume imbalance. Near 0% = balanced trading."
             />
           </div>
         </div>
@@ -2176,24 +2278,83 @@ interface MetricCardProps {
   title: string;
   value: string;
   color: string;
+  tooltip?: string;
 }
 
-const MetricCard: React.FC<MetricCardProps> = ({ title, value, color }) => (
-  <div style={{
-    backgroundColor: 'white',
-    padding: '20px',
-    borderRadius: '8px',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-    textAlign: 'center',
-  }}>
-    <div style={{ fontSize: '14px', color: '#666', marginBottom: '8px' }}>
-      {title}
+const MetricCard: React.FC<MetricCardProps> = ({ title, value, color, tooltip }) => {
+  const [showTooltip, setShowTooltip] = React.useState(false);
+  
+  return (
+    <div style={{
+      backgroundColor: 'white',
+      padding: '20px',
+      borderRadius: '8px',
+      boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+      textAlign: 'center',
+      position: 'relative',
+    }}>
+      <div style={{ fontSize: '14px', color: '#666', marginBottom: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>
+        {title}
+        {tooltip && (
+          <span
+            onMouseEnter={() => setShowTooltip(true)}
+            onMouseLeave={() => setShowTooltip(false)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '16px',
+              height: '16px',
+              borderRadius: '50%',
+              backgroundColor: '#e9ecef',
+              color: '#6c757d',
+              fontSize: '11px',
+              fontWeight: 600,
+              cursor: 'help',
+              position: 'relative',
+            }}
+          >
+            ?
+            {showTooltip && (
+              <div style={{
+                position: 'absolute',
+                bottom: '100%',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                marginBottom: '8px',
+                padding: '10px 12px',
+                backgroundColor: '#333',
+                color: 'white',
+                borderRadius: '6px',
+                fontSize: '12px',
+                lineHeight: '1.4',
+                whiteSpace: 'normal',
+                width: '220px',
+                textAlign: 'left',
+                zIndex: 1000,
+                boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+              }}>
+                {tooltip}
+                <div style={{
+                  position: 'absolute',
+                  top: '100%',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  borderLeft: '6px solid transparent',
+                  borderRight: '6px solid transparent',
+                  borderTop: '6px solid #333',
+                }} />
+              </div>
+            )}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: '28px', fontWeight: 'bold', color }}>
+        {value}
+      </div>
     </div>
-    <div style={{ fontSize: '28px', fontWeight: 'bold', color }}>
-      {value}
-    </div>
-  </div>
-);
+  );
+};
 
 interface EquityCurveChartProps {
   data: Array<number | { timestamp?: string; value?: number }>;
