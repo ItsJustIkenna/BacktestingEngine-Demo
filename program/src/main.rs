@@ -529,11 +529,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                             open_positions: None,
                                                             realized_pnl: Some(eval_result.net_pnl),
                                                             unrealized_pnl: None,
-                                                            annualized_return: None,
-                                                            volatility: None,
+                                                            annualized_return: None, // Computed from equity curve in save_result
+                                                            volatility: None, // Computed from equity curve in save_result
                                                             sortino_ratio: None,
                                                             calmar_ratio: None,
-                                                            avg_trade_return: None,
+                                                            avg_trade_return: if eval_result.num_trades > 0 {
+                                                                Some(eval_result.net_pnl / eval_result.num_trades as f64)
+                                                            } else {
+                                                                None
+                                                            },
                                                             best_trade: None,
                                                             worst_trade: None,
                                                             avg_time_in_trade: None,

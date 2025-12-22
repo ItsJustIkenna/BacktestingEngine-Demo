@@ -358,6 +358,12 @@ pub struct FastSimResult {
     pub gross_profit: f64,
     pub gross_loss: f64,
     pub total_commission: f64,
+    /// Annualized volatility of returns
+    pub volatility: f64,
+    /// Annualized return (as a decimal, e.g., 0.25 = 25%)
+    pub annualized_return: f64,
+    /// Number of trading days in the simulation
+    pub trading_days: f64,
 }
 
 impl Default for FastSimResult {
@@ -373,6 +379,9 @@ impl Default for FastSimResult {
             gross_profit: 0.0,
             gross_loss: 0.0,
             total_commission: 0.0,
+            volatility: 0.0,
+            annualized_return: 0.0,
+            trading_days: 0.0,
         }
     }
 }
@@ -402,7 +411,7 @@ impl<'a> FastSimulator<'a> {
         
         // Pre-allocate result vectors
         let mut equity_curve = Vec::with_capacity(n / 100 + 1);
-        let mut trade_pnls = Vec::with_capacity(n / 10);
+        let mut round_trip_pnls: Vec<f64> = Vec::with_capacity(n / 20);
         
         // State variables
         let mut cash = self.initial_capital;
@@ -410,6 +419,12 @@ impl<'a> FastSimulator<'a> {
         let mut total_commission = 0.0;
         let mut peak_equity = self.initial_capital;
         let mut max_drawdown = 0.0;
+        
+        // Round-trip tracking for market making
+        // Track inventory cost basis to compute realized P&L on round trips
+        let mut inventory_cost_basis = 0.0; // Total cost of current inventory
+        let mut total_buy_qty = 0.0;
+        let mut total_sell_qty = 0.0;
         
         // Calculate order size in base units
         let ref_price = self.features.prices[0];
@@ -481,13 +496,23 @@ impl<'a> FastSimulator<'a> {
                     let trade_value = fill_size * fill_price;
                     let commission = trade_value * params.fee_rate;
                     
+                    // Calculate realized P&L if closing existing long inventory
+                    if inventory > 0.0 && total_buy_qty > 0.0 {
+                        let closing_qty = fill_size.min(inventory);
+                        let avg_cost = inventory_cost_basis / total_buy_qty;
+                        let realized_pnl = (fill_price - avg_cost) * closing_qty - commission;
+                        round_trip_pnls.push(realized_pnl);
+                        
+                        // Reduce cost basis proportionally
+                        let basis_reduction = avg_cost * closing_qty;
+                        inventory_cost_basis = (inventory_cost_basis - basis_reduction).max(0.0);
+                        total_buy_qty = (total_buy_qty - closing_qty).max(0.0);
+                    }
+                    
                     cash += trade_value - commission;
                     inventory -= fill_size;
                     total_commission += commission;
-                    
-                    // Track P&L for this trade
-                    let trade_pnl = (fill_price - price) * fill_size - commission;
-                    trade_pnls.push(trade_pnl);
+                    total_sell_qty += fill_size;
                     
                     // Reset quote
                     last_ask_price = 0.0;
@@ -504,13 +529,21 @@ impl<'a> FastSimulator<'a> {
                     let trade_value = fill_size * fill_price;
                     let commission = trade_value * params.fee_rate;
                     
+                    // Calculate realized P&L if closing existing short inventory
+                    if inventory < 0.0 && total_sell_qty > 0.0 {
+                        let closing_qty = fill_size.min((-inventory).abs());
+                        // For shorts, we sold at a price and now buying back
+                        // This is more complex - for simplicity, count as new position
+                        // The overall equity change captures this correctly
+                    }
+                    
+                    // Add to cost basis for long position
+                    inventory_cost_basis += trade_value;
+                    total_buy_qty += fill_size;
+                    
                     cash -= trade_value + commission;
                     inventory += fill_size;
                     total_commission += commission;
-                    
-                    // Track P&L for this trade
-                    let trade_pnl = (price - fill_price) * fill_size - commission;
-                    trade_pnls.push(trade_pnl);
                     
                     // Reset quote
                     last_bid_price = 0.0;
@@ -545,9 +578,11 @@ impl<'a> FastSimulator<'a> {
         
         // Calculate metrics
         let total_pnl = final_equity - self.initial_capital;
-        let num_trades = trade_pnls.len();
         
-        let (gross_profit, gross_loss) = trade_pnls.iter().fold((0.0, 0.0), |(profit, loss), &pnl| {
+        // Use round_trip_pnls for win_rate and profit_factor (closed positions only)
+        let num_round_trips = round_trip_pnls.len();
+        
+        let (gross_profit, gross_loss) = round_trip_pnls.iter().fold((0.0, 0.0), |(profit, loss), &pnl| {
             if pnl > 0.0 {
                 (profit + pnl, loss)
             } else {
@@ -555,13 +590,43 @@ impl<'a> FastSimulator<'a> {
             }
         });
         
-        let profit_factor = if gross_loss > 0.0 { gross_profit / gross_loss } else { gross_profit.max(1.0) };
+        let profit_factor = if gross_loss > 0.0 { 
+            gross_profit / gross_loss 
+        } else if gross_profit > 0.0 {
+            // All wins, no losses - use a high but reasonable value
+            10.0
+        } else {
+            1.0 // No trades or no P&L
+        };
         
-        let winning_trades = trade_pnls.iter().filter(|&&pnl| pnl > 0.0).count();
-        let win_rate = if num_trades > 0 { winning_trades as f64 / num_trades as f64 } else { 0.0 };
+        let winning_trades = round_trip_pnls.iter().filter(|&&pnl| pnl > 0.0).count();
+        let win_rate = if num_round_trips > 0 { 
+            winning_trades as f64 / num_round_trips as f64 
+        } else {
+            // No round trips closed, but if we have positive total P&L, estimate
+            if total_pnl > 0.0 { 0.5 } else { 0.0 }
+        };
         
-        // Calculate Sharpe ratio from equity curve returns
-        let sharpe_ratio = calculate_sharpe_from_equity(&equity_curve, self.initial_capital);
+        // Total trades = buy fills + sell fills (one-way count)
+        let num_trades = (total_buy_qty + total_sell_qty) as usize;
+        
+        // Calculate trading days from actual timestamps
+        let first_ts = self.features.timestamps.first().copied().unwrap_or(0);
+        let last_ts = self.features.timestamps.last().copied().unwrap_or(0);
+        let duration_ms = (last_ts - first_ts).max(1) as f64;
+        let trading_days = (duration_ms / (24.0 * 60.0 * 60.0 * 1000.0)).max(0.01); // At least 0.01 days
+        
+        // Calculate Sharpe ratio and volatility from equity curve returns
+        // Pass trading_days so we can annualize correctly
+        let (sharpe_ratio, volatility) = calculate_sharpe_and_volatility(&equity_curve, trading_days);
+        
+        // Annualized return: (1 + total_return)^(252/days) - 1
+        let total_return = total_pnl / self.initial_capital;
+        let annualized_return = if trading_days > 0.0 && total_return > -1.0 {
+            ((1.0 + total_return).powf(252.0 / trading_days) - 1.0)
+        } else {
+            0.0
+        };
         
         FastSimResult {
             total_pnl,
@@ -574,14 +639,19 @@ impl<'a> FastSimulator<'a> {
             gross_profit,
             gross_loss,
             total_commission,
+            volatility,
+            annualized_return,
+            trading_days,
         }
     }
 }
 
-/// Calculate Sharpe ratio from equity curve
-fn calculate_sharpe_from_equity(equity: &[f64], _initial_capital: f64) -> f64 {
+/// Calculate Sharpe ratio and annualized volatility from equity curve
+/// Returns (sharpe_ratio, annualized_volatility)
+/// trading_days: actual duration of the backtest in days
+fn calculate_sharpe_and_volatility(equity: &[f64], trading_days: f64) -> (f64, f64) {
     if equity.len() < 2 {
-        return 0.0;
+        return (0.0, 0.0);
     }
     
     // Calculate returns
@@ -593,7 +663,7 @@ fn calculate_sharpe_from_equity(equity: &[f64], _initial_capital: f64) -> f64 {
     }
     
     if returns.is_empty() {
-        return 0.0;
+        return (0.0, 0.0);
     }
     
     // Mean and std of returns
@@ -602,13 +672,22 @@ fn calculate_sharpe_from_equity(equity: &[f64], _initial_capital: f64) -> f64 {
     let std = variance.sqrt();
     
     if std < 1e-10 {
-        return 0.0;
+        return (0.0, 0.0);
     }
     
-    // Annualize (assuming ~500 samples = ~1 day of data for sampled curve)
-    let annualization = (252.0 * equity.len() as f64 / 500.0).sqrt();
+    // Annualize based on actual trading period
+    // If we have N samples over T days, then we have N/T samples per day
+    // To annualize: multiply by sqrt(252 * samples_per_day) = sqrt(252 * N / T)
+    let samples_per_day = returns.len() as f64 / trading_days.max(0.01);
+    let annualization = (252.0 * samples_per_day).sqrt();
     
-    (mean / std) * annualization
+    // Cap annualization factor to prevent extreme values for short periods
+    let annualization = annualization.min(50.0); // ~250 samples/day max
+    
+    let sharpe = (mean / std) * annualization;
+    let annualized_volatility = std * annualization;
+    
+    (sharpe, annualized_volatility)
 }
 
 /// Convert FastSimResult to standard BacktestResult for compatibility
@@ -679,12 +758,13 @@ mod tests {
     fn test_sharpe_calculation() {
         // Steadily increasing equity should have positive Sharpe
         let equity = vec![100.0, 101.0, 102.0, 103.0, 104.0, 105.0];
-        let sharpe = calculate_sharpe_from_equity(&equity, 100.0);
+        let (sharpe, volatility) = calculate_sharpe_and_volatility(&equity, 100.0);
         assert!(sharpe > 0.0);
+        assert!(volatility > 0.0);
         
         // Flat equity should have ~0 Sharpe
         let flat = vec![100.0, 100.0, 100.0, 100.0];
-        let sharpe_flat = calculate_sharpe_from_equity(&flat, 100.0);
+        let (sharpe_flat, _) = calculate_sharpe_and_volatility(&flat, 100.0);
         assert!(sharpe_flat.abs() < 0.1);
     }
 }

@@ -878,6 +878,45 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         }}>
           <h3 style={{ marginTop: 0, marginBottom: '15px' }}>🎲 Monte Carlo Analysis ({result.monte_carlo.num_runs} runs)</h3>
           
+          {/* Key Risk Summary Box */}
+          <div style={{
+            backgroundColor: '#f8f9fa',
+            border: '1px solid #dee2e6',
+            borderRadius: '8px',
+            padding: '15px',
+            marginBottom: '20px',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-around', flexWrap: 'wrap', gap: '15px' }}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Value at Risk (95%)</div>
+                <div style={{ fontSize: '20px', fontWeight: 600, color: '#dc3545' }}>
+                  -${safeToFixed(Math.abs(result.monte_carlo.var_95), 2)}
+                </div>
+                <div style={{ fontSize: '11px', color: '#888' }}>
+                  {safeToFixed((Math.abs(result.monte_carlo.var_95) / (jobDetails?.initial_capital || 10000)) * 100, 2)}% of capital
+                </div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Expected Shortfall (CVaR)</div>
+                <div style={{ fontSize: '20px', fontWeight: 600, color: '#dc3545' }}>
+                  -${safeToFixed(Math.abs(result.monte_carlo.cvar_95), 2)}
+                </div>
+                <div style={{ fontSize: '11px', color: '#888' }}>
+                  {safeToFixed((Math.abs(result.monte_carlo.cvar_95) / (jobDetails?.initial_capital || 10000)) * 100, 2)}% of capital
+                </div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Sharpe 95% Confidence</div>
+                <div style={{ fontSize: '20px', fontWeight: 600, color: result.monte_carlo.confidence_lower > 0 ? '#28a745' : '#ffc107' }}>
+                  [{safeToFixed(result.monte_carlo.confidence_lower, 2)}, {safeToFixed(result.monte_carlo.confidence_upper, 2)}]
+                </div>
+                <div style={{ fontSize: '11px', color: '#888' }}>
+                  Mean: {safeToFixed(result.monte_carlo.mean_sharpe, 3)} ± {safeToFixed(result.monte_carlo.stddev_sharpe, 3)}
+                </div>
+              </div>
+            </div>
+          </div>
+          
           {/* Risk Metrics */}
           <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Risk Metrics</h4>
           <div style={{
@@ -2079,7 +2118,29 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
         marginBottom: '30px',
       }}>
-        <h3 style={{ marginTop: 0 }}>Equity Curve</h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+          <h3 style={{ margin: 0 }}>Equity Curve</h3>
+          <div style={{ display: 'flex', gap: '20px', fontSize: '14px' }}>
+            <div>
+              <span style={{ color: '#666' }}>Starting Capital: </span>
+              <span style={{ fontWeight: 600, color: '#007bff' }}>
+                ${formatLargeNumber(jobDetails?.initial_capital ?? 10000)}
+              </span>
+            </div>
+            <div>
+              <span style={{ color: '#666' }}>Ending Capital: </span>
+              <span style={{ fontWeight: 600, color: (result.total_pnl ?? 0) >= 0 ? '#28a745' : '#dc3545' }}>
+                ${formatLargeNumber((jobDetails?.initial_capital ?? 10000) + (result.total_pnl ?? 0))}
+              </span>
+            </div>
+            <div>
+              <span style={{ color: '#666' }}>Return: </span>
+              <span style={{ fontWeight: 600, color: (result.total_pnl ?? 0) >= 0 ? '#28a745' : '#dc3545' }}>
+                {safeToFixed(((result.total_pnl ?? 0) / (jobDetails?.initial_capital ?? 10000)) * 100, 2)}%
+              </span>
+            </div>
+          </div>
+        </div>
         <EquityCurveChart 
           data={result.equity_curve ?? []} 
           startDate={result.start_date}

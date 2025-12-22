@@ -533,9 +533,33 @@ impl JobQueue for PostgresQueue {
         
         let capped_pnl = sanitize(result.total_pnl, MAX_VALUE_20_8);
         
-        // Calculate annualized metrics (simplified - using 252 trading days)
+        // Calculate annualized return properly
+        // If result.annualized_return is provided, use it; otherwise compute from equity curve
         let total_return_bd = cap_value(capped_pnl);
-        let annualized_return = total_return_bd.clone(); // Simplified
+        let computed_annualized_return = if let Some(ann_ret) = result.annualized_return {
+            // Already computed (e.g., from FastSimulator)
+            cap_value(ann_ret * 100.0) // Convert to percentage (e.g., 0.25 -> 25%)
+        } else {
+            // Fallback: estimate from equity curve
+            // Assume 252 trading days for 1 year, scale by actual data period
+            let equity_slice: &[f64] = &result.equity_curve;
+            if equity_slice.len() >= 2 {
+                let start_equity = equity_slice.get(0).copied().unwrap_or(10000.0);
+                let end_equity = equity_slice.get(equity_slice.len() - 1).copied().unwrap_or(10000.0);
+                let total_return = (end_equity - start_equity) / start_equity;
+                // Rough estimate: 500 samples = 1 day of high-freq data
+                let trading_days = (equity_slice.len() as f64 / 500.0).max(1.0);
+                // Annualize: (1 + r)^(252/days) - 1
+                let annualized = if total_return > -1.0 {
+                    ((1.0 + total_return).powf(252.0 / trading_days) - 1.0) * 100.0
+                } else {
+                    -100.0 // Total loss
+                };
+                cap_value(annualized)
+            } else {
+                total_return_bd.clone() // Fallback to raw P&L if no curve
+            }
+        };
         
         // Downsample equity curve to 500 points max (reduced from 1000 for faster serialization)
         let equity_curve_downsampled = Self::downsample_equity_curve(&result.equity_curve, 500);
@@ -561,8 +585,7 @@ impl JobQueue for PostgresQueue {
             point_in_time: true,
             warmup_period_days: 30,
             total_return: total_return_bd.clone(),
-            annualized_return: cap_opt(result.annualized_return)
-                .unwrap_or_else(|| annualized_return.clone()),
+            annualized_return: computed_annualized_return,
             volatility: cap_opt(result.volatility)
                 .unwrap_or(BigDecimal::from(0)),
             sharpe_ratio: Some(cap_value(result.sharpe_ratio)),
