@@ -1739,10 +1739,18 @@ impl Worker {
             "viable" => (expected_net_per_trade > 0.0)
         );
         
+        // Update generation to show all generations complete before final analysis
+        let total_generations = params.generations as i32;
+        if let Err(e) = self.job_queue.update_generation(&job.id, total_generations, total_generations).await {
+            log_warn!(MAIN_LOGGER, "Job {} failed to update generation for final analysis: {}", job.id, e);
+        }
+        
         // Update phase for final analysis with granular sub-phases
         progress_tracker.broadcast_phase("final_analysis", serde_json::json!({
             "status": "starting",
             "sub_phase": "backtest",
+            "current_generation": total_generations,
+            "total_generations": total_generations,
             "monte_carlo_enabled": params.monte_carlo_enabled,
             "walk_forward_enabled": params.walk_forward_enabled,
             "data_points": data_for_backtest.len(),
@@ -1750,6 +1758,8 @@ impl Worker {
         let _ = progress_tracker.persist_phase_change("final_analysis", serde_json::json!({
             "status": "starting",
             "sub_phase": "backtest",
+            "current_generation": total_generations,
+            "total_generations": total_generations,
             "monte_carlo_runs": params.monte_carlo_runs.min(200),
         })).await;
         let _ = progress_tracker.persist_progress(87.0).await; // 87% - starting final analysis
