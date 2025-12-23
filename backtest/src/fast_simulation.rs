@@ -545,11 +545,12 @@ impl<'a> FastSimulator<'a> {
                 last_quote_time = timestamp;
             }
             
-            // Check for fills based on trade aggressor side
-            // If a buy aggressor (trade_side > 0) hits our ask, we sell
-            // If a sell aggressor (trade_side < 0) hits our bid, we buy
+            // Check for fills based on price crossing our quotes
+            // Order book data has side indicating book position, not trade aggressor
+            // Use pure price-based fills: if price crosses our quote level, we get filled
             
-            if trade_side > 0.0 && last_ask_price > 0.0 {
+            // Our ask gets hit when price rises to/above our ask level
+            if last_ask_price > 0.0 {
                 ask_hit_attempts += 1;
                 if price >= last_ask_price {
                     // Our ask got hit - we sell
@@ -589,7 +590,8 @@ impl<'a> FastSimulator<'a> {
                 }
             }
             
-            if trade_side < 0.0 && last_bid_price > 0.0 {
+            // Our bid gets hit when price drops to/below our bid level
+            if last_bid_price > 0.0 {
                 bid_hit_attempts += 1;
                 if price <= last_bid_price {
                     // Our bid got hit - we buy
