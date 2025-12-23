@@ -331,13 +331,13 @@ impl DistributedGAWorker {
             "cache_time_ms" => elapsed.as_millis()
         );
         
-        // Send acknowledgment
+        // Send acknowledgment with actual tick count
         let ack = protocol::broker::messages::DataCacheAck {
             cache_key: broadcast.cache_key,
             worker_id: self.worker_id.clone(),
             success: true,
             capacity: MAX_CONCURRENT_EVALS as i32,
-            tick_count: 0,
+            tick_count: data_len as i64,
         };
         
         let _ = self.broker.publish_data_ack(ack).await;
@@ -358,14 +358,15 @@ impl DistributedGAWorker {
         // Check if already cached
         {
             let binary_cache = self.binary_cache.read().await;
-            if binary_cache.contains_key(&cache_key) {
-                println!("✅ [WORKER {}] Binary file already cached for {}", self.worker_id, cache_key);
+            if let Some(info) = binary_cache.get(&cache_key) {
+                println!("✅ [WORKER {}] Binary file already cached for {} ({} ticks)", 
+                    self.worker_id, cache_key, info.tick_count);
                 let ack = protocol::broker::messages::DataCacheAck {
                     cache_key,
                     worker_id: self.worker_id.clone(),
                     success: true,
                     capacity: MAX_CONCURRENT_EVALS as i32,
-                    tick_count: 0,
+                    tick_count: info.tick_count as i64,  // Send actual tick count
                 };
                 let _ = self.broker.publish_data_ack(ack).await;
                 return;
@@ -373,14 +374,16 @@ impl DistributedGAWorker {
         }
         {
             let data_cache = self.data_cache.read().await;
-            if data_cache.contains_key(&cache_key) {
-                println!("✅ [WORKER {}] Data already cached for {}", self.worker_id, cache_key);
+            if let Some(entry) = data_cache.get(&cache_key) {
+                let tick_count = entry.data.len() as i64;
+                println!("✅ [WORKER {}] Data already cached for {} ({} ticks)", 
+                    self.worker_id, cache_key, tick_count);
                 let ack = protocol::broker::messages::DataCacheAck {
                     cache_key,
                     worker_id: self.worker_id.clone(),
                     success: true,
                     capacity: MAX_CONCURRENT_EVALS as i32,
-                    tick_count: 0,
+                    tick_count,  // Send actual tick count
                 };
                 let _ = self.broker.publish_data_ack(ack).await;
                 return;
@@ -394,18 +397,29 @@ impl DistributedGAWorker {
                 println!("⏳ [WORKER {}] Another worker loading {}, waiting...", self.worker_id, cache_key);
                 drop(loading);
                 
-                // Wait for completion
+                // Wait for completion - get tick_count from cache when available
                 for _ in 0..120 {
                     tokio::time::sleep(Duration::from_secs(1)).await;
                     let bc = self.binary_cache.read().await;
                     let dc = self.data_cache.read().await;
-                    if bc.contains_key(&cache_key) || dc.contains_key(&cache_key) {
+                    if let Some(info) = bc.get(&cache_key) {
                         let ack = protocol::broker::messages::DataCacheAck {
                             cache_key,
                             worker_id: self.worker_id.clone(),
                             success: true,
                             capacity: MAX_CONCURRENT_EVALS as i32,
-                            tick_count: 0,
+                            tick_count: info.tick_count as i64,
+                        };
+                        let _ = self.broker.publish_data_ack(ack).await;
+                        return;
+                    }
+                    if let Some(entry) = dc.get(&cache_key) {
+                        let ack = protocol::broker::messages::DataCacheAck {
+                            cache_key,
+                            worker_id: self.worker_id.clone(),
+                            success: true,
+                            capacity: MAX_CONCURRENT_EVALS as i32,
+                            tick_count: entry.data.len() as i64,
                         };
                         let _ = self.broker.publish_data_ack(ack).await;
                         return;
@@ -457,7 +471,7 @@ impl DistributedGAWorker {
                 worker_id: self.worker_id.clone(),
                 success: true,
                 capacity: MAX_CONCURRENT_EVALS as i32,
-                tick_count: 0,
+                tick_count: tick_count as i64,  // Send actual tick count for data splits
             };
             let _ = self.broker.publish_data_ack(ack).await;
             return;
@@ -497,7 +511,7 @@ impl DistributedGAWorker {
                                 worker_id: self.worker_id.clone(),
                                 success: true,
                                 capacity: MAX_CONCURRENT_EVALS as i32,
-                                tick_count: 0,
+                                tick_count: count as i64,  // Send actual tick count
                             };
                             let _ = self.broker.publish_data_ack(ack).await;
                             return;
@@ -546,7 +560,7 @@ impl DistributedGAWorker {
                             worker_id: self.worker_id.clone(),
                             success: true,
                             capacity: MAX_CONCURRENT_EVALS as i32,
-                            tick_count: 0,
+                            tick_count: data_len as i64,  // Send actual tick count
                         };
                         let _ = self.broker.publish_data_ack(ack).await;
                         return;

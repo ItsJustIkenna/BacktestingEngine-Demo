@@ -224,7 +224,9 @@ impl PostgresQueue {
             completed_at: record.completed_at,
             progress: f64::from_str(&record.progress.to_string())?,
             current_generation: record.current_generation.unwrap_or(0),
-            total_generations: record.total_generations.unwrap_or(0),
+            // Use total_generations if set, otherwise fall back to generations from job params
+            // This ensures proper display before the first update_generation call
+            total_generations: record.total_generations.or(record.generations).unwrap_or(0),
             current_phase: record.current_phase.unwrap_or_else(|| "initializing".to_string()),
             phase_details: record.phase_details.unwrap_or_else(|| serde_json::json!({})),
             error_message: record.error_message,
@@ -304,21 +306,38 @@ impl JobQueue for PostgresQueue {
                 
                 if let Some(job_record) = job {
                     let now = Utc::now();
+                    
+                    // Initialize total_generations from job params to fix "first job glitch"
+                    // where UI shows 0/0 generations until first progress update
+                    let generations = job_record.generations.unwrap_or(0);
+                    
                     let rows_updated = diesel::update(backtest_jobs::table.find(job_record.id))
                         .set((
                             backtest_jobs::status.eq("running"),
                             backtest_jobs::started_at.eq(Some(now)),
                             backtest_jobs::last_heartbeat.eq(Some(now)),
+                            // Initialize generation tracking immediately on claim
+                            backtest_jobs::current_generation.eq(0),
+                            backtest_jobs::total_generations.eq(generations),
+                            // Initialize phase to "initializing" so UI shows something
+                            backtest_jobs::current_phase.eq("initializing"),
+                            backtest_jobs::phase_details.eq(serde_json::json!({
+                                "step": "claimed",
+                                "message": "Job claimed, preparing to start"
+                            })),
                         ))
                         .execute(conn)
                         .await?;
                     
-                    eprintln!("🔄 DB_STATUS_UPDATE | job_id={} | rows_updated={} | new_status=running", job_record.job_id, rows_updated);
+                    eprintln!("🔄 DB_STATUS_UPDATE | job_id={} | rows_updated={} | new_status=running | generations=0/{}", job_record.job_id, rows_updated, generations);
                     
-                    // Create updated record with started_at set
+                    // Create updated record with started_at and generation info set
                     let mut updated_record = job_record;
                     updated_record.status = "running".to_string();
                     updated_record.started_at = Some(now);
+                    updated_record.current_generation = Some(0);
+                    updated_record.total_generations = Some(generations);
+                    updated_record.current_phase = Some("initializing".to_string());
                     
                     Ok(Some(Self::record_to_job(updated_record)?))
                 } else {

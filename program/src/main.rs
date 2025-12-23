@@ -425,19 +425,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 })).await;
                                 let _ = job_queue_clone.update_progress(&job.id, 5.0).await;
                                 
-                                // First request workers to load data
+                                // First request workers to load data (also sets data splits from worker tick_count)
                                 eprintln!("📤 [COORDINATOR] Requesting data load for job {}", job.id);
                                 match coordinator.request_data_load().await {
                                     Ok(cache_key) => {
                                         eprintln!("✅ [COORDINATOR] Data loaded with cache_key: {}", cache_key);
-                                        
-                                        // Set up data splits for train/test/validate
-                                        if let Some(tick_count) = coordinator.probe_tick_count() {
-                                            coordinator.set_data_splits(tick_count);
-                                            eprintln!("📊 [COORDINATOR] Data split: {} ticks, train=60%, test=20%, validate=20%", tick_count);
-                                        } else {
-                                            eprintln!("⚠️ [COORDINATOR] Could not probe tick count - using full data for all phases");
-                                        }
                                         
                                         // Now run the distributed GA
                                         eprintln!("🚀 [COORDINATOR] Starting GA run at {:?}", chrono::Utc::now());

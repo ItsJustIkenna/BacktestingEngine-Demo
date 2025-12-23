@@ -394,6 +394,9 @@ impl DistributedGACoordinator {
             "min_workers" => min_workers_needed
         );
         
+        // Track tick_count from worker acks - use first non-zero value received
+        let mut received_tick_count: i64 = 0;
+        
         while Instant::now() < ack_deadline {
             // Republish periodically to catch workers that subscribed late
             if last_publish.elapsed() >= publish_interval {
@@ -418,11 +421,20 @@ impl DistributedGACoordinator {
                             capacity: ack.capacity,
                             last_seen: Instant::now(),
                         });
-                        eprintln!("✅ [COORDINATOR] Worker {} acknowledged (capacity={})", ack.worker_id, ack.capacity);
+                        
+                        // Capture tick_count from first worker that provides it
+                        if received_tick_count == 0 && ack.tick_count > 0 {
+                            received_tick_count = ack.tick_count;
+                            eprintln!("📊 [COORDINATOR] Received tick_count={} from worker {}", ack.tick_count, ack.worker_id);
+                        }
+                        
+                        eprintln!("✅ [COORDINATOR] Worker {} acknowledged (capacity={}, tick_count={})", 
+                            ack.worker_id, ack.capacity, ack.tick_count);
                         log_info_structured!(MAIN_LOGGER, "GA_WORKER_READY",
                             "event" => "GA_WORKER_READY",
                             "worker_id" => ack.worker_id,
-                            "capacity" => ack.capacity
+                            "capacity" => ack.capacity,
+                            "tick_count" => ack.tick_count
                         );
                         
                         // Check if we have enough workers now
@@ -437,12 +449,28 @@ impl DistributedGACoordinator {
             }
         }
         
+        // Set data splits from tick_count received from workers
+        if received_tick_count > 0 {
+            self.set_data_splits(received_tick_count);
+            eprintln!("📊 [COORDINATOR] Data splits set from worker ack: {} ticks", received_tick_count);
+        } else {
+            eprintln!("⚠️ [COORDINATOR] No tick_count received from workers, trying local probe...");
+            // Fallback to local probe (may fail if coordinator doesn't have data access)
+            if let Some(tick_count) = self.probe_tick_count() {
+                self.set_data_splits(tick_count);
+                eprintln!("📊 [COORDINATOR] Data splits set from local probe: {} ticks", tick_count);
+            } else {
+                eprintln!("⚠️ [COORDINATOR] Could not determine tick_count - data splits will be 0");
+            }
+        }
+        
         let worker_count = self.workers.read().await.len();
         log_info_structured!(MAIN_LOGGER, "GA_DATA_LOAD_COMPLETE",
             "event" => "GA_DATA_LOAD_COMPLETE",
             "cache_key" => &cache_key,
             "workers_ready" => worker_count,
-            "total_capacity" => self.total_capacity().await
+            "total_capacity" => self.total_capacity().await,
+            "tick_count" => received_tick_count
         );
         
         if worker_count == 0 {
