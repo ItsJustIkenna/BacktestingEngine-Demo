@@ -90,6 +90,7 @@ impl DatabaseStreamer {
     }
     
     /// Count total rows (for progress reporting)
+    /// Only counts trade events, not order book events
     pub async fn count_orders(
         &self,
         symbol: &str,
@@ -104,6 +105,7 @@ impl DatabaseStreamer {
         let mut query = historical_orders::table
             .filter(historical_orders::symbol.eq(symbol))
             .filter(historical_orders::exchange.eq(exchange))
+            .filter(historical_orders::event_type.eq("trade"))
             .select(count_star())
             .into_boxed();
         
@@ -139,6 +141,9 @@ impl StreamState {
         let mut query = historical_orders::table
             .filter(historical_orders::symbol.eq(&self.symbol))
             .filter(historical_orders::exchange.eq(&self.exchange))
+            // Only include trade events - order book events (new/cancel/modify) 
+            // don't represent actual executions and would give false fill signals
+            .filter(historical_orders::event_type.eq("trade"))
             .order(historical_orders::timestamp.asc())
             .limit(self.chunk_size as i64)
             .into_boxed();
