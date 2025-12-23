@@ -498,7 +498,18 @@ fn correlation(x: &[f64], y: &[f64]) -> f64 {
     if denom > 1e-10 {
         cov / denom
     } else {
-        0.0
+        // If both series have zero variance (constant values), 
+        // check if they're equal - if so, correlation is perfect (1.0)
+        if var_x < 1e-10 && var_y < 1e-10 {
+            // Both are constant - check if means are equal
+            if (mean_x - mean_y).abs() < 1e-10 {
+                1.0  // Perfect correlation when identical constants
+            } else {
+                0.0  // Different constants = undefined, treat as 0
+            }
+        } else {
+            0.0
+        }
     }
 }
 
@@ -526,19 +537,21 @@ mod tests {
                 5.0,      // live fee (same)
                 10,       // live latency (same)
             );
+            // Record PnL for correlation calculation (simulate some profit variance)
+            let pnl = 10.0 + (i as f64) * 0.1;  // Varying PnL
+            validator.record_backtest_fill(pnl);
+            validator.record_live_fill(pnl);  // Same PnL = perfect correlation
         }
         
         validator.backtest_orders = 100;
-        validator.backtest_fills = 100;
         validator.live_orders = 100;
-        validator.live_fills = 100;
         
         let metrics = validator.calculate_metrics();
         
         assert_eq!(metrics.num_comparisons, 100);
         assert!((metrics.mean_price_slippage_bps).abs() < 0.01);
         assert!((metrics.mean_qty_fill_ratio - 1.0).abs() < 0.01);
-        assert!(metrics.accuracy_score > 95.0);
+        assert!(metrics.accuracy_score > 95.0, "Expected > 95.0, got {}", metrics.accuracy_score);
     }
     
     #[test]
