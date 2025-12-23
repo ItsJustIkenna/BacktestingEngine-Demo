@@ -1696,7 +1696,6 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                     tooltip="Maximum quote updates per minute. Prevents excessive API calls and fees."
                   />
                 )}
-                )}
               </div>
             </>
           )}
