@@ -58,7 +58,9 @@ impl Chromosome for AvellanedaStoikovChromosome {
             inventory_target: rng.gen_range(-0.3..0.3),
             
             // Volatility cap to prevent extreme spread widening
-            volatility_cap: rng.gen_range(0.05..5.0),
+            // NOTE: Must be >= vol_floor (0.15) in fast_simulation.rs or all events get skipped
+            // Range 0.20-5.0 ensures trades can execute (20% min > 15% floor)
+            volatility_cap: rng.gen_range(0.20..5.0),
             
             // Time horizon: 10 seconds to 60 minutes
             // Short for scalping, long for position trading
@@ -149,10 +151,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.inventory_target += rng.gen_range(-0.15..0.15);
             self.inventory_target = self.inventory_target.clamp(-0.3, 0.3);  // Reasonable bounds
         }
-        // Volatility cap: range 0.05-5.0
+        // Volatility cap: range 0.20-5.0 (must be above vol_floor of 0.15)
         if rng.gen_bool(mutation_rate) {
             self.volatility_cap += rng.gen_range(-0.5..0.5);
-            self.volatility_cap = self.volatility_cap.clamp(0.05, 5.0);
+            self.volatility_cap = self.volatility_cap.clamp(0.20, 5.0);
         }
         // Time horizon: range 10s-60min
         if rng.gen_bool(mutation_rate) {
@@ -216,7 +218,7 @@ impl Chromosome for AvellanedaStoikovChromosome {
         // d_fee removed - fee_rate is not in chromosome
         // d_latency removed - latency_buffer is not in chromosome
         let d_inventory = (self.inventory_target - other.inventory_target).abs() / 2.0; // Range: -1.0 to 1.0
-        let d_vol_cap = (self.volatility_cap - other.volatility_cap).abs() / 4.95; // Range: 0.05-5.0
+        let d_vol_cap = (self.volatility_cap - other.volatility_cap).abs() / 4.80; // Range: 0.20-5.0
         let d_horizon = ((self.time_horizon_minutes.ln() - other.time_horizon_minutes.ln()).abs()) / (60.0_f64.ln() - 0.167_f64.ln()).abs();
         let d_depth = (self.market_depth_k - other.market_depth_k).abs() / 49.0; // Range: 1.0-50.0
         

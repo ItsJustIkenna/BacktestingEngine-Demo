@@ -493,10 +493,21 @@ impl Worker {
         if let Err(e) = self.job_queue.update_progress(&job.id, 0.0).await {
             log_error!(MAIN_LOGGER, "Job {} failed to set initial progress: {}", job.id, e);
         }
+        
+        // CRITICAL: Set total_generations upfront for genetic optimization jobs
+        // This prevents the UI from showing "Gen null/null" during initialization
+        if job.params.optimization_method == "genetic" && job.params.generations > 0 {
+            log_info!(MAIN_LOGGER, "Job {} setting total_generations={} at initialization", job.id, job.params.generations);
+            if let Err(e) = self.job_queue.update_generation(&job.id, 0, job.params.generations as i32).await {
+                log_error!(MAIN_LOGGER, "Job {} failed to set initial generation info: {}", job.id, e);
+            }
+        }
+        
         if let Err(e) = self.job_queue.update_phase(&job.id, "initializing", serde_json::json!({
             "optimization_method": job.params.optimization_method,
             "symbol": job.params.symbol,
             "exchange": job.params.exchange,
+            "total_generations": job.params.generations,
         })).await {
             log_error!(MAIN_LOGGER, "Job {} failed to set initial phase: {}", job.id, e);
         }

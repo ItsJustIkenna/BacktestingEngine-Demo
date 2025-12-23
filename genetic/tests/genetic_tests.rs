@@ -502,7 +502,7 @@ fn test_all_parameter_ranges() {
         assert!(c.min_quote_lifetime_ms >= 10 && c.min_quote_lifetime_ms <= 60_000);
         // fee_rate and latency_buffer removed from chromosome - uses exchange config and latency simulation
         assert!(c.inventory_target >= -1.0 && c.inventory_target <= 1.0);
-        assert!(c.volatility_cap >= 0.05 && c.volatility_cap <= 5.0);
+        assert!(c.volatility_cap >= 0.20 && c.volatility_cap <= 5.0);  // Min 0.20 > vol_floor 0.15
         assert!(c.time_horizon_minutes >= 0.167 && c.time_horizon_minutes <= 60.0);
         assert!(c.market_depth_k >= 1.0 && c.market_depth_k <= 50.0);  // Updated range for liquid markets
     }

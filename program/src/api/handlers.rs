@@ -146,6 +146,10 @@ pub async fn get_job_status(
     
     // log_info!(...)
     
+    // Return generation info when total_generations > 0 (indicates a genetic optimization job)
+    // This ensures UI shows "Gen 0/N" during initialization instead of "Gen null/null"
+    let has_generation_info = job.total_generations > 0;
+    
     Ok(Json(JobStatusResponse {
         job_id: job.id,
         status: format!("{:?}", job.status).to_lowercase(),
@@ -154,8 +158,8 @@ pub async fn get_job_status(
         started_at: job.started_at.map(|dt| dt.to_rfc3339()),
         completed_at: job.completed_at.map(|dt| dt.to_rfc3339()),
         error_message: job.error_message,
-        current_generation: if job.current_generation > 0 { Some(job.current_generation) } else { None },
-        total_generations: if job.total_generations > 0 { Some(job.total_generations) } else { None },
+        current_generation: if has_generation_info { Some(job.current_generation) } else { None },
+        total_generations: if has_generation_info { Some(job.total_generations) } else { None },
         current_phase: job.current_phase,
         phase_details: job.phase_details,
     }))

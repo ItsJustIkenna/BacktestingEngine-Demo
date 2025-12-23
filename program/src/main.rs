@@ -297,6 +297,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("🔄 Starting job processing loop...");
                     eprintln!("🔄 [COORDINATOR] Job processing loop started (stderr)");
                     
+                    // Log first poll immediately so we know the loop is running
+                    eprintln!("🔍 [COORDINATOR] First poll starting NOW - ready to claim jobs");
+                    
                     let mut poll_count = 0u64;
                     
                     // Catch panics in the job processing loop
@@ -633,6 +636,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                                 "market_depth_k": best_chromosome.market_depth_k,
                                                                 "take_profit_pct": best_chromosome.take_profit_pct,
                                                                 "stop_loss_pct": best_chromosome.stop_loss_pct,
+                                                                "volatility_cap": best_chromosome.volatility_cap,
+                                                                "min_spread_bps": best_chromosome.min_spread_bps,
                                                                 "fitness": best_fitness,
                                                             })),
                                                             start_date: job.params.start_date.clone(),
@@ -692,6 +697,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                                 "market_depth_k": best_chromosome.market_depth_k,
                                                                 "take_profit_pct": best_chromosome.take_profit_pct,
                                                                 "stop_loss_pct": best_chromosome.stop_loss_pct,
+                                                                "volatility_cap": best_chromosome.volatility_cap,
+                                                                "min_spread_bps": best_chromosome.min_spread_bps,
                                                                 "fitness": best_fitness,
                                                                 "final_eval_error": format!("{:?}", e),
                                                             })),
