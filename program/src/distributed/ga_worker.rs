@@ -1010,9 +1010,8 @@ impl DistributedGAWorker {
         chromosome: &AvellanedaStoikovChromosome,
     ) {
         use data_prep::BinaryFileReader;
-        use dataloader::{Tick, TickSource};
-        use backtest::fast_simulation::{FastSimulator, FastASParams, MarketFeatures};
-        use bigdecimal::ToPrimitive;
+        use dataloader::TickSource;
+        use backtest::realistic_simulation::{RealisticSimulator, RealisticASParams, ticks_to_trade_events};
         
         let start = Instant::now();
         
@@ -1086,14 +1085,15 @@ impl DistributedGAWorker {
         println!("🔬 [WORKER {}] Final backtest on ticks [{}, {}) - {} ticks", 
             self.worker_id, start_idx, end_idx, end_idx - start_idx);
         
-        // Build market features for the target data range
-        let features_start = std::time::Instant::now();
-        let features = MarketFeatures::from_tick_source_range(&reader, start_idx, end_idx);
-        println!("📊 [WORKER {}] Features computed in {:.2}s for {} points", 
-            self.worker_id, features_start.elapsed().as_secs_f64(), features.len());
+        // Convert trade ticks to order book events for realistic simulation
+        let events_start = std::time::Instant::now();
+        let ticks: Vec<_> = (start_idx..end_idx).filter_map(|i| reader.get(i).cloned()).collect();
+        let events = ticks_to_trade_events(&ticks);
+        println!("📊 [WORKER {}] Converted {} ticks to events in {:.2}s", 
+            self.worker_id, events.len(), events_start.elapsed().as_secs_f64());
         
-        // Convert chromosome to fast simulation parameters
-        let fast_params = FastASParams {
+        // Convert chromosome to realistic simulation parameters
+        let realistic_params = RealisticASParams {
             risk_aversion: chromosome.risk_aversion,
             inventory_target: chromosome.inventory_target,
             order_size_pct: chromosome.order_size_pct,
@@ -1103,30 +1103,31 @@ impl DistributedGAWorker {
             fee_rate: 0.001, // Default 0.1% fee
         };
         
-        // Run vectorized simulation (fast!)
-        let simulator = FastSimulator::new(&features, request.initial_capital);
-        let fast_result = simulator.evaluate(&fast_params);
+        // Run realistic order book simulation
+        let simulator = RealisticSimulator::new(request.initial_capital, 0.001);
+        let realistic_result = simulator.run(&events, &realistic_params);
         
         // Convert to standard BacktestResult for fitness calculation
-        let backtest_result: backtest::types::BacktestResult = fast_result.clone().into();
+        let backtest_result: backtest::types::BacktestResult = realistic_result.clone().into();
         
         // Extract metrics
-        let net_pnl = fast_result.total_pnl;
-        let sharpe = fast_result.sharpe_ratio;
-        let num_trades = fast_result.num_trades as i32;
-        let max_dd = fast_result.max_drawdown;
-        let win_rate = fast_result.win_rate;
-        let profit_factor = fast_result.profit_factor;
-        let closed_trades = fast_result.num_trades as i32;
+        let net_pnl = realistic_result.total_pnl;
+        let sharpe = realistic_result.sharpe_ratio;
+        let num_trades = realistic_result.num_trades as i32;
+        let max_dd = realistic_result.max_drawdown;
+        let win_rate = realistic_result.win_rate;
+        let profit_factor = realistic_result.profit_factor;
+        let closed_trades = realistic_result.num_trades as i32;
         let total_orders = (backtest_result.num_trades * 2) as i32; // Estimate
         let ending_capital = request.initial_capital + net_pnl;
         let total_return_pct = (net_pnl / request.initial_capital) * 100.0;
         let fitness = calculate_comprehensive_fitness(&backtest_result, request.initial_capital);
         
-        println!("🔬 [WORKER {}] FINAL BACKTEST COMPLETE: PnL={:.2}, Sharpe={:.4}, trades={}, max_dd={:.4}",
+        println!("🔬 [WORKER {}] REALISTIC SIMULATION COMPLETE: PnL={:.2}, Sharpe={:.4}, trades={}, max_dd={:.4}",
             self.worker_id, net_pnl, sharpe, num_trades, max_dd);
-        println!("🔬 [WORKER {}] equity_curve length={}, fitness={:.6}",
-            self.worker_id, backtest_result.equity_curve.len(), fitness);
+        println!("🔬 [WORKER {}] Fill rate={:.2}%, avg_queue_pos={:.1}, equity_curve length={}, fitness={:.6}",
+            self.worker_id, realistic_result.avg_fill_rate * 100.0, realistic_result.avg_queue_position,
+            backtest_result.equity_curve.len(), fitness);
         
         // Run Monte Carlo if requested
         let monte_carlo_results = if request.run_monte_carlo {
