@@ -107,7 +107,22 @@ export const JobList: React.FC<JobListProps> = ({
       }
 
       const data = await response.json();
-      setJobs(data.backtests || []);
+      const newJobs = data.backtests || [];
+      
+      // Prevent progress from going backwards (race condition guard)
+      setJobs(prevJobs => {
+        const prevJobMap = new Map(prevJobs.map(j => [j.job_id, j]));
+        return newJobs.map((newJob: BacktestJob) => {
+          const prevJob = prevJobMap.get(newJob.job_id);
+          if (prevJob && newJob.status === 'running' && prevJob.status === 'running') {
+            // Keep the higher progress value to prevent UI glitches
+            if (newJob.progress < prevJob.progress) {
+              return { ...newJob, progress: prevJob.progress };
+            }
+          }
+          return newJob;
+        });
+      });
       setTotal(data.total || 0);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
@@ -204,26 +219,29 @@ export const JobList: React.FC<JobListProps> = ({
       const phaseIcons: { [key: string]: string } = {
         'initializing': '⏳',
         'loading_data': '📂',
+        'data_loading': '📂',
         'data_ready': '✅',
         'optimizing': '🧬',
         'genetic_optimization': '🧬',
+        'post_optimization': '🎯',
+        'final_analysis': '📊',
         'final_evaluation': '🎯',
         'calculating_metrics': '📊',
         'completed': '✅',
         'failed': '❌',
         'pending': '⏳',
+        'cancelled': '🚫',
       };
       const icon = phaseIcons[job.current_phase] || '🔄';
       const phaseName = job.current_phase.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
       return `${icon} ${phaseName}`;
     }
     
-    // Fallback to progress-based estimation
+    // Fallback to progress-based estimation (matches backend progress ranges)
     const progress = job.progress;
-    if (progress < 15) return '📂 Loading data...';
-    if (progress < 25) return '⚙️ Initializing...';
-    if (progress < 90) return '🚀 Running backtest...';
-    if (progress < 95) return '📊 Calculating metrics...';
+    if (progress < 5) return '📂 Loading data...';
+    if (progress < 85) return '🧬 Genetic optimization...';
+    if (progress < 95) return '📊 Final analysis...';
     return '✅ Finalizing...';
   };
 

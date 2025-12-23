@@ -380,13 +380,19 @@ impl JobQueue for PostgresQueue {
         
         let mut conn = self.get_conn_with_timeout().await?;
         
-        let rows = diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(job_id)))
+        // Only update if new progress is greater than current (monotonic progress)
+        // This prevents race conditions from causing progress to jump backwards
+        let rows = diesel::update(
+            backtest_jobs::table
+                .filter(backtest_jobs::job_id.eq(job_id))
+                .filter(backtest_jobs::progress.lt(BigDecimal::from_str(&progress.to_string())?))
+        )
             .set(backtest_jobs::progress.eq(BigDecimal::from_str(&progress.to_string())?))
             .execute(&mut conn)
             .await?;
         
         if rows == 0 {
-            log_warn!(crate::MAIN_LOGGER, "Job {} progress update affected 0 rows", job_id);
+            log_debug!(crate::MAIN_LOGGER, "Job {} progress update skipped (already at or past {:.1}%)", job_id, progress);
         }
         
         Ok(())
