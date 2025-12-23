@@ -16,7 +16,8 @@ use bytemuck::{Pod, Zeroable};
 /// - price: f64 (8 bytes) - Price level
 /// - quantity: f64 (8 bytes) - Trade/order quantity  
 /// - side: u8 (1 byte) - 0=Buy, 1=Sell
-/// - _padding: [u8; 7] - Alignment padding
+/// - event_type: u8 (1 byte) - 0=New, 1=Modify, 2=Cancel, 3=Trade
+/// - _padding: [u8; 6] - Alignment padding
 /// - volatility_1m: f32 (4 bytes) - Precomputed 1-min volatility
 /// - ema_5m: f32 (4 bytes) - Precomputed 5-min EMA
 /// - imbalance: f32 (4 bytes) - Order flow imbalance
@@ -32,8 +33,10 @@ pub struct SimulationTick {
     pub quantity: f64,
     /// Side: 0 = Buy, 1 = Sell
     pub side: u8,
+    /// Event type: 0=New, 1=Modify, 2=Cancel, 3=Trade
+    pub event_type: u8,
     /// Padding for alignment
-    pub _padding: [u8; 7],
+    pub _padding: [u8; 6],
     /// Precomputed 1-minute volatility (filled by FeatureComputer)
     pub volatility_1m: f32,
     /// Precomputed 5-minute EMA (filled by FeatureComputer)
@@ -48,14 +51,27 @@ pub struct SimulationTick {
 const _: () = assert!(std::mem::size_of::<SimulationTick>() == 48);
 
 impl SimulationTick {
+    /// Event type constants
+    pub const EVENT_NEW: u8 = 0;
+    pub const EVENT_MODIFY: u8 = 1;
+    pub const EVENT_CANCEL: u8 = 2;
+    pub const EVENT_TRADE: u8 = 3;
+    
     /// Create a new tick with basic data (features zeroed)
+    /// Default event_type is Trade (3) for backward compatibility
     pub fn new(timestamp_ms: i64, price: f64, quantity: f64, is_sell: bool) -> Self {
+        Self::with_event_type(timestamp_ms, price, quantity, is_sell, Self::EVENT_TRADE)
+    }
+    
+    /// Create a new tick with explicit event type
+    pub fn with_event_type(timestamp_ms: i64, price: f64, quantity: f64, is_sell: bool, event_type: u8) -> Self {
         Self {
             timestamp_ms,
             price,
             quantity,
             side: if is_sell { 1 } else { 0 },
-            _padding: [0; 7],
+            event_type,
+            _padding: [0; 6],
             volatility_1m: 0.0,
             ema_5m: 0.0,
             imbalance: 0.0,
@@ -118,6 +134,11 @@ impl dataloader::Tick for SimulationTick {
             dataloader::Side::Buy
         }
     }
+    
+    #[inline]
+    fn event_type(&self) -> u8 {
+        self.event_type
+    }
 }
 
 // Conversion from HistoricalOrder
@@ -125,13 +146,24 @@ impl dataloader::Tick for SimulationTick {
 impl From<&databaseschema::models::historical_order::HistoricalOrder> for SimulationTick {
     fn from(order: &databaseschema::models::historical_order::HistoricalOrder) -> Self {
         use bigdecimal::ToPrimitive;
+        
+        // Parse event_type from string to u8
+        let event_type = match order.event_type.to_lowercase().as_str() {
+            "new" | "add" | "open" => Self::EVENT_NEW,
+            "modify" | "change" | "update" => Self::EVENT_MODIFY,
+            "cancel" | "delete" | "remove" => Self::EVENT_CANCEL,
+            "trade" | "fill" | "match" | "execution" => Self::EVENT_TRADE,
+            _ => Self::EVENT_TRADE, // Default to trade for unknown types
+        };
+        
         Self {
             timestamp_ms: order.timestamp.timestamp_millis(),
             price: order.price_level.to_f64().unwrap_or(0.0),
             quantity: order.quantity.to_f64().unwrap_or(0.0),
             side: if order.side.eq_ignore_ascii_case("sell") 
                    || order.side.eq_ignore_ascii_case("ask") { 1 } else { 0 },
-            _padding: [0; 7],
+            event_type,
+            _padding: [0; 6],
             volatility_1m: 0.0,
             ema_5m: 0.0,
             imbalance: 0.0,
@@ -149,7 +181,8 @@ impl From<&dataloader::TradeData> for SimulationTick {
             quantity: trade.quantity_f64,
             side: if trade.side.eq_ignore_ascii_case("sell") 
                    || trade.side.eq_ignore_ascii_case("ask") { 1 } else { 0 },
-            _padding: [0; 7],
+            event_type: Self::EVENT_TRADE, // TradeData is always a trade
+            _padding: [0; 6],
             volatility_1m: 0.0,
             ema_5m: 0.0,
             imbalance: 0.0,
@@ -167,7 +200,8 @@ impl From<&dataloader::Candle> for SimulationTick {
             price: candle.close.to_f64().unwrap_or(0.0),
             quantity: candle.volume.to_f64().unwrap_or(0.0),
             side: 0, // Candles don't have side
-            _padding: [0; 7],
+            event_type: Self::EVENT_TRADE, // Candles represent aggregated trades
+            _padding: [0; 6],
             volatility_1m: 0.0,
             ema_5m: 0.0,
             imbalance: 0.0,
@@ -191,7 +225,8 @@ impl From<&dataloader::MarketData> for SimulationTick {
                     quantity: s.quantity.to_f64().unwrap_or(0.0),
                     side: if s.side.eq_ignore_ascii_case("sell") 
                            || s.side.eq_ignore_ascii_case("ask") { 1 } else { 0 },
-                    _padding: [0; 7],
+                    event_type: Self::EVENT_NEW, // Snapshots represent order book state
+                    _padding: [0; 6],
                     volatility_1m: 0.0,
                     ema_5m: 0.0,
                     imbalance: 0.0,

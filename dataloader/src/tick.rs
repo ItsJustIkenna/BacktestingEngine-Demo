@@ -70,6 +70,12 @@ pub trait Tick: Send + Sync {
     /// Get the trade side
     fn side(&self) -> Side;
     
+    /// Get the event type (0=New, 1=Modify, 2=Cancel, 3=Trade)
+    /// Default returns 3 (Trade) for backward compatibility
+    fn event_type(&self) -> u8 {
+        3 // Trade by default
+    }
+    
     /// Check if this is a sell
     #[inline]
     fn is_sell(&self) -> bool {

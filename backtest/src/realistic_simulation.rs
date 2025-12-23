@@ -920,19 +920,28 @@ impl OrderBookEvent {
     }
 }
 
-/// Convert a slice of SimulationTicks to OrderBookEvents
+/// Convert a slice of ticks to OrderBookEvents
 /// 
-/// This creates trade events only - suitable for degraded-mode realistic
-/// simulation where we don't have full order book data.
+/// Uses the tick's event_type() to create proper New/Modify/Cancel/Trade events.
+/// This enables realistic order book simulation when data includes event types.
 pub fn ticks_to_trade_events<T: dataloader::Tick>(ticks: &[T]) -> Vec<OrderBookEvent> {
     ticks.iter().enumerate().map(|(idx, tick)| {
-        OrderBookEvent::from_trade(
-            tick.timestamp_ms(),
-            tick.price(),
-            tick.quantity(),
-            tick.is_sell(),
-            idx,
-        )
+        let event_type = match tick.event_type() {
+            0 => EventType::New,
+            1 => EventType::Modify,
+            2 => EventType::Cancel,
+            _ => EventType::Trade,
+        };
+        let side = if tick.is_sell() { Side::Sell } else { Side::Buy };
+        
+        OrderBookEvent {
+            timestamp_ms: tick.timestamp_ms(),
+            event_type,
+            order_id: format!("tick_{}", idx),
+            side,
+            price: tick.price(),
+            quantity: tick.quantity(),
+        }
     }).collect()
 }
 
