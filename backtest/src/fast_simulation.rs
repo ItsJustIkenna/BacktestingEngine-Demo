@@ -486,6 +486,14 @@ impl<'a> FastSimulator<'a> {
         // Sample equity curve every N points for efficiency
         let sample_interval = (n / 500).max(1);
         
+        // Diagnostic counters
+        let mut vol_skip_count = 0usize;
+        let mut processed_count = 0usize;
+        let mut buy_aggressor_count = 0usize;
+        let mut sell_aggressor_count = 0usize;
+        let mut ask_hit_attempts = 0usize;
+        let mut bid_hit_attempts = 0usize;
+
         for i in 0..n {
             let price = self.features.prices[i];
             let vol = self.features.volatility[i];
@@ -494,7 +502,17 @@ impl<'a> FastSimulator<'a> {
             
             // Skip if volatility too high
             if vol > params.volatility_cap {
+                vol_skip_count += 1;
                 continue;
+            }
+            
+            processed_count += 1;
+            
+            // Track aggressor counts
+            if trade_side > 0.0 {
+                buy_aggressor_count += 1;
+            } else if trade_side < 0.0 {
+                sell_aggressor_count += 1;
             }
             
             // Calculate inventory skew (deviation from target)
@@ -531,74 +549,80 @@ impl<'a> FastSimulator<'a> {
             // If a buy aggressor (trade_side > 0) hits our ask, we sell
             // If a sell aggressor (trade_side < 0) hits our bid, we buy
             
-            if trade_side > 0.0 && last_ask_price > 0.0 && price >= last_ask_price {
-                // Our ask got hit - we sell
-                let fill_price = last_ask_price;
-                let fill_size = order_size.min(inventory.max(0.0) + order_size); // Can go short
-                
-                if fill_size > 0.0 {
-                    let trade_value = fill_size * fill_price;
-                    let commission = trade_value * params.fee_rate;
+            if trade_side > 0.0 && last_ask_price > 0.0 {
+                ask_hit_attempts += 1;
+                if price >= last_ask_price {
+                    // Our ask got hit - we sell
+                    let fill_price = last_ask_price;
+                    let fill_size = order_size.min(inventory.max(0.0) + order_size); // Can go short
                     
-                    // Calculate realized P&L if closing existing long inventory
-                    if inventory > 0.0 && total_buy_qty > 0.0 {
-                        let closing_qty = fill_size.min(inventory);
-                        let avg_cost = inventory_cost_basis / total_buy_qty;
-                        let realized_pnl = (fill_price - avg_cost) * closing_qty - commission;
-                        round_trip_pnls.push(realized_pnl);
+                    if fill_size > 0.0 {
+                        let trade_value = fill_size * fill_price;
+                        let commission = trade_value * params.fee_rate;
                         
-                        // Track trade duration if we have entry times
-                        if let Some(entry_ts) = trade_entry_times.pop() {
-                            trade_durations_ms.push(timestamp - entry_ts);
+                        // Calculate realized P&L if closing existing long inventory
+                        if inventory > 0.0 && total_buy_qty > 0.0 {
+                            let closing_qty = fill_size.min(inventory);
+                            let avg_cost = inventory_cost_basis / total_buy_qty;
+                            let realized_pnl = (fill_price - avg_cost) * closing_qty - commission;
+                            round_trip_pnls.push(realized_pnl);
+                            
+                            // Track trade duration if we have entry times
+                            if let Some(entry_ts) = trade_entry_times.pop() {
+                                trade_durations_ms.push(timestamp - entry_ts);
+                            }
+                            
+                            // Reduce cost basis proportionally
+                            let basis_reduction = avg_cost * closing_qty;
+                            inventory_cost_basis = (inventory_cost_basis - basis_reduction).max(0.0);
+                            total_buy_qty = (total_buy_qty - closing_qty).max(0.0);
                         }
                         
-                        // Reduce cost basis proportionally
-                        let basis_reduction = avg_cost * closing_qty;
-                        inventory_cost_basis = (inventory_cost_basis - basis_reduction).max(0.0);
-                        total_buy_qty = (total_buy_qty - closing_qty).max(0.0);
+                        cash += trade_value - commission;
+                        inventory -= fill_size;
+                        total_commission += commission;
+                        total_sell_qty += fill_size;
+                        
+                        // Reset quote
+                        last_ask_price = 0.0;
                     }
-                    
-                    cash += trade_value - commission;
-                    inventory -= fill_size;
-                    total_commission += commission;
-                    total_sell_qty += fill_size;
-                    
-                    // Reset quote
-                    last_ask_price = 0.0;
                 }
             }
             
-            if trade_side < 0.0 && last_bid_price > 0.0 && price <= last_bid_price {
-                // Our bid got hit - we buy
-                let fill_price = last_bid_price;
-                let max_buy = cash / fill_price * 0.95; // Keep some cash buffer
-                let fill_size = order_size.min(max_buy);
-                
-                if fill_size > 0.0 {
-                    let trade_value = fill_size * fill_price;
-                    let commission = trade_value * params.fee_rate;
+            if trade_side < 0.0 && last_bid_price > 0.0 {
+                bid_hit_attempts += 1;
+                if price <= last_bid_price {
+                    // Our bid got hit - we buy
+                    let fill_price = last_bid_price;
+                    let max_buy = cash / fill_price * 0.95; // Keep some cash buffer
+                    let fill_size = order_size.min(max_buy);
                     
-                    // Calculate realized P&L if closing existing short inventory
-                    if inventory < 0.0 && total_sell_qty > 0.0 {
-                        let closing_qty = fill_size.min((-inventory).abs());
-                        // For shorts, we sold at a price and now buying back
-                        // This is more complex - for simplicity, count as new position
-                        // The overall equity change captures this correctly
+                    if fill_size > 0.0 {
+                        let trade_value = fill_size * fill_price;
+                        let commission = trade_value * params.fee_rate;
+                        
+                        // Calculate realized P&L if closing existing short inventory
+                        if inventory < 0.0 && total_sell_qty > 0.0 {
+                            let _closing_qty = fill_size.min((-inventory).abs());
+                            // For shorts, we sold at a price and now buying back
+                            // This is more complex - for simplicity, count as new position
+                            // The overall equity change captures this correctly
+                        }
+                        
+                        // Track trade entry time for duration calculation
+                        trade_entry_times.push(timestamp);
+                        
+                        // Add to cost basis for long position
+                        inventory_cost_basis += trade_value;
+                        total_buy_qty += fill_size;
+                        
+                        cash -= trade_value + commission;
+                        inventory += fill_size;
+                        total_commission += commission;
+                        
+                        // Reset quote
+                        last_bid_price = 0.0;
                     }
-                    
-                    // Track trade entry time for duration calculation
-                    trade_entry_times.push(timestamp);
-                    
-                    // Add to cost basis for long position
-                    inventory_cost_basis += trade_value;
-                    total_buy_qty += fill_size;
-                    
-                    cash -= trade_value + commission;
-                    inventory += fill_size;
-                    total_commission += commission;
-                    
-                    // Reset quote
-                    last_bid_price = 0.0;
                 }
             }
             
@@ -649,6 +673,22 @@ impl<'a> FastSimulator<'a> {
         let final_price = self.features.prices[n - 1];
         let final_equity = cash + inventory * final_price;
         equity_curve.push(final_equity);
+        
+        // Print diagnostic info (only if no trades to debug)
+        if total_buy_qty == 0.0 && total_sell_qty == 0.0 {
+            eprintln!("⚠️ [FastSimulator] NO TRADES - Diagnostic info:");
+            eprintln!("   total_ticks={}, vol_skip_count={}, processed_count={}", n, vol_skip_count, processed_count);
+            eprintln!("   buy_aggressor_count={}, sell_aggressor_count={}", buy_aggressor_count, sell_aggressor_count);
+            eprintln!("   ask_hit_attempts={}, bid_hit_attempts={}", ask_hit_attempts, bid_hit_attempts);
+            eprintln!("   volatility_cap={:.4}, min_spread_bps={:.2}", params.volatility_cap, params.min_spread_bps);
+            if n > 0 {
+                let sample_vol = self.features.volatility.iter().take(100).sum::<f64>() / 100.0f64.min(n as f64);
+                let price_range: f64 = self.features.prices.iter().take(1000).fold((f64::MAX, f64::MIN), |(min, max), &p| (min.min(p), max.max(p))).1 
+                    - self.features.prices.iter().take(1000).fold((f64::MAX, f64::MIN), |(min, max), &p| (min.min(p), max.max(p))).0;
+                eprintln!("   sample_avg_volatility={:.4}, price_range_1000_ticks={:.2}", sample_vol, price_range);
+                eprintln!("   first_price={:.2}, last_price={:.2}", self.features.prices[0], self.features.prices[n-1]);
+            }
+        }
         
         // Calculate metrics
         let total_pnl = final_equity - self.initial_capital;
