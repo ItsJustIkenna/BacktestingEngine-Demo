@@ -518,6 +518,10 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
         informed_trader_prob_window_ms: 5000,
         adverse_selection_multiplier: 2.0,
         toxic_flow_threshold: 0.6,
+        
+        // Exchange-specific order size limits
+        min_order_size: exchange_fee_config.min_order_size,
+        max_order_size: exchange_fee_config.max_order_size,
     }
 }
 
@@ -603,7 +607,7 @@ pub async fn run_walkforward_with_auto_export(
 fn extract_best_parameters_from_walkforward(_wf_summary: &WalkForwardSummary) -> AvellanedaStoikovParams {
     // Find window with highest Sharpe ratio
     // For now, using default parameters - in a real implementation you'd parse the JSON from best window
-    // Get exchange maker fee from config
+    // Get exchange config for fees and limits
     let exchange_fee_config = config::ExchangeFeeConfig::for_exchange("kraken");
     let maker_fee = exchange_fee_config.maker_fee;
     
@@ -682,6 +686,10 @@ fn extract_best_parameters_from_walkforward(_wf_summary: &WalkForwardSummary) ->
         informed_trader_prob_window_ms: 5000,
         adverse_selection_multiplier: 2.0,
         toxic_flow_threshold: 0.6,
+        
+        // Exchange-specific order size limits
+        min_order_size: exchange_fee_config.min_order_size,
+        max_order_size: exchange_fee_config.max_order_size,
     }
 }
 

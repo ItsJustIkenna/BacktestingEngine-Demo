@@ -136,6 +136,10 @@ pub struct AvellanedaStoikovParams {
     pub informed_trader_prob_window_ms: u64,  // Window for estimating informed trader probability
     pub adverse_selection_multiplier: f64,    // How much to widen spread on detected informed flow (2.0 = 2x)
     pub toxic_flow_threshold: f64,            // Order flow toxicity threshold (0.6 = 60%)
+    
+    // Exchange-specific limits (from ExchangeFeeConfig)
+    pub min_order_size: f64,                  // Minimum order size in base currency
+    pub max_order_size: f64,                  // Maximum order size in base currency
 }
 
 impl Default for AvellanedaStoikovParams {
@@ -216,6 +220,10 @@ impl Default for AvellanedaStoikovParams {
             informed_trader_prob_window_ms: 5000, // 5 second window for detecting informed flow
             adverse_selection_multiplier: 2.0,    // Double spread on toxic flow
             toxic_flow_threshold: 0.6,            // 60% threshold for toxic flow detection
+            
+            // Exchange-specific limits from config
+            min_order_size: config::ExchangeFeeConfig::kraken().min_order_size,
+            max_order_size: config::ExchangeFeeConfig::kraken().max_order_size,
         }
     }
 }
@@ -429,9 +437,8 @@ impl AvellanedaStoikovStrategy {
         let order_value_usd = capital * self.params.order_size_pct;
         let order_size_units = order_value_usd / current_price;
         
-        // Ensure order size is at least some minimum (avoid dust orders)
-        let min_order_size = 0.0001;
-        order_size_units.max(min_order_size)
+        // Ensure order size is at least the exchange minimum (avoid dust orders)
+        order_size_units.max(self.params.min_order_size)
     }
     
     /// Phase 4: Calculate order size with dynamic sizing based on volatility and performance
@@ -454,9 +461,8 @@ impl AvellanedaStoikovStrategy {
         let order_value_usd = capital * dynamic_size_pct;
         let order_size_units = order_value_usd / current_price;
         
-        // Ensure order size is at least some minimum (avoid dust orders)
-        let min_order_size = 0.0001;
-        order_size_units.max(min_order_size)
+        // Ensure order size is at least the exchange minimum (avoid dust orders)
+        order_size_units.max(self.params.min_order_size)
     }
 
     /// Check if we should exit current position (take profit or stop loss)

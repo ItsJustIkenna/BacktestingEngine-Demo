@@ -18,6 +18,7 @@
 //! let result = simulator.evaluate(&chromosome);
 //! ```
 
+use config::ExchangeFeeConfig;
 use dataloader::Tick;
 
 /// Pre-computed market features for fast simulation
@@ -333,6 +334,9 @@ pub struct FastASParams {
 
 impl Default for FastASParams {
     fn default() -> Self {
+        // Use Kraken's maker fee as default (fast sim uses maker fee only)
+        let exchange_config = ExchangeFeeConfig::kraken();
+        
         Self {
             risk_aversion: 0.5,
             inventory_target: 0.0,
@@ -340,7 +344,7 @@ impl Default for FastASParams {
             volatility_cap: 1.0,
             min_spread_bps: 10.0,
             time_horizon_minutes: 60.0,
-            fee_rate: 0.0002, // 2 bps maker fee
+            fee_rate: exchange_config.maker_fee,
         }
     }
 }

@@ -29,6 +29,9 @@ pub mod simd_utils;
 pub mod fast_simulation;
 pub mod lightweight_sim;
 pub mod realistic_simulation;
+pub mod statistical_significance;
+pub mod portfolio_risk;
+pub mod accuracy_validation;
 
 // Re-export main types for easy access
 pub use engine::{BacktestEngine, BacktestResults, AnalysisMetadata, WalkForwardSummary};
@@ -41,6 +44,18 @@ pub use lightweight_sim::{LightweightSim, LightweightSimConfig};
 pub use realistic_simulation::{
     RealisticSimulator, RealisticASParams, RealisticSimResult, 
     OrderBookEvent, EventType, Side, ticks_to_trade_events
+};
+pub use statistical_significance::{
+    SignificanceResult, BootstrapConfidenceIntervals,
+    compute_sharpe_significance, compute_bootstrap_confidence_intervals,
+    compute_deflated_sharpe_ratio
+};
+pub use portfolio_risk::{
+    PortfolioRiskManager, PortfolioRiskMetrics, AssetPosition, 
+    CorrelationEntry, AssetReturns
+};
+pub use accuracy_validation::{
+    AccuracyValidator, AccuracyMetrics, ExecutionComparison
 };
 
 // Utility functions for report generation

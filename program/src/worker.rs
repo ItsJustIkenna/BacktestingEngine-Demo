@@ -1372,6 +1372,10 @@ impl Worker {
                     informed_trader_prob_window_ms: 5000,
                     adverse_selection_multiplier: 2.0,
                     toxic_flow_threshold: 0.6,
+                    
+                    // Exchange-specific order size limits
+                    min_order_size: exchange_fee_config.min_order_size,
+                    max_order_size: exchange_fee_config.max_order_size,
                 };
                 
                 let mut strategy_params_map = HashMap::new();
@@ -2706,6 +2710,10 @@ impl Worker {
             informed_trader_prob_window_ms: 5000,
             adverse_selection_multiplier: 2.0,
             toxic_flow_threshold: 0.6,
+            
+            // Exchange-specific order size limits
+            min_order_size: exchange_fee_config.min_order_size,
+            max_order_size: exchange_fee_config.max_order_size,
         };
         
         let mut strategy_params_map = HashMap::new();
@@ -3144,6 +3152,10 @@ impl Worker {
             informed_trader_prob_window_ms: 5000,
             adverse_selection_multiplier: 2.0,
             toxic_flow_threshold: 0.6,
+            
+            // Exchange-specific order size limits
+            min_order_size: exchange_fee_config.min_order_size,
+            max_order_size: exchange_fee_config.max_order_size,
         };
         
         let mut strategy_params_map = HashMap::new();

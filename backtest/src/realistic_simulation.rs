@@ -21,6 +21,7 @@ use std::collections::{BTreeMap, VecDeque};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use bigdecimal::BigDecimal;
+use config::ExchangeFeeConfig;
 
 /// Event types from historical data
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,7 +81,142 @@ pub struct RealisticASParams {
     pub volatility_cap: f64,
     pub min_spread_bps: f64,
     pub time_horizon_minutes: f64,
-    pub fee_rate: f64,
+    
+    // === Fee Configuration (Maker/Taker) ===
+    /// Fee rate for passive (maker) orders - typically negative rebate or lower fee
+    pub maker_fee_rate: f64,
+    /// Fee rate for aggressive (taker) orders - typically higher
+    pub taker_fee_rate: f64,
+    
+    // === Inventory Risk Limits ===
+    /// Maximum inventory as multiple of order size (e.g., 5.0 = 5x order size)
+    pub max_inventory_multiple: f64,
+    
+    // === Latency Modeling ===
+    /// Mean latency in milliseconds for order execution
+    pub latency_mean_ms: f64,
+    /// Standard deviation of latency (for jitter simulation)
+    pub latency_std_ms: f64,
+    
+    // === Partial Fill Modeling ===
+    /// Enable partial fills (vs all-or-nothing)
+    pub enable_partial_fills: bool,
+    /// Minimum fill size as fraction of order (0.1 = 10% minimum)
+    pub min_fill_fraction: f64,
+    
+    // === Rate Limiting ===
+    /// Maximum orders per second (exchange rate limit)
+    pub max_orders_per_second: f64,
+    /// Cooldown after rate limit hit (ms)
+    pub rate_limit_cooldown_ms: i64,
+    
+    // === Funding Rate (Perpetuals) ===
+    /// Funding rate per 8-hour interval (e.g., 0.0001 = 0.01%)
+    pub funding_rate_8h: f64,
+    /// Funding interval in milliseconds (default 8 hours)
+    pub funding_interval_ms: i64,
+}
+
+impl Default for RealisticASParams {
+    fn default() -> Self {
+        // Use Kraken's configuration as default - all values from config
+        let exchange_config = config::ExchangeFeeConfig::kraken();
+        
+        Self {
+            risk_aversion: 0.5,
+            inventory_target: 0.0,
+            order_size_pct: 0.01,
+            volatility_cap: 0.5,
+            min_spread_bps: 10.0,
+            time_horizon_minutes: 5.0,
+            
+            // All operational parameters from exchange configuration
+            maker_fee_rate: exchange_config.maker_fee,
+            taker_fee_rate: exchange_config.taker_fee,
+            
+            // Inventory limits (TODO: add to exchange config)
+            max_inventory_multiple: 5.0,
+            
+            // Latency from exchange configuration
+            latency_mean_ms: exchange_config.latency_mean_ms,
+            latency_std_ms: exchange_config.latency_std_ms,
+            
+            // Partial fills enabled
+            enable_partial_fills: true,
+            min_fill_fraction: 0.1,
+            
+            // Rate limiting from exchange configuration
+            max_orders_per_second: exchange_config.max_orders_per_second,
+            rate_limit_cooldown_ms: exchange_config.rate_limit_cooldown_ms,
+            
+            // Funding rate from exchange configuration
+            funding_rate_8h: exchange_config.funding_rate_8h,
+            funding_interval_ms: exchange_config.funding_interval_ms,
+        }
+    }
+}
+
+/// Tracks rolling 30-day trading volume for dynamic fee tier calculation
+#[derive(Debug, Clone)]
+pub struct VolumeTracker {
+    /// Volume entries: (timestamp_ms, volume_usd)
+    entries: VecDeque<(i64, f64)>,
+    /// Cached total for performance
+    total_volume: f64,
+    /// 30 days in milliseconds
+    window_ms: i64,
+}
+
+impl VolumeTracker {
+    pub fn new() -> Self {
+        Self {
+            entries: VecDeque::new(),
+            total_volume: 0.0,
+            window_ms: 30 * 24 * 60 * 60 * 1000, // 30 days in ms
+        }
+    }
+    
+    /// Create with starting volume (simulates existing trading history)
+    pub fn with_starting_volume(starting_volume: f64) -> Self {
+        let mut tracker = Self::new();
+        // Add starting volume as a single entry at time 0
+        if starting_volume > 0.0 {
+            tracker.entries.push_back((0, starting_volume));
+            tracker.total_volume = starting_volume;
+        }
+        tracker
+    }
+    
+    /// Add a trade and get updated 30-day volume
+    pub fn add_trade(&mut self, timestamp_ms: i64, volume_usd: f64) -> f64 {
+        // Remove entries older than 30 days
+        let cutoff = timestamp_ms - self.window_ms;
+        while let Some(&(ts, vol)) = self.entries.front() {
+            if ts < cutoff {
+                self.entries.pop_front();
+                self.total_volume -= vol;
+            } else {
+                break;
+            }
+        }
+        
+        // Add new entry
+        self.entries.push_back((timestamp_ms, volume_usd));
+        self.total_volume += volume_usd;
+        
+        self.total_volume.max(0.0) // Ensure non-negative
+    }
+    
+    /// Get current 30-day volume
+    pub fn get_volume(&self) -> f64 {
+        self.total_volume.max(0.0)
+    }
+}
+
+impl Default for VolumeTracker {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Our strategy's pending order
@@ -237,6 +373,30 @@ pub struct RealisticSimResult {
     pub avg_fill_rate: f64,  // % of our orders that got filled
     pub avg_queue_position: f64,  // Average queue position when filled
     pub equity_curve: Vec<f64>,
+    
+    // === Enhanced Metrics ===
+    /// Number of partial fills (vs full fills)
+    pub partial_fill_count: usize,
+    /// Rate limit rejections during simulation
+    pub rate_limit_rejections: usize,
+    /// Total funding costs paid (perpetuals)
+    pub total_funding_paid: f64,
+    /// Maker fees paid
+    pub maker_fees: f64,
+    /// Taker fees paid (if any aggressive orders)
+    pub taker_fees: f64,
+    
+    // === Volume-Tiered Fee Tracking ===
+    /// Starting 30-day volume (from config)
+    pub starting_30d_volume: f64,
+    /// Final 30-day rolling volume
+    pub final_30d_volume: f64,
+    /// Starting fee rate (maker)
+    pub starting_fee_rate: f64,
+    /// Final fee rate (maker) after volume accumulation
+    pub final_fee_rate: f64,
+    /// Number of fee tier upgrades during simulation
+    pub fee_tier_upgrades: usize,
 }
 
 impl From<RealisticSimResult> for crate::types::BacktestResult {
@@ -255,27 +415,49 @@ impl From<RealisticSimResult> for crate::types::BacktestResult {
     }
 }
 
-/// Realistic order book simulator
+/// Realistic order book simulator with dynamic fee tiers
 pub struct RealisticSimulator {
     initial_capital: f64,
-    fee_rate: f64,
+    fee_config: config::ExchangeFeeConfig,
 }
 
 impl RealisticSimulator {
-    pub fn new(initial_capital: f64, fee_rate: f64) -> Self {
+    pub fn new(initial_capital: f64, _fee_rate: f64) -> Self {
+        // Use default Kraken config for backward compatibility
         Self {
             initial_capital,
-            fee_rate,
+            fee_config: config::ExchangeFeeConfig::kraken(),
         }
     }
     
-    /// Run simulation over order book events
+    /// Create simulator with specific exchange configuration
+    pub fn with_exchange_config(initial_capital: f64, fee_config: config::ExchangeFeeConfig) -> Self {
+        Self {
+            initial_capital,
+            fee_config,
+        }
+    }
+    
+    /// Run simulation over order book events with dynamic volume-based fees
     pub fn run(&self, events: &[OrderBookEvent], params: &RealisticASParams) -> RealisticSimResult {
+        use rand::prelude::*;
+        use rand_distr::Normal;
+        
+        let mut rng = rand::thread_rng();
+        let latency_dist = Normal::new(params.latency_mean_ms, params.latency_std_ms).unwrap_or(Normal::new(10.0, 1.0).unwrap());
+        
+        // Initialize volume tracker with starting 30d volume from config
+        let mut volume_tracker = VolumeTracker::with_starting_volume(self.fee_config.starting_30d_volume);
+        let starting_30d_volume = self.fee_config.starting_30d_volume;
+        let starting_fee_rate = self.fee_config.get_fee_rate(starting_30d_volume, true);
+        let mut current_fee_rate = starting_fee_rate;
+        let mut fee_tier_upgrades = 0usize;
+        
         let mut book = SimpleOrderBook::new();
-        let mut capital = self.initial_capital;
-        let mut inventory = 0.0;
-        let mut total_fees = 0.0;
-        let mut total_volume = 0.0;
+        let mut capital: f64 = self.initial_capital;
+        let mut inventory: f64 = 0.0;
+        let mut total_fees: f64 = 0.0;
+        let mut total_volume: f64 = 0.0;
         
         // Track our pending orders
         let mut our_bid: Option<PendingOrder> = None;
@@ -290,7 +472,18 @@ impl RealisticSimulator {
         // Fill statistics
         let mut orders_placed = 0usize;
         let mut orders_filled = 0usize;
+        let mut partial_fills = 0usize;
         let mut queue_positions_at_fill: Vec<f64> = Vec::new();
+        
+        // Rate limiting tracking
+        let mut orders_this_second = 0usize;
+        let mut last_rate_limit_window: i64 = 0;
+        let mut rate_limited_until: i64 = 0;
+        let mut rate_limit_rejections = 0usize;
+        
+        // Funding rate tracking
+        let mut last_funding_time: i64 = 0;
+        let mut total_funding_paid = 0.0;
         
         // Volatility tracking (simplified EWMA)
         let mut volatility: f64 = 0.01;  // Start with 1%
@@ -305,6 +498,37 @@ impl RealisticSimulator {
         let mut max_drawdown: f64 = 0.0;
         
         for event in events {
+            // === Funding Rate Settlement ===
+            if params.funding_rate_8h != 0.0 && inventory.abs() > 1e-10 {
+                let funding_intervals_passed = (event.timestamp_ms - last_funding_time) / params.funding_interval_ms;
+                if funding_intervals_passed > 0 {
+                    // Pay/receive funding based on position direction
+                    // Long pays when rate is positive, short receives
+                    let mark_price = book.mid_price().unwrap_or_else(|| last_price.unwrap_or(1.0));
+                    let position_value = inventory.abs() * mark_price;
+                    let funding_payment = position_value * params.funding_rate_8h * funding_intervals_passed as f64;
+                    
+                    if inventory > 0.0 {
+                        // Long position pays funding when rate is positive
+                        capital -= funding_payment;
+                        total_funding_paid += funding_payment;
+                    } else {
+                        // Short position receives funding when rate is positive
+                        capital += funding_payment;
+                        total_funding_paid -= funding_payment;
+                    }
+                    
+                    last_funding_time = event.timestamp_ms - (event.timestamp_ms % params.funding_interval_ms);
+                }
+            }
+            
+            // === Rate Limit Window Reset ===
+            let current_second = event.timestamp_ms / 1000;
+            if current_second != last_rate_limit_window / 1000 {
+                orders_this_second = 0;
+                last_rate_limit_window = event.timestamp_ms;
+            }
+            
             // Update book state based on event type
             match event.event_type {
                 EventType::New => {
@@ -318,7 +542,7 @@ impl RealisticSimulator {
                 }
                 EventType::Trade => {
                     // Execute trade in book
-                    let consumed = book.execute_trade(event.side, event.price, event.quantity);
+                    let _consumed = book.execute_trade(event.side, event.price, event.quantity);
                     
                     // Check if our orders got filled
                     // A buy aggressor hits asks; a sell aggressor hits bids
@@ -332,11 +556,40 @@ impl RealisticSimulator {
                             // Trade at our price level - check queue position
                             our_order.quantity_ahead -= event.quantity;
                             
-                            if our_order.quantity_ahead <= 0.0 {
-                                // We got filled!
-                                let fill_qty = our_order.quantity;
+                            // === Partial Fill Modeling ===
+                            let should_fill = our_order.quantity_ahead <= 0.0;
+                            let fill_qty = if should_fill {
+                                if params.enable_partial_fills && event.quantity < our_order.quantity {
+                                    // Partial fill: we get filled for the remaining trade volume
+                                    let available = event.quantity + our_order.quantity_ahead.min(0.0).abs();
+                                    let partial = available.min(our_order.quantity);
+                                    if partial >= our_order.quantity * params.min_fill_fraction {
+                                        partial_fills += 1;
+                                        partial
+                                    } else {
+                                        our_order.quantity // Full fill
+                                    }
+                                } else {
+                                    our_order.quantity // Full fill
+                                }
+                            } else {
+                                0.0 // No fill yet
+                            };
+                            
+                            if fill_qty > 0.0 {
                                 let fill_price = our_order.price;
-                                let fee = fill_qty * fill_price * self.fee_rate;
+                                let trade_volume_usd = fill_qty * fill_price;
+                                
+                                // Update 30-day rolling volume and get dynamic fee rate
+                                let current_30d_volume = volume_tracker.add_trade(event.timestamp_ms, trade_volume_usd);
+                                let dynamic_maker_fee = self.fee_config.get_fee_rate(current_30d_volume, true);
+                                let fee = trade_volume_usd * dynamic_maker_fee;
+                                
+                                // Track fee tier upgrades (when fee rate decreases)
+                                if dynamic_maker_fee < current_fee_rate {
+                                    fee_tier_upgrades += 1;
+                                    current_fee_rate = dynamic_maker_fee;
+                                }
                                 
                                 match our_order.side {
                                     Side::Buy => {
@@ -352,7 +605,7 @@ impl RealisticSimulator {
                                 }
                                 
                                 total_fees += fee;
-                                total_volume += fill_qty * fill_price;
+                                total_volume += trade_volume_usd;
                                 orders_filled += 1;
                                 queue_positions_at_fill.push(-our_order.quantity_ahead.max(0.0));
                                 
@@ -378,8 +631,24 @@ impl RealisticSimulator {
                 }
             }
             
-            // Periodically update our quotes
-            if event.timestamp_ms - last_quote_time >= QUOTE_REFRESH_MS {
+            // === Latency Jitter Calculation ===
+            let current_latency = latency_dist.sample(&mut rng).max(1.0) as i64;
+            
+            // Periodically update our quotes (accounting for latency with jitter)
+            if event.timestamp_ms - last_quote_time >= QUOTE_REFRESH_MS + current_latency {
+                // === Rate Limit Check ===
+                if event.timestamp_ms < rate_limited_until {
+                    // Still in cooldown, skip this quote update
+                    continue;
+                }
+                
+                if orders_this_second as f64 >= params.max_orders_per_second {
+                    // Hit rate limit, enter cooldown
+                    rate_limited_until = event.timestamp_ms + params.rate_limit_cooldown_ms;
+                    rate_limit_rejections += 1;
+                    continue;
+                }
+                
                 last_quote_time = event.timestamp_ms;
                 
                 // Get current market state
@@ -394,6 +663,14 @@ impl RealisticSimulator {
                     // Skip quoting in low volatility environments
                     continue;
                 }
+                
+                // Calculate max inventory limit
+                let order_size = capital * params.order_size_pct;
+                let max_inventory = (order_size / mid_price) * params.max_inventory_multiple;
+                
+                // Check if we're at inventory limits
+                let can_buy = inventory < max_inventory;
+                let can_sell = inventory > -max_inventory;
                 
                 // Avellaneda-Stoikov spread calculation
                 let gamma = params.risk_aversion;
@@ -415,19 +692,21 @@ impl RealisticSimulator {
                 // Calculate quote prices
                 let bid_price = reservation_price - half_spread;
                 let ask_price = reservation_price + half_spread;
-                let order_size = capital * params.order_size_pct;
                 
-                // Cancel old orders and place new ones
+                // Cancel old orders (counts against rate limit)
                 if our_bid.is_some() {
                     let old_bid = our_bid.take().unwrap();
                     book.cancel_order(&old_bid.order_id);
+                    orders_this_second += 1;
                 }
                 if our_ask.is_some() {
                     let old_ask = our_ask.take().unwrap();
                     book.cancel_order(&old_ask.order_id);
+                    orders_this_second += 1;
                 }
                 
-                // Place new bid
+                // Place new bid (only if we can buy - not at max inventory)
+                if can_buy && (orders_this_second as f64) < params.max_orders_per_second {
                 let bid_order_id = format!("our_bid_{}", next_order_id);
                 next_order_id += 1;
                 let quantity_at_bid = book.quantity_at_price(Side::Buy, bid_price);
@@ -441,8 +720,11 @@ impl RealisticSimulator {
                     quantity_ahead: quantity_at_bid,
                 });
                 orders_placed += 1;
+                orders_this_second += 1;
+                } // End can_buy check
                 
-                // Place new ask
+                // Place new ask (only if we can sell - not at min inventory)
+                if can_sell && (orders_this_second as f64) < params.max_orders_per_second {
                 let ask_order_id = format!("our_ask_{}", next_order_id);
                 next_order_id += 1;
                 let quantity_at_ask = book.quantity_at_price(Side::Sell, ask_price);
@@ -456,6 +738,8 @@ impl RealisticSimulator {
                     quantity_ahead: quantity_at_ask,
                 });
                 orders_placed += 1;
+                orders_this_second += 1;
+                } // End can_sell check
                 
                 // Track equity
                 let mark_price = mid_price;
@@ -549,6 +833,16 @@ impl RealisticSimulator {
             avg_fill_rate,
             avg_queue_position,
             equity_curve,
+            partial_fill_count: partial_fills,
+            rate_limit_rejections,
+            total_funding_paid,
+            maker_fees: total_fees, // All fees are maker in this simulation
+            taker_fees: 0.0, // No aggressive orders in market making
+            starting_30d_volume,
+            final_30d_volume: volume_tracker.get_volume(),
+            starting_fee_rate,
+            final_fee_rate: current_fee_rate,
+            fee_tier_upgrades,
         }
     }
 }

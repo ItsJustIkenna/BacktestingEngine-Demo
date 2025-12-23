@@ -246,6 +246,7 @@ dependencies = [
  "ordered-float",
  "portfoliomanager",
  "rand 0.8.5",
+ "rand_distr",
  "rayon",
  "riskmanager",
  "rustc-hash",

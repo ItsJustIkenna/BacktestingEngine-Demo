@@ -201,19 +201,55 @@ pub struct ExchangeFeeConfig {
     /// e.g., 1_000_000.0 for $1M 30-day volume = 0.06% maker / 0.16% taker on Kraken
     #[serde(default)]
     pub starting_30d_volume: f64,
+    
+    // === Order Size Limits ===
+    /// Minimum order size in base currency (e.g., 0.0001 BTC for Kraken)
+    #[serde(default = "default_min_order_size")]
+    pub min_order_size: f64,
+    /// Maximum order size in base currency
+    #[serde(default = "default_max_order_size")]
+    pub max_order_size: f64,
+    
+    // === Latency Modeling ===
+    /// Mean latency in milliseconds for order execution
+    #[serde(default = "default_latency_mean")]
+    pub latency_mean_ms: f64,
+    /// Standard deviation of latency (for jitter simulation)
+    #[serde(default = "default_latency_std")]
+    pub latency_std_ms: f64,
+    
+    // === Rate Limiting ===
+    /// Maximum orders per second allowed by exchange
+    #[serde(default = "default_max_orders_per_second")]
+    pub max_orders_per_second: f64,
+    /// Cooldown period in ms after rate limit hit
+    #[serde(default = "default_rate_limit_cooldown")]
+    pub rate_limit_cooldown_ms: i64,
+    
+    // === Funding Rate (for perpetuals) ===
+    /// Funding rate per 8-hour interval (e.g., 0.0001 = 0.01%)
+    #[serde(default = "default_funding_rate")]
+    pub funding_rate_8h: f64,
+    /// Funding interval in milliseconds (default 8 hours)
+    #[serde(default = "default_funding_interval")]
+    pub funding_interval_ms: i64,
 }
+
+// Default value functions for serde
+fn default_min_order_size() -> f64 { 0.0001 }  // 0.0001 BTC typical minimum
+fn default_max_order_size() -> f64 { 100.0 }   // 100 BTC typical maximum
+fn default_latency_mean() -> f64 { 10.0 }
+fn default_latency_std() -> f64 { 3.0 }
+fn default_max_orders_per_second() -> f64 { 10.0 }
+fn default_rate_limit_cooldown() -> i64 { 1000 }
+fn default_funding_rate() -> f64 { 0.0001 }
+fn default_funding_interval() -> i64 { 8 * 60 * 60 * 1000 }
 
 impl Default for ExchangeFeeConfig {
     /// Default to Kraken fees starting at 0 volume (realistic for new market makers)
     /// Fees will decrease as 30-day volume builds during the backtest
     fn default() -> Self {
-        Self {
-            exchange: "kraken".to_string(),
-            maker_fee: 0.0025,  // 0.25% (25 bps) at 0 volume tier
-            taker_fee: 0.0040,  // 0.40% (40 bps) at 0 volume tier
-            volume_tiers: Self::kraken_fee_tiers(),
-            starting_30d_volume: 0.0, // Start from scratch - fees decrease as volume builds
-        }
+        Self::kraken()
     }
 }
 
@@ -243,6 +279,18 @@ impl ExchangeFeeConfig {
             taker_fee: 0.0040,  // 0.40% at 0 volume tier
             volume_tiers: Self::kraken_fee_tiers(),
             starting_30d_volume: 0.0,
+            // Kraken BTC/USD min: 0.0001 BTC, max: varies by pair
+            min_order_size: 0.0001,
+            max_order_size: 100.0,
+            // Kraken REST API: ~50-100ms, Websocket: ~10-20ms
+            latency_mean_ms: 15.0,
+            latency_std_ms: 5.0,
+            // Kraken rate limits: 15/sec burst for adding orders
+            max_orders_per_second: 15.0,
+            rate_limit_cooldown_ms: 1000,
+            // Standard perpetual funding (Kraken Futures)
+            funding_rate_8h: 0.0001,
+            funding_interval_ms: 8 * 60 * 60 * 1000,
         }
     }
     
@@ -257,6 +305,18 @@ impl ExchangeFeeConfig {
                 VolumeTier { min_volume_30d: 1_000_000.0, maker_fee: 0.0009, taker_fee: 0.0010 },
             ],
             starting_30d_volume: 0.0,
+            // Binance BTC/USDT min: 0.00001 BTC
+            min_order_size: 0.00001,
+            max_order_size: 500.0,
+            // Binance: Very low latency (~5ms)
+            latency_mean_ms: 5.0,
+            latency_std_ms: 2.0,
+            // Binance rate limits: 10 orders/sec for Spot
+            max_orders_per_second: 10.0,
+            rate_limit_cooldown_ms: 1000,
+            // Binance perpetual funding
+            funding_rate_8h: 0.0001,
+            funding_interval_ms: 8 * 60 * 60 * 1000,
         }
     }
     
@@ -272,6 +332,18 @@ impl ExchangeFeeConfig {
                 VolumeTier { min_volume_30d: 100_000.0,    maker_fee: 0.0015, taker_fee: 0.0025 },
             ],
             starting_30d_volume: 0.0,
+            // Coinbase BTC-USD min: 0.0001 BTC
+            min_order_size: 0.0001,
+            max_order_size: 200.0,
+            // Coinbase: Moderate latency (~20ms)
+            latency_mean_ms: 20.0,
+            latency_std_ms: 8.0,
+            // Coinbase rate limits: 10 req/sec
+            max_orders_per_second: 10.0,
+            rate_limit_cooldown_ms: 1000,
+            // Coinbase doesn't have perpetuals in US, set nominal rate
+            funding_rate_8h: 0.0,
+            funding_interval_ms: 8 * 60 * 60 * 1000,
         }
     }
     
@@ -287,6 +359,18 @@ impl ExchangeFeeConfig {
                 VolumeTier { min_volume_30d: 0.0, maker_fee: 0.0005, taker_fee: 0.0010 },
             ],
             starting_30d_volume: 0.0,
+            // DeepBook minimum lot sizes (SUI-based)
+            min_order_size: 0.001,
+            max_order_size: 1000.0,
+            // DeepBook on SUI: Very fast on-chain (~400ms finality)
+            latency_mean_ms: 400.0,
+            latency_std_ms: 100.0,
+            // No traditional rate limits (gas limited)
+            max_orders_per_second: 100.0,
+            rate_limit_cooldown_ms: 100,
+            // No funding on spot CLOB
+            funding_rate_8h: 0.0,
+            funding_interval_ms: 8 * 60 * 60 * 1000,
         }
     }
     
@@ -300,6 +384,18 @@ impl ExchangeFeeConfig {
                 VolumeTier { min_volume_30d: 0.0, maker_fee: 0.0030, taker_fee: 0.0030 },
             ],
             starting_30d_volume: 0.0,
+            // Cetus minimum swap sizes
+            min_order_size: 0.001,
+            max_order_size: 1000.0,
+            // Cetus on SUI: Similar to DeepBook
+            latency_mean_ms: 400.0,
+            latency_std_ms: 100.0,
+            // No traditional rate limits (gas limited)
+            max_orders_per_second: 100.0,
+            rate_limit_cooldown_ms: 100,
+            // No funding on AMM
+            funding_rate_8h: 0.0,
+            funding_interval_ms: 8 * 60 * 60 * 1000,
         }
     }
     
@@ -312,13 +408,22 @@ impl ExchangeFeeConfig {
             "deepbook" | "sui" => Self::deepbook(),
             "cetus" => Self::cetus(),
             _ => {
-                // Default to generic fees
+                // Default to generic conservative fees with typical CEX parameters
                 Self {
                     exchange: exchange.to_string(),
                     maker_fee: 0.0010,
                     taker_fee: 0.0015,
                     volume_tiers: vec![],
                     starting_30d_volume: 0.0,
+                    // Conservative defaults for unknown exchanges
+                    min_order_size: 0.0001,
+                    max_order_size: 100.0,
+                    latency_mean_ms: 50.0,
+                    latency_std_ms: 20.0,
+                    max_orders_per_second: 5.0,
+                    rate_limit_cooldown_ms: 2000,
+                    funding_rate_8h: 0.0001,
+                    funding_interval_ms: 8 * 60 * 60 * 1000,
                 }
             }
         }
@@ -707,36 +812,15 @@ impl Default for TradingConfig {
 
 impl ExchangeFeeConfig {
     /// Kraken exchange fee configuration starting at 0 volume (new market maker)
+    /// Delegates to the main kraken() factory method
     pub fn kraken_default() -> Self {
-        Self {
-            exchange: "kraken".to_string(),
-            maker_fee: 0.0025,     // 0.25% (25 bps) at 0 volume
-            taker_fee: 0.0040,     // 0.40% (40 bps) at 0 volume
-            volume_tiers: Self::kraken_fee_tiers(),
-            starting_30d_volume: 0.0,
-        }
+        Self::kraken()
     }
 
     /// Coinbase Pro exchange fee configuration
+    /// Delegates to the main coinbase() factory method
     pub fn coinbase_default() -> Self {
-        Self {
-            exchange: "coinbase".to_string(),
-            maker_fee: 0.0000,     // 0.00%
-            taker_fee: 0.0060,     // 0.60%
-            volume_tiers: vec![
-                VolumeTier {
-                    min_volume_30d: 0.0,
-                    maker_fee: 0.0000,
-                    taker_fee: 0.0060,
-                },
-                VolumeTier {
-                    min_volume_30d: 10_000.0,
-                    maker_fee: 0.0000,
-                    taker_fee: 0.0040,
-                },
-            ],
-            starting_30d_volume: 0.0,
-        }
+        Self::coinbase()
     }
 
     /// Get applicable fee rate based on volume and liquidity type

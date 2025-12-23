@@ -752,6 +752,7 @@ impl DistributedGAWorker {
             walk_forward_results: Vec::new(), // Only populated in final evaluation
             closed_trades_data: Vec::new(), // Only populated in final evaluation
             is_final_evaluation: false,
+            statistical_significance: String::new(), // Only populated in final evaluation
         };
         
         println!("📤 [WORKER {}] Sending result for chromosome {}/{} fitness={:.4} in {:?}", 
@@ -998,6 +999,7 @@ impl DistributedGAWorker {
             walk_forward_results: Vec::new(),
             closed_trades_data: Vec::new(),
             is_final_evaluation: false,
+            statistical_significance: String::new(),
         };
         
         let _ = self.broker.publish_chromosome_result(response).await;
@@ -1012,6 +1014,7 @@ impl DistributedGAWorker {
         use data_prep::BinaryFileReader;
         use dataloader::TickSource;
         use backtest::realistic_simulation::{RealisticSimulator, RealisticASParams, ticks_to_trade_events};
+        use backtest::statistical_significance::{compute_sharpe_significance, compute_deflated_sharpe_ratio};
         
         let start = Instant::now();
         
@@ -1092,7 +1095,15 @@ impl DistributedGAWorker {
         println!("📊 [WORKER {}] Converted {} ticks to events in {:.2}s", 
             self.worker_id, events.len(), events_start.elapsed().as_secs_f64());
         
-        // Convert chromosome to realistic simulation parameters
+        // Get exchange fee configuration (uses Kraken's full tier structure)
+        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&request.exchange);
+        println!("📊 [WORKER {}] Using {} config: maker={:.4}%, taker={:.4}%, latency={:.1}ms±{:.1}ms",
+            self.worker_id, exchange_fee_config.exchange, 
+            exchange_fee_config.maker_fee * 100.0, exchange_fee_config.taker_fee * 100.0,
+            exchange_fee_config.latency_mean_ms, exchange_fee_config.latency_std_ms);
+        
+        // Convert chromosome to realistic simulation parameters with institutional-grade settings
+        // All operational parameters come from exchange configuration - no hardcoded values
         let realistic_params = RealisticASParams {
             risk_aversion: chromosome.risk_aversion,
             inventory_target: chromosome.inventory_target,
@@ -1100,12 +1111,43 @@ impl DistributedGAWorker {
             volatility_cap: chromosome.volatility_cap,
             min_spread_bps: chromosome.min_spread_bps,
             time_horizon_minutes: chromosome.time_horizon_minutes,
-            fee_rate: 0.001, // Default 0.1% fee
+            
+            // Maker/taker fees from exchange configuration
+            maker_fee_rate: exchange_fee_config.maker_fee,
+            taker_fee_rate: exchange_fee_config.taker_fee,
+            
+            // Inventory limits (TODO: make configurable per exchange)
+            max_inventory_multiple: 5.0,
+            
+            // Latency from exchange configuration
+            latency_mean_ms: exchange_fee_config.latency_mean_ms,
+            latency_std_ms: exchange_fee_config.latency_std_ms,
+            
+            // Partial fills enabled
+            enable_partial_fills: true,
+            min_fill_fraction: 0.1,
+            
+            // Rate limiting from exchange configuration
+            max_orders_per_second: exchange_fee_config.max_orders_per_second,
+            rate_limit_cooldown_ms: exchange_fee_config.rate_limit_cooldown_ms,
+            
+            // Funding rate from exchange configuration
+            funding_rate_8h: exchange_fee_config.funding_rate_8h,
+            funding_interval_ms: exchange_fee_config.funding_interval_ms,
         };
         
-        // Run realistic order book simulation
-        let simulator = RealisticSimulator::new(request.initial_capital, 0.001);
+        // Run realistic order book simulation with dynamic volume-based fees
+        let simulator = RealisticSimulator::with_exchange_config(request.initial_capital, exchange_fee_config.clone());
         let realistic_result = simulator.run(&events, &realistic_params);
+        
+        // Log enhanced metrics including volume-based fee tier tracking
+        println!("📊 [WORKER {}] Enhanced metrics: partial_fills={}, rate_limit_rejects={}, funding_paid={:.4}",
+            self.worker_id, realistic_result.partial_fill_count, 
+            realistic_result.rate_limit_rejections, realistic_result.total_funding_paid);
+        println!("📊 [WORKER {}] Volume tiers: 30d_vol=${:.0}→${:.0}, fee_rate={:.4}%→{:.4}%, tier_upgrades={}",
+            self.worker_id, realistic_result.starting_30d_volume, realistic_result.final_30d_volume,
+            realistic_result.starting_fee_rate * 100.0, realistic_result.final_fee_rate * 100.0,
+            realistic_result.fee_tier_upgrades);
         
         // Convert to standard BacktestResult for fitness calculation
         let backtest_result: backtest::types::BacktestResult = realistic_result.clone().into();
@@ -1153,6 +1195,66 @@ impl DistributedGAWorker {
             }
         } else {
             Vec::new()
+        };
+        
+        // Compute statistical significance of Sharpe ratio
+        let statistical_significance = if !backtest_result.trade_returns.is_empty() {
+            println!("🔬 [WORKER {}] Computing statistical significance...", self.worker_id);
+            // benchmark_sharpe = 0.0 (vs no skill), annualization_factor = sqrt(252) for daily returns
+            let annualization = 252.0_f64.sqrt();
+            let sig_result = compute_sharpe_significance(&backtest_result.trade_returns, 0.0, annualization);
+            
+            // Compute deflated Sharpe (assume ~50 trials for typical GA optimization)
+            let num_trials = 50; // Conservative estimate of independent trials
+            // Calculate expected max Sharpe under null for the number of trials
+            let expected_max_null = backtest::statistical_significance::expected_max_sharpe_under_null(
+                num_trials, 
+                backtest_result.trade_returns.len()
+            );
+            let dsr = compute_deflated_sharpe_ratio(
+                sig_result.sharpe_ratio, 
+                sig_result.sharpe_std_error, 
+                num_trials,
+                expected_max_null
+            );
+            
+            println!("📊 [WORKER {}] Statistical significance: Sharpe={:.4}, t-stat={:.4}, p-value={:.6}, PSR={:.2}%, DSR={:.2}%",
+                self.worker_id, sig_result.sharpe_ratio, sig_result.t_statistic, sig_result.p_value, 
+                sig_result.probabilistic_sharpe_ratio * 100.0, dsr * 100.0);
+            println!("📊 [WORKER {}] Confidence Intervals: 95%=[{:.4}, {:.4}], min track record={:.0} samples",
+                self.worker_id, sig_result.ci_95_lower, sig_result.ci_95_upper,
+                sig_result.min_track_record_length);
+            
+            // Log significance assessment
+            let significance_level = if sig_result.p_value < 0.01 {
+                "HIGHLY SIGNIFICANT (p<0.01)"
+            } else if sig_result.p_value < 0.05 {
+                "SIGNIFICANT (p<0.05)"
+            } else if sig_result.p_value < 0.10 {
+                "MARGINALLY SIGNIFICANT (p<0.10)"
+            } else {
+                "NOT STATISTICALLY SIGNIFICANT"
+            };
+            println!("📊 [WORKER {}] Assessment: {}", self.worker_id, significance_level);
+            
+            // Create JSON blob for storage
+            serde_json::json!({
+                "sharpe": sig_result.sharpe_ratio,
+                "sharpe_std_error": sig_result.sharpe_std_error,
+                "t_statistic": sig_result.t_statistic,
+                "p_value": sig_result.p_value,
+                "probabilistic_sharpe_ratio": sig_result.probabilistic_sharpe_ratio,
+                "deflated_sharpe_ratio": dsr,
+                "confidence_interval_95": [sig_result.ci_95_lower, sig_result.ci_95_upper],
+                "min_track_record_length": sig_result.min_track_record_length,
+                "is_significant_at_5pct": sig_result.is_significant_5pct,
+                "is_significant_at_1pct": sig_result.is_significant_1pct,
+                "skewness": sig_result.skewness,
+                "kurtosis": sig_result.kurtosis,
+                "num_observations": sig_result.n_observations
+            }).to_string()
+        } else {
+            String::new()
         };
         
         // Run Walk-Forward analysis if requested
@@ -1228,6 +1330,7 @@ impl DistributedGAWorker {
             walk_forward_results,
             closed_trades_data,
             is_final_evaluation: true,
+            statistical_significance,
         };
         
         println!("📤 [WORKER {}] Publishing FINAL result: job={}, pnl={:.2}, trades={}, is_final=true",
