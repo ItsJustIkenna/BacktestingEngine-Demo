@@ -45,9 +45,14 @@ pub mod binary_format;
 pub mod db_streamer;
 pub mod feature_compute;
 pub mod tick;
+pub mod orderbook_binary;
 
 // Re-export main types
 pub use binary_format::{BinaryFileHeader, BinaryFileWriter, BinaryFileReader, SlicedTickSource, HEADER_SIZE};
+pub use orderbook_binary::{
+    OrderBookEventTick, OrderBookBinaryWriter, OrderBookBinaryReader, 
+    OrderBookBinaryHeader, EventTypeCode, SideCode
+};
 pub use db_streamer::DatabaseStreamer;
 pub use feature_compute::FeatureComputer;
 pub use tick::SimulationTick;

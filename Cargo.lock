@@ -243,6 +243,7 @@ dependencies = [
  "metrics 0.1.0",
  "once_cell",
  "orderbook",
+ "ordered-float",
  "portfoliomanager",
  "rand 0.8.5",
  "rayon",

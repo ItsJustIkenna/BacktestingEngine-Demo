@@ -28,6 +28,7 @@ pub mod latency;
 pub mod simd_utils;
 pub mod fast_simulation;
 pub mod lightweight_sim;
+pub mod realistic_simulation;
 
 // Re-export main types for easy access
 pub use engine::{BacktestEngine, BacktestResults, AnalysisMetadata, WalkForwardSummary};
@@ -37,6 +38,10 @@ pub use html_export::HtmlExporter;
 pub use latency::{LatencySampler, sample_latency};
 pub use fast_simulation::{FastSimulator, MarketFeatures, FastASParams, FastSimResult};
 pub use lightweight_sim::{LightweightSim, LightweightSimConfig};
+pub use realistic_simulation::{
+    RealisticSimulator, RealisticASParams, RealisticSimResult, 
+    OrderBookEvent, EventType, Side, ticks_to_trade_events
+};
 
 // Utility functions for report generation
 use metrics::{ReportConfig, ReportFormat};
