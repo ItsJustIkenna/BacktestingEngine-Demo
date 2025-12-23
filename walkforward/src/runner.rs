@@ -727,7 +727,7 @@ fn create_strategy_with_params(_params: AvellanedaStoikovParams) -> Result<std::
 pub async fn run_walkforward_for_chromosome(
     reader: &data_prep::BinaryFileReader,
     chromosome: &AvellanedaStoikovChromosome,
-    symbol: &str,
+    _symbol: &str,
     exchange: &str,
     initial_capital: f64,
     train_days: Option<i64>,

@@ -59,7 +59,7 @@ enum Commands {
         port: u16,
         
         /// Enable distributed mode (use message broker for job distribution)
-        #[arg(long, default_value = "true")]
+        #[arg(long, default_value_t = true)]
         distributed: bool,
     },
     /// Prepare historical data for backtesting (converts DB to binary format)
@@ -417,6 +417,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     });
                                 });
                                 
+                                // Transition to data_loading phase
+                                let _ = job_queue_clone.update_phase(&job.id, "data_loading", serde_json::json!({
+                                    "step": "requesting_workers",
+                                    "symbol": &job.params.symbol,
+                                    "exchange": &job.params.exchange
+                                })).await;
+                                let _ = job_queue_clone.update_progress(&job.id, 5.0).await;
+                                
                                 // First request workers to load data
                                 eprintln!("📤 [COORDINATOR] Requesting data load for job {}", job.id);
                                 match coordinator.request_data_load().await {
@@ -440,6 +448,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                     best_chromosome.risk_aversion, best_chromosome.order_size_pct, best_chromosome.inventory_target);
                                                 eprintln!("🔄 [COORDINATOR] Sending final evaluation request (MC={}, WF={})...",
                                                     job.params.monte_carlo_enabled, job.params.walk_forward_enabled);
+                                                
+                                                // Update generation to total/total before final analysis phase
+                                                // This ensures UI shows "Generation 3 of 3" (or whatever the total is) during final analysis
+                                                let total_gens = job.params.generations as i32;
+                                                let _ = job_queue_clone.update_generation(&job.id, total_gens, total_gens).await;
+                                                
+                                                // Transition to final_analysis phase with proper details
+                                                let _ = job_queue_clone.update_phase(&job.id, "final_analysis", serde_json::json!({
+                                                    "step": "starting",
+                                                    "monte_carlo_enabled": job.params.monte_carlo_enabled,
+                                                    "walk_forward_enabled": job.params.walk_forward_enabled,
+                                                    "best_fitness": best_fitness,
+                                                    "current_generation": total_gens,
+                                                    "total_generations": total_gens
+                                                })).await;
+                                                eprintln!("📊 [COORDINATOR] Transitioned to final_analysis phase (gen {}/{})", total_gens, total_gens);
                                                 
                                                 let final_eval_start = std::time::Instant::now();
                                                 

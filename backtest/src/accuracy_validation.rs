@@ -12,7 +12,6 @@
 //! of actual trading performance.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Individual execution comparison between backtest and live
 #[derive(Debug, Clone, Serialize, Deserialize)]

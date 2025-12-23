@@ -21,7 +21,6 @@ use std::collections::{BTreeMap, VecDeque};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use bigdecimal::BigDecimal;
-use config::ExchangeFeeConfig;
 
 /// Event types from historical data
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,6 +220,7 @@ impl Default for VolumeTracker {
 
 /// Our strategy's pending order
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct PendingOrder {
     order_id: String,
     side: Side,
@@ -339,6 +339,7 @@ impl SimpleOrderBook {
         levels.get(&price_key).map(|l| l.total_quantity).unwrap_or(0.0)
     }
     
+    #[allow(dead_code)]
     fn quantity_ahead_in_queue(&self, side: Side, price: f64, our_order_id: &str) -> f64 {
         let price_key = OrderedFloat(price);
         let levels = match side {

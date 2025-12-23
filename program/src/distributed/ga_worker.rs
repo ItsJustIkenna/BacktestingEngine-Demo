@@ -22,8 +22,6 @@ use std::path::PathBuf;
 use tokio::sync::{RwLock, Semaphore, Mutex};
 
 use dataloader::MarketData;
-use dataloader::Tick; // Needed for price() method
-use bigdecimal::ToPrimitive; // Needed for to_f64()
 use genetic::chromosome::AvellanedaStoikovChromosome;
 use genetic::FitnessResult;
 
@@ -168,6 +166,33 @@ impl DistributedGAWorker {
         }
     }
     
+    /// Evict expired entries from caches to prevent memory leaks
+    async fn evict_expired_cache_entries(&self) {
+        let now = Instant::now();
+        
+        // Evict expired binary cache entries
+        {
+            let mut binary_cache = self.binary_cache.write().await;
+            let before = binary_cache.len();
+            binary_cache.retain(|_k, v| v.expires_at > now);
+            let evicted = before - binary_cache.len();
+            if evicted > 0 {
+                println!("🧹 [WORKER {}] Evicted {} expired binary cache entries", self.worker_id, evicted);
+            }
+        }
+        
+        // Evict expired data cache entries
+        {
+            let mut data_cache = self.data_cache.write().await;
+            let before = data_cache.len();
+            data_cache.retain(|_k, v| v.expires_at > now);
+            let evicted = before - data_cache.len();
+            if evicted > 0 {
+                println!("🧹 [WORKER {}] Evicted {} expired data cache entries (freed memory)", self.worker_id, evicted);
+            }
+        }
+    }
+    
     /// Run the worker loop
     /// 
     /// Subscribes to data broadcast and chromosome evaluation topics,
@@ -178,6 +203,16 @@ impl DistributedGAWorker {
             "worker_id" => &self.worker_id,
             "max_concurrent" => MAX_CONCURRENT_EVALS
         );
+        
+        // Spawn background cache eviction task (runs every 5 minutes)
+        let worker_for_eviction = self.clone_for_task();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(300));
+            loop {
+                interval.tick().await;
+                worker_for_eviction.evict_expired_cache_entries().await;
+            }
+        });
         
         // Subscribe to data broadcasts (legacy - for small datasets)
         let mut data_receiver = self.broker.subscribe_data_broadcasts();
@@ -774,7 +809,7 @@ impl DistributedGAWorker {
         train_end_idx: i64,
     ) -> FitnessResult {
         use data_prep::BinaryFileReader;
-        use dataloader::{Tick, TickSource};
+        use dataloader::TickSource;
         use backtest::fast_simulation::{FastSimulator, FastASParams, MarketFeatures};
         
         let sim_start = std::time::Instant::now();

@@ -5,7 +5,6 @@
 
 use std::sync::Arc;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 use chrono::Utc;
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
@@ -703,7 +702,7 @@ impl Worker {
         log_debug!(BACKTEST_LOGGER, "Job {} loading market data for {} on {}", job.id, params.symbol, params.exchange);
         
         // Update phase: loading data
-        let _ = self.job_queue.update_phase(&job.id, "loading_data", serde_json::json!({
+        let _ = self.job_queue.update_phase(&job.id, "data_loading", serde_json::json!({
             "symbol": params.symbol,
             "exchange": params.exchange,
         })).await;

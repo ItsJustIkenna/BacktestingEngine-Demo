@@ -359,6 +359,7 @@ impl JobQueue for PostgresQueue {
             JobStatus::Running => "running",
             JobStatus::Completed => "completed",
             JobStatus::Failed => "failed",
+            JobStatus::Cancelled => "cancelled",
         };
         
         diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(job_id)))
@@ -398,19 +399,28 @@ impl JobQueue for PostgresQueue {
         Ok(())
     }
     
-    /// Update generation progress for genetic optimization
+    /// Update generation progress for genetic optimization (monotonic - never goes backwards)
     async fn update_generation(&self, job_id: &str, current_generation: i32, total_generations: i32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         log_info!(crate::MAIN_LOGGER, "Job {} generation {}/{}", job_id, current_generation, total_generations);
         
         let mut conn = self.get_conn_with_timeout().await?;
         
-        diesel::update(backtest_jobs::table.filter(backtest_jobs::job_id.eq(job_id)))
+        // Monotonic update: only update if new generation > current generation
+        let rows = diesel::update(
+            backtest_jobs::table
+                .filter(backtest_jobs::job_id.eq(job_id))
+                .filter(backtest_jobs::current_generation.lt(current_generation))
+        )
             .set((
                 backtest_jobs::current_generation.eq(current_generation),
                 backtest_jobs::total_generations.eq(total_generations),
             ))
             .execute(&mut conn)
             .await?;
+        
+        if rows == 0 {
+            log_debug!(crate::MAIN_LOGGER, "Job {} generation update skipped (already at or past gen {})", job_id, current_generation);
+        }
         
         Ok(())
     }

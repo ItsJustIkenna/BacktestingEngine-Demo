@@ -743,7 +743,7 @@ impl<'a> FastSimulator<'a> {
         // Annualized return: (1 + total_return)^(252/days) - 1
         let total_return = total_pnl / self.initial_capital;
         let annualized_return = if trading_days > 0.0 && total_return > -1.0 {
-            ((1.0 + total_return).powf(252.0 / trading_days) - 1.0)
+            (1.0 + total_return).powf(252.0 / trading_days) - 1.0
         } else {
             0.0
         };
@@ -910,7 +910,7 @@ fn calculate_sortino_ratio(equity: &[f64], trading_days: f64) -> f64 {
 
 /// Calculate Value at Risk (95%) and Expected Shortfall (CVaR 95%)
 /// Returns (VaR, ES) as positive values representing potential losses in USD
-fn calculate_var_and_es(equity: &[f64], initial_capital: f64) -> (f64, f64) {
+fn calculate_var_and_es(equity: &[f64], _initial_capital: f64) -> (f64, f64) {
     if equity.len() < 10 {
         return (0.0, 0.0);
     }

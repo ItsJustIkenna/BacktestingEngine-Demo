@@ -152,6 +152,7 @@ export const JobList: React.FC<JobListProps> = ({
       running: '#17a2b8',
       completed: '#28a745',
       failed: '#dc3545',
+      cancelled: '#6c757d',
     };
 
     return (
@@ -347,7 +348,7 @@ export const JobList: React.FC<JobListProps> = ({
   };
 
   const isJobCancellable = (status: string) => {
-    return ['running', 'queued', 'pending'].includes(status.toLowerCase());
+    return ['running', 'queued'].includes(status.toLowerCase());
   };
 
   const isJobDeletable = (status: string) => {
@@ -378,6 +379,7 @@ export const JobList: React.FC<JobListProps> = ({
             <option value="running">Running</option>
             <option value="completed">Completed</option>
             <option value="failed">Failed</option>
+            <option value="cancelled">Cancelled</option>
           </select>
         </div>
 

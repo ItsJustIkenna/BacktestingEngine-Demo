@@ -157,7 +157,7 @@ impl ProgressBroadcaster {
             job_id: job_id.to_string(),
             progress: match phase {
                 "initializing" => 0.0,
-                "loading_data" => 5.0,
+                "data_loading" => 5.0,
                 "genetic_optimization" => 10.0,
                 "final_analysis" => 85.0,
                 "completed" => 100.0,

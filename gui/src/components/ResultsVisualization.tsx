@@ -250,7 +250,25 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
     }
   };
 
+  // Ref to track mounted state for cleanup
+  const isMountedRef = React.useRef(true);
+  const pollingTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+
+  // Cleanup on unmount
+  React.useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (pollingTimeoutRef.current) {
+        clearTimeout(pollingTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const fetchData = useCallback(async () => {
+    // Don't fetch if component is unmounted
+    if (!isMountedRef.current) return;
+    
     // Only show loading spinner on first load to avoid page flicker
     if (isFirstLoad.current) {
       setLoading(true);
@@ -261,6 +279,10 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
       // First fetch job status
       const statusResponse = await fetch(`/api/backtest/${jobId}/status`);
       const statusData = await statusResponse.json();
+      
+      // Check if still mounted before updating state
+      if (!isMountedRef.current) return;
+      
       console.log(`[FetchData] Job ${jobId} status: ${statusData.status}, progress: ${statusData.progress}%`);
       setJobStatus(statusData);
 
@@ -284,21 +306,31 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
       if (statusData.status === 'completed') {
         const resultsResponse = await fetch(`/api/backtest/${jobId}/results`);
         const resultsData = await resultsResponse.json();
-        setResult(resultsData);
-        setLoading(false);
+        if (isMountedRef.current) {
+          setResult(resultsData);
+          setLoading(false);
+        }
       } else if (statusData.status === 'running' || statusData.status === 'queued') {
         // Job still in progress, auto-retry after 3 seconds
-        setLoading(false);
-        setTimeout(fetchData, 3000);
+        if (isMountedRef.current) {
+          setLoading(false);
+          pollingTimeoutRef.current = setTimeout(fetchData, 3000);
+        }
       } else if (statusData.status === 'failed') {
-        setError(statusData.error_message || 'Job failed');
-        setLoading(false);
+        if (isMountedRef.current) {
+          setError(statusData.error_message || 'Job failed');
+          setLoading(false);
+        }
       } else {
-        setLoading(false);
+        if (isMountedRef.current) {
+          setLoading(false);
+        }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
-      setLoading(false);
+      if (isMountedRef.current) {
+        setError(err instanceof Error ? err.message : 'An error occurred');
+        setLoading(false);
+      }
     }
   }, [jobId]);
 

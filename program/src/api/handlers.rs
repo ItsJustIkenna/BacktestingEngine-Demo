@@ -267,6 +267,12 @@ pub async fn get_job_results(
                 created_at: job.created_at.to_rfc3339(),
             });
         },
+        JobStatus::Cancelled => {
+            return Err(AppError::JobFailed {
+                job_id: job_id.clone(),
+                error: "Job was cancelled".to_string(),
+            });
+        },
     }
     
     // This is unreachable but needed for type checking

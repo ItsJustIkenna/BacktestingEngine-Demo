@@ -17,6 +17,7 @@ pub enum JobStatus {
     Running,
     Completed,
     Failed,
+    Cancelled,
 }
 
 /// Backtest job parameters

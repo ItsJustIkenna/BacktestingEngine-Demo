@@ -726,7 +726,7 @@ fn test_progress_update_serialization() {
 fn test_progress_update_phases() {
     let phases = vec![
         "initializing",
-        "loading_data",
+        "data_loading",
         "genetic_optimization",
         "final_analysis",
         "completed",
