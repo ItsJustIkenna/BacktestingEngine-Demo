@@ -653,17 +653,21 @@ impl RealisticSimulator {
                 last_quote_time = event.timestamp_ms;
                 
                 // Get current market state
+                // Use book mid_price if available, otherwise fall back to last traded price
+                // This is critical for trade-only data where order book is not populated
                 let mid_price = match book.mid_price() {
                     Some(p) => p,
-                    None => continue,
+                    None => match last_price {
+                        Some(p) => p,
+                        None => continue,  // No price reference at all, skip
+                    },
                 };
                 
                 // Apply volatility cap
                 let effective_vol = volatility.min(params.volatility_cap);
-                if effective_vol < 0.15 {
-                    // Skip quoting in low volatility environments
-                    continue;
-                }
+                // Note: We previously had a check to skip quoting if effective_vol < 0.15
+                // but this was causing 0 trades in low-volatility periods. Market makers
+                // should quote in all volatility environments, using spread adjustment instead.
                 
                 // Calculate max inventory limit
                 let order_size = capital * params.order_size_pct;
