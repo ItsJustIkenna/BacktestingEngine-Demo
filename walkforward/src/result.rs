@@ -12,6 +12,9 @@ pub struct WalkForwardWindowResult {
     pub test_end: NaiveDate,
     pub best_params: serde_json::Value,
     pub test_metrics: PerformanceMetrics,
+    /// Individual trade P&L values from this window (for Monte Carlo aggregation)
+    #[serde(default)]
+    pub trade_returns: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

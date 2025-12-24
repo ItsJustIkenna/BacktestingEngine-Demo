@@ -71,6 +71,7 @@ pub async fn run_walkforward_analysis(
                     "volatility_cap": best_params.volatility_cap,
                 }),
                 test_metrics,
+                trade_returns: Vec::new(),  // Not available in non-L3 walk-forward
             }
         });
         tasks.push(task);
@@ -193,6 +194,7 @@ pub async fn run_walkforward_streaming<S: dataloader::TickSource + Send + Sync +
                 "volatility_cap": best_params.volatility_cap,
             }),
             test_metrics,
+            trade_returns: Vec::new(),  // Not available in streaming walk-forward
         });
     }
     
@@ -852,6 +854,7 @@ pub async fn run_walkforward_for_chromosome(
                 "time_horizon_minutes": chromosome.time_horizon_minutes,
             }),
             test_metrics,
+            trade_returns: Vec::new(),  // Not available in chromosome walk-forward
         });
     }
     
@@ -862,6 +865,10 @@ pub async fn run_walkforward_for_chromosome(
     
     summary
 }
+
+// NOTE: run_walkforward_realistic has been moved to ga_worker.rs to avoid circular dependency
+// The walkforward crate cannot depend on backtest (backtest depends on walkforward).
+// The realistic walk-forward is implemented directly in program/src/distributed/ga_worker.rs
 
 /// Run backtest on a specific tick index range
 fn run_backtest_on_range(

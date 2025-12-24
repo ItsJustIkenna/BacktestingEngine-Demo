@@ -334,10 +334,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     end_time: job.params.end_date.clone().unwrap_or_default(),
                                     initial_capital: job.params.initial_capital,
                                     cache_ttl_seconds: 14400, // 4 hours - enough for long GA runs + final evaluation
-                                    // Data split ratios for train/test/validate
+                                    // Simplified: TRAIN for GA, VALIDATE (remaining) for walk-forward
                                     train_ratio: job.params.train_ratio,
-                                    test_ratio: job.params.test_ratio,
-                                    validate_ratio: job.params.validate_ratio,
+                                    validation_ratio: job.params.test_ratio + job.params.validate_ratio, // Combined
                                 };
                                 
                                 let mut coordinator = DistributedGACoordinator::new(

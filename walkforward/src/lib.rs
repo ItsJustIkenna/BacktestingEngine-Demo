@@ -12,6 +12,7 @@ pub mod logging_facade;
 
 // Re-export key functions for external use
 pub use runner::run_walkforward_for_chromosome;
+// Note: run_walkforward_realistic is implemented directly in ga_worker to avoid circular dependency
 pub use result::{WalkForwardSummary, WalkForwardWindowResult};
 
 // Trading performance metrics for walkforward analysis

@@ -1478,7 +1478,7 @@ impl Worker {
             eprintln!("🧬 Taking DISTRIBUTED GA path...");
             log_info!(GENETIC_LOGGER, "Job {} attempting DISTRIBUTED genetic optimization", job.id);
             
-            // Create distributed GA config
+            // Create distributed GA config with simplified TRAIN/VALIDATE split
             let distributed_config = DistributedGAConfig {
                 genetic_config: config_for_distributed.clone(),
                 symbol: params.symbol.clone(),
@@ -1488,8 +1488,7 @@ impl Worker {
                 start_time: params.start_date.clone().unwrap_or_else(|| "2024-01-01T00:00:00Z".to_string()),
                 end_time: params.end_date.clone().unwrap_or_else(|| "2024-12-31T23:59:59Z".to_string()),
                 train_ratio: params.train_ratio,
-                test_ratio: params.test_ratio,
-                validate_ratio: params.validate_ratio,
+                validation_ratio: params.test_ratio + params.validate_ratio, // Combined for walk-forward
             };
             eprintln!("🧬 Created DistributedGAConfig with start_time={}, end_time={}", 
                 distributed_config.start_time, distributed_config.end_time);

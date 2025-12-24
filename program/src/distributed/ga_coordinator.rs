@@ -179,12 +179,11 @@ pub struct DistributedGAConfig {
     pub start_time: String,
     /// End time for data query (ISO 8601 format)
     pub end_time: String,
-    /// Train data ratio (default 0.6 = 60%)
+    /// Train data ratio (default 0.6 = 60%) - GA optimization runs here
     pub train_ratio: f64,
-    /// Test data ratio for walk-forward (default 0.2 = 20%)
-    pub test_ratio: f64,
-    /// Validate data ratio for final held-out test (default 0.2 = 20%)
-    pub validate_ratio: f64,
+    /// Validation data ratio (default 0.4 = 40%) - Walk-forward runs here as PRIMARY validation
+    /// Note: The old test_ratio and validate_ratio are combined - walk-forward IS the final validation
+    pub validation_ratio: f64,
 }
 
 /// Worker capacity tracking
@@ -267,23 +266,27 @@ impl DistributedGACoordinator {
     }
     
     /// Set data split indices (called after data is loaded)
+    /// 
+    /// Uses simplified TRAIN/VALIDATE split:
+    /// - TRAIN: [0, train_end_idx) - GA optimization uses this
+    /// - VALIDATE: [train_end_idx, total_ticks) - Walk-forward validation uses this as PRIMARY output
     pub fn set_data_splits(&mut self, total_ticks: i64) {
         let train_ratio = self.config.train_ratio;
-        let test_ratio = self.config.test_ratio;
         
         self.total_ticks = total_ticks;
         self.train_end_idx = (total_ticks as f64 * train_ratio) as i64;
-        self.test_end_idx = (total_ticks as f64 * (train_ratio + test_ratio)) as i64;
+        // Validation runs from train_end to end of data
+        self.test_end_idx = total_ticks; // Walk-forward uses ALL validation data
         
         log_info_structured!(MAIN_LOGGER, "GA_DATA_SPLIT_CONFIG",
             "event" => "GA_DATA_SPLIT_CONFIG",
             "job_id" => &self.job_id,
             "total_ticks" => total_ticks,
             "train_end_idx" => self.train_end_idx,
-            "test_end_idx" => self.test_end_idx,
+            "validation_start" => self.train_end_idx,
+            "validation_end" => total_ticks,
             "train_ratio" => train_ratio,
-            "test_ratio" => test_ratio,
-            "validate_ratio" => self.config.validate_ratio
+            "validation_ratio" => 1.0 - train_ratio
         );
     }
     

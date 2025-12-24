@@ -374,6 +374,8 @@ pub struct RealisticSimResult {
     pub avg_fill_rate: f64,  // % of our orders that got filled
     pub avg_queue_position: f64,  // Average queue position when filled
     pub equity_curve: Vec<f64>,
+    /// Individual trade P&L values for Monte Carlo simulation and statistical significance
+    pub trade_returns: Vec<f64>,
     
     // === Enhanced Metrics ===
     /// Number of partial fills (vs full fills)
@@ -836,6 +838,9 @@ impl RealisticSimulator {
             0.0
         };
         
+        // Extract individual trade P&L values for Monte Carlo
+        let trade_returns: Vec<f64> = trades.iter().map(|(pnl, _)| *pnl).collect();
+        
         RealisticSimResult {
             total_pnl,
             sharpe_ratio,
@@ -848,6 +853,7 @@ impl RealisticSimulator {
             avg_fill_rate,
             avg_queue_position,
             equity_curve,
+            trade_returns,
             partial_fill_count: partial_fills,
             rate_limit_rejections,
             total_funding_paid,
