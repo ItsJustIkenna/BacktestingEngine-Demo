@@ -241,8 +241,14 @@ impl DistributedGAWorker {
                 
                 // Handle chromosome evaluation request
                 Ok(request) = eval_receiver.recv() => {
-                    // Check if we have the required data cached (either binary file path or in-memory data)
-                    let has_data = {
+                    // Final evaluations should always be processed - they have fallback logic
+                    // to find the binary file even if cache expired
+                    let should_process = if request.is_final_evaluation {
+                        println!("🔬 [WORKER {}] Received FINAL evaluation request for job {}", 
+                            self.worker_id, request.job_id);
+                        true
+                    } else {
+                        // For regular GA evals, check if we have the required data cached
                         let binary_cache = self.binary_cache.read().await;
                         let data_cache = self.data_cache.read().await;
                         let in_binary = binary_cache.contains_key(&request.data_cache_key);
@@ -252,9 +258,10 @@ impl DistributedGAWorker {
                         in_binary || in_data
                     };
                     
-                    if has_data {
-                        println!("✅ [WORKER {}] Processing chromosome {}/{} for job {}", 
-                            self.worker_id, request.chromosome_id, request.total_chromosomes, request.job_id);
+                    if should_process {
+                        println!("✅ [WORKER {}] Processing chromosome {}/{} for job {}{}", 
+                            self.worker_id, request.chromosome_id, request.total_chromosomes, request.job_id,
+                            if request.is_final_evaluation { " (FINAL)" } else { "" });
                         // Spawn evaluation task with semaphore
                         let worker = self.clone_for_task();
                         let request_clone = request.clone();
