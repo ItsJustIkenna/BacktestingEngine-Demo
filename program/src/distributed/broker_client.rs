@@ -497,10 +497,8 @@ impl BacktestBrokerClient {
                     "topics" => format!("{:?}", topics_to_subscribe)
                 );
                 
-                // Convert buf_reader back to OwnedReadHalf for the receiver loop
-                let reader = buf_reader.into_inner();
-                
                 // Spawn unified receiver task that routes messages based on topic
+                // IMPORTANT: Pass the buf_reader directly to avoid losing buffered data
                 let chromosome_request_sender = self.chromosome_request_sender.clone();
                 let chromosome_result_sender = self.chromosome_result_sender.clone();
                 let data_broadcast_sender = self.data_broadcast_sender.clone();
@@ -509,7 +507,7 @@ impl BacktestBrokerClient {
                 
                 tokio::spawn(async move {
                     Self::unified_receiver_loop(
-                        reader,
+                        buf_reader,
                         chromosome_request_sender,
                         chromosome_result_sender,
                         data_broadcast_sender,
@@ -524,8 +522,8 @@ impl BacktestBrokerClient {
     }
     
     /// Unified receiver loop that routes messages based on topic
-    async fn unified_receiver_loop(
-        mut reader: tokio::net::tcp::OwnedReadHalf,
+    async fn unified_receiver_loop<R: tokio::io::AsyncRead + Unpin>(
+        mut buf_reader: tokio::io::BufReader<R>,
         chromosome_request_sender: broadcast::Sender<ChromosomeEvalRequest>,
         chromosome_result_sender: broadcast::Sender<ChromosomeEvalResult>,
         data_broadcast_sender: broadcast::Sender<DataBroadcastRequest>,
@@ -533,7 +531,6 @@ impl BacktestBrokerClient {
         data_ack_sender: broadcast::Sender<DataCacheAck>,
     ) {
         use tokio::io::AsyncReadExt;
-        let mut buf_reader = tokio::io::BufReader::new(&mut reader);
         
         println!("🔄 [BROKER] Receiver loop started, waiting for messages...");
         
