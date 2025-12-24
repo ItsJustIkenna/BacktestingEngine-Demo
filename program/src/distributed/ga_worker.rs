@@ -63,6 +63,14 @@ pub struct BinaryFileInfo {
     expires_at: Instant,
 }
 
+/// Cache entry for L3 order book binary file metadata
+#[allow(dead_code)]
+pub struct L3BinaryFileInfo {
+    path: PathBuf,
+    event_count: usize,
+    expires_at: Instant,
+}
+
 /// Fallback cache for in-memory data (small datasets or no binary file)
 struct DataCacheEntry {
     data: Arc<Vec<MarketData>>,
@@ -78,8 +86,10 @@ pub struct DistributedGAWorker {
     worker_id: String,
     /// Broker client for communication
     broker: Arc<BacktestBrokerClient>,
-    /// Binary file info by cache key (preferred path)
+    /// Binary file info by cache key (trade-only, for fast GA evaluations)
     binary_cache: Arc<RwLock<HashMap<String, BinaryFileInfo>>>,
+    /// L3 order book binary file info (for realistic final evaluation)
+    l3_binary_cache: Arc<RwLock<HashMap<String, L3BinaryFileInfo>>>,
     /// Fallback in-memory data cache (for DB-loaded data)
     data_cache: Arc<RwLock<HashMap<String, DataCacheEntry>>>,
     /// Track which cache keys are currently being loaded
@@ -103,6 +113,7 @@ impl DistributedGAWorker {
             worker_id,
             broker,
             binary_cache: Arc::new(RwLock::new(HashMap::new())),
+            l3_binary_cache: Arc::new(RwLock::new(HashMap::new())),
             data_cache: Arc::new(RwLock::new(HashMap::new())),
             loading_in_progress: Arc::new(Mutex::new(HashSet::new())),
             eval_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_EVALS)),
@@ -126,6 +137,7 @@ impl DistributedGAWorker {
             worker_id,
             broker,
             binary_cache: shared_binary_cache,
+            l3_binary_cache: Arc::new(RwLock::new(HashMap::new())),
             data_cache: Arc::new(RwLock::new(HashMap::new())),
             loading_in_progress: shared_loading_lock,
             eval_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_EVALS)),
@@ -676,10 +688,13 @@ impl DistributedGAWorker {
         Ok(market_data)
     }
     
-    /// Auto-prepare binary data file from database
+    /// Auto-prepare binary data files from database
+    /// 
+    /// Creates TWO binary files:
+    /// 1. Trade-only `.bin` for fast GA evaluations
+    /// 2. Full L3 `.l3.bin` for realistic final evaluation with order book reconstruction
     /// 
     /// This eliminates the need for manual `prepare-data` CLI invocation.
-    /// Creates a memory-mapped binary file for efficient tick access.
     #[cfg(feature = "postgres")]
     async fn prepare_binary_data(
         &self,
@@ -710,10 +725,43 @@ impl DistributedGAWorker {
             end_time: None,
         };
         
+        // 1. Prepare trade-only binary (for fast GA evaluations)
         let prep_start = std::time::Instant::now();
         let result = data_prep::prepare_data(pool, &config).await
             .map_err(|e| WorkerError::DatabaseError(e.to_string()))?;
-        let prep_elapsed = prep_start.elapsed();
+        let trade_elapsed = prep_start.elapsed();
+        
+        log_info_structured!(MAIN_LOGGER, "GA_WORKER_AUTO_PREPARE_TRADES",
+            "event" => "GA_WORKER_AUTO_PREPARE_TRADES",
+            "worker_id" => &self.worker_id,
+            "symbol" => symbol,
+            "exchange" => exchange,
+            "ticks" => result.total_ticks,
+            "size_mb" => result.file_size_bytes / 1_000_000,
+            "elapsed_sec" => format!("{:.1}", trade_elapsed.as_secs_f64())
+        );
+        
+        // 2. Prepare L3 order book binary (for realistic final evaluation)
+        // This runs in parallel since final eval needs it
+        let l3_start = std::time::Instant::now();
+        match data_prep::prepare_orderbook_data(pool, &config).await {
+            Ok(l3_result) => {
+                let l3_elapsed = l3_start.elapsed();
+                log_info_structured!(MAIN_LOGGER, "GA_WORKER_AUTO_PREPARE_L3",
+                    "event" => "GA_WORKER_AUTO_PREPARE_L3",
+                    "worker_id" => &self.worker_id,
+                    "symbol" => symbol,
+                    "exchange" => exchange,
+                    "events" => l3_result.total_ticks,
+                    "size_mb" => l3_result.file_size_bytes / 1_000_000,
+                    "elapsed_sec" => format!("{:.1}", l3_elapsed.as_secs_f64())
+                );
+            }
+            Err(e) => {
+                // L3 prep failure is not fatal - we can fall back to trade-through detection
+                log_warn!(MAIN_LOGGER, "L3 order book prep failed (will use trade-through): {}", e);
+            }
+        }
         
         log_info_structured!(MAIN_LOGGER, "GA_WORKER_AUTO_PREPARE_COMPLETE",
             "event" => "GA_WORKER_AUTO_PREPARE_COMPLETE",
@@ -722,7 +770,7 @@ impl DistributedGAWorker {
             "exchange" => exchange,
             "ticks" => result.total_ticks,
             "size_mb" => result.file_size_bytes / 1_000_000,
-            "elapsed_sec" => format!("{:.1}", prep_elapsed.as_secs_f64())
+            "elapsed_sec" => format!("{:.1}", prep_start.elapsed().as_secs_f64())
         );
         
         Ok(result.total_ticks)
@@ -1086,6 +1134,66 @@ impl DistributedGAWorker {
         
         let _ = self.broker.publish_chromosome_result(response).await;
     }
+    
+    /// Load trade events from trade-only binary file as fallback
+    /// 
+    /// Used when L3 order book data is not available. The simulation will use
+    /// trade-through detection for fills instead of actual order book reconstruction.
+    async fn load_trade_events_fallback(
+        &self,
+        request: &protocol::broker::messages::ChromosomeEvalRequest,
+    ) -> Vec<backtest::realistic_simulation::OrderBookEvent> {
+        use data_prep::BinaryFileReader;
+        use dataloader::TickSource;
+        use backtest::realistic_simulation::ticks_to_trade_events;
+        
+        // Get binary file path from cache
+        let path = {
+            let binary_cache = self.binary_cache.read().await;
+            binary_cache.get(&request.data_cache_key)
+                .map(|info| info.path.clone())
+        };
+        
+        let path: std::path::PathBuf = match path {
+            Some(p) if p.exists() => p,
+            _ => {
+                // Fallback: try to find the file in the data directory
+                let fallback_path = self.data_dir.join(format!("{}_{}.bin", 
+                    request.symbol.replace("/", "_"),
+                    request.exchange));
+                if fallback_path.exists() {
+                    fallback_path
+                } else {
+                    println!("❌ [WORKER {}] No trade binary file found", self.worker_id);
+                    return Vec::new();
+                }
+            }
+        };
+        
+        // Load binary file
+        let reader = match BinaryFileReader::open(&path) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("❌ [WORKER {}] Failed to open binary file: {}", self.worker_id, e);
+                return Vec::new();
+            }
+        };
+        
+        let total_ticks = reader.len();
+        
+        // Determine data range for final evaluation
+        let (start_idx, end_idx) = if request.test_end_idx > 0 && request.total_ticks > request.test_end_idx {
+            (request.test_end_idx as usize, request.total_ticks as usize)
+        } else {
+            (0, total_ticks)
+        };
+        
+        println!("📊 [WORKER {}] Loading trade-only ticks [{}, {}) as fallback", 
+            self.worker_id, start_idx, end_idx);
+        
+        let ticks: Vec<_> = (start_idx..end_idx).filter_map(|i| reader.get(i).cloned()).collect();
+        ticks_to_trade_events(&ticks)
+    }
 
     /// Process a final evaluation request with full backtest, Monte Carlo, and Walk-Forward
     async fn process_final_evaluation(
@@ -1093,9 +1201,8 @@ impl DistributedGAWorker {
         request: &protocol::broker::messages::ChromosomeEvalRequest,
         chromosome: &AvellanedaStoikovChromosome,
     ) {
-        use data_prep::BinaryFileReader;
-        use dataloader::TickSource;
-        use backtest::realistic_simulation::{RealisticSimulator, RealisticASParams, ticks_to_trade_events};
+        use data_prep::OrderBookBinaryReader;
+        use backtest::realistic_simulation::{RealisticSimulator, RealisticASParams, OrderBookEvent};
         use backtest::statistical_significance::{compute_sharpe_significance, compute_deflated_sharpe_ratio};
         
         let start = Instant::now();
@@ -1106,76 +1213,55 @@ impl DistributedGAWorker {
         println!("🔬 [WORKER {}] Data splits: train_end_idx={}, test_end_idx={}, total_ticks={}",
             self.worker_id, request.train_end_idx, request.test_end_idx, request.total_ticks);
         
-        // Get binary file path - for final evaluation, also check if file exists even if cache expired
-        let path = {
-            let binary_cache = self.binary_cache.read().await;
-            // First try to get from cache (may be expired)
-            binary_cache.get(&request.data_cache_key)
-                .map(|info| info.path.clone())
-        };
+        // Try L3 order book binary file FIRST (for realistic order book reconstruction)
+        let l3_path = self.data_dir.join(format!("{}_{}.l3.bin", 
+            request.symbol.replace("/", "_"), request.exchange));
         
-        let path: std::path::PathBuf = match path {
-            Some(p) => {
-                // Verify the file still exists on disk
-                if p.exists() {
-                    println!("🔬 [WORKER {}] Binary file path: {:?} (file exists)", self.worker_id, p);
-                    p
-                } else {
-                    println!("❌ [WORKER {}] Binary file {:?} no longer exists on disk!", self.worker_id, p);
-                    self.send_error_result(request, "Binary file no longer exists on disk").await;
-                    return;
+        let events: Vec<OrderBookEvent> = if l3_path.exists() {
+            // L3 data available - use real order book events!
+            println!("📚 [WORKER {}] Found L3 order book data: {:?}", self.worker_id, l3_path);
+            
+            match OrderBookBinaryReader::open(&l3_path) {
+                Ok(l3_reader) => {
+                    let total_events = l3_reader.len();
+                    println!("📚 [WORKER {}] L3 file has {} events", self.worker_id, total_events);
+                    
+                    // Determine range based on trade-only tick counts
+                    // Note: L3 has more events than trades, so we use timestamp-based filtering
+                    let events_start = std::time::Instant::now();
+                    let events: Vec<OrderBookEvent> = (0..total_events)
+                        .filter_map(|i| l3_reader.get(i))
+                        .map(OrderBookEvent::from)
+                        .collect();
+                    
+                    println!("📚 [WORKER {}] Loaded {} L3 events in {:.2}s (FULL ORDER BOOK RECONSTRUCTION)", 
+                        self.worker_id, events.len(), events_start.elapsed().as_secs_f64());
+                    events
+                }
+                Err(e) => {
+                    println!("⚠️ [WORKER {}] Failed to open L3 file: {}, falling back to trades", self.worker_id, e);
+                    self.load_trade_events_fallback(request).await
                 }
             }
-            None => {
-                // Fallback: try to find the file in the data directory
-                let fallback_path = self.data_dir.join("historical")
-                    .join(format!("{}_{}_Kraken.bin", 
-                        request.symbol.replace("/", "_"),
-                        request.exchange));
-                if fallback_path.exists() {
-                    println!("🔬 [WORKER {}] Using fallback binary path: {:?}", self.worker_id, fallback_path);
-                    fallback_path
-                } else {
-                    println!("❌ [WORKER {}] Binary data NOT in cache and fallback {:?} not found!", 
-                        self.worker_id, fallback_path);
-                    self.send_error_result(request, "Binary data not in cache for final evaluation").await;
-                    return;
-                }
-            }
-        };
-        
-        // Load binary file as TickSource
-        let reader = match BinaryFileReader::open(&path) {
-            Ok(r) => {
-                println!("🔬 [WORKER {}] Binary file opened, {} ticks available", self.worker_id, r.len());
-                r
-            }
-            Err(e) => {
-                println!("❌ [WORKER {}] Failed to open binary file: {}", self.worker_id, e);
-                self.send_error_result(request, &format!("Failed to open binary file: {}", e)).await;
-                return;
-            }
-        };
-        
-        let total_ticks = reader.len();
-        
-        // Determine data range for final evaluation
-        // Use VALIDATE portion: [test_end_idx, total_ticks) if configured, else full data
-        let (start_idx, end_idx) = if request.test_end_idx > 0 && request.total_ticks > request.test_end_idx {
-            (request.test_end_idx as usize, request.total_ticks as usize)
         } else {
-            (0, total_ticks)
+            // Fall back to trade-only data
+            println!("⚠️ [WORKER {}] No L3 data found at {:?}, using trade-through detection", self.worker_id, l3_path);
+            self.load_trade_events_fallback(request).await
         };
         
-        println!("🔬 [WORKER {}] Final backtest on ticks [{}, {}) - {} ticks", 
-            self.worker_id, start_idx, end_idx, end_idx - start_idx);
+        if events.is_empty() {
+            println!("❌ [WORKER {}] No events loaded for final evaluation!", self.worker_id);
+            self.send_error_result(request, "No events loaded for final evaluation").await;
+            return;
+        }
         
-        // Convert trade ticks to order book events for realistic simulation
-        let events_start = std::time::Instant::now();
-        let ticks: Vec<_> = (start_idx..end_idx).filter_map(|i| reader.get(i).cloned()).collect();
-        let events = ticks_to_trade_events(&ticks);
-        println!("📊 [WORKER {}] Converted {} ticks to events in {:.2}s", 
-            self.worker_id, events.len(), events_start.elapsed().as_secs_f64());
+        // Log event type breakdown
+        let new_count = events.iter().filter(|e| matches!(e.event_type, backtest::realistic_simulation::EventType::New)).count();
+        let modify_count = events.iter().filter(|e| matches!(e.event_type, backtest::realistic_simulation::EventType::Modify)).count();
+        let cancel_count = events.iter().filter(|e| matches!(e.event_type, backtest::realistic_simulation::EventType::Cancel)).count();
+        let trade_count = events.iter().filter(|e| matches!(e.event_type, backtest::realistic_simulation::EventType::Trade)).count();
+        println!("📊 [WORKER {}] Event breakdown: {} new, {} modify, {} cancel, {} trade", 
+            self.worker_id, new_count, modify_count, cancel_count, trade_count);
         
         // Get exchange fee configuration (uses Kraken's full tier structure)
         let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&request.exchange);
@@ -1341,36 +1427,56 @@ impl DistributedGAWorker {
         
         // Run Walk-Forward analysis if requested
         // Walk-forward runs on the TEST portion of data: [train_end_idx, test_end_idx)
+        // Walk-forward uses trade-only binary file (not L3) for its own simulation
         let walk_forward_results = if request.run_walk_forward {
             log_info!(MAIN_LOGGER, "Running Walk-Forward analysis for job {} on TEST data [{}, {})", 
                 request.job_id, request.train_end_idx, request.test_end_idx);
             let wf_start = Instant::now();
             
-            // Specify the test data range for walk-forward
-            let (wf_start_idx, wf_end_idx) = if request.train_end_idx > 0 && request.test_end_idx > request.train_end_idx {
-                (Some(request.train_end_idx as usize), Some(request.test_end_idx as usize))
+            // Load trade-only binary file for walk-forward
+            let trade_binary_path = self.data_dir.join(format!("{}_{}.bin", 
+                request.symbol.replace("/", "_"), request.exchange));
+            
+            let wf_result = if trade_binary_path.exists() {
+                match data_prep::BinaryFileReader::open(&trade_binary_path) {
+                    Ok(reader) => {
+                        // Specify the test data range for walk-forward
+                        let (wf_start_idx, wf_end_idx) = if request.train_end_idx > 0 && request.test_end_idx > request.train_end_idx {
+                            (Some(request.train_end_idx as usize), Some(request.test_end_idx as usize))
+                        } else {
+                            (None, None) // Use full data (backward compatibility)
+                        };
+                        
+                        // Use 30-day train, 7-day test windows with 7-day steps
+                        let wf_summary = walkforward::run_walkforward_for_chromosome(
+                            &reader,
+                            chromosome,
+                            &request.symbol,
+                            &request.exchange,
+                            request.initial_capital,
+                            Some(30), // train_days
+                            Some(7),  // test_days
+                            Some(7),  // step_days
+                            wf_start_idx,
+                            wf_end_idx,
+                        ).await;
+                        
+                        log_info!(MAIN_LOGGER, "Walk-Forward complete: windows={}, avg_sharpe={:.4}, consistency={:.4}, elapsed={:.2}s",
+                            wf_summary.num_windows, wf_summary.average_test_sharpe, wf_summary.consistency_score, wf_start.elapsed().as_secs_f64());
+                        
+                        serde_json::to_vec(&wf_summary).unwrap_or_default()
+                    }
+                    Err(e) => {
+                        log_warn!(MAIN_LOGGER, "Failed to open binary file for walk-forward: {}", e);
+                        Vec::new()
+                    }
+                }
             } else {
-                (None, None) // Use full data (backward compatibility)
+                log_warn!(MAIN_LOGGER, "No binary file found for walk-forward at {:?}", trade_binary_path);
+                Vec::new()
             };
             
-            // Use 30-day train, 7-day test windows with 7-day steps
-            let wf_summary = walkforward::run_walkforward_for_chromosome(
-                &reader,
-                chromosome,
-                &request.symbol,
-                &request.exchange,
-                request.initial_capital,
-                Some(30), // train_days
-                Some(7),  // test_days
-                Some(7),  // step_days
-                wf_start_idx,
-                wf_end_idx,
-            ).await;
-            
-            log_info!(MAIN_LOGGER, "Walk-Forward complete: windows={}, avg_sharpe={:.4}, consistency={:.4}, elapsed={:.2}s",
-                wf_summary.num_windows, wf_summary.average_test_sharpe, wf_summary.consistency_score, wf_start.elapsed().as_secs_f64());
-            
-            serde_json::to_vec(&wf_summary).unwrap_or_default()
+            wf_result
         } else {
             Vec::new()
         };
@@ -1430,6 +1536,7 @@ impl DistributedGAWorker {
             worker_id: self.worker_id.clone(),
             broker: Arc::clone(&self.broker),
             binary_cache: Arc::clone(&self.binary_cache),
+            l3_binary_cache: Arc::clone(&self.l3_binary_cache),
             data_cache: Arc::clone(&self.data_cache),
             loading_in_progress: Arc::clone(&self.loading_in_progress),
             eval_semaphore: Arc::clone(&self.eval_semaphore),

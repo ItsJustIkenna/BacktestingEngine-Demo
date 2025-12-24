@@ -306,7 +306,15 @@ impl OrderBookBinaryWriter {
         Ok(())
     }
     
-    pub fn finalize(mut self) -> Result<u64> {
+    /// Write a batch of events efficiently
+    pub fn write_events(&mut self, events: &[OrderBookEventTick]) -> Result<()> {
+        for event in events {
+            self.write_event(event)?;
+        }
+        Ok(())
+    }
+    
+    pub fn finalize(mut self) -> Result<OrderBookBinaryHeader> {
         self.writer.flush()?;
         
         // Get file size
@@ -323,7 +331,7 @@ impl OrderBookBinaryWriter {
         self.writer.write_all(&self.header.to_bytes())?;
         self.writer.flush()?;
         
-        Ok(self.event_count)
+        Ok(self.header)
     }
 }
 

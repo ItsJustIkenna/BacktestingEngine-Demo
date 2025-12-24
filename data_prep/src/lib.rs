@@ -194,3 +194,107 @@ pub struct PrepareResult {
     pub total_ticks: u64,
     pub file_size_bytes: u64,
 }
+
+/// Prepare full L3 order book data (new, modify, cancel, trade events)
+/// 
+/// Unlike `prepare_data` which only includes trades, this function exports
+/// all order book events needed for realistic order book simulation.
+/// 
+/// Output file uses `.l3.bin` extension to distinguish from trade-only `.bin` files.
+#[cfg(feature = "postgres")]
+pub async fn prepare_orderbook_data(
+    pool: &diesel_async::pooled_connection::deadpool::Pool<diesel_async::AsyncPgConnection>,
+    config: &DataPrepConfig,
+) -> Result<PrepareResult> {
+    use tracing::info;
+    use bigdecimal::ToPrimitive;
+    
+    info!(
+        symbol = %config.symbol,
+        exchange = %config.exchange,
+        chunk_size = config.chunk_size,
+        "Starting L3 order book data preparation"
+    );
+    
+    // Create output directory if needed
+    std::fs::create_dir_all(&config.output_dir)?;
+    
+    // Generate output filename with .l3.bin extension
+    let filename = format!(
+        "{}_{}.l3.bin",
+        config.symbol.replace('/', "_"),
+        config.exchange
+    );
+    let output_path = config.output_dir.join(&filename);
+    
+    // Create streamer and writer
+    let streamer = DatabaseStreamer::new(pool.clone(), config.chunk_size);
+    let mut writer = OrderBookBinaryWriter::create(&output_path, &config.symbol, &config.exchange)?;
+    
+    // Stream ALL events (not just trades)
+    let mut total_events = 0u64;
+    let mut chunks_processed = 0u64;
+    
+    let stream = streamer.stream_all_events(
+        &config.symbol,
+        &config.exchange,
+        config.start_time,
+        config.end_time,
+    );
+    
+    use futures::StreamExt;
+    tokio::pin!(stream);
+    while let Some(chunk_result) = stream.next().await {
+        let orders = chunk_result?;
+        if orders.is_empty() {
+            break;
+        }
+        
+        // Convert to OrderBookEventTick
+        let events: Vec<OrderBookEventTick> = orders
+            .iter()
+            .map(|order| {
+                OrderBookEventTick::new(
+                    order.timestamp.timestamp_millis(),
+                    &order.order_id,
+                    &order.event_type,
+                    &order.side,
+                    order.price_level.to_f64().unwrap_or(0.0),
+                    order.quantity.to_f64().unwrap_or(0.0),
+                    order.prev_price.as_ref().and_then(|p| p.to_f64()),
+                    order.prev_quantity.as_ref().and_then(|q| q.to_f64()),
+                )
+            })
+            .collect();
+        
+        total_events += events.len() as u64;
+        chunks_processed += 1;
+        
+        // Write chunk
+        writer.write_events(&events)?;
+        
+        if chunks_processed % 100 == 0 {
+            info!(
+                chunks = chunks_processed,
+                events = total_events,
+                "Progress"
+            );
+        }
+    }
+    
+    // Finalize file
+    let header = writer.finalize()?;
+    
+    info!(
+        total_events = total_events,
+        file_size_mb = header.file_size_bytes / 1_000_000,
+        path = %output_path.display(),
+        "L3 order book data preparation complete"
+    );
+    
+    Ok(PrepareResult {
+        output_path,
+        total_ticks: total_events,
+        file_size_bytes: header.file_size_bytes,
+    })
+}
