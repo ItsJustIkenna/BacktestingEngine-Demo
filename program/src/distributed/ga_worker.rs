@@ -241,11 +241,29 @@ impl DistributedGAWorker {
                 
                 // Handle chromosome evaluation request
                 Ok(request) = eval_receiver.recv() => {
+                    // Log every received request for diagnostics
+                    log_info_structured!(MAIN_LOGGER, "GA_WORKER_RECV_EVAL_REQUEST",
+                        "event" => "GA_WORKER_RECV_EVAL_REQUEST",
+                        "worker_id" => &self.worker_id,
+                        "job_id" => &request.job_id,
+                        "generation" => request.generation,
+                        "chromosome_id" => request.chromosome_id,
+                        "is_final" => request.is_final_evaluation,
+                        "cache_key" => &request.data_cache_key
+                    );
+                    
                     // Final evaluations should always be processed - they have fallback logic
                     // to find the binary file even if cache expired
                     let should_process = if request.is_final_evaluation {
                         println!("🔬 [WORKER {}] Received FINAL evaluation request for job {}", 
                             self.worker_id, request.job_id);
+                        log_info_structured!(MAIN_LOGGER, "GA_WORKER_FINAL_EVAL_RECEIVED",
+                            "event" => "GA_WORKER_FINAL_EVAL_RECEIVED",
+                            "worker_id" => &self.worker_id,
+                            "job_id" => &request.job_id,
+                            "run_monte_carlo" => request.run_monte_carlo,
+                            "run_walk_forward" => request.run_walk_forward
+                        );
                         true
                     } else {
                         // For regular GA evals, check if we have the required data cached
@@ -272,6 +290,14 @@ impl DistributedGAWorker {
                     } else {
                         println!("⏭️ [WORKER {}] Skipping chromosome - no data for cache_key {}", 
                             self.worker_id, request.data_cache_key);
+                        log_info_structured!(MAIN_LOGGER, "GA_WORKER_SKIP_NO_CACHE",
+                            "event" => "GA_WORKER_SKIP_NO_CACHE",
+                            "worker_id" => &self.worker_id,
+                            "job_id" => &request.job_id,
+                            "cache_key" => &request.data_cache_key,
+                            "generation" => request.generation,
+                            "is_final" => request.is_final_evaluation
+                        );
                         // Don't process - another worker with the data will handle it
                     }
                 }
