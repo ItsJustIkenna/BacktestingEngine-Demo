@@ -553,8 +553,18 @@ impl RealisticSimulator {
                     };
                     
                     if let Some(ref mut our_order) = check_our_order {
-                        if (our_order.price - event.price).abs() < 1e-10 {
-                            // Trade at our price level - check queue position
+                        // For trade-only data (no order book events), we can't track queue position.
+                        // Instead, check if the trade price crosses our quote:
+                        // - For our bid: sell aggressor trades at price <= our bid (we buy)
+                        // - For our ask: buy aggressor trades at price >= our ask (we sell)
+                        let price_matches = (our_order.price - event.price).abs() < 1e-10;
+                        let trade_crosses_our_quote = match our_order.side {
+                            Side::Buy => event.price <= our_order.price,   // Seller willing to sell at/below our bid
+                            Side::Sell => event.price >= our_order.price,  // Buyer willing to buy at/above our ask
+                        };
+                        
+                        if price_matches || trade_crosses_our_quote {
+                            // Trade at or through our price level - check queue position
                             our_order.quantity_ahead -= event.quantity;
                             
                             // === Partial Fill Modeling ===
