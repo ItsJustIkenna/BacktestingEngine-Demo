@@ -427,8 +427,9 @@ mod tests {
             );
             writer.write_event(&event2).unwrap();
             
-            let count = writer.finalize().unwrap();
-            assert_eq!(count, 2);
+            let header = writer.finalize().unwrap();
+            let event_count = header.event_count;
+            assert_eq!(event_count, 2);
         }
         
         // Read events
