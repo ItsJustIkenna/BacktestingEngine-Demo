@@ -152,7 +152,13 @@ pub async fn submit_backtest(
     // data on-the-fly. The API pod prepares data once, and all workers can use it.
     #[cfg(feature = "postgres")]
     {
-        if let Err(e) = ensure_binary_data_for_job(&state.job_queue, &params.symbol, &params.exchange).await {
+        if let Err(e) = ensure_binary_data_for_job(
+            &state.job_queue, 
+            &params.symbol, 
+            &params.exchange,
+            params.start_date.as_deref(),
+            params.end_date.as_deref(),
+        ).await {
             log_warn!(crate::MAIN_LOGGER, "Data preparation warning for {}/{}: {} (job will still be queued)", 
                 params.symbol, params.exchange, e);
             // Don't fail the job submission - workers can fall back to DB streaming
@@ -1036,14 +1042,29 @@ pub async fn prepare_data(
 // Helper function for auto data preparation at job submission time
 // ============================================================================
 
+/// Ensures binary data file exists and covers the required date range.
+/// 
+/// As data grows, this function:
+/// 1. Checks if binary file exists
+/// 2. Verifies it covers the job's date range (with 1-day buffer)
+/// 3. Re-prepares if coverage is insufficient
+/// 
+/// This prevents timeout issues where workers try to prepare data on-the-fly.
 #[cfg(feature = "postgres")]
 async fn ensure_binary_data_for_job(
     job_queue: &std::sync::Arc<dyn JobQueue>,
     symbol: &str,
     exchange: &str,
+    start_date: Option<&str>,
+    end_date: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use data_prep::{DataPrepConfig, BinaryFileReader};
     use std::path::PathBuf;
+    use chrono::{NaiveDate, TimeZone, Utc};
+    
+    // Parse job date range (if provided)
+    let job_start = start_date.and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+    let job_end = end_date.and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
     
     // Get data directory from environment or use default
     let data_dir = std::env::var("DATA_DIR")
@@ -1055,17 +1076,65 @@ async fn ensure_binary_data_for_job(
     let binary_path = data_path.join(&filename);
     
     if binary_path.exists() {
-        // Verify file is valid
+        // Verify file is valid and covers the required range
         match BinaryFileReader::open(&binary_path) {
             Ok(reader) => {
                 let tick_count = reader.tick_count();
-                if tick_count > 0 {
-                    log_info!(crate::MAIN_LOGGER, "API: Binary data exists for {}/{}: {} ({} ticks)", 
-                        symbol, exchange, binary_path.display(), tick_count);
-                    return Ok(());
+                if tick_count == 0 {
+                    log_warn!(crate::MAIN_LOGGER, "API: Binary file for {}/{} has 0 ticks, will regenerate", 
+                        symbol, exchange);
+                } else {
+                    // Check date coverage
+                    let header = reader.header();
+                    let file_start_ms = header.start_timestamp_ms;
+                    let file_end_ms = header.end_timestamp_ms;
+                    
+                    let mut needs_regeneration = false;
+                    let mut reason = String::new();
+                    
+                    if let Some(job_start) = job_start {
+                        let job_start_ms = Utc.from_utc_datetime(&job_start.and_hms_opt(0, 0, 0).unwrap())
+                            .timestamp_millis();
+                        // Allow 1 day buffer (86400000 ms)
+                        if file_start_ms > job_start_ms + 86_400_000 {
+                            needs_regeneration = true;
+                            reason = format!("file starts {} but job needs {}", 
+                                chrono::DateTime::from_timestamp_millis(file_start_ms)
+                                    .map(|d| d.format("%Y-%m-%d").to_string())
+                                    .unwrap_or_default(),
+                                job_start);
+                        }
+                    }
+                    
+                    if let Some(job_end) = job_end {
+                        let job_end_ms = Utc.from_utc_datetime(&job_end.and_hms_opt(23, 59, 59).unwrap())
+                            .timestamp_millis();
+                        // Allow 1 day buffer
+                        if file_end_ms < job_end_ms - 86_400_000 {
+                            needs_regeneration = true;
+                            reason = format!("file ends {} but job needs {}", 
+                                chrono::DateTime::from_timestamp_millis(file_end_ms)
+                                    .map(|d| d.format("%Y-%m-%d").to_string())
+                                    .unwrap_or_default(),
+                                job_end);
+                        }
+                    }
+                    
+                    if !needs_regeneration {
+                        log_info!(crate::MAIN_LOGGER, "API: Binary data exists for {}/{}: {} ({} ticks, {} - {})", 
+                            symbol, exchange, binary_path.display(), tick_count,
+                            chrono::DateTime::from_timestamp_millis(file_start_ms)
+                                .map(|d| d.format("%Y-%m-%d").to_string())
+                                .unwrap_or_default(),
+                            chrono::DateTime::from_timestamp_millis(file_end_ms)
+                                .map(|d| d.format("%Y-%m-%d").to_string())
+                                .unwrap_or_default());
+                        return Ok(());
+                    }
+                    
+                    log_info!(crate::MAIN_LOGGER, "API: Binary file for {}/{} needs regeneration: {}", 
+                        symbol, exchange, reason);
                 }
-                log_warn!(crate::MAIN_LOGGER, "API: Binary file for {}/{} has 0 ticks, will regenerate", 
-                    symbol, exchange);
             }
             Err(e) => {
                 log_warn!(crate::MAIN_LOGGER, "API: Binary file for {}/{} invalid ({}), will regenerate", 
@@ -1085,15 +1154,16 @@ async fn ensure_binary_data_for_job(
     // Create output directory
     std::fs::create_dir_all(&data_path)?;
     
-    // Prepare data configuration
+    // Prepare data configuration - prepare ALL data for this symbol/exchange
+    // This avoids creating multiple partial files
     let config = DataPrepConfig {
         symbol: symbol.to_string(),
         exchange: exchange.to_string(),
         output_dir: data_path,
         chunk_size: 10_000,
         compute_features: false, // Skip feature computation for speed
-        start_time: None,
-        end_time: None,
+        start_time: None, // Prepare all data
+        end_time: None,   // Prepare all data
     };
     
     // Run data preparation
