@@ -2150,6 +2150,7 @@ fn run_walkforward_realistic(
             number_of_trades: result.num_trades,
             average_trade_return: if result.num_trades > 0 { result.total_pnl / result.num_trades as f64 } else { 0.0 },
             win_rate: result.win_rate,
+            profit_factor: result.profit_factor,
             ..Default::default()
         };
         
