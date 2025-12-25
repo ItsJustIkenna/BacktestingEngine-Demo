@@ -1042,14 +1042,15 @@ pub async fn prepare_data(
 // Helper function for auto data preparation at job submission time
 // ============================================================================
 
-/// Ensures binary data file exists and covers the required date range.
+/// Ensures binary data file exists and includes the latest data from DB.
 /// 
-/// As data grows, this function:
-/// 1. Checks if binary file exists
-/// 2. Verifies it covers the job's date range (with 1-day buffer)
-/// 3. Re-prepares if coverage is insufficient
+/// As data grows perpetually, this function:
+/// 1. Checks if binary file exists and is valid
+/// 2. Queries DB for the latest timestamp for this symbol/exchange
+/// 3. Compares file's end timestamp with DB's latest - regenerates if stale
+/// 4. Also checks if job needs older data than file contains
 /// 
-/// This prevents timeout issues where workers try to prepare data on-the-fly.
+/// This ensures backtests always use the most up-to-date data.
 #[cfg(feature = "postgres")]
 async fn ensure_binary_data_for_job(
     job_queue: &std::sync::Arc<dyn JobQueue>,
@@ -1071,12 +1072,18 @@ async fn ensure_binary_data_for_job(
         .unwrap_or_else(|_| "/data/historical".to_string());
     let data_path = PathBuf::from(&data_dir);
     
+    // Get database pool early - we'll need it for freshness check
+    let pool = job_queue.get_pool()
+        .ok_or("Database pool not available for data preparation")?;
+    
+    // Query DB for latest timestamp to check freshness
+    let db_latest_ms = get_db_latest_timestamp(&pool, symbol, exchange).await?;
+    
     // Check if binary file already exists
     let filename = format!("{}_{}.bin", symbol.replace('/', "_"), exchange);
     let binary_path = data_path.join(&filename);
     
     if binary_path.exists() {
-        // Verify file is valid and covers the required range
         match BinaryFileReader::open(&binary_path) {
             Ok(reader) => {
                 let tick_count = reader.tick_count();
@@ -1084,7 +1091,6 @@ async fn ensure_binary_data_for_job(
                     log_warn!(crate::MAIN_LOGGER, "API: Binary file for {}/{} has 0 ticks, will regenerate", 
                         symbol, exchange);
                 } else {
-                    // Check date coverage
                     let header = reader.header();
                     let file_start_ms = header.start_timestamp_ms;
                     let file_end_ms = header.end_timestamp_ms;
@@ -1092,42 +1098,63 @@ async fn ensure_binary_data_for_job(
                     let mut needs_regeneration = false;
                     let mut reason = String::new();
                     
-                    if let Some(job_start) = job_start {
-                        let job_start_ms = Utc.from_utc_datetime(&job_start.and_hms_opt(0, 0, 0).unwrap())
-                            .timestamp_millis();
-                        // Allow 1 day buffer (86400000 ms)
-                        if file_start_ms > job_start_ms + 86_400_000 {
+                    // Check 1: Is there newer data in DB? (allow 5 min tolerance)
+                    let staleness_tolerance_ms = 5 * 60 * 1000; // 5 minutes
+                    if let Some(db_latest) = db_latest_ms {
+                        if db_latest > file_end_ms + staleness_tolerance_ms {
                             needs_regeneration = true;
-                            reason = format!("file starts {} but job needs {}", 
-                                chrono::DateTime::from_timestamp_millis(file_start_ms)
-                                    .map(|d| d.format("%Y-%m-%d").to_string())
+                            let new_data_hours = (db_latest - file_end_ms) as f64 / 3_600_000.0;
+                            reason = format!("DB has {:.1}h of new data (file ends {}, DB has data until {})",
+                                new_data_hours,
+                                chrono::DateTime::from_timestamp_millis(file_end_ms)
+                                    .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
                                     .unwrap_or_default(),
-                                job_start);
+                                chrono::DateTime::from_timestamp_millis(db_latest)
+                                    .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                                    .unwrap_or_default());
                         }
                     }
                     
-                    if let Some(job_end) = job_end {
-                        let job_end_ms = Utc.from_utc_datetime(&job_end.and_hms_opt(23, 59, 59).unwrap())
-                            .timestamp_millis();
-                        // Allow 1 day buffer
-                        if file_end_ms < job_end_ms - 86_400_000 {
-                            needs_regeneration = true;
-                            reason = format!("file ends {} but job needs {}", 
-                                chrono::DateTime::from_timestamp_millis(file_end_ms)
-                                    .map(|d| d.format("%Y-%m-%d").to_string())
-                                    .unwrap_or_default(),
-                                job_end);
+                    // Check 2: Does job need older data than file contains?
+                    if !needs_regeneration {
+                        if let Some(job_start) = job_start {
+                            let job_start_ms = Utc.from_utc_datetime(&job_start.and_hms_opt(0, 0, 0).unwrap())
+                                .timestamp_millis();
+                            if file_start_ms > job_start_ms + 86_400_000 {
+                                needs_regeneration = true;
+                                reason = format!("file starts {} but job needs {}", 
+                                    chrono::DateTime::from_timestamp_millis(file_start_ms)
+                                        .map(|d| d.format("%Y-%m-%d").to_string())
+                                        .unwrap_or_default(),
+                                    job_start);
+                            }
+                        }
+                    }
+                    
+                    // Check 3: Does job need newer data than file contains?
+                    if !needs_regeneration {
+                        if let Some(job_end) = job_end {
+                            let job_end_ms = Utc.from_utc_datetime(&job_end.and_hms_opt(23, 59, 59).unwrap())
+                                .timestamp_millis();
+                            if file_end_ms < job_end_ms - 86_400_000 {
+                                needs_regeneration = true;
+                                reason = format!("file ends {} but job needs {}", 
+                                    chrono::DateTime::from_timestamp_millis(file_end_ms)
+                                        .map(|d| d.format("%Y-%m-%d").to_string())
+                                        .unwrap_or_default(),
+                                    job_end);
+                            }
                         }
                     }
                     
                     if !needs_regeneration {
-                        log_info!(crate::MAIN_LOGGER, "API: Binary data exists for {}/{}: {} ({} ticks, {} - {})", 
+                        log_info!(crate::MAIN_LOGGER, "API: Binary data up-to-date for {}/{}: {} ({} ticks, {} - {})", 
                             symbol, exchange, binary_path.display(), tick_count,
                             chrono::DateTime::from_timestamp_millis(file_start_ms)
-                                .map(|d| d.format("%Y-%m-%d").to_string())
+                                .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
                                 .unwrap_or_default(),
                             chrono::DateTime::from_timestamp_millis(file_end_ms)
-                                .map(|d| d.format("%Y-%m-%d").to_string())
+                                .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
                                 .unwrap_or_default());
                         return Ok(());
                     }
@@ -1143,19 +1170,14 @@ async fn ensure_binary_data_for_job(
         }
     }
     
-    // Binary file doesn't exist or is invalid - prepare it
+    // Binary file doesn't exist, is invalid, or is stale - prepare it
     log_info!(crate::MAIN_LOGGER, "API: Preparing binary data for {}/{} -> {}", 
         symbol, exchange, binary_path.display());
-    
-    // Get database pool
-    let pool = job_queue.get_pool()
-        .ok_or("Database pool not available for data preparation")?;
     
     // Create output directory
     std::fs::create_dir_all(&data_path)?;
     
     // Prepare data configuration - prepare ALL data for this symbol/exchange
-    // This avoids creating multiple partial files
     let config = DataPrepConfig {
         symbol: symbol.to_string(),
         exchange: exchange.to_string(),
@@ -1179,4 +1201,36 @@ async fn ensure_binary_data_for_job(
     );
     
     Ok(())
+}
+
+/// Query the database for the latest timestamp for a symbol/exchange pair
+#[cfg(feature = "postgres")]
+async fn get_db_latest_timestamp(
+    pool: &diesel_async::pooled_connection::deadpool::Pool<diesel_async::AsyncPgConnection>,
+    symbol: &str,
+    exchange: &str,
+) -> Result<Option<i64>, Box<dyn std::error::Error + Send + Sync>> {
+    use diesel::prelude::*;
+    use diesel_async::RunQueryDsl;
+    use diesel::sql_types::{Text, Nullable, BigInt};
+    
+    #[derive(QueryableByName)]
+    struct MaxTimestamp {
+        #[diesel(sql_type = Nullable<BigInt>)]
+        max_ts: Option<i64>,
+    }
+    
+    let mut conn = pool.get().await?;
+    
+    let result: MaxTimestamp = diesel::sql_query(
+        "SELECT EXTRACT(EPOCH FROM MAX(timestamp))::BIGINT * 1000 as max_ts \
+         FROM historical_orders \
+         WHERE symbol = $1 AND exchange = $2"
+    )
+    .bind::<Text, _>(symbol)
+    .bind::<Text, _>(exchange)
+    .get_result(&mut conn)
+    .await?;
+    
+    Ok(result.max_ts)
 }
