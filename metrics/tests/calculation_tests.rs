@@ -116,12 +116,14 @@ fn test_profit_factor_breakeven() {
 
 #[test]
 fn test_profit_factor_zero_loss() {
-    // No losses = undefined profit factor
+    // No losses with profits = perfect profit factor (capped at 10.0)
+    // Previously returned None which caused fitness overflow issues
     let gross_p = 5000.0;
     let gross_l = 0.0;
     
     let result = profit_factor(gross_p, gross_l);
-    assert!(result.is_none(), "Profit factor should be None when there are no losses");
+    assert!(result.is_some(), "Profit factor should be Some(10.0) when there are no losses but profits exist");
+    assert!((result.unwrap() - 10.0).abs() < 0.001, "Profit factor should be capped at 10.0 for all-wins case");
 }
 
 #[test]
