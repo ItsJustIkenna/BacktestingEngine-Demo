@@ -145,6 +145,20 @@ pub async fn submit_backtest(
         }
     }
     
+    // ========================================================================
+    // AUTO DATA PREPARATION - Ensure binary data exists before queueing job
+    // ========================================================================
+    // This prevents timeout issues with distributed workers trying to prepare
+    // data on-the-fly. The API pod prepares data once, and all workers can use it.
+    #[cfg(feature = "postgres")]
+    {
+        if let Err(e) = ensure_binary_data_for_job(&state.job_queue, &params.symbol, &params.exchange).await {
+            log_warn!(crate::MAIN_LOGGER, "Data preparation warning for {}/{}: {} (job will still be queued)", 
+                params.symbol, params.exchange, e);
+            // Don't fail the job submission - workers can fall back to DB streaming
+        }
+    }
+    
     let job_id = state
         .job_queue
         .submit_job(params)
@@ -1016,4 +1030,83 @@ pub async fn prepare_data(
     Json(_request): Json<PrepareDataRequest>,
 ) -> Result<Json<PrepareDataResponse>, AppError> {
     Err(AppError::Internal("Data preparation requires PostgreSQL feature".to_string()))
+}
+
+// ============================================================================
+// Helper function for auto data preparation at job submission time
+// ============================================================================
+
+#[cfg(feature = "postgres")]
+async fn ensure_binary_data_for_job(
+    job_queue: &std::sync::Arc<dyn JobQueue>,
+    symbol: &str,
+    exchange: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use data_prep::{DataPrepConfig, BinaryFileReader};
+    use std::path::PathBuf;
+    
+    // Get data directory from environment or use default
+    let data_dir = std::env::var("DATA_DIR")
+        .unwrap_or_else(|_| "/data/historical".to_string());
+    let data_path = PathBuf::from(&data_dir);
+    
+    // Check if binary file already exists
+    let filename = format!("{}_{}.bin", symbol.replace('/', "_"), exchange);
+    let binary_path = data_path.join(&filename);
+    
+    if binary_path.exists() {
+        // Verify file is valid
+        match BinaryFileReader::open(&binary_path) {
+            Ok(reader) => {
+                let tick_count = reader.tick_count();
+                if tick_count > 0 {
+                    log_info!(crate::MAIN_LOGGER, "API: Binary data exists for {}/{}: {} ({} ticks)", 
+                        symbol, exchange, binary_path.display(), tick_count);
+                    return Ok(());
+                }
+                log_warn!(crate::MAIN_LOGGER, "API: Binary file for {}/{} has 0 ticks, will regenerate", 
+                    symbol, exchange);
+            }
+            Err(e) => {
+                log_warn!(crate::MAIN_LOGGER, "API: Binary file for {}/{} invalid ({}), will regenerate", 
+                    symbol, exchange, e);
+            }
+        }
+    }
+    
+    // Binary file doesn't exist or is invalid - prepare it
+    log_info!(crate::MAIN_LOGGER, "API: Preparing binary data for {}/{} -> {}", 
+        symbol, exchange, binary_path.display());
+    
+    // Get database pool
+    let pool = job_queue.get_pool()
+        .ok_or("Database pool not available for data preparation")?;
+    
+    // Create output directory
+    std::fs::create_dir_all(&data_path)?;
+    
+    // Prepare data configuration
+    let config = DataPrepConfig {
+        symbol: symbol.to_string(),
+        exchange: exchange.to_string(),
+        output_dir: data_path,
+        chunk_size: 10_000,
+        compute_features: false, // Skip feature computation for speed
+        start_time: None,
+        end_time: None,
+    };
+    
+    // Run data preparation
+    let prep_start = std::time::Instant::now();
+    let result = data_prep::prepare_data(&pool, &config).await?;
+    let prep_elapsed = prep_start.elapsed();
+    
+    log_info!(crate::MAIN_LOGGER, "API: Binary data prepared for {}/{} in {:.1}s: {} ticks, {} MB", 
+        symbol, exchange,
+        prep_elapsed.as_secs_f64(),
+        result.total_ticks,
+        result.file_size_bytes / 1_000_000
+    );
+    
+    Ok(())
 }
