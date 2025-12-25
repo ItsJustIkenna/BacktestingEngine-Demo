@@ -1171,6 +1171,7 @@ mod tests {
             train_ratio: 0.6,
             test_ratio: 0.2,
             validate_ratio: 0.2,
+            fitness_weights: None,
         };
         
         let job_id = queue.submit_job(params).await.unwrap();
