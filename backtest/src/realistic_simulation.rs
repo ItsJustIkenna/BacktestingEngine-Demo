@@ -573,7 +573,28 @@ impl RealisticSimulator {
                             Side::Sell => event.price >= our_order.price,  // Buyer willing to buy at/above our ask
                         };
                         
-                        if price_matches || trade_crosses_our_quote {
+                        // For trade-only data (empty book), use probabilistic fills based on proximity
+                        // If trade is within our spread of the mid, we have a chance to get filled
+                        // This models the reality that we'd be competitive if we were actually in the book
+                        let trade_only_mode = book.bids.is_empty() && book.asks.is_empty();
+                        let probabilistic_fill = if trade_only_mode && !price_matches && !trade_crosses_our_quote {
+                            // Calculate how close the trade is to our quote as a percentage
+                            let price_diff = (event.price - our_order.price).abs();
+                            let price_tolerance = our_order.price * 0.002; // 0.2% tolerance (20 bps)
+                            
+                            if price_diff <= price_tolerance {
+                                // The closer the trade is to our price, the higher our fill probability
+                                // At our exact price: 80% fill chance, linear decay to 0% at tolerance edge
+                                let fill_prob = 0.8 * (1.0 - price_diff / price_tolerance);
+                                rng.gen::<f64>() < fill_prob
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        
+                        if price_matches || trade_crosses_our_quote || probabilistic_fill {
                             // Trade at or through our price level - check queue position
                             our_order.quantity_ahead -= event.quantity;
                             
