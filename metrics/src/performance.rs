@@ -101,11 +101,20 @@ pub fn sharpe_ratio_from_equity_curve(
 }
 
 /// Calculates the profit factor given gross profit and gross loss.
+/// Returns a bounded value: 1.0 for no trades, 10.0 for all wins, or actual ratio otherwise.
 pub fn profit_factor(gross_profit: f64, gross_loss: f64) -> Option<f64> {
 	if gross_loss.abs() < std::f64::EPSILON {
-		return None;
+		// No losses
+		if gross_profit > std::f64::EPSILON {
+			// All wins - use a high but reasonable value
+			return Some(10.0);
+		} else {
+			// No trades at all - neutral
+			return Some(1.0);
+		}
 	}
-	Some(gross_profit / gross_loss.abs())
+	// Cap at reasonable max to prevent overflow in downstream calculations
+	Some((gross_profit / gross_loss.abs()).min(100.0))
 }
 
 /// Calculates net profit from a list of trade returns.

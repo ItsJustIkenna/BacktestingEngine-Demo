@@ -1755,10 +1755,35 @@ impl DistributedGAWorker {
         let total_orders = num_trades * 2; // Estimate (entry + exit)
         
         // Aggregate PER-TRADE returns from all walk-forward windows FIRST
-        // (needed for sortino calculation)
+        // (needed for sortino calculation and consistent net_pnl/equity curve)
         let all_trade_returns: Vec<f64> = wf_summary.window_results.iter()
             .flat_map(|w| w.trade_returns.iter().copied())
             .collect();
+        
+        // Build an aggregate equity curve from per-trade returns
+        // Do this BEFORE calculating net_pnl so they are consistent
+        let mut aggregate_equity_curve: Vec<f64> = Vec::with_capacity(all_trade_returns.len() + 1);
+        let mut current_equity = request.initial_capital;
+        aggregate_equity_curve.push(current_equity);
+        for trade_pnl in &all_trade_returns {
+            current_equity += trade_pnl;
+            aggregate_equity_curve.push(current_equity);
+        }
+        
+        // Calculate net_pnl from equity curve to ensure consistency with displayed curve
+        // This replaces the previous method that summed net_profit from window metrics
+        let net_pnl_from_curve = current_equity - request.initial_capital;
+        let net_pnl_from_windows: f64 = wf_summary.window_results.iter()
+            .map(|w| w.test_metrics.net_profit)
+            .sum();
+        
+        // Use the equity curve value (more accurate as it matches what's displayed)
+        // Log if there's a significant discrepancy for debugging
+        if (net_pnl_from_curve - net_pnl_from_windows).abs() > 1.0 {
+            println!("⚠️ [WORKER {}] net_pnl discrepancy: curve={:.2} vs windows={:.2}, using curve value",
+                self.worker_id, net_pnl_from_curve, net_pnl_from_windows);
+        }
+        let net_pnl = net_pnl_from_curve;
         
         // Parse fitness weights from request (if provided)
         let weights: FitnessWeights = if !request.fitness_weights_json.is_empty() {
@@ -1799,15 +1824,6 @@ impl DistributedGAWorker {
         
         println!("🔬 [WORKER {}] Aggregated {} per-trade returns from {} windows for Monte Carlo",
             self.worker_id, all_trade_returns.len(), wf_summary.num_windows);
-        
-        // Build an aggregate equity curve from per-trade returns
-        let mut aggregate_equity_curve: Vec<f64> = Vec::with_capacity(all_trade_returns.len() + 1);
-        let mut current_equity = request.initial_capital;
-        aggregate_equity_curve.push(current_equity);
-        for trade_pnl in &all_trade_returns {
-            current_equity += trade_pnl;
-            aggregate_equity_curve.push(current_equity);
-        }
         
         // Create a synthetic BacktestResult for Monte Carlo using PER-TRADE returns
         // This provides statistically valid sample sizes (n=100-1000+ trades)

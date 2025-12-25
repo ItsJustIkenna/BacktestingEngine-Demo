@@ -825,11 +825,11 @@ impl RealisticSimulator {
             let total_wins: f64 = wins.iter().sum();
             let total_losses: f64 = losses.iter().sum();
             if total_losses > 0.0 {
-                total_wins / total_losses
+                (total_wins / total_losses).min(100.0) // Cap at reasonable max
             } else if total_wins > 0.0 {
-                f64::MAX
+                10.0 // All wins, no losses - use a high but reasonable value
             } else {
-                0.0
+                1.0 // No trades - neutral
             }
         };
         
