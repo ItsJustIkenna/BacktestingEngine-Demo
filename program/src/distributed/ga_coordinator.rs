@@ -184,6 +184,8 @@ pub struct DistributedGAConfig {
     /// Validation data ratio (default 0.4 = 40%) - Walk-forward runs here as PRIMARY validation
     /// Note: The old test_ratio and validate_ratio are combined - walk-forward IS the final validation
     pub validation_ratio: f64,
+    /// Custom fitness weights for GA optimization (optional, defaults to balanced)
+    pub fitness_weights: Option<crate::job_queue::FitnessWeights>,
 }
 
 /// Worker capacity tracking
@@ -764,6 +766,13 @@ impl DistributedGACoordinator {
         let params = serde_json::to_vec(chromo)
             .map_err(|e| CoordinatorError::SerializationError(e.to_string()))?;
         
+        // Serialize fitness weights if configured
+        let fitness_weights_json = if let Some(ref weights) = self.config.fitness_weights {
+            serde_json::to_vec(weights).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        
         Ok(protocol::broker::messages::ChromosomeEvalRequest {
             job_id: self.job_id.clone(),
             generation,
@@ -781,6 +790,7 @@ impl DistributedGACoordinator {
             train_end_idx: self.train_end_idx,
             test_end_idx: self.test_end_idx,
             total_ticks: self.total_ticks,
+            fitness_weights_json,
         })
     }
     
@@ -800,6 +810,13 @@ impl DistributedGACoordinator {
         let params = serde_json::to_vec(chromosome)
             .map_err(|e| CoordinatorError::SerializationError(e.to_string()))?;
         
+        // Serialize fitness weights if configured
+        let fitness_weights_json = if let Some(ref weights) = self.config.fitness_weights {
+            serde_json::to_vec(weights).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        
         let request = protocol::broker::messages::ChromosomeEvalRequest {
             job_id: self.job_id.clone(),
             generation: -1, // Indicates final evaluation
@@ -817,6 +834,7 @@ impl DistributedGACoordinator {
             train_end_idx: self.train_end_idx,
             test_end_idx: self.test_end_idx,
             total_ticks: self.total_ticks,
+            fitness_weights_json,
         };
         
         log_info_structured!(MAIN_LOGGER, "GA_FINAL_EVAL_REQUEST",

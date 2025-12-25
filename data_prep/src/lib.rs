@@ -219,9 +219,9 @@ pub async fn prepare_orderbook_data(
     // Create output directory if needed
     std::fs::create_dir_all(&config.output_dir)?;
     
-    // Generate output filename with .l3.bin extension
+    // Generate output filename - unified .bin file with all event types
     let filename = format!(
-        "{}_{}.l3.bin",
+        "{}_{}.bin",
         config.symbol.replace('/', "_"),
         config.exchange
     );

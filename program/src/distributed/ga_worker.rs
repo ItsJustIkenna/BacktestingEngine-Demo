@@ -27,6 +27,7 @@ use genetic::FitnessResult;
 
 use super::broker_client::BacktestBrokerClient;
 use crate::worker::calculate_comprehensive_fitness;
+use crate::job_queue::FitnessWeights;
 use crate::{log_info_structured, log_debug, log_error_structured};
 use crate::logging_facade::MAIN_LOGGER;
 
@@ -53,6 +54,100 @@ fn sample_equity_curve<T: Clone>(curve: &[T], max_points: usize) -> Vec<T> {
     }
     
     sampled
+}
+
+/// Calculate Sortino ratio from trade returns
+/// Sortino only penalizes downside volatility (negative returns)
+fn calculate_sortino_ratio(returns: &[f64]) -> f64 {
+    if returns.is_empty() {
+        return 0.0;
+    }
+    
+    let mean_return = returns.iter().sum::<f64>() / returns.len() as f64;
+    
+    // Downside deviation: only consider negative returns
+    let negative_returns: Vec<f64> = returns.iter()
+        .filter(|&&r| r < 0.0)
+        .copied()
+        .collect();
+    
+    if negative_returns.is_empty() {
+        // No negative returns = very good, but cap at reasonable value
+        return mean_return.max(0.0) * 10.0; // Scale up for no downside risk
+    }
+    
+    let downside_variance = negative_returns.iter()
+        .map(|r| r * r)
+        .sum::<f64>() / negative_returns.len() as f64;
+    let downside_deviation = downside_variance.sqrt();
+    
+    if downside_deviation < 1e-10 {
+        return mean_return.max(0.0) * 10.0;
+    }
+    
+    // Annualize (assuming ~252 trading days per year)
+    let annualized_return = mean_return * 252.0;
+    let annualized_downside_dev = downside_deviation * (252.0_f64).sqrt();
+    
+    annualized_return / annualized_downside_dev
+}
+
+/// Calculate Calmar ratio: annualized return / max drawdown
+fn calculate_calmar_ratio(total_return_pct: f64, max_drawdown: f64, _trading_days: f64) -> f64 {
+    if max_drawdown < 1e-10 {
+        // No drawdown = very good, cap at reasonable value
+        return total_return_pct.max(0.0);
+    }
+    total_return_pct / (max_drawdown * 100.0) // Drawdown is 0-1, return is percent
+}
+
+/// Calculate weighted fitness score from multiple metrics
+/// Normalizes each metric to a comparable scale before weighting
+fn calculate_weighted_fitness(
+    sharpe: f64,
+    sortino: f64,
+    profit_factor: f64,
+    win_rate: f64,
+    net_profit: f64,
+    calmar: f64,
+    consistency: f64,
+    max_dd: f64,
+    weights: &FitnessWeights,
+    initial_capital: f64,
+) -> f64 {
+    // Normalize metrics to 0-1 or similar comparable scales
+    // Sharpe: typically -3 to +5, normalize to 0-1 with sigmoid-like mapping
+    let norm_sharpe = (sharpe / 3.0).tanh().max(0.0); // Range ~0 to 0.9 for sharpe 0-3
+    
+    // Sortino: similar to Sharpe but can be higher
+    let norm_sortino = (sortino / 4.0).tanh().max(0.0);
+    
+    // Profit factor: 1.0 is breakeven, typically 1-3 is good
+    let norm_pf = ((profit_factor - 1.0) / 2.0).clamp(0.0, 1.0); // 1->0, 2->0.5, 3->1
+    
+    // Win rate: already 0-1
+    let norm_wr = win_rate;
+    
+    // Net profit: normalize by initial capital (return %)
+    let return_pct = net_profit / initial_capital;
+    let norm_profit = (return_pct / 0.5).tanh().max(0.0); // 50% return = ~0.46
+    
+    // Calmar: typically 0.5-3 is good
+    let norm_calmar = (calmar / 2.0).tanh().max(0.0);
+    
+    // Calculate weighted sum
+    let weighted_score = 
+        norm_sharpe * weights.sharpe +
+        norm_sortino * weights.sortino +
+        norm_pf * weights.profit_factor +
+        norm_wr * weights.win_rate +
+        norm_profit * weights.net_profit +
+        norm_calmar * weights.calmar;
+    
+    // Apply consistency multiplier and drawdown penalty
+    let dd_factor = 1.0 - max_dd.min(1.0);
+    
+    weighted_score * consistency * dd_factor
 }
 
 /// Cache entry for binary file metadata
@@ -907,7 +1002,7 @@ impl DistributedGAWorker {
     ) -> FitnessResult {
         use data_prep::{BinaryFileReader, OrderBookBinaryReader};
         use dataloader::TickSource;
-        use backtest::realistic_simulation::{RealisticSimulator, RealisticASParams, OrderBookEvent, ticks_to_trade_events};
+        use backtest::realistic_simulation::{RealisticSimulator, RealisticASParams, OrderBookEvent};
         
         let sim_start = std::time::Instant::now();
         
@@ -986,6 +1081,7 @@ impl DistributedGAWorker {
             rate_limit_cooldown_ms: exchange_fee_config.rate_limit_cooldown_ms,
             funding_rate_8h: exchange_fee_config.funding_rate_8h,
             funding_interval_ms: exchange_fee_config.funding_interval_ms,
+            adverse_selection_sensitivity: chromosome.adverse_selection_sensitivity,
         };
         
         // Run realistic simulation
@@ -1271,7 +1367,100 @@ impl DistributedGAWorker {
         ticks_to_trade_events(&ticks)
     }
     
+    /// Run a single realistic simulation on all data when there's not enough for walk-forward
+    /// Returns a WalkForwardSummary with a single "window" for compatibility
+    fn run_single_realistic_simulation(
+        &self,
+        events: &[backtest::realistic_simulation::OrderBookEvent],
+        chromosome: &genetic::chromosome::AvellanedaStoikovChromosome,
+        exchange: &str,
+        initial_capital: f64,
+    ) -> walkforward::WalkForwardSummary {
+        use backtest::realistic_simulation::{RealisticSimulator, RealisticASParams};
+        
+        if events.is_empty() {
+            println!("⚠️ [WORKER {}] No events for single simulation", self.worker_id);
+            return walkforward::WalkForwardSummary::new(vec![]);
+        }
+        
+        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(exchange);
+        
+        let realistic_params = RealisticASParams {
+            risk_aversion: chromosome.risk_aversion,
+            inventory_target: chromosome.inventory_target,
+            order_size_pct: chromosome.order_size_pct,
+            volatility_cap: chromosome.volatility_cap,
+            min_spread_bps: chromosome.min_spread_bps,
+            time_horizon_minutes: chromosome.time_horizon_minutes,
+            maker_fee_rate: exchange_fee_config.maker_fee,
+            taker_fee_rate: exchange_fee_config.taker_fee,
+            max_inventory_multiple: 5.0,
+            latency_mean_ms: exchange_fee_config.latency_mean_ms,
+            latency_std_ms: exchange_fee_config.latency_std_ms,
+            enable_partial_fills: true,
+            min_fill_fraction: 0.1,
+            max_orders_per_second: exchange_fee_config.max_orders_per_second,
+            rate_limit_cooldown_ms: exchange_fee_config.rate_limit_cooldown_ms,
+            funding_rate_8h: exchange_fee_config.funding_rate_8h,
+            funding_interval_ms: exchange_fee_config.funding_interval_ms,
+            adverse_selection_sensitivity: chromosome.adverse_selection_sensitivity,
+        };
+        
+        let simulator = RealisticSimulator::with_exchange_config(initial_capital, exchange_fee_config);
+        let result = simulator.run(events, &realistic_params);
+        
+        println!("🔬 [WORKER {}] Single simulation: trades={}, sharpe={:.4}, pnl={:.2}",
+            self.worker_id, result.num_trades, result.sharpe_ratio, result.total_pnl);
+        
+        // Get date range for the "window"
+        let first_ts = events.first().map(|e| e.timestamp_ms).unwrap_or(0);
+        let last_ts = events.last().map(|e| e.timestamp_ms).unwrap_or(0);
+        let start_date = chrono::DateTime::from_timestamp_millis(first_ts)
+            .map(|dt| dt.date_naive())
+            .unwrap_or_else(|| chrono::Utc::now().date_naive());
+        let end_date = chrono::DateTime::from_timestamp_millis(last_ts)
+            .map(|dt| dt.date_naive())
+            .unwrap_or_else(|| chrono::Utc::now().date_naive());
+        
+        // Create a single window result using PerformanceMetrics
+        let window_result = walkforward::WalkForwardWindowResult {
+            train_start: start_date,
+            train_end: start_date, // No training for single sim
+            test_start: start_date,
+            test_end: end_date,
+            best_params: serde_json::json!({
+                "risk_aversion": chromosome.risk_aversion,
+                "order_size_pct": chromosome.order_size_pct,
+                "inventory_target": chromosome.inventory_target,
+                "volatility_cap": chromosome.volatility_cap,
+            }),
+            test_metrics: metrics::PerformanceMetrics {
+                net_profit: result.total_pnl,
+                sharpe_ratio: result.sharpe_ratio,
+                max_drawdown: result.max_drawdown,
+                win_rate: result.win_rate,
+                number_of_trades: result.num_trades,
+                profit_factor: result.profit_factor,
+                // Default values for fields we don't have from RealisticSimResult
+                gross_profit: 0.0,
+                gross_loss: 0.0,
+                average_trade_return: if result.num_trades > 0 { result.total_pnl / result.num_trades as f64 } else { 0.0 },
+                median_trade_return: 0.0,
+                volatility: 0.0,
+                average_trade_duration: 0.0,
+                total_commission: result.total_fees,
+                total_slippage: 0.0,
+                total_market_impact: 0.0,
+                transaction_costs_percentage: if result.total_volume > 0.0 { result.total_fees / result.total_volume * 100.0 } else { 0.0 },
+            },
+            trade_returns: result.trade_returns,
+        };
+        
+        walkforward::WalkForwardSummary::new(vec![window_result])
+    }
+    
     /// Fallback walk-forward using trade-only data with simplified simulation
+    #[allow(dead_code)]
     async fn run_walkforward_trades_fallback(
         &self,
         request: &protocol::broker::messages::ChromosomeEvalRequest,
@@ -1326,7 +1515,7 @@ impl DistributedGAWorker {
         chromosome: &AvellanedaStoikovChromosome,
     ) {
         use data_prep::OrderBookBinaryReader;
-        use backtest::realistic_simulation::{RealisticSimulator, RealisticASParams, OrderBookEvent};
+        use backtest::realistic_simulation::{RealisticASParams, OrderBookEvent, EventType};
         use backtest::statistical_significance::{compute_sharpe_significance, compute_deflated_sharpe_ratio};
         
         let start = Instant::now();
@@ -1337,39 +1526,36 @@ impl DistributedGAWorker {
         println!("🔬 [WORKER {}] Data splits: train_end_idx={}, test_end_idx={}, total_ticks={}",
             self.worker_id, request.train_end_idx, request.test_end_idx, request.total_ticks);
         
-        // Try L3 order book binary file FIRST (for realistic order book reconstruction)
-        let l3_path = self.data_dir.join(format!("{}_{}.l3.bin", 
+        // Load unified binary file with all event types (New/Modify/Cancel/Trade)
+        let bin_path = self.data_dir.join(format!("{}_{}.bin", 
             request.symbol.replace("/", "_"), request.exchange));
         
-        let events: Vec<OrderBookEvent> = if l3_path.exists() {
-            // L3 data available - use real order book events!
-            println!("📚 [WORKER {}] Found L3 order book data: {:?}", self.worker_id, l3_path);
+        let events: Vec<OrderBookEvent> = if bin_path.exists() {
+            println!("📚 [WORKER {}] Loading order book data: {:?}", self.worker_id, bin_path);
             
-            match OrderBookBinaryReader::open(&l3_path) {
-                Ok(l3_reader) => {
-                    let total_events = l3_reader.len();
-                    println!("📚 [WORKER {}] L3 file has {} events", self.worker_id, total_events);
+            match OrderBookBinaryReader::open(&bin_path) {
+                Ok(reader) => {
+                    let total_events = reader.len();
+                    println!("📚 [WORKER {}] Binary file has {} events", self.worker_id, total_events);
                     
-                    // Determine range based on trade-only tick counts
-                    // Note: L3 has more events than trades, so we use timestamp-based filtering
                     let events_start = std::time::Instant::now();
                     let events: Vec<OrderBookEvent> = (0..total_events)
-                        .filter_map(|i| l3_reader.get(i))
+                        .filter_map(|i| reader.get(i))
                         .map(OrderBookEvent::from)
                         .collect();
                     
-                    println!("📚 [WORKER {}] Loaded {} L3 events in {:.2}s (FULL ORDER BOOK RECONSTRUCTION)", 
+                    println!("📚 [WORKER {}] Loaded {} events in {:.2}s", 
                         self.worker_id, events.len(), events_start.elapsed().as_secs_f64());
                     events
                 }
                 Err(e) => {
-                    println!("⚠️ [WORKER {}] Failed to open L3 file: {}, falling back to trades", self.worker_id, e);
+                    println!("⚠️ [WORKER {}] Failed to open binary file: {}, trying trade fallback", self.worker_id, e);
                     self.load_trade_events_fallback(request).await
                 }
             }
         } else {
-            // Fall back to trade-only data
-            println!("⚠️ [WORKER {}] No L3 data found at {:?}, using trade-through detection", self.worker_id, l3_path);
+            // Fall back to trade-only data (legacy format)
+            println!("⚠️ [WORKER {}] No unified binary found at {:?}, using trade-only fallback", self.worker_id, bin_path);
             self.load_trade_events_fallback(request).await
         };
         
@@ -1380,12 +1566,12 @@ impl DistributedGAWorker {
         }
         
         // Log event type breakdown
-        let new_count = events.iter().filter(|e| matches!(e.event_type, backtest::realistic_simulation::EventType::New)).count();
-        let modify_count = events.iter().filter(|e| matches!(e.event_type, backtest::realistic_simulation::EventType::Modify)).count();
-        let cancel_count = events.iter().filter(|e| matches!(e.event_type, backtest::realistic_simulation::EventType::Cancel)).count();
-        let trade_count = events.iter().filter(|e| matches!(e.event_type, backtest::realistic_simulation::EventType::Trade)).count();
-        println!("📊 [WORKER {}] Event breakdown: {} new, {} modify, {} cancel, {} trade", 
-            self.worker_id, new_count, modify_count, cancel_count, trade_count);
+        let new_count = events.iter().filter(|e| matches!(e.event_type, EventType::New)).count();
+        let modify_count = events.iter().filter(|e| matches!(e.event_type, EventType::Modify)).count();
+        let cancel_count = events.iter().filter(|e| matches!(e.event_type, EventType::Cancel)).count();
+        let trade_count = events.iter().filter(|e| matches!(e.event_type, EventType::Trade)).count();
+        println!("📊 [WORKER {}] Event breakdown: {} new, {} modify, {} cancel, {} trade (total: {})", 
+            self.worker_id, new_count, modify_count, cancel_count, trade_count, events.len());
         
         // Get exchange fee configuration (uses Kraken's full tier structure)
         let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&request.exchange);
@@ -1396,7 +1582,7 @@ impl DistributedGAWorker {
         
         // Convert chromosome to realistic simulation parameters with institutional-grade settings
         // All operational parameters come from exchange configuration - no hardcoded values
-        let realistic_params = RealisticASParams {
+        let _realistic_params = RealisticASParams {
             risk_aversion: chromosome.risk_aversion,
             inventory_target: chromosome.inventory_target,
             order_size_pct: chromosome.order_size_pct,
@@ -1426,6 +1612,9 @@ impl DistributedGAWorker {
             // Funding rate from exchange configuration
             funding_rate_8h: exchange_fee_config.funding_rate_8h,
             funding_interval_ms: exchange_fee_config.funding_interval_ms,
+            
+            // Adverse selection from chromosome
+            adverse_selection_sensitivity: chromosome.adverse_selection_sensitivity,
         };
         
         // WALK-FORWARD IS THE PRIMARY VALIDATION
@@ -1463,18 +1652,66 @@ impl DistributedGAWorker {
         println!("🔬 [WORKER {}] Validation events: {} (from {} total)", 
             self.worker_id, validation_events.len(), events.len());
         
+        // Calculate data date range to determine appropriate window sizes
+        let first_event_ts = validation_events.first().map(|e| e.timestamp_ms).unwrap_or(0);
+        let last_event_ts = validation_events.last().map(|e| e.timestamp_ms).unwrap_or(0);
+        let data_days = (last_event_ts - first_event_ts) as f64 / (1000.0 * 60.0 * 60.0 * 24.0);
+        
+        // PROPORTIONAL window sizing: train=60%, test=20%, step=20% of total data
+        // This ensures we always get at least 2 windows (for consistency measurement)
+        // and works regardless of data length
+        let min_days_for_walkforward = 7.0; // Need at least 1 week for meaningful walk-forward
+        
+        let (train_days, test_days, step_days) = if data_days >= min_days_for_walkforward {
+            // Use proportional splits: 60% train, 20% test, 20% step
+            // This guarantees 2+ windows: first at 0%, second at 20%, third at 40%...
+            let train = (data_days * 0.60).max(1.0) as i64;
+            let test = (data_days * 0.20).max(1.0) as i64;
+            let step = (data_days * 0.20).max(1.0) as i64;
+            (train, test, step)
+        } else {
+            // Less than a week: run single simulation
+            println!("⚠️ [WORKER {}] Only {:.1} days of data - running single simulation (no walk-forward)", 
+                self.worker_id, data_days);
+            (0i64, 0i64, 0i64) // Signal to skip walk-forward
+        };
+        
+        // Calculate expected number of windows
+        let expected_windows = if train_days > 0 && test_days > 0 && step_days > 0 {
+            let total_needed = train_days + test_days;
+            let remaining = data_days as i64 - total_needed;
+            if remaining >= 0 {
+                1 + (remaining / step_days) as usize
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        
+        println!("🔬 [WORKER {}] Data span: {:.1} days | Proportional split: train={}d ({:.0}%) test={}d ({:.0}%) step={}d | Expected windows: {}",
+            self.worker_id, data_days, 
+            train_days, (train_days as f64 / data_days) * 100.0,
+            test_days, (test_days as f64 / data_days) * 100.0,
+            step_days, expected_windows);
+        
         // Run walk-forward analysis on validation data
         // This is the PRIMARY evaluation - multiple out-of-sample windows
         // Using local run_walkforward_realistic to avoid circular dependency
-        let wf_summary = run_walkforward_realistic(
-            &validation_events,
-            chromosome,
-            &request.exchange,
-            request.initial_capital,
-            Some(30), // train_days - train on 30 days within each window
-            Some(7),  // test_days - test on 7 days of out-of-sample
-            Some(7),  // step_days - move forward by 7 days each window
-        );
+        let wf_summary = if train_days > 0 {
+            run_walkforward_realistic(
+                &validation_events,
+                chromosome,
+                &request.exchange,
+                request.initial_capital,
+                Some(train_days),
+                Some(test_days),
+                Some(step_days),
+            )
+        } else {
+            // Not enough data for walk-forward - run single realistic simulation
+            self.run_single_realistic_simulation(&validation_events, chromosome, &request.exchange, request.initial_capital)
+        };
         
         println!("🔬 [WORKER {}] Walk-forward PRIMARY validation complete:", self.worker_id);
         println!("   📊 Windows: {}, Avg Sharpe: {:.4}, Consistency: {:.4}", 
@@ -1517,28 +1754,48 @@ impl DistributedGAWorker {
         let closed_trades = num_trades;
         let total_orders = num_trades * 2; // Estimate (entry + exit)
         
-        // Calculate fitness from walk-forward metrics
-        // This uses consistency-weighted Sharpe which rewards robust strategies
+        // Aggregate PER-TRADE returns from all walk-forward windows FIRST
+        // (needed for sortino calculation)
+        let all_trade_returns: Vec<f64> = wf_summary.window_results.iter()
+            .flat_map(|w| w.trade_returns.iter().copied())
+            .collect();
+        
+        // Parse fitness weights from request (if provided)
+        let weights: FitnessWeights = if !request.fitness_weights_json.is_empty() {
+            serde_json::from_slice(&request.fitness_weights_json)
+                .unwrap_or_else(|_| FitnessWeights::balanced())
+        } else {
+            FitnessWeights::balanced()
+        };
+        
+        // Calculate additional metrics for weighted fitness
+        let sortino = calculate_sortino_ratio(&all_trade_returns);
+        let calmar = calculate_calmar_ratio(total_return_pct, max_dd, 252.0);
+        
+        // Calculate fitness from walk-forward metrics using custom weights
         let fitness = if wf_summary.num_windows > 0 {
-            // Sharpe adjusted by consistency (0-1 score)
-            // Also apply drawdown penalty
-            let dd_factor = 1.0 - max_dd.min(1.0);
-            sharpe * wf_summary.consistency_score * dd_factor
+            calculate_weighted_fitness(
+                sharpe,
+                sortino,
+                profit_factor,
+                win_rate,
+                net_pnl,
+                calmar,
+                wf_summary.consistency_score,
+                max_dd,
+                &weights,
+                request.initial_capital,
+            )
         } else {
             0.0
         };
         
         println!("🔬 [WORKER {}] WALK-FORWARD VALIDATION COMPLETE: PnL={:.2}, Sharpe={:.4}, trades={}, max_dd={:.4}",
             self.worker_id, net_pnl, sharpe, num_trades, max_dd);
-        println!("🔬 [WORKER {}] Consistency={:.4}, fitness={:.6}",
+        println!("🔬 [WORKER {}] Sortino={:.4}, Calmar={:.4}, weights={:?}",
+            self.worker_id, sortino, calmar, weights);
+        println!("🔬 [WORKER {}] Consistency={:.4}, weighted_fitness={:.6}",
             self.worker_id, wf_summary.consistency_score, fitness);
-        
-        // Aggregate PER-TRADE returns from all walk-forward windows
-        // This provides statistically meaningful sample sizes for Monte Carlo (100s-1000s of trades)
-        // instead of just ~8-10 per-window returns
-        let all_trade_returns: Vec<f64> = wf_summary.window_results.iter()
-            .flat_map(|w| w.trade_returns.iter().copied())
-            .collect();
         
         println!("🔬 [WORKER {}] Aggregated {} per-trade returns from {} windows for Monte Carlo",
             self.worker_id, all_trade_returns.len(), wf_summary.num_windows);
@@ -1843,6 +2100,7 @@ fn run_walkforward_realistic(
         rate_limit_cooldown_ms: exchange_fee_config.rate_limit_cooldown_ms,
         funding_rate_8h: exchange_fee_config.funding_rate_8h,
         funding_interval_ms: exchange_fee_config.funding_interval_ms,
+        adverse_selection_sensitivity: chromosome.adverse_selection_sensitivity,
     };
     
     // Process each window using RealisticSimulator

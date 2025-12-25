@@ -20,6 +20,53 @@ pub enum JobStatus {
     Cancelled,
 }
 
+/// Custom fitness function weights for GA optimization
+/// All values should be normalized to sum to 1.0
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FitnessWeights {
+    #[serde(default = "default_sharpe_weight")]
+    pub sharpe: f64,
+    #[serde(default = "default_sortino_weight")]
+    pub sortino: f64,
+    #[serde(default = "default_profit_factor_weight")]
+    pub profit_factor: f64,
+    #[serde(default = "default_win_rate_weight")]
+    pub win_rate: f64,
+    #[serde(default = "default_net_profit_weight")]
+    pub net_profit: f64,
+    #[serde(default = "default_calmar_weight")]
+    pub calmar: f64,
+}
+
+fn default_sharpe_weight() -> f64 { 0.10 }
+fn default_sortino_weight() -> f64 { 0.15 }
+fn default_profit_factor_weight() -> f64 { 0.15 }
+fn default_win_rate_weight() -> f64 { 0.10 }
+fn default_net_profit_weight() -> f64 { 0.35 }
+fn default_calmar_weight() -> f64 { 0.15 }
+
+impl FitnessWeights {
+    /// Balanced preset (default)
+    pub fn balanced() -> Self {
+        Self { sharpe: 0.10, sortino: 0.15, profit_factor: 0.15, win_rate: 0.10, net_profit: 0.35, calmar: 0.15 }
+    }
+    
+    /// Max Sharpe ratio focus
+    pub fn max_sharpe() -> Self {
+        Self { sharpe: 0.35, sortino: 0.25, profit_factor: 0.10, win_rate: 0.05, net_profit: 0.15, calmar: 0.10 }
+    }
+    
+    /// Max profit focus
+    pub fn max_profit() -> Self {
+        Self { sharpe: 0.05, sortino: 0.10, profit_factor: 0.15, win_rate: 0.10, net_profit: 0.50, calmar: 0.10 }
+    }
+    
+    /// Low drawdown focus
+    pub fn low_drawdown() -> Self {
+        Self { sharpe: 0.15, sortino: 0.15, profit_factor: 0.15, win_rate: 0.10, net_profit: 0.15, calmar: 0.30 }
+    }
+}
+
 /// Backtest job parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BacktestJobParams {
@@ -107,6 +154,11 @@ pub struct BacktestJobParams {
     // Walk-Forward configuration
     #[serde(default = "default_walk_forward_enabled")]
     pub walk_forward_enabled: bool,
+    
+    // Custom fitness weights for GA optimization (normalized to sum to 1.0)
+    // If None, uses default balanced weights
+    #[serde(default)]
+    pub fitness_weights: Option<FitnessWeights>,
     
     // Data split configuration for train/test/validate
     /// Fraction of data used for GA training (default 0.6 = 60%)
@@ -216,6 +268,7 @@ impl Default for BacktestJobParams {
             monte_carlo_enabled: default_monte_carlo_enabled(),
             monte_carlo_runs: default_monte_carlo_runs(),
             walk_forward_enabled: default_walk_forward_enabled(),
+            fitness_weights: None,  // Use default balanced weights
             train_ratio: default_train_ratio(),
             test_ratio: default_test_ratio(),
             validate_ratio: default_validate_ratio(),

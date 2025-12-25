@@ -139,6 +139,15 @@ interface JobStatus {
   phase_details: any;
 }
 
+interface FitnessWeights {
+  sharpe: number;
+  sortino: number;
+  profit_factor: number;
+  win_rate: number;
+  net_profit: number;
+  calmar: number;
+}
+
 interface JobDetails {
   job_id: string;
   symbol: string;
@@ -150,6 +159,46 @@ interface JobDetails {
   generations?: number;
   created_at: string;
   started_at: string | null;
+  // All configuration parameters
+  initial_inventory_pct: number;
+  initial_30d_volume: number;
+  monte_carlo_enabled: boolean;
+  monte_carlo_runs: number;
+  walk_forward_enabled: boolean;
+  train_ratio: number;
+  test_ratio: number;
+  validate_ratio: number;
+  auto_save_profitable: boolean;
+  min_sharpe_ratio: number;
+  min_profit_factor: number;
+  max_drawdown: number;
+  min_win_rate: number;
+  min_trades: number;
+  min_sortino_ratio?: number;
+  min_calmar_ratio?: number;
+  min_total_pnl?: number;
+  fitness_weights?: FitnessWeights;
+  start_date?: string;
+  end_date?: string;
+  commission_rate: number;
+  // Manual strategy parameters
+  risk_aversion: number;
+  inventory_target: number;
+  order_size: number;
+  order_size_pct: number;
+  window_ms: number;
+  min_quote_lifetime_ms: number;
+  volatility_cap: number;
+  time_horizon_minutes: number;
+  market_depth_k: number;
+  volatility_adjustment_factor: number;
+  inventory_penalty_factor: number;
+  trend_sensitivity: number;
+  flow_sensitivity: number;
+  take_profit_pct: number;
+  stop_loss_pct: number;
+  min_spread_bps: number;
+  max_trades_per_minute: number;
 }
 
 interface ResultsVisualizationProps {
@@ -400,17 +449,82 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
     let mimeType: string;
 
     if (format === 'json') {
-      content = JSON.stringify(result, null, 2);
+      // Include job configuration alongside results
+      const exportData = {
+        ...result,
+        configuration: jobDetails ? {
+          symbol: jobDetails.symbol,
+          exchange: jobDetails.exchange,
+          strategy: jobDetails.strategy,
+          initial_capital: jobDetails.initial_capital,
+          optimization_method: jobDetails.optimization_method,
+          population_size: jobDetails.population_size,
+          generations: jobDetails.generations,
+          initial_inventory_pct: jobDetails.initial_inventory_pct,
+          initial_30d_volume: jobDetails.initial_30d_volume,
+          monte_carlo_enabled: jobDetails.monte_carlo_enabled,
+          monte_carlo_runs: jobDetails.monte_carlo_runs,
+          walk_forward_enabled: jobDetails.walk_forward_enabled,
+          train_ratio: jobDetails.train_ratio,
+          test_ratio: jobDetails.test_ratio,
+          validate_ratio: jobDetails.validate_ratio,
+          auto_save_profitable: jobDetails.auto_save_profitable,
+          min_sharpe_ratio: jobDetails.min_sharpe_ratio,
+          min_profit_factor: jobDetails.min_profit_factor,
+          max_drawdown: jobDetails.max_drawdown,
+          min_win_rate: jobDetails.min_win_rate,
+          min_trades: jobDetails.min_trades,
+          min_sortino_ratio: jobDetails.min_sortino_ratio,
+          min_calmar_ratio: jobDetails.min_calmar_ratio,
+          min_total_pnl: jobDetails.min_total_pnl,
+          fitness_weights: jobDetails.fitness_weights,
+          start_date: jobDetails.start_date,
+          end_date: jobDetails.end_date,
+          commission_rate: jobDetails.commission_rate,
+          risk_aversion: jobDetails.risk_aversion,
+          inventory_target: jobDetails.inventory_target,
+          order_size: jobDetails.order_size,
+          order_size_pct: jobDetails.order_size_pct,
+          window_ms: jobDetails.window_ms,
+          min_quote_lifetime_ms: jobDetails.min_quote_lifetime_ms,
+          volatility_cap: jobDetails.volatility_cap,
+          time_horizon_minutes: jobDetails.time_horizon_minutes,
+          market_depth_k: jobDetails.market_depth_k,
+          volatility_adjustment_factor: jobDetails.volatility_adjustment_factor,
+          inventory_penalty_factor: jobDetails.inventory_penalty_factor,
+          trend_sensitivity: jobDetails.trend_sensitivity,
+          flow_sensitivity: jobDetails.flow_sensitivity,
+          take_profit_pct: jobDetails.take_profit_pct,
+          stop_loss_pct: jobDetails.stop_loss_pct,
+          min_spread_bps: jobDetails.min_spread_bps,
+          max_trades_per_minute: jobDetails.max_trades_per_minute,
+        } : null,
+      };
+      content = JSON.stringify(exportData, null, 2);
       filename = `backtest_${jobId.substring(0, 8)}.json`;
       mimeType = 'application/json';
     } else {
-      // CSV format
+      // CSV format - include configuration columns
       const headers = [
+        // Results
         'Job ID', 'Symbol', 'Exchange', 'Sharpe Ratio', 'Max Drawdown (%)',
-        'Total P&L', 'Win Rate (%)', 'Profit Factor', 'Total Trades', 'Avg Trade Duration (s)'
+        'Total P&L', 'Win Rate (%)', 'Profit Factor', 'Total Trades', 'Avg Trade Duration (s)',
+        // Configuration
+        'Strategy', 'Initial Capital', 'Optimization Method', 'Population Size', 'Generations',
+        'Initial Inventory %', 'Monte Carlo Enabled', 'Monte Carlo Runs',
+        'Walk Forward Enabled', 'Train Ratio', 'Test Ratio', 'Validate Ratio',
+        'Commission Rate', 'Start Date', 'End Date',
+        // Strategy Parameters
+        'Risk Aversion', 'Inventory Target', 'Order Size %', 'Window (ms)',
+        'Min Quote Lifetime (ms)', 'Volatility Cap', 'Time Horizon (min)', 'Market Depth K',
+        'Volatility Adjustment', 'Inventory Penalty', 'Trend Sensitivity', 'Flow Sensitivity',
+        'Take Profit %', 'Stop Loss %', 'Min Spread (bps)', 'Max Trades/Min',
+        // Profitability Criteria
+        'Auto Save', 'Min Sharpe', 'Min Profit Factor', 'Max Drawdown Criteria', 'Min Win Rate', 'Min Trades',
       ];
       
       const row = [
+        // Results
         result.job_id ?? 'N/A',
         result.symbol ?? 'N/A',
         result.exchange ?? 'N/A',
@@ -421,6 +535,46 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         safeToFixed(result.profit_factor, 2),
         (result.total_trades ?? 0).toString(),
         safeToFixed(result.avg_trade_duration, 2),
+        // Configuration
+        jobDetails?.strategy ?? 'N/A',
+        jobDetails?.initial_capital?.toString() ?? 'N/A',
+        jobDetails?.optimization_method ?? 'N/A',
+        jobDetails?.population_size?.toString() ?? 'N/A',
+        jobDetails?.generations?.toString() ?? 'N/A',
+        safeToFixed((jobDetails?.initial_inventory_pct ?? 0) * 100, 1),
+        jobDetails?.monte_carlo_enabled ? 'Yes' : 'No',
+        jobDetails?.monte_carlo_runs?.toString() ?? 'N/A',
+        jobDetails?.walk_forward_enabled ? 'Yes' : 'No',
+        safeToFixed((jobDetails?.train_ratio ?? 0) * 100, 0),
+        safeToFixed((jobDetails?.test_ratio ?? 0) * 100, 0),
+        safeToFixed((jobDetails?.validate_ratio ?? 0) * 100, 0),
+        safeToFixed((jobDetails?.commission_rate ?? 0) * 100, 4),
+        jobDetails?.start_date ?? 'N/A',
+        jobDetails?.end_date ?? 'N/A',
+        // Strategy Parameters
+        safeToFixed(jobDetails?.risk_aversion, 4),
+        safeToFixed(jobDetails?.inventory_target, 4),
+        safeToFixed((jobDetails?.order_size_pct ?? 0) * 100, 2),
+        jobDetails?.window_ms?.toString() ?? 'N/A',
+        jobDetails?.min_quote_lifetime_ms?.toString() ?? 'N/A',
+        safeToFixed((jobDetails?.volatility_cap ?? 0) * 100, 2),
+        jobDetails?.time_horizon_minutes?.toString() ?? 'N/A',
+        safeToFixed(jobDetails?.market_depth_k, 2),
+        safeToFixed(jobDetails?.volatility_adjustment_factor, 2),
+        safeToFixed(jobDetails?.inventory_penalty_factor, 2),
+        safeToFixed(jobDetails?.trend_sensitivity, 2),
+        safeToFixed(jobDetails?.flow_sensitivity, 2),
+        safeToFixed((jobDetails?.take_profit_pct ?? 0) * 100, 2),
+        safeToFixed((jobDetails?.stop_loss_pct ?? 0) * 100, 2),
+        safeToFixed(jobDetails?.min_spread_bps, 1),
+        safeToFixed(jobDetails?.max_trades_per_minute, 1),
+        // Profitability Criteria
+        jobDetails?.auto_save_profitable ? 'Yes' : 'No',
+        safeToFixed(jobDetails?.min_sharpe_ratio, 2),
+        safeToFixed(jobDetails?.min_profit_factor, 2),
+        safeToFixed((jobDetails?.max_drawdown ?? 0) * 100, 1),
+        safeToFixed((jobDetails?.min_win_rate ?? 0) * 100, 1),
+        jobDetails?.min_trades?.toString() ?? 'N/A',
       ];
       
       content = headers.join(',') + '\n' + row.join(',');
@@ -485,7 +639,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
           </div>
         </div>
 
-        {/* Job Details Card */}
+        {/* Job Details Card - Comprehensive Configuration */}
         {jobDetails && (
           <div style={{
             padding: '20px',
@@ -495,37 +649,107 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
             marginBottom: '20px',
             boxShadow: '0 2px 4px rgba(0,0,0,0.05)',
           }}>
-            <h3 style={{ marginTop: 0, marginBottom: '15px' }}>Backtest Configuration</h3>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', fontSize: '14px' }}>
-              <div>
-                <strong>Symbol:</strong> {jobDetails.symbol}
+            <h3 style={{ marginTop: 0, marginBottom: '15px' }}>📋 Backtest Configuration</h3>
+            
+            {/* Basic Settings */}
+            <div style={{ marginBottom: '15px' }}>
+              <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#495057' }}>Basic Settings</h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', fontSize: '13px' }}>
+                <div><strong>Symbol:</strong> {jobDetails.symbol}</div>
+                <div><strong>Exchange:</strong> {jobDetails.exchange}</div>
+                <div><strong>Strategy:</strong> {jobDetails.strategy}</div>
+                <div><strong>Initial Capital:</strong> ${jobDetails.initial_capital.toLocaleString()}</div>
+                <div><strong>Initial Inventory:</strong> {safeToFixed((jobDetails.initial_inventory_pct ?? 0) * 100, 0)}%</div>
+                <div><strong>Commission Rate:</strong> {safeToFixed((jobDetails.commission_rate ?? 0) * 100, 4)}%</div>
+                <div><strong>Start Date:</strong> {jobDetails.start_date ? new Date(jobDetails.start_date).toLocaleDateString() : 'N/A'}</div>
+                <div><strong>End Date:</strong> {jobDetails.end_date ? new Date(jobDetails.end_date).toLocaleDateString() : 'N/A'}</div>
               </div>
-              <div>
-                <strong>Exchange:</strong> {jobDetails.exchange}
-              </div>
-              <div>
-                <strong>Strategy:</strong> {jobDetails.strategy}
-              </div>
-              <div>
-                <strong>Initial Capital:</strong> ${jobDetails.initial_capital.toLocaleString()}
-              </div>
-              <div>
-                <strong>Optimization:</strong> {jobDetails.optimization_method}
-              </div>
-              {jobDetails.optimization_method === 'genetic' && jobDetails.population_size && (
-                <>
-                  <div>
-                    <strong>Population Size:</strong> {jobDetails.population_size}
-                  </div>
-                  <div>
-                    <strong>Generations:</strong> {jobDetails.generations}
-                  </div>
-                  <div style={{ gridColumn: '1 / -1', marginTop: '5px', padding: '10px', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
-                    <strong>Total Simulations:</strong> {jobDetails.population_size! * jobDetails.generations!} backtests
-                  </div>
-                </>
-              )}
             </div>
+
+            {/* Optimization Settings */}
+            <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
+              <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#495057' }}>🧬 Optimization Settings</h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', fontSize: '13px' }}>
+                <div><strong>Method:</strong> {jobDetails.optimization_method}</div>
+                {jobDetails.optimization_method === 'genetic' && (
+                  <>
+                    <div><strong>Population:</strong> {jobDetails.population_size}</div>
+                    <div><strong>Generations:</strong> {jobDetails.generations}</div>
+                    <div><strong>Total Sims:</strong> {(jobDetails.population_size ?? 0) * (jobDetails.generations ?? 0)}</div>
+                  </>
+                )}
+                <div><strong>Train:</strong> {safeToFixed((jobDetails.train_ratio ?? 0) * 100, 0)}%</div>
+                <div><strong>Test:</strong> {safeToFixed((jobDetails.test_ratio ?? 0) * 100, 0)}%</div>
+                <div><strong>Validate:</strong> {safeToFixed((jobDetails.validate_ratio ?? 0) * 100, 0)}%</div>
+              </div>
+            </div>
+
+            {/* Analysis Settings */}
+            <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#e7f3ff', borderRadius: '4px' }}>
+              <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#495057' }}>📊 Analysis Settings</h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', fontSize: '13px' }}>
+                <div><strong>Monte Carlo:</strong> {jobDetails.monte_carlo_enabled ? `✅ ${jobDetails.monte_carlo_runs} runs` : '❌ Disabled'}</div>
+                <div><strong>Walk-Forward:</strong> {jobDetails.walk_forward_enabled ? '✅ Enabled' : '❌ Disabled'}</div>
+                <div><strong>Auto-Save:</strong> {jobDetails.auto_save_profitable ? '✅ Enabled' : '❌ Disabled'}</div>
+              </div>
+            </div>
+
+            {/* Fitness Weights (if custom) */}
+            {jobDetails.fitness_weights && (
+              <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#fff3cd', borderRadius: '4px' }}>
+                <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#495057' }}>⚖️ Custom Fitness Weights</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '10px', fontSize: '13px' }}>
+                  <div><strong>Sharpe:</strong> {safeToFixed(jobDetails.fitness_weights.sharpe * 100, 0)}%</div>
+                  <div><strong>Sortino:</strong> {safeToFixed(jobDetails.fitness_weights.sortino * 100, 0)}%</div>
+                  <div><strong>Profit Factor:</strong> {safeToFixed(jobDetails.fitness_weights.profit_factor * 100, 0)}%</div>
+                  <div><strong>Win Rate:</strong> {safeToFixed(jobDetails.fitness_weights.win_rate * 100, 0)}%</div>
+                  <div><strong>Net Profit:</strong> {safeToFixed(jobDetails.fitness_weights.net_profit * 100, 0)}%</div>
+                  <div><strong>Calmar:</strong> {safeToFixed(jobDetails.fitness_weights.calmar * 100, 0)}%</div>
+                </div>
+              </div>
+            )}
+
+            {/* Profitability Criteria */}
+            {jobDetails.auto_save_profitable && (
+              <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#d4edda', borderRadius: '4px' }}>
+                <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#495057' }}>✅ Profitability Criteria</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px', fontSize: '13px' }}>
+                  <div><strong>Min Sharpe:</strong> {safeToFixed(jobDetails.min_sharpe_ratio, 2)}</div>
+                  <div><strong>Min Profit Factor:</strong> {safeToFixed(jobDetails.min_profit_factor, 2)}</div>
+                  <div><strong>Max Drawdown:</strong> {safeToFixed((jobDetails.max_drawdown ?? 0) * 100, 1)}%</div>
+                  <div><strong>Min Win Rate:</strong> {safeToFixed((jobDetails.min_win_rate ?? 0) * 100, 1)}%</div>
+                  <div><strong>Min Trades:</strong> {jobDetails.min_trades}</div>
+                  {jobDetails.min_sortino_ratio && <div><strong>Min Sortino:</strong> {safeToFixed(jobDetails.min_sortino_ratio, 2)}</div>}
+                  {jobDetails.min_calmar_ratio && <div><strong>Min Calmar:</strong> {safeToFixed(jobDetails.min_calmar_ratio, 2)}</div>}
+                  {jobDetails.min_total_pnl && <div><strong>Min P&L:</strong> ${jobDetails.min_total_pnl.toLocaleString()}</div>}
+                </div>
+              </div>
+            )}
+
+            {/* Strategy Parameters (collapsed by default for cleaner view) */}
+            <details style={{ marginBottom: '10px' }}>
+              <summary style={{ cursor: 'pointer', fontWeight: 'bold', fontSize: '14px', color: '#495057' }}>
+                ⚙️ Strategy Parameters (click to expand)
+              </summary>
+              <div style={{ marginTop: '10px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px', fontSize: '13px', padding: '10px', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
+                <div><strong>Risk Aversion:</strong> {safeToFixed(jobDetails.risk_aversion, 4)}</div>
+                <div><strong>Inventory Target:</strong> {safeToFixed(jobDetails.inventory_target, 4)}</div>
+                <div><strong>Order Size:</strong> {safeToFixed((jobDetails.order_size_pct ?? 0) * 100, 2)}%</div>
+                <div><strong>Window:</strong> {jobDetails.window_ms}ms</div>
+                <div><strong>Min Quote Life:</strong> {jobDetails.min_quote_lifetime_ms}ms</div>
+                <div><strong>Volatility Cap:</strong> {safeToFixed((jobDetails.volatility_cap ?? 0) * 100, 2)}%</div>
+                <div><strong>Time Horizon:</strong> {jobDetails.time_horizon_minutes} min</div>
+                <div><strong>Market Depth K:</strong> {safeToFixed(jobDetails.market_depth_k, 2)}</div>
+                <div><strong>Vol Adjustment:</strong> {safeToFixed(jobDetails.volatility_adjustment_factor, 2)}</div>
+                <div><strong>Inv Penalty:</strong> {safeToFixed(jobDetails.inventory_penalty_factor, 2)}</div>
+                <div><strong>Trend Sens:</strong> {safeToFixed(jobDetails.trend_sensitivity, 2)}</div>
+                <div><strong>Flow Sens:</strong> {safeToFixed(jobDetails.flow_sensitivity, 2)}</div>
+                <div><strong>Take Profit:</strong> {safeToFixed((jobDetails.take_profit_pct ?? 0) * 100, 2)}%</div>
+                <div><strong>Stop Loss:</strong> {safeToFixed((jobDetails.stop_loss_pct ?? 0) * 100, 2)}%</div>
+                <div><strong>Min Spread:</strong> {safeToFixed(jobDetails.min_spread_bps, 1)} bps</div>
+                <div><strong>Max Trades/Min:</strong> {safeToFixed(jobDetails.max_trades_per_minute, 1)}</div>
+              </div>
+            </details>
           </div>
         )}
 
@@ -859,6 +1083,128 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Configuration Section - Collapsible */}
+      {jobDetails && (
+        <details style={{ marginBottom: '20px' }}>
+          <summary style={{ 
+            cursor: 'pointer', 
+            padding: '15px', 
+            backgroundColor: '#f8f9fa', 
+            border: '1px solid #dee2e6',
+            borderRadius: '8px',
+            fontWeight: 'bold',
+            fontSize: '16px',
+          }}>
+            📋 Backtest Configuration (click to expand)
+          </summary>
+          <div style={{
+            padding: '20px',
+            backgroundColor: 'white',
+            border: '1px solid #dee2e6',
+            borderTop: 'none',
+            borderRadius: '0 0 8px 8px',
+          }}>
+            {/* Basic Settings */}
+            <div style={{ marginBottom: '15px' }}>
+              <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#495057' }}>Basic Settings</h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px', fontSize: '13px' }}>
+                <div><strong>Symbol:</strong> {jobDetails.symbol}</div>
+                <div><strong>Exchange:</strong> {jobDetails.exchange}</div>
+                <div><strong>Strategy:</strong> {jobDetails.strategy}</div>
+                <div><strong>Initial Capital:</strong> ${jobDetails.initial_capital.toLocaleString()}</div>
+                <div><strong>Initial Inventory:</strong> {safeToFixed((jobDetails.initial_inventory_pct ?? 0) * 100, 0)}%</div>
+                <div><strong>Commission Rate:</strong> {safeToFixed((jobDetails.commission_rate ?? 0) * 100, 4)}%</div>
+                <div><strong>Start Date:</strong> {jobDetails.start_date ? new Date(jobDetails.start_date).toLocaleDateString() : 'N/A'}</div>
+                <div><strong>End Date:</strong> {jobDetails.end_date ? new Date(jobDetails.end_date).toLocaleDateString() : 'N/A'}</div>
+              </div>
+            </div>
+
+            {/* Optimization Settings */}
+            <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
+              <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#495057' }}>🧬 Optimization Settings</h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px', fontSize: '13px' }}>
+                <div><strong>Method:</strong> {jobDetails.optimization_method}</div>
+                {jobDetails.optimization_method === 'genetic' && (
+                  <>
+                    <div><strong>Population:</strong> {jobDetails.population_size}</div>
+                    <div><strong>Generations:</strong> {jobDetails.generations}</div>
+                    <div><strong>Total Sims:</strong> {(jobDetails.population_size ?? 0) * (jobDetails.generations ?? 0)}</div>
+                  </>
+                )}
+                <div><strong>Train:</strong> {safeToFixed((jobDetails.train_ratio ?? 0) * 100, 0)}%</div>
+                <div><strong>Test:</strong> {safeToFixed((jobDetails.test_ratio ?? 0) * 100, 0)}%</div>
+                <div><strong>Validate:</strong> {safeToFixed((jobDetails.validate_ratio ?? 0) * 100, 0)}%</div>
+              </div>
+            </div>
+
+            {/* Analysis Settings */}
+            <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#e7f3ff', borderRadius: '4px' }}>
+              <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#495057' }}>📊 Analysis Settings</h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', fontSize: '13px' }}>
+                <div><strong>Monte Carlo:</strong> {jobDetails.monte_carlo_enabled ? `✅ ${jobDetails.monte_carlo_runs} runs` : '❌ Disabled'}</div>
+                <div><strong>Walk-Forward:</strong> {jobDetails.walk_forward_enabled ? '✅ Enabled' : '❌ Disabled'}</div>
+                <div><strong>Auto-Save:</strong> {jobDetails.auto_save_profitable ? '✅ Enabled' : '❌ Disabled'}</div>
+              </div>
+            </div>
+
+            {/* Fitness Weights (if custom) */}
+            {jobDetails.fitness_weights && (
+              <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#fff3cd', borderRadius: '4px' }}>
+                <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#495057' }}>⚖️ Custom Fitness Weights</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: '10px', fontSize: '13px' }}>
+                  <div><strong>Sharpe:</strong> {safeToFixed(jobDetails.fitness_weights.sharpe * 100, 0)}%</div>
+                  <div><strong>Sortino:</strong> {safeToFixed(jobDetails.fitness_weights.sortino * 100, 0)}%</div>
+                  <div><strong>Profit Factor:</strong> {safeToFixed(jobDetails.fitness_weights.profit_factor * 100, 0)}%</div>
+                  <div><strong>Win Rate:</strong> {safeToFixed(jobDetails.fitness_weights.win_rate * 100, 0)}%</div>
+                  <div><strong>Net Profit:</strong> {safeToFixed(jobDetails.fitness_weights.net_profit * 100, 0)}%</div>
+                  <div><strong>Calmar:</strong> {safeToFixed(jobDetails.fitness_weights.calmar * 100, 0)}%</div>
+                </div>
+              </div>
+            )}
+
+            {/* Profitability Criteria */}
+            {jobDetails.auto_save_profitable && (
+              <div style={{ marginBottom: '15px', padding: '10px', backgroundColor: '#d4edda', borderRadius: '4px' }}>
+                <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#495057' }}>✅ Profitability Criteria</h4>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '10px', fontSize: '13px' }}>
+                  <div><strong>Min Sharpe:</strong> {safeToFixed(jobDetails.min_sharpe_ratio, 2)}</div>
+                  <div><strong>Min Profit Factor:</strong> {safeToFixed(jobDetails.min_profit_factor, 2)}</div>
+                  <div><strong>Max Drawdown:</strong> {safeToFixed((jobDetails.max_drawdown ?? 0) * 100, 1)}%</div>
+                  <div><strong>Min Win Rate:</strong> {safeToFixed((jobDetails.min_win_rate ?? 0) * 100, 1)}%</div>
+                  <div><strong>Min Trades:</strong> {jobDetails.min_trades}</div>
+                  {jobDetails.min_sortino_ratio && <div><strong>Min Sortino:</strong> {safeToFixed(jobDetails.min_sortino_ratio, 2)}</div>}
+                  {jobDetails.min_calmar_ratio && <div><strong>Min Calmar:</strong> {safeToFixed(jobDetails.min_calmar_ratio, 2)}</div>}
+                  {jobDetails.min_total_pnl && <div><strong>Min P&L:</strong> ${jobDetails.min_total_pnl.toLocaleString()}</div>}
+                </div>
+              </div>
+            )}
+
+            {/* Strategy Parameters */}
+            <div style={{ padding: '10px', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
+              <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#495057' }}>⚙️ Strategy Parameters</h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px', fontSize: '13px' }}>
+                <div><strong>Risk Aversion:</strong> {safeToFixed(jobDetails.risk_aversion, 4)}</div>
+                <div><strong>Inventory Target:</strong> {safeToFixed(jobDetails.inventory_target, 4)}</div>
+                <div><strong>Order Size:</strong> {safeToFixed((jobDetails.order_size_pct ?? 0) * 100, 2)}%</div>
+                <div><strong>Window:</strong> {jobDetails.window_ms}ms</div>
+                <div><strong>Min Quote Life:</strong> {jobDetails.min_quote_lifetime_ms}ms</div>
+                <div><strong>Volatility Cap:</strong> {safeToFixed((jobDetails.volatility_cap ?? 0) * 100, 2)}%</div>
+                <div><strong>Time Horizon:</strong> {jobDetails.time_horizon_minutes} min</div>
+                <div><strong>Market Depth K:</strong> {safeToFixed(jobDetails.market_depth_k, 2)}</div>
+                <div><strong>Vol Adjustment:</strong> {safeToFixed(jobDetails.volatility_adjustment_factor, 2)}</div>
+                <div><strong>Inv Penalty:</strong> {safeToFixed(jobDetails.inventory_penalty_factor, 2)}</div>
+                <div><strong>Trend Sens:</strong> {safeToFixed(jobDetails.trend_sensitivity, 2)}</div>
+                <div><strong>Flow Sens:</strong> {safeToFixed(jobDetails.flow_sensitivity, 2)}</div>
+                <div><strong>Take Profit:</strong> {safeToFixed((jobDetails.take_profit_pct ?? 0) * 100, 2)}%</div>
+                <div><strong>Stop Loss:</strong> {safeToFixed((jobDetails.stop_loss_pct ?? 0) * 100, 2)}%</div>
+                <div><strong>Min Spread:</strong> {safeToFixed(jobDetails.min_spread_bps, 1)} bps</div>
+                <div><strong>Max Trades/Min:</strong> {safeToFixed(jobDetails.max_trades_per_minute, 1)}</div>
+              </div>
+            </div>
+          </div>
+        </details>
+      )}
 
       {/* Metrics Cards */}
       <div style={{

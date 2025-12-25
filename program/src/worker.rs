@@ -5,7 +5,6 @@
 
 use std::sync::Arc;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 use chrono::Utc;
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
@@ -1489,9 +1488,10 @@ impl Worker {
                 end_time: params.end_date.clone().unwrap_or_else(|| "2024-12-31T23:59:59Z".to_string()),
                 train_ratio: params.train_ratio,
                 validation_ratio: params.test_ratio + params.validate_ratio, // Combined for walk-forward
+                fitness_weights: params.fitness_weights.clone(),
             };
-            eprintln!("🧬 Created DistributedGAConfig with start_time={}, end_time={}", 
-                distributed_config.start_time, distributed_config.end_time);
+            eprintln!("🧬 Created DistributedGAConfig with start_time={}, end_time={}, fitness_weights={:?}", 
+                distributed_config.start_time, distributed_config.end_time, distributed_config.fitness_weights);
             
             // Clone data for the closure
             let data_for_fallback = Arc::clone(&data_for_distributed);
@@ -1978,6 +1978,7 @@ impl Worker {
             stop_loss_pct: params.stop_loss_pct,
             min_spread_bps: params.min_spread_bps,
             max_trades_per_minute: params.max_trades_per_minute,
+            adverse_selection_sensitivity: 1.0,  // Default moderate sensitivity
         };
         
         log_info_structured!(WALKFORWARD_LOGGER, "WALKFORWARD_FIXED_PARAMS",

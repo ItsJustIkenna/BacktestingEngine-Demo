@@ -337,6 +337,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     // Simplified: TRAIN for GA, VALIDATE (remaining) for walk-forward
                                     train_ratio: job.params.train_ratio,
                                     validation_ratio: job.params.test_ratio + job.params.validate_ratio, // Combined
+                                    fitness_weights: job.params.fitness_weights.clone(),
                                 };
                                 
                                 let mut coordinator = DistributedGACoordinator::new(
@@ -830,13 +831,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             exchange: _exchange, 
             output_dir: _output_dir, 
             chunk_size: _chunk_size, 
-            compute_features: _compute_features 
+            compute_features: _compute_features,
         } => {
             #[cfg(feature = "postgres")]
             {
                 use diesel_async::pooled_connection::{AsyncDieselConnectionManager, deadpool::Pool};
                 use diesel_async::AsyncPgConnection;
-                use data_prep::{DataPrepConfig, prepare_data};
+                use data_prep::{DataPrepConfig, prepare_orderbook_data};
                 use std::path::PathBuf;
                 
                 // Re-bind variables for use inside postgres block
@@ -864,20 +865,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .expect("Failed to create database pool");
 
                 let config = DataPrepConfig {
-                    symbol,
-                    exchange,
-                    output_dir: PathBuf::from(output_dir),
+                    symbol: symbol.clone(),
+                    exchange: exchange.clone(),
+                    output_dir: PathBuf::from(&output_dir),
                     chunk_size,
                     compute_features,
                     start_time: None,
                     end_time: None,
                 };
 
-                match prepare_data(&pool, &config).await {
+                // Prepare unified binary file with ALL event types (New/Modify/Cancel/Trade)
+                println!("\n📚 Preparing unified order book data (.bin)...");
+                match prepare_orderbook_data(&pool, &config).await {
                     Ok(result) => {
                         println!("✅ Data preparation complete!");
                         println!("   Output file: {}", result.output_path.display());
-                        println!("   Total ticks: {}", result.total_ticks);
+                        println!("   Total events: {}", result.total_ticks);
                         println!("   File size: {} MB", result.file_size_bytes / 1_000_000);
                     }
                     Err(e) => {
@@ -885,6 +888,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         std::process::exit(1);
                     }
                 }
+                
+                println!("\n🎉 Data preparation complete!");
             }
             
             #[cfg(not(feature = "postgres"))]

@@ -114,6 +114,11 @@ pub struct RealisticASParams {
     pub funding_rate_8h: f64,
     /// Funding interval in milliseconds (default 8 hours)
     pub funding_interval_ms: i64,
+    
+    // === Adverse Selection Protection ===
+    /// Sensitivity to toxic order flow: 0.0 = ignore, 1.0 = proportional widening, 2.0 = aggressive
+    /// When detected, spreads are widened by this multiplier of the toxicity signal
+    pub adverse_selection_sensitivity: f64,
 }
 
 impl Default for RealisticASParams {
@@ -151,6 +156,9 @@ impl Default for RealisticASParams {
             // Funding rate from exchange configuration
             funding_rate_8h: exchange_config.funding_rate_8h,
             funding_interval_ms: exchange_config.funding_interval_ms,
+            
+            // Adverse selection: moderate sensitivity by default
+            adverse_selection_sensitivity: 1.0,
         }
     }
 }
@@ -940,20 +948,25 @@ impl OrderBookEvent {
 /// 
 /// Uses the tick's event_type() to create proper New/Modify/Cancel/Trade events.
 /// This enables realistic order book simulation when data includes event types.
+/// Convert trade-only tick data to OrderBookEvents
+/// 
+/// IMPORTANT: This function is used for TRADE-ONLY data fallback when L3 order book
+/// data is not available. All events are forced to EventType::Trade because the source
+/// data represents executed trades, not order book mutations.
+/// 
+/// For L3 order book data (new/modify/cancel/trade events), use the From<OrderBookEventTick>
+/// implementation instead.
 pub fn ticks_to_trade_events<T: dataloader::Tick>(ticks: &[T]) -> Vec<OrderBookEvent> {
     ticks.iter().enumerate().map(|(idx, tick)| {
-        let event_type = match tick.event_type() {
-            0 => EventType::New,
-            1 => EventType::Modify,
-            2 => EventType::Cancel,
-            _ => EventType::Trade,
-        };
+        // FORCE all events to Trade type - this data represents executed trades,
+        // not order book mutations. The event_type field in the database may be
+        // incorrectly set to "new" for historical trade data.
         let side = if tick.is_sell() { Side::Sell } else { Side::Buy };
         
         OrderBookEvent {
             timestamp_ms: tick.timestamp_ms(),
-            event_type,
-            order_id: format!("tick_{}", idx),
+            event_type: EventType::Trade,  // Always Trade for trade-only data
+            order_id: format!("trade_{}", idx),
             side,
             price: tick.price(),
             quantity: tick.quantity(),

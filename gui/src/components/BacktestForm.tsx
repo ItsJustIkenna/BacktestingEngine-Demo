@@ -1,5 +1,23 @@
 import React, { useState, useEffect } from 'react';
 
+// Fitness weight presets
+const FITNESS_PRESETS = {
+  balanced: { sharpe: 10, sortino: 15, profit_factor: 15, win_rate: 10, net_profit: 35, calmar: 15 },
+  maxSharpe: { sharpe: 35, sortino: 25, profit_factor: 10, win_rate: 5, net_profit: 15, calmar: 10 },
+  maxProfit: { sharpe: 5, sortino: 10, profit_factor: 15, win_rate: 10, net_profit: 50, calmar: 10 },
+  lowDrawdown: { sharpe: 15, sortino: 15, profit_factor: 15, win_rate: 10, net_profit: 15, calmar: 30 },
+  highWinRate: { sharpe: 10, sortino: 10, profit_factor: 15, win_rate: 35, net_profit: 20, calmar: 10 },
+};
+
+interface FitnessWeights {
+  sharpe: number;
+  sortino: number;
+  profit_factor: number;
+  win_rate: number;
+  net_profit: number;
+  calmar: number;
+}
+
 interface BacktestFormData {
   symbol: string;
   exchange: string;
@@ -16,6 +34,9 @@ interface BacktestFormData {
   monte_carlo_runs: number;
   // Walk-Forward configuration
   walk_forward_enabled: boolean;
+  // Fitness function customization
+  custom_fitness_weights: boolean;
+  fitness_weights: FitnessWeights;
   // Profitability criteria for auto-saving strategies
   auto_save_profitable: boolean;
   min_sharpe_ratio: number;
@@ -64,6 +85,9 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     monte_carlo_runs: 1000,
     // Walk-Forward defaults
     walk_forward_enabled: true,
+    // Fitness weights defaults (balanced)
+    custom_fitness_weights: false,
+    fitness_weights: { ...FITNESS_PRESETS.balanced },
     // Profitability criteria defaults
     auto_save_profitable: true,
     min_sharpe_ratio: 1.0,
@@ -178,6 +202,20 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
       if (formData.optimization_method === 'genetic') {
         params.population_size = formData.population_size;
         params.generations = formData.generations;
+        
+        // Include custom fitness weights if enabled
+        if (formData.custom_fitness_weights) {
+          // Normalize weights to sum to 1.0
+          const total = Object.values(formData.fitness_weights).reduce((a, b) => a + b, 0);
+          params.fitness_weights = {
+            sharpe: formData.fitness_weights.sharpe / total,
+            sortino: formData.fitness_weights.sortino / total,
+            profit_factor: formData.fitness_weights.profit_factor / total,
+            win_rate: formData.fitness_weights.win_rate / total,
+            net_profit: formData.fitness_weights.net_profit / total,
+            calmar: formData.fitness_weights.calmar / total,
+          };
+        }
       } else {
         // Manual mode - send all 14 parameters
         params.risk_aversion = formData.risk_aversion;
@@ -559,6 +597,161 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
               </div>
             </div>
           </div>
+
+          {/* Fitness Function Weights Section */}
+          {formData.optimization_method === 'genetic' && (
+            <div style={{ 
+              marginTop: '15px', 
+              padding: '15px', 
+              backgroundColor: '#fff8e1', 
+              borderRadius: '6px',
+              border: '1px solid #ffb300'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px' }}>
+                <input
+                  type="checkbox"
+                  id="custom_fitness_weights"
+                  name="custom_fitness_weights"
+                  checked={formData.custom_fitness_weights}
+                  onChange={(e) => setFormData({...formData, custom_fitness_weights: e.target.checked})}
+                  style={{ marginRight: '8px' }}
+                />
+                <label htmlFor="custom_fitness_weights" style={{ fontSize: '14px', fontWeight: 600, color: '#e65100' }}>
+                  ⚖️ Custom Fitness Weights
+                </label>
+              </div>
+              
+              {formData.custom_fitness_weights && (
+                <>
+                  <div style={{ fontSize: '11px', color: '#bf360c', marginBottom: '12px' }}>
+                    Adjust how the GA evaluates strategies. Weights are normalized automatically. Total: {
+                      Object.values(formData.fitness_weights).reduce((a, b) => a + b, 0)
+                    }%
+                  </div>
+                  
+                  {/* Preset Buttons */}
+                  <div style={{ marginBottom: '15px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({...formData, fitness_weights: {...FITNESS_PRESETS.balanced}})}
+                      style={{ padding: '4px 10px', fontSize: '11px', borderRadius: '4px', border: '1px solid #ccc', cursor: 'pointer', backgroundColor: '#fff' }}
+                    >
+                      📊 Balanced
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({...formData, fitness_weights: {...FITNESS_PRESETS.maxSharpe}})}
+                      style={{ padding: '4px 10px', fontSize: '11px', borderRadius: '4px', border: '1px solid #ccc', cursor: 'pointer', backgroundColor: '#fff' }}
+                    >
+                      📈 Max Sharpe
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({...formData, fitness_weights: {...FITNESS_PRESETS.maxProfit}})}
+                      style={{ padding: '4px 10px', fontSize: '11px', borderRadius: '4px', border: '1px solid #ccc', cursor: 'pointer', backgroundColor: '#fff' }}
+                    >
+                      💰 Max Profit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({...formData, fitness_weights: {...FITNESS_PRESETS.lowDrawdown}})}
+                      style={{ padding: '4px 10px', fontSize: '11px', borderRadius: '4px', border: '1px solid #ccc', cursor: 'pointer', backgroundColor: '#fff' }}
+                    >
+                      🛡️ Low Drawdown
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({...formData, fitness_weights: {...FITNESS_PRESETS.highWinRate}})}
+                      style={{ padding: '4px 10px', fontSize: '11px', borderRadius: '4px', border: '1px solid #ccc', cursor: 'pointer', backgroundColor: '#fff' }}
+                    >
+                      🎯 High Win Rate
+                    </button>
+                  </div>
+                  
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
+                        Sharpe Ratio ({formData.fitness_weights.sharpe}%)
+                      </label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="50"
+                        value={formData.fitness_weights.sharpe}
+                        onChange={(e) => setFormData({...formData, fitness_weights: {...formData.fitness_weights, sharpe: parseInt(e.target.value)}})}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
+                        Sortino Ratio ({formData.fitness_weights.sortino}%)
+                      </label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="50"
+                        value={formData.fitness_weights.sortino}
+                        onChange={(e) => setFormData({...formData, fitness_weights: {...formData.fitness_weights, sortino: parseInt(e.target.value)}})}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
+                        Profit Factor ({formData.fitness_weights.profit_factor}%)
+                      </label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="50"
+                        value={formData.fitness_weights.profit_factor}
+                        onChange={(e) => setFormData({...formData, fitness_weights: {...formData.fitness_weights, profit_factor: parseInt(e.target.value)}})}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
+                        Win Rate ({formData.fitness_weights.win_rate}%)
+                      </label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="50"
+                        value={formData.fitness_weights.win_rate}
+                        onChange={(e) => setFormData({...formData, fitness_weights: {...formData.fitness_weights, win_rate: parseInt(e.target.value)}})}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
+                        Net Profit ({formData.fitness_weights.net_profit}%)
+                      </label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="60"
+                        value={formData.fitness_weights.net_profit}
+                        onChange={(e) => setFormData({...formData, fitness_weights: {...formData.fitness_weights, net_profit: parseInt(e.target.value)}})}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
+                        Calmar Ratio ({formData.fitness_weights.calmar}%)
+                      </label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="50"
+                        value={formData.fitness_weights.calmar}
+                        onChange={(e) => setFormData({...formData, fitness_weights: {...formData.fitness_weights, calmar: parseInt(e.target.value)}})}
+                        style={{ width: '100%' }}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
 
           {/* Profitability Criteria Section */}
           <div style={{ 

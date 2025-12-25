@@ -182,6 +182,8 @@ impl PostgresQueue {
                 monte_carlo_enabled: true,
                 monte_carlo_runs: 1000,
                 walk_forward_enabled: true,
+                // Custom fitness weights - default to None (use balanced)
+                fitness_weights: None,
                 // Data split ratios - defaults for train/test/validate
                 train_ratio: 0.6,
                 test_ratio: 0.2,
