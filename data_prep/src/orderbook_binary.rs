@@ -390,6 +390,21 @@ impl OrderBookBinaryReader {
         bytemuck::cast_slice(data)
     }
     
+    /// Get the file header for accessing metadata (timestamps, event count, etc.)
+    pub fn header(&self) -> &OrderBookBinaryHeader {
+        &self.header
+    }
+    
+    /// Get start timestamp in milliseconds
+    pub fn start_timestamp_ms(&self) -> i64 {
+        self.header.start_timestamp_ms
+    }
+    
+    /// Get end timestamp in milliseconds  
+    pub fn end_timestamp_ms(&self) -> i64 {
+        self.header.end_timestamp_ms
+    }
+    
     pub fn symbol(&self) -> String {
         let bytes = &self.header.symbol;
         let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());

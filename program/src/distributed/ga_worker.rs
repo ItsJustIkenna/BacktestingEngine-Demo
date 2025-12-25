@@ -783,11 +783,10 @@ impl DistributedGAWorker {
         Ok(market_data)
     }
     
-    /// Auto-prepare binary data files from database
+    /// Auto-prepare binary data file from database
     /// 
-    /// Creates TWO binary files:
-    /// 1. Trade-only `.bin` for fast GA evaluations
-    /// 2. Full L3 `.l3.bin` for realistic final evaluation with order book reconstruction
+    /// Creates a unified `.bin` file with all order book events (new, modify, cancel, trade).
+    /// This single file is used for all evaluations - both GA training and final evaluation.
     /// 
     /// This eliminates the need for manual `prepare-data` CLI invocation.
     #[cfg(feature = "postgres")]
@@ -820,52 +819,20 @@ impl DistributedGAWorker {
             end_time: None,
         };
         
-        // 1. Prepare trade-only binary (for fast GA evaluations)
+        // Prepare unified binary with all order book events
         let prep_start = std::time::Instant::now();
-        let result = data_prep::prepare_data(pool, &config).await
+        let result = data_prep::prepare_orderbook_data(pool, &config).await
             .map_err(|e| WorkerError::DatabaseError(e.to_string()))?;
-        let trade_elapsed = prep_start.elapsed();
-        
-        log_info_structured!(MAIN_LOGGER, "GA_WORKER_AUTO_PREPARE_TRADES",
-            "event" => "GA_WORKER_AUTO_PREPARE_TRADES",
-            "worker_id" => &self.worker_id,
-            "symbol" => symbol,
-            "exchange" => exchange,
-            "ticks" => result.total_ticks,
-            "size_mb" => result.file_size_bytes / 1_000_000,
-            "elapsed_sec" => format!("{:.1}", trade_elapsed.as_secs_f64())
-        );
-        
-        // 2. Prepare L3 order book binary (for realistic final evaluation)
-        // This runs in parallel since final eval needs it
-        let l3_start = std::time::Instant::now();
-        match data_prep::prepare_orderbook_data(pool, &config).await {
-            Ok(l3_result) => {
-                let l3_elapsed = l3_start.elapsed();
-                log_info_structured!(MAIN_LOGGER, "GA_WORKER_AUTO_PREPARE_L3",
-                    "event" => "GA_WORKER_AUTO_PREPARE_L3",
-                    "worker_id" => &self.worker_id,
-                    "symbol" => symbol,
-                    "exchange" => exchange,
-                    "events" => l3_result.total_ticks,
-                    "size_mb" => l3_result.file_size_bytes / 1_000_000,
-                    "elapsed_sec" => format!("{:.1}", l3_elapsed.as_secs_f64())
-                );
-            }
-            Err(e) => {
-                // L3 prep failure is not fatal - we can fall back to trade-through detection
-                log_warn!(MAIN_LOGGER, "L3 order book prep failed (will use trade-through): {}", e);
-            }
-        }
+        let prep_elapsed = prep_start.elapsed();
         
         log_info_structured!(MAIN_LOGGER, "GA_WORKER_AUTO_PREPARE_COMPLETE",
             "event" => "GA_WORKER_AUTO_PREPARE_COMPLETE",
             "worker_id" => &self.worker_id,
             "symbol" => symbol,
             "exchange" => exchange,
-            "ticks" => result.total_ticks,
+            "events" => result.total_ticks,
             "size_mb" => result.file_size_bytes / 1_000_000,
-            "elapsed_sec" => format!("{:.1}", prep_start.elapsed().as_secs_f64())
+            "elapsed_sec" => format!("{:.1}", prep_elapsed.as_secs_f64())
         );
         
         Ok(result.total_ticks)
@@ -1000,58 +967,44 @@ impl DistributedGAWorker {
         train_end_idx: i64,
         exchange: &str,
     ) -> FitnessResult {
-        use data_prep::{BinaryFileReader, OrderBookBinaryReader};
-        use dataloader::TickSource;
+        use data_prep::OrderBookBinaryReader;
         use backtest::realistic_simulation::{RealisticSimulator, RealisticASParams, OrderBookEvent};
         
         let sim_start = std::time::Instant::now();
         
-        // Try L3 order book data first (preferred for accurate simulation)
-        let l3_path = path.with_extension("l3.bin");
-        
-        let events: Vec<OrderBookEvent> = if l3_path.exists() {
-            // L3 data available - use real order book events
-            match OrderBookBinaryReader::open(&l3_path) {
-                Ok(l3_reader) => {
-                    let total_events = l3_reader.len();
-                    
-                    // Calculate effective training range
-                    // Use trade-only file to get timestamp boundary for train_end_idx
-                    let end_timestamp = if train_end_idx > 0 {
-                        match BinaryFileReader::open(path) {
-                            Ok(trade_reader) => {
-                                trade_reader.get(train_end_idx as usize)
-                                    .map(|t| t.timestamp_ms)
-                                    .unwrap_or(i64::MAX)
-                            }
-                            Err(_) => i64::MAX,
-                        }
-                    } else {
-                        // Use 60% of data for training
-                        let idx_60pct = (total_events as f64 * 0.6) as usize;
-                        l3_reader.get(idx_60pct).map(|e| e.timestamp_ms).unwrap_or(i64::MAX)
-                    };
-                    
-                    // Load events up to training boundary
-                    let events: Vec<OrderBookEvent> = (0..total_events)
-                        .filter_map(|i| l3_reader.get(i))
-                        .take_while(|e| e.timestamp_ms <= end_timestamp)
-                        .map(OrderBookEvent::from)
-                        .collect();
-                    
-                    println!("🔬 [WORKER {}] REALISTIC sim on {} L3 events (of {} total)", 
-                        self.worker_id, events.len(), total_events);
-                    events
-                }
-                Err(e) => {
-                    println!("⚠️ [WORKER {}] L3 file error: {}, falling back to trades", self.worker_id, e);
-                    self.load_trade_events_for_training(path, train_end_idx)
-                }
+        // Load order book events from unified binary file (contains all event types)
+        // The binary file is prepared by the API and contains L3 orderbook data
+        let events: Vec<OrderBookEvent> = match OrderBookBinaryReader::open(path) {
+            Ok(reader) => {
+                let total_events = reader.len();
+                
+                // Calculate effective training range
+                let end_timestamp = if train_end_idx > 0 {
+                    // Use the provided index to get timestamp boundary
+                    reader.get(train_end_idx as usize)
+                        .map(|e| e.timestamp_ms)
+                        .unwrap_or(i64::MAX)
+                } else {
+                    // Use 60% of data for training
+                    let idx_60pct = (total_events as f64 * 0.6) as usize;
+                    reader.get(idx_60pct).map(|e| e.timestamp_ms).unwrap_or(i64::MAX)
+                };
+                
+                // Load events up to training boundary
+                let events: Vec<OrderBookEvent> = (0..total_events)
+                    .filter_map(|i| reader.get(i))
+                    .take_while(|e| e.timestamp_ms <= end_timestamp)
+                    .map(OrderBookEvent::from)
+                    .collect();
+                
+                println!("🔬 [WORKER {}] REALISTIC sim on {} events (of {} total)", 
+                    self.worker_id, events.len(), total_events);
+                events
             }
-        } else {
-            // Fall back to trade-only data
-            println!("⚠️ [WORKER {}] No L3 data, using trade-through detection", self.worker_id);
-            self.load_trade_events_for_training(path, train_end_idx)
+            Err(e) => {
+                println!("❌ [WORKER {}] Failed to open binary file: {}", self.worker_id, e);
+                return FitnessResult::failure();
+            }
         };
         
         if events.is_empty() {
@@ -1106,40 +1059,6 @@ impl DistributedGAWorker {
             result.win_rate,
             result.profit_factor,
         )
-    }
-    
-    /// Load trade events from trade-only binary for training (fallback when no L3)
-    fn load_trade_events_for_training(
-        &self,
-        path: &std::path::Path,
-        train_end_idx: i64,
-    ) -> Vec<backtest::realistic_simulation::OrderBookEvent> {
-        use data_prep::BinaryFileReader;
-        use dataloader::TickSource;
-        use backtest::realistic_simulation::ticks_to_trade_events;
-        
-        let reader = match BinaryFileReader::open(path) {
-            Ok(r) => r,
-            Err(e) => {
-                println!("❌ [WORKER {}] Binary file error: {}", self.worker_id, e);
-                return Vec::new();
-            }
-        };
-        
-        let total_ticks = reader.len();
-        let effective_end_idx = if train_end_idx > 0 {
-            train_end_idx as usize
-        } else {
-            (total_ticks as f64 * 0.6) as usize
-        };
-        
-        println!("📊 [WORKER {}] Loading {} trade ticks for training", self.worker_id, effective_end_idx);
-        
-        let ticks: Vec<_> = (0..effective_end_idx)
-            .filter_map(|i| reader.get(i).cloned())
-            .collect();
-        
-        ticks_to_trade_events(&ticks)
     }
     
     /// Evaluate a chromosome against the cached data

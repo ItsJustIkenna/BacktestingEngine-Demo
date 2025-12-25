@@ -1059,7 +1059,7 @@ async fn ensure_binary_data_for_job(
     start_date: Option<&str>,
     end_date: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use data_prep::{DataPrepConfig, BinaryFileReader};
+    use data_prep::DataPrepConfig;
     use std::path::PathBuf;
     use chrono::{NaiveDate, TimeZone, Utc};
     
@@ -1079,21 +1079,21 @@ async fn ensure_binary_data_for_job(
     // Query DB for latest timestamp to check freshness
     let db_latest_ms = get_db_latest_timestamp(&pool, symbol, exchange).await?;
     
-    // Check if binary file already exists
+    // Check if binary file already exists (unified format with all event types)
     let filename = format!("{}_{}.bin", symbol.replace('/', "_"), exchange);
     let binary_path = data_path.join(&filename);
     
+    // Check binary file using OrderBookBinaryReader (unified L3 format)
     if binary_path.exists() {
-        match BinaryFileReader::open(&binary_path) {
+        match data_prep::OrderBookBinaryReader::open(&binary_path) {
             Ok(reader) => {
-                let tick_count = reader.tick_count();
-                if tick_count == 0 {
-                    log_warn!(crate::MAIN_LOGGER, "API: Binary file for {}/{} has 0 ticks, will regenerate", 
+                let event_count = reader.len();
+                if event_count == 0 {
+                    log_warn!(crate::MAIN_LOGGER, "API: Binary file for {}/{} has 0 events, will regenerate", 
                         symbol, exchange);
                 } else {
-                    let header = reader.header();
-                    let file_start_ms = header.start_timestamp_ms;
-                    let file_end_ms = header.end_timestamp_ms;
+                    let file_start_ms = reader.start_timestamp_ms();
+                    let file_end_ms = reader.end_timestamp_ms();
                     
                     let mut needs_regeneration = false;
                     let mut reason = String::new();
@@ -1148,8 +1148,8 @@ async fn ensure_binary_data_for_job(
                     }
                     
                     if !needs_regeneration {
-                        log_info!(crate::MAIN_LOGGER, "API: Binary data up-to-date for {}/{}: {} ({} ticks, {} - {})", 
-                            symbol, exchange, binary_path.display(), tick_count,
+                        log_info!(crate::MAIN_LOGGER, "API: Binary data up-to-date for {}/{}: {} ({} events, {} - {})", 
+                            symbol, exchange, binary_path.display(), event_count,
                             chrono::DateTime::from_timestamp_millis(file_start_ms)
                                 .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
                                 .unwrap_or_default(),
@@ -1188,12 +1188,15 @@ async fn ensure_binary_data_for_job(
         end_time: None,   // Prepare all data
     };
     
-    // Run data preparation
+    // Prepare unified binary with ALL event types (new, modify, cancel, trade)
+    // This single file is used for both:
+    // - Fast GA evaluations (filter to trade events at read time)
+    // - Realistic final evaluation (full orderbook reconstruction)
     let prep_start = std::time::Instant::now();
-    let result = data_prep::prepare_data(&pool, &config).await?;
+    let result = data_prep::prepare_orderbook_data(&pool, &config).await?;
     let prep_elapsed = prep_start.elapsed();
     
-    log_info!(crate::MAIN_LOGGER, "API: Binary data prepared for {}/{} in {:.1}s: {} ticks, {} MB", 
+    log_info!(crate::MAIN_LOGGER, "API: Binary data prepared for {}/{} in {:.1}s: {} events, {} MB", 
         symbol, exchange,
         prep_elapsed.as_secs_f64(),
         result.total_ticks,
