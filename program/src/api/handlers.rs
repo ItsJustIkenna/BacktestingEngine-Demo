@@ -152,6 +152,7 @@ pub async fn submit_backtest(
     // data on-the-fly. The API pod prepares data once, and all workers can use it.
     #[cfg(feature = "postgres")]
     {
+        log_info!(crate::MAIN_LOGGER, "API: Starting auto data preparation for {}/{}", params.symbol, params.exchange);
         if let Err(e) = ensure_binary_data_for_job(
             &state.job_queue, 
             &params.symbol, 
@@ -1063,6 +1064,8 @@ async fn ensure_binary_data_for_job(
     use std::path::PathBuf;
     use chrono::{NaiveDate, TimeZone, Utc};
     
+    log_info!(crate::MAIN_LOGGER, "API: ensure_binary_data_for_job called for {}/{}", symbol, exchange);
+    
     // Parse job date range (if provided)
     let job_start = start_date.and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
     let job_end = end_date.and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
@@ -1072,9 +1075,16 @@ async fn ensure_binary_data_for_job(
         .unwrap_or_else(|_| "/data/historical".to_string());
     let data_path = PathBuf::from(&data_dir);
     
+    log_info!(crate::MAIN_LOGGER, "API: Data directory: {}", data_dir);
+    
     // Get database pool early - we'll need it for freshness check
-    let pool = job_queue.get_pool()
-        .ok_or("Database pool not available for data preparation")?;
+    let pool = match job_queue.get_pool() {
+        Some(p) => p,
+        None => {
+            log_warn!(crate::MAIN_LOGGER, "API: Database pool not available for data preparation");
+            return Err("Database pool not available for data preparation".into());
+        }
+    };
     
     // Query DB for latest timestamp to check freshness
     let db_latest_ms = get_db_latest_timestamp(&pool, symbol, exchange).await?;
