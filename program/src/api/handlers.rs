@@ -145,6 +145,9 @@ pub async fn submit_backtest(
         }
     }
     
+    // Debug: confirm handler is being called
+    eprintln!("🔔 [API] submit_backtest handler called for {}/{}", params.symbol, params.exchange);
+    
     // ========================================================================
     // AUTO DATA PREPARATION - Ensure binary data exists before queueing job
     // ========================================================================
