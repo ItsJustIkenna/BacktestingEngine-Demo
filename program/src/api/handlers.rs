@@ -152,7 +152,7 @@ pub async fn submit_backtest(
     // data on-the-fly. The API pod prepares data once, and all workers can use it.
     #[cfg(feature = "postgres")]
     {
-        log_info!(crate::MAIN_LOGGER, "API: Starting auto data preparation for {}/{}", params.symbol, params.exchange);
+        eprintln!("📦 [API] Starting auto data preparation for {}/{}", params.symbol, params.exchange);
         if let Err(e) = ensure_binary_data_for_job(
             &state.job_queue, 
             &params.symbol, 
@@ -160,9 +160,11 @@ pub async fn submit_backtest(
             params.start_date.as_deref(),
             params.end_date.as_deref(),
         ).await {
-            log_warn!(crate::MAIN_LOGGER, "Data preparation warning for {}/{}: {} (job will still be queued)", 
+            eprintln!("⚠️ [API] Data preparation warning for {}/{}: {} (job will still be queued)", 
                 params.symbol, params.exchange, e);
             // Don't fail the job submission - workers can fall back to DB streaming
+        } else {
+            eprintln!("✅ [API] Data preparation completed for {}/{}", params.symbol, params.exchange);
         }
     }
     
@@ -1064,7 +1066,7 @@ async fn ensure_binary_data_for_job(
     use std::path::PathBuf;
     use chrono::{NaiveDate, TimeZone, Utc};
     
-    log_info!(crate::MAIN_LOGGER, "API: ensure_binary_data_for_job called for {}/{}", symbol, exchange);
+    eprintln!("📦 [API] ensure_binary_data_for_job called for {}/{}", symbol, exchange);
     
     // Parse job date range (if provided)
     let job_start = start_date.and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
@@ -1075,13 +1077,13 @@ async fn ensure_binary_data_for_job(
         .unwrap_or_else(|_| "/data/historical".to_string());
     let data_path = PathBuf::from(&data_dir);
     
-    log_info!(crate::MAIN_LOGGER, "API: Data directory: {}", data_dir);
+    eprintln!("📂 [API] Data directory: {}", data_dir);
     
     // Get database pool early - we'll need it for freshness check
     let pool = match job_queue.get_pool() {
         Some(p) => p,
         None => {
-            log_warn!(crate::MAIN_LOGGER, "API: Database pool not available for data preparation");
+            eprintln!("❌ [API] Database pool not available for data preparation");
             return Err("Database pool not available for data preparation".into());
         }
     };
@@ -1099,7 +1101,7 @@ async fn ensure_binary_data_for_job(
             Ok(reader) => {
                 let event_count = reader.len();
                 if event_count == 0 {
-                    log_warn!(crate::MAIN_LOGGER, "API: Binary file for {}/{} has 0 events, will regenerate", 
+                    eprintln!("⚠️ [API] Binary file for {}/{} has 0 events, will regenerate", 
                         symbol, exchange);
                 } else {
                     let file_start_ms = reader.start_timestamp_ms();
@@ -1158,7 +1160,7 @@ async fn ensure_binary_data_for_job(
                     }
                     
                     if !needs_regeneration {
-                        log_info!(crate::MAIN_LOGGER, "API: Binary data up-to-date for {}/{}: {} ({} events, {} - {})", 
+                        eprintln!("✅ [API] Binary data up-to-date for {}/{}: {} ({} events, {} - {})", 
                             symbol, exchange, binary_path.display(), event_count,
                             chrono::DateTime::from_timestamp_millis(file_start_ms)
                                 .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
@@ -1169,19 +1171,19 @@ async fn ensure_binary_data_for_job(
                         return Ok(());
                     }
                     
-                    log_info!(crate::MAIN_LOGGER, "API: Binary file for {}/{} needs regeneration: {}", 
+                    eprintln!("🔄 [API] Binary file for {}/{} needs regeneration: {}", 
                         symbol, exchange, reason);
                 }
             }
             Err(e) => {
-                log_warn!(crate::MAIN_LOGGER, "API: Binary file for {}/{} invalid ({}), will regenerate", 
+                eprintln!("⚠️ [API] Binary file for {}/{} invalid ({}), will regenerate", 
                     symbol, exchange, e);
             }
         }
     }
     
     // Binary file doesn't exist, is invalid, or is stale - prepare it
-    log_info!(crate::MAIN_LOGGER, "API: Preparing binary data for {}/{} -> {}", 
+    eprintln!("📥 [API] Preparing binary data for {}/{} -> {}", 
         symbol, exchange, binary_path.display());
     
     // Create output directory
@@ -1206,7 +1208,7 @@ async fn ensure_binary_data_for_job(
     let result = data_prep::prepare_orderbook_data(&pool, &config).await?;
     let prep_elapsed = prep_start.elapsed();
     
-    log_info!(crate::MAIN_LOGGER, "API: Binary data prepared for {}/{} in {:.1}s: {} events, {} MB", 
+    eprintln!("✅ [API] Binary data prepared for {}/{} in {:.1}s: {} events, {} MB", 
         symbol, exchange,
         prep_elapsed.as_secs_f64(),
         result.total_ticks,
