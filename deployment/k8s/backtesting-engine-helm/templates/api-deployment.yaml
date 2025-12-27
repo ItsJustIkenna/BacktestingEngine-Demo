@@ -123,3 +123,16 @@ spec:
             requests:
               cpu: {{ .Values.api.resources.requests.cpu | default "500m" | quote }}
               memory: {{ .Values.api.resources.requests.memory | default "2Gi" | quote }}
+          {{- if .Values.distributedGA.enabled }}
+          volumeMounts:
+            # Mount historical data PVC for auto data preparation
+            - name: historical-data
+              mountPath: /data/historical
+          {{- end }}
+      {{- if .Values.distributedGA.enabled }}
+      volumes:
+        # Historical data PVC for auto data preparation at submission time
+        - name: historical-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.distributedWorker.historicalData.pvcName | default "historical-data-pvc" }}
+      {{- end }}
