@@ -293,6 +293,7 @@ impl DistributedGACoordinator {
     }
     
     /// Probe binary file to get tick count for data splits
+    /// Uses OrderBookBinaryReader for unified L3 orderbook format
     pub fn probe_tick_count(&self) -> Option<i64> {
         let data_dir = std::env::var("DATA_DIR")
             .unwrap_or_else(|_| "/data/historical".to_string());
@@ -306,10 +307,11 @@ impl DistributedGACoordinator {
         
         if path.exists() {
             eprintln!("✅ [COORDINATOR] Binary file exists at {:?}", path);
-            match data_prep::BinaryFileReader::open(&path) {
+            // Use OrderBookBinaryReader for unified L3 format
+            match data_prep::OrderBookBinaryReader::open(&path) {
                 Ok(reader) => {
-                    let count = reader.tick_count() as i64;
-                    eprintln!("✅ [COORDINATOR] Binary file opened, tick_count={}", count);
+                    let count = reader.len() as i64;
+                    eprintln!("✅ [COORDINATOR] L3 binary file opened, event_count={}", count);
                     Some(count)
                 },
                 Err(e) => {

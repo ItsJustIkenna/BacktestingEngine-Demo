@@ -889,7 +889,7 @@ pub async fn prepare_data(
     State(state): State<ApiState>,
     Json(request): Json<PrepareDataRequest>,
 ) -> Result<Json<PrepareDataResponse>, AppError> {
-    use data_prep::{DataPrepConfig, BinaryFileReader};
+    use data_prep::{DataPrepConfig, OrderBookBinaryReader};
     use std::path::PathBuf;
     
     let pool = state.job_queue.get_pool()
@@ -913,16 +913,17 @@ pub async fn prepare_data(
         let binary_path = data_path.join(&filename);
         
         // Check if file exists and is valid (skip if not forcing rebuild)
+        // Use OrderBookBinaryReader for unified L3 format
         if !request.force && binary_path.exists() {
-            if let Ok(reader) = BinaryFileReader::open(&binary_path) {
-                if reader.tick_count() > 0 {
+            if let Ok(reader) = OrderBookBinaryReader::open(&binary_path) {
+                if reader.len() > 0 {
                     // File exists and is valid, skip
                     continue;
                 }
             }
         }
         
-        // Prepare data
+        // Prepare L3 orderbook data (all event types: new, modify, cancel, trade)
         let config = DataPrepConfig {
             symbol: symbol.clone(),
             exchange: exchange.clone(),
@@ -934,7 +935,7 @@ pub async fn prepare_data(
         };
         
         let prep_start = std::time::Instant::now();
-        match data_prep::prepare_data(&pool, &config).await {
+        match data_prep::prepare_orderbook_data(&pool, &config).await {
             Ok(result) => {
                 prepared.push(PreparedFile {
                     symbol,
