@@ -259,17 +259,26 @@ impl DistributedGAWorker {
     }
     
     /// Check if binary file exists and get tick count
+    /// Uses OrderBookBinaryReader for unified L3 orderbook format
     fn probe_binary_file(&self, symbol: &str, exchange: &str) -> Option<(PathBuf, usize)> {
-        use data_prep::BinaryFileReader;
+        use data_prep::OrderBookBinaryReader;
         
         let path = self.binary_path(symbol, exchange);
         if !path.exists() {
             return None;
         }
         
-        match BinaryFileReader::open(&path) {
-            Ok(reader) => Some((path, reader.tick_count() as usize)),
-            Err(_) => None,
+        // Try unified L3 orderbook format first (new format with all event types)
+        match OrderBookBinaryReader::open(&path) {
+            Ok(reader) => {
+                println!("📂 [WORKER] Found L3 binary file: {} ({} events)", 
+                    path.display(), reader.len());
+                Some((path, reader.len()))
+            }
+            Err(e) => {
+                println!("⚠️ [WORKER] Failed to open binary file {}: {}", path.display(), e);
+                None
+            }
         }
     }
     
@@ -1544,13 +1553,12 @@ impl DistributedGAWorker {
         
         // Filter events to validation period based on timestamp
         let validation_events = if request.train_end_idx > 0 {
-            // Use trade-only binary to get timestamp range for validation window
-            let trade_binary_path = self.data_dir.join(format!("{}_{}.bin", 
+            // Use L3 binary reader to get timestamp range for validation window
+            let binary_path = self.data_dir.join(format!("{}_{}.bin", 
                 request.symbol.replace("/", "_"), request.exchange));
             
-            if let Ok(trade_reader) = data_prep::BinaryFileReader::open(&trade_binary_path) {
-                use dataloader::TickSource;
-                let start_ts = trade_reader.get(request.train_end_idx as usize)
+            if let Ok(reader) = data_prep::OrderBookBinaryReader::open(&binary_path) {
+                let start_ts = reader.get(request.train_end_idx as usize)
                     .map(|t| t.timestamp_ms).unwrap_or(0);
                 
                 println!("🔬 [WORKER {}] Filtering to validation period: from tick {} (ts={})", 
