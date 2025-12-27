@@ -492,6 +492,10 @@ impl RealisticSimulator {
         let mut rate_limited_until: i64 = 0;
         let mut rate_limit_rejections = 0usize;
         
+        // Debug: track skipped quotes
+        let mut skipped_no_price = 0usize;
+        let mut quote_refresh_attempts = 0usize;
+        
         // Funding rate tracking
         let mut last_funding_time: i64 = 0;
         let mut total_funding_paid = 0.0;
@@ -692,6 +696,7 @@ impl RealisticSimulator {
                 }
                 
                 last_quote_time = event.timestamp_ms;
+                quote_refresh_attempts += 1;
                 
                 // Get current market state
                 // Use book mid_price if available, otherwise fall back to last traded price
@@ -700,7 +705,10 @@ impl RealisticSimulator {
                     Some(p) => p,
                     None => match last_price {
                         Some(p) => p,
-                        None => continue,  // No price reference at all, skip
+                        None => {
+                            skipped_no_price += 1;
+                            continue;  // No price reference at all, skip
+                        },
                     },
                 };
                 
@@ -869,6 +877,28 @@ impl RealisticSimulator {
         
         // Extract individual trade P&L values for Monte Carlo
         let trade_returns: Vec<f64> = trades.iter().map(|(pnl, _)| *pnl).collect();
+        
+        // Debug logging for 0 trades investigation
+        if trades.is_empty() && events.len() > 1000 {
+            eprintln!("⚠️ [SIM_DEBUG] 0 trades with {} events!", events.len());
+            eprintln!("  - quote_refresh_attempts: {}", quote_refresh_attempts);
+            eprintln!("  - skipped_no_price: {}", skipped_no_price);
+            eprintln!("  - orders_placed: {}", orders_placed);
+            eprintln!("  - orders_filled: {}", orders_filled);
+            eprintln!("  - rate_limit_rejections: {}", rate_limit_rejections);
+            eprintln!("  - final book state: {} bids, {} asks", book.bids.len(), book.asks.len());
+            eprintln!("  - best_bid: {:?}, best_ask: {:?}", book.best_bid(), book.best_ask());
+            eprintln!("  - last_price: {:?}", last_price);
+            eprintln!("  - final volatility: {:.6}", volatility);
+            
+            // Count event types
+            let new_count = events.iter().filter(|e| matches!(e.event_type, EventType::New)).count();
+            let cancel_count = events.iter().filter(|e| matches!(e.event_type, EventType::Cancel)).count();
+            let modify_count = events.iter().filter(|e| matches!(e.event_type, EventType::Modify)).count();
+            let trade_count = events.iter().filter(|e| matches!(e.event_type, EventType::Trade)).count();
+            eprintln!("  - event types: new={}, cancel={}, modify={}, trade={}", 
+                new_count, cancel_count, modify_count, trade_count);
+        }
         
         RealisticSimResult {
             total_pnl,
