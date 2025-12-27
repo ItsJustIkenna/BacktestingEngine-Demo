@@ -242,6 +242,9 @@ pub async fn prepare_orderbook_data(
         config.end_time,
     );
     
+    // Track event type counts for debugging
+    let mut event_type_counts: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    
     use futures::StreamExt;
     tokio::pin!(stream);
     while let Some(chunk_result) = stream.next().await {
@@ -254,6 +257,9 @@ pub async fn prepare_orderbook_data(
         let events: Vec<OrderBookEventTick> = orders
             .iter()
             .map(|order| {
+                // Count event types for debugging
+                *event_type_counts.entry(order.event_type.clone()).or_insert(0) += 1;
+                
                 OrderBookEventTick::new(
                     order.timestamp.timestamp_millis(),
                     &order.order_id,
@@ -284,6 +290,13 @@ pub async fn prepare_orderbook_data(
     
     // Finalize file
     let header = writer.finalize()?;
+    
+    // Log event type distribution for debugging
+    info!(
+        ?event_type_counts,
+        "Event type distribution from database"
+    );
+    eprintln!("📊 [DATA_PREP] Event type counts: {:?}", event_type_counts);
     
     info!(
         total_events = total_events,
