@@ -274,16 +274,44 @@ impl SimpleOrderBook {
     }
     
     fn cancel_order(&mut self, order_id: &str) -> bool {
-        // Search both sides
-        for levels in [&mut self.bids, &mut self.asks] {
-            for (_, level) in levels.iter_mut() {
-                if let Some(pos) = level.orders.iter().position(|(id, _)| id == order_id) {
-                    let (_, qty) = level.orders.remove(pos).unwrap();
-                    level.total_quantity -= qty;
-                    return true;  // Found and cancelled
+        // Search bids first
+        let mut found_price: Option<OrderedFloat<f64>> = None;
+        let mut found_side_is_bids = false;
+        
+        for (&price, level) in self.bids.iter_mut() {
+            if let Some(pos) = level.orders.iter().position(|(id, _)| id == order_id) {
+                let (_, qty) = level.orders.remove(pos).unwrap();
+                level.total_quantity -= qty;
+                if level.orders.is_empty() {
+                    found_price = Some(price);
+                    found_side_is_bids = true;
                 }
+                // Found and removed - clean up empty level if needed and return
+                if let Some(price) = found_price {
+                    if found_side_is_bids {
+                        self.bids.remove(&price);
+                    }
+                }
+                return true;
             }
         }
+        
+        // Search asks
+        for (&price, level) in self.asks.iter_mut() {
+            if let Some(pos) = level.orders.iter().position(|(id, _)| id == order_id) {
+                let (_, qty) = level.orders.remove(pos).unwrap();
+                level.total_quantity -= qty;
+                if level.orders.is_empty() {
+                    found_price = Some(price);
+                }
+                // Found and removed - clean up empty level if needed and return
+                if let Some(price) = found_price {
+                    self.asks.remove(&price);
+                }
+                return true;
+            }
+        }
+        
         false  // Order not found
     }
     
@@ -329,11 +357,17 @@ impl SimpleOrderBook {
     }
     
     fn best_bid(&self) -> Option<f64> {
-        self.bids.keys().next_back().map(|k| k.0)
+        // Find highest bid with non-empty orders
+        self.bids.iter().rev()
+            .find(|(_, level)| !level.orders.is_empty() && level.total_quantity > 0.0)
+            .map(|(price, _)| price.0)
     }
     
     fn best_ask(&self) -> Option<f64> {
-        self.asks.keys().next().map(|k| k.0)
+        // Find lowest ask with non-empty orders
+        self.asks.iter()
+            .find(|(_, level)| !level.orders.is_empty() && level.total_quantity > 0.0)
+            .map(|(price, _)| price.0)
     }
     
     fn mid_price(&self) -> Option<f64> {
