@@ -390,10 +390,10 @@ impl BacktestBrokerClient {
             BrokerMode::Network { host, port } => {
                 let addr = format!("{}:{}", host, port);
                 
-                // Initial connection
-                Self::connect_and_subscribe(&addr, role).await?;
+                // Initial connection - get the buf_reader to pass to receiver loop
+                let initial_buf_reader = Self::connect_and_subscribe(&addr, role).await?;
                 
-                // Spawn reconnecting receiver task
+                // Spawn receiver task that starts with the already-connected reader
                 let addr_clone = addr.clone();
                 let chromosome_request_sender = self.chromosome_request_sender.clone();
                 let chromosome_result_sender = self.chromosome_result_sender.clone();
@@ -402,9 +402,10 @@ impl BacktestBrokerClient {
                 let data_ack_sender = self.data_ack_sender.clone();
                 
                 tokio::spawn(async move {
-                    Self::reconnecting_receiver_loop(
+                    Self::receiver_loop_with_reconnect(
                         addr_clone,
                         role,
+                        Some(initial_buf_reader),
                         chromosome_request_sender,
                         chromosome_result_sender,
                         data_broadcast_sender,
@@ -533,10 +534,11 @@ impl BacktestBrokerClient {
         Ok(buf_reader)
     }
     
-    /// Reconnecting receiver loop - automatically reconnects when connection drops
-    async fn reconnecting_receiver_loop(
+    /// Receiver loop with reconnect - starts with optional initial reader, then reconnects on failure
+    async fn receiver_loop_with_reconnect(
         addr: String,
         role: BrokerRole,
+        initial_reader: Option<tokio::io::BufReader<tokio::net::tcp::OwnedReadHalf>>,
         chromosome_request_sender: broadcast::Sender<ChromosomeEvalRequest>,
         chromosome_result_sender: broadcast::Sender<ChromosomeEvalResult>,
         data_broadcast_sender: broadcast::Sender<DataBroadcastRequest>,
@@ -546,21 +548,33 @@ impl BacktestBrokerClient {
         let mut reconnect_delay = Duration::from_secs(1);
         const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(60);
         
+        // Use initial reader if provided, otherwise connect
+        let mut current_reader = initial_reader;
+        
         loop {
-            // Try to connect and subscribe
-            let buf_reader = match Self::connect_and_subscribe(&addr, role).await {
-                Ok(reader) => {
-                    // Reset delay on successful connection
-                    reconnect_delay = Duration::from_secs(1);
-                    println!("✅ [BROKER] Receiver connected and subscribed successfully");
+            // Get or create buf_reader
+            let buf_reader = match current_reader.take() {
+                Some(reader) => {
+                    println!("✅ [BROKER] Using initial connection for receiver loop");
                     reader
                 }
-                Err(e) => {
-                    println!("❌ [BROKER] Failed to connect for receiver: {}. Retrying in {:?}...", e, reconnect_delay);
-                    tokio::time::sleep(reconnect_delay).await;
-                    // Exponential backoff
-                    reconnect_delay = std::cmp::min(reconnect_delay * 2, MAX_RECONNECT_DELAY);
-                    continue;
+                None => {
+                    // Try to connect and subscribe
+                    match Self::connect_and_subscribe(&addr, role).await {
+                        Ok(reader) => {
+                            // Reset delay on successful connection
+                            reconnect_delay = Duration::from_secs(1);
+                            println!("✅ [BROKER] Receiver reconnected and subscribed successfully");
+                            reader
+                        }
+                        Err(e) => {
+                            println!("❌ [BROKER] Failed to connect for receiver: {}. Retrying in {:?}...", e, reconnect_delay);
+                            tokio::time::sleep(reconnect_delay).await;
+                            // Exponential backoff
+                            reconnect_delay = std::cmp::min(reconnect_delay * 2, MAX_RECONNECT_DELAY);
+                            continue;
+                        }
+                    }
                 }
             };
             
