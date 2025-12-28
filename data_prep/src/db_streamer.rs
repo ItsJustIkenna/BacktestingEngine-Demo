@@ -296,7 +296,27 @@ impl AllEventsStreamState {
             query = query.filter(historical_orders::timestamp.lt(end));
         }
         
-        let orders: Vec<HistoricalOrder> = query.load(&mut conn).await?;
+        let mut orders: Vec<HistoricalOrder> = query.load(&mut conn).await?;
+        
+        // Sort by timestamp, then by event_type priority (new before modify before cancel)
+        // This ensures proper ordering when events have identical timestamps
+        orders.sort_by(|a, b| {
+            match a.timestamp.cmp(&b.timestamp) {
+                std::cmp::Ordering::Equal => {
+                    // Priority: new=0, modify=1, cancel=2, trade=3
+                    let priority = |et: &str| match et {
+                        "new" => 0,
+                        "modify" => 1,
+                        "cancel" => 2,
+                        "trade" => 3,
+                        _ => 4,
+                    };
+                    priority(&a.event_type).cmp(&priority(&b.event_type))
+                }
+                other => other,
+            }
+        });
+        
         Ok(orders)
     }
 }

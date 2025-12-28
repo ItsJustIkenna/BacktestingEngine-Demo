@@ -258,6 +258,10 @@ impl SimpleOrderBook {
     }
     
     fn add_order(&mut self, side: Side, price: f64, quantity: f64, order_id: &str) {
+        // First, remove any existing order with the same ID (handles order amends/replaces)
+        // Kraken reuses order_ids when orders are amended to a new price
+        self.cancel_order(order_id);
+        
         let price_key = OrderedFloat(price);
         let levels = match side {
             Side::Buy => &mut self.bids,
