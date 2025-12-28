@@ -924,17 +924,29 @@ impl RealisticSimulator {
                 quote_refresh_attempts += 1;
                 
                 // Get current market state
-                // Use book mid_price if available, otherwise fall back to last traded price
-                // This is critical for trade-only data where order book is not populated
-                let mid_price = match book.mid_price() {
-                    Some(p) => p,
-                    None => match last_price {
-                        Some(p) => p,
-                        None => {
-                            skipped_no_price += 1;
-                            continue;  // No price reference at all, skip
-                        },
-                    },
+                // CRITICAL: Trade prices are the ground truth of where the market IS.
+                // The order book can drift from trade prices when:
+                // 1. L3 data spans long time periods (months)
+                // 2. Stale limit orders accumulate at old price levels
+                // 
+                // So we prefer trade price when available, with book mid as fallback.
+                // If both exist but diverge significantly, prefer trade price.
+                let mid_price = match (last_price, book.mid_price()) {
+                    (Some(trade_price), Some(book_mid)) => {
+                        // If book mid is more than 5% away from last trade, trust the trade
+                        let divergence = (book_mid - trade_price).abs() / trade_price;
+                        if divergence > 0.05 {
+                            trade_price  // Book is stale, use trade price
+                        } else {
+                            book_mid     // Book is in sync, use book mid for better precision
+                        }
+                    }
+                    (Some(trade_price), None) => trade_price,  // No book, use trade
+                    (None, Some(book_mid)) => book_mid,        // No trades yet, use book
+                    (None, None) => {
+                        skipped_no_price += 1;
+                        continue;  // No price reference at all, skip
+                    }
                 };
                 
                 // Apply volatility cap
