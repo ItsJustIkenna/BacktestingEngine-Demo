@@ -383,122 +383,18 @@ impl BacktestBrokerClient {
 
     /// Start receiving messages from broker (for Network mode)
     /// This spawns a background task that reads messages and forwards them to local channels
+    /// with automatic reconnection on connection failure.
     pub async fn start_receiver(&self, role: BrokerRole) -> Result<(), BrokerError> {
         match &self.mode {
             BrokerMode::InProcess => Ok(()), // No-op for in-process
             BrokerMode::Network { host, port } => {
-                // Create a separate connection for receiving (subscriptions)
                 let addr = format!("{}:{}", host, port);
                 
-                println!("🔌 [BROKER] Connecting to {} for {:?} receiver...", addr, role);
+                // Initial connection
+                Self::connect_and_subscribe(&addr, role).await?;
                 
-                let stream = tokio::time::timeout(
-                    Duration::from_secs(10),
-                    TcpStream::connect(&addr)
-                ).await
-                    .map_err(|_| {
-                        println!("❌ [BROKER] Connection timeout to {}", addr);
-                        BrokerError::Timeout
-                    })?
-                    .map_err(|e| {
-                        println!("❌ [BROKER] Connection failed to {}: {}", addr, e);
-                        BrokerError::ConnectionFailed(e.to_string())
-                    })?;
-                
-                println!("✅ [BROKER] TCP connection established to {}", addr);
-                
-                let _ = stream.set_nodelay(true);
-                
-                let (reader, mut writer) = stream.into_split();
-                
-                // Subscribe to ALL topics needed for this role
-                let topics_to_subscribe: Vec<&str> = match role {
-                    BrokerRole::Coordinator => vec![
-                        topics::CHROMOSOME_RESULTS,  // Receive evaluation results from workers
-                        topics::DATA_ACK,            // Receive data cache acknowledgments
-                    ],
-                    BrokerRole::Worker => vec![
-                        topics::CHROMOSOME_REQUESTS, // Receive evaluation requests from coordinator
-                        topics::DATA_BROADCAST,      // Receive market data broadcasts (legacy)
-                        topics::DATA_LOAD,           // Receive data load requests (new - workers query DB)
-                    ],
-                };
-                
-                // Send SUBSCRIBE message for each topic
-                for topic in &topics_to_subscribe {
-                    let topic_bytes = topic.as_bytes();
-                    let mut buffer = Vec::with_capacity(1 + 4 + topic_bytes.len());
-                    buffer.push(0x02); // SUBSCRIBE
-                    buffer.extend_from_slice(&(topic_bytes.len() as u32).to_le_bytes());
-                    buffer.extend_from_slice(topic_bytes);
-                    writer.write_all(&buffer).await.map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
-                    println!("📝 [BROKER] Sent SUBSCRIBE for topic: {}", topic);
-                }
-                writer.flush().await.map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
-                println!("✅ [BROKER] All {} subscriptions sent and flushed", topics_to_subscribe.len());
-                
-                // Wait for SUBSCRIBE_ACKs from broker (protocol: 0x03 = SUBSCRIBE_ACK)
-                // This ensures subscriptions are registered before we return
-                let mut buf_reader = tokio::io::BufReader::new(reader);
-                let mut acks_received = 0;
-                let expected_acks = topics_to_subscribe.len();
-                
-                println!("⏳ [BROKER] Waiting for {} SUBSCRIBE_ACKs...", expected_acks);
-                
-                while acks_received < expected_acks {
-                    use tokio::io::AsyncReadExt;
-                    
-                    // Read message type (should be 0x03 = SUBSCRIBE_ACK)
-                    let msg_type = match tokio::time::timeout(
-                        Duration::from_secs(5),
-                        buf_reader.read_u8()
-                    ).await {
-                        Ok(Ok(t)) => t,
-                        Ok(Err(e)) => {
-                            println!("❌ [BROKER] Error reading SUBSCRIBE_ACK msg_type: {}", e);
-                            return Err(BrokerError::ConnectionFailed(e.to_string()));
-                        }
-                        Err(_) => {
-                            println!("❌ [BROKER] Timeout waiting for SUBSCRIBE_ACK");
-                            return Err(BrokerError::Timeout);
-                        }
-                    };
-                    
-                    if msg_type != 0x03 {
-                        println!("⚠️ [BROKER] Expected SUBSCRIBE_ACK (0x03), got msg_type: 0x{:02x}", msg_type);
-                        // Skip this unexpected message - try to recover
-                        continue;
-                    }
-                    
-                    // Read topic length
-                    let topic_len = buf_reader.read_u32_le().await
-                        .map_err(|e| BrokerError::ConnectionFailed(e.to_string()))? as usize;
-                    
-                    if topic_len > 1024 {
-                        println!("❌ [BROKER] SUBSCRIBE_ACK topic too long: {}", topic_len);
-                        return Err(BrokerError::ConnectionFailed("Topic too long in ACK".to_string()));
-                    }
-                    
-                    // Read topic
-                    let mut topic_buf = vec![0u8; topic_len];
-                    buf_reader.read_exact(&mut topic_buf).await
-                        .map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
-                    let topic = String::from_utf8_lossy(&topic_buf);
-                    
-                    acks_received += 1;
-                    println!("✅ [BROKER] Received SUBSCRIBE_ACK for '{}' ({}/{})", topic, acks_received, expected_acks);
-                }
-                
-                println!("✅ [BROKER] All {} SUBSCRIBE_ACKs received - subscriptions confirmed!", expected_acks);
-                
-                log_info_structured!(MAIN_LOGGER, "BROKER_SUBSCRIBER_STARTED",
-                    "event" => "BROKER_SUBSCRIBER_STARTED",
-                    "role" => format!("{:?}", role),
-                    "topics" => format!("{:?}", topics_to_subscribe)
-                );
-                
-                // Spawn unified receiver task that routes messages based on topic
-                // IMPORTANT: Pass the buf_reader directly to avoid losing buffered data
+                // Spawn reconnecting receiver task
+                let addr_clone = addr.clone();
                 let chromosome_request_sender = self.chromosome_request_sender.clone();
                 let chromosome_result_sender = self.chromosome_result_sender.clone();
                 let data_broadcast_sender = self.data_broadcast_sender.clone();
@@ -506,8 +402,9 @@ impl BacktestBrokerClient {
                 let data_ack_sender = self.data_ack_sender.clone();
                 
                 tokio::spawn(async move {
-                    Self::unified_receiver_loop(
-                        buf_reader,
+                    Self::reconnecting_receiver_loop(
+                        addr_clone,
+                        role,
                         chromosome_request_sender,
                         chromosome_result_sender,
                         data_broadcast_sender,
@@ -518,6 +415,171 @@ impl BacktestBrokerClient {
                 
                 Ok(())
             }
+        }
+    }
+    
+    /// Connect to broker and subscribe to topics, returning the buf_reader
+    async fn connect_and_subscribe(
+        addr: &str,
+        role: BrokerRole,
+    ) -> Result<tokio::io::BufReader<tokio::net::tcp::OwnedReadHalf>, BrokerError> {
+        println!("🔌 [BROKER] Connecting to {} for {:?} receiver...", addr, role);
+        
+        let stream = tokio::time::timeout(
+            Duration::from_secs(10),
+            TcpStream::connect(addr)
+        ).await
+            .map_err(|_| {
+                println!("❌ [BROKER] Connection timeout to {}", addr);
+                BrokerError::Timeout
+            })?
+            .map_err(|e| {
+                println!("❌ [BROKER] Connection failed to {}: {}", addr, e);
+                BrokerError::ConnectionFailed(e.to_string())
+            })?;
+        
+        println!("✅ [BROKER] TCP connection established to {}", addr);
+        
+        let _ = stream.set_nodelay(true);
+        
+        let (reader, mut writer) = stream.into_split();
+        
+        // Subscribe to ALL topics needed for this role
+        let topics_to_subscribe: Vec<&str> = match role {
+            BrokerRole::Coordinator => vec![
+                topics::CHROMOSOME_RESULTS,  // Receive evaluation results from workers
+                topics::DATA_ACK,            // Receive data cache acknowledgments
+            ],
+            BrokerRole::Worker => vec![
+                topics::CHROMOSOME_REQUESTS, // Receive evaluation requests from coordinator
+                topics::DATA_BROADCAST,      // Receive market data broadcasts (legacy)
+                topics::DATA_LOAD,           // Receive data load requests (new - workers query DB)
+            ],
+        };
+        
+        // Send SUBSCRIBE message for each topic
+        for topic in &topics_to_subscribe {
+            let topic_bytes = topic.as_bytes();
+            let mut buffer = Vec::with_capacity(1 + 4 + topic_bytes.len());
+            buffer.push(0x02); // SUBSCRIBE
+            buffer.extend_from_slice(&(topic_bytes.len() as u32).to_le_bytes());
+            buffer.extend_from_slice(topic_bytes);
+            writer.write_all(&buffer).await.map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
+            println!("📝 [BROKER] Sent SUBSCRIBE for topic: {}", topic);
+        }
+        writer.flush().await.map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
+        println!("✅ [BROKER] All {} subscriptions sent and flushed", topics_to_subscribe.len());
+        
+        // Wait for SUBSCRIBE_ACKs from broker (protocol: 0x03 = SUBSCRIBE_ACK)
+        // This ensures subscriptions are registered before we return
+        let mut buf_reader = tokio::io::BufReader::new(reader);
+        let mut acks_received = 0;
+        let expected_acks = topics_to_subscribe.len();
+        
+        println!("⏳ [BROKER] Waiting for {} SUBSCRIBE_ACKs...", expected_acks);
+        
+        while acks_received < expected_acks {
+            use tokio::io::AsyncReadExt;
+            
+            // Read message type (should be 0x03 = SUBSCRIBE_ACK)
+            let msg_type = match tokio::time::timeout(
+                Duration::from_secs(5),
+                buf_reader.read_u8()
+            ).await {
+                Ok(Ok(t)) => t,
+                Ok(Err(e)) => {
+                    println!("❌ [BROKER] Error reading SUBSCRIBE_ACK msg_type: {}", e);
+                    return Err(BrokerError::ConnectionFailed(e.to_string()));
+                }
+                Err(_) => {
+                    println!("❌ [BROKER] Timeout waiting for SUBSCRIBE_ACK");
+                    return Err(BrokerError::Timeout);
+                }
+            };
+            
+            if msg_type != 0x03 {
+                println!("⚠️ [BROKER] Expected SUBSCRIBE_ACK (0x03), got msg_type: 0x{:02x}", msg_type);
+                // Skip this unexpected message - try to recover
+                continue;
+            }
+            
+            // Read topic length
+            let topic_len = buf_reader.read_u32_le().await
+                .map_err(|e| BrokerError::ConnectionFailed(e.to_string()))? as usize;
+            
+            if topic_len > 1024 {
+                println!("❌ [BROKER] SUBSCRIBE_ACK topic too long: {}", topic_len);
+                return Err(BrokerError::ConnectionFailed("Topic too long in ACK".to_string()));
+            }
+            
+            // Read topic
+            let mut topic_buf = vec![0u8; topic_len];
+            buf_reader.read_exact(&mut topic_buf).await
+                .map_err(|e| BrokerError::ConnectionFailed(e.to_string()))?;
+            let topic = String::from_utf8_lossy(&topic_buf);
+            
+            acks_received += 1;
+            println!("✅ [BROKER] Received SUBSCRIBE_ACK for '{}' ({}/{})", topic, acks_received, expected_acks);
+        }
+        
+        println!("✅ [BROKER] All {} SUBSCRIBE_ACKs received - subscriptions confirmed!", expected_acks);
+        
+        log_info_structured!(MAIN_LOGGER, "BROKER_SUBSCRIBER_STARTED",
+            "event" => "BROKER_SUBSCRIBER_STARTED",
+            "role" => format!("{:?}", role),
+            "topics" => format!("{:?}", topics_to_subscribe)
+        );
+        
+        Ok(buf_reader)
+    }
+    
+    /// Reconnecting receiver loop - automatically reconnects when connection drops
+    async fn reconnecting_receiver_loop(
+        addr: String,
+        role: BrokerRole,
+        chromosome_request_sender: broadcast::Sender<ChromosomeEvalRequest>,
+        chromosome_result_sender: broadcast::Sender<ChromosomeEvalResult>,
+        data_broadcast_sender: broadcast::Sender<DataBroadcastRequest>,
+        data_load_sender: broadcast::Sender<DataLoadRequest>,
+        data_ack_sender: broadcast::Sender<DataCacheAck>,
+    ) {
+        let mut reconnect_delay = Duration::from_secs(1);
+        const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(60);
+        
+        loop {
+            // Try to connect and subscribe
+            let buf_reader = match Self::connect_and_subscribe(&addr, role).await {
+                Ok(reader) => {
+                    // Reset delay on successful connection
+                    reconnect_delay = Duration::from_secs(1);
+                    println!("✅ [BROKER] Receiver connected and subscribed successfully");
+                    reader
+                }
+                Err(e) => {
+                    println!("❌ [BROKER] Failed to connect for receiver: {}. Retrying in {:?}...", e, reconnect_delay);
+                    tokio::time::sleep(reconnect_delay).await;
+                    // Exponential backoff
+                    reconnect_delay = std::cmp::min(reconnect_delay * 2, MAX_RECONNECT_DELAY);
+                    continue;
+                }
+            };
+            
+            // Run the receiver loop until it exits (connection error)
+            println!("🔄 [BROKER] Starting receiver loop...");
+            Self::unified_receiver_loop(
+                buf_reader,
+                chromosome_request_sender.clone(),
+                chromosome_result_sender.clone(),
+                data_broadcast_sender.clone(),
+                data_load_sender.clone(),
+                data_ack_sender.clone(),
+            ).await;
+            
+            // Receiver loop exited - connection lost
+            println!("⚠️ [BROKER] Receiver loop exited. Reconnecting in {:?}...", reconnect_delay);
+            tokio::time::sleep(reconnect_delay).await;
+            // Exponential backoff
+            reconnect_delay = std::cmp::min(reconnect_delay * 2, MAX_RECONNECT_DELAY);
         }
     }
     
