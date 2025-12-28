@@ -1248,6 +1248,74 @@ impl RealisticSimulator {
                 new_count, cancel_count, modify_count, trade_count);
         }
         
+        // ============================================================================
+        // PROFITABILITY ANALYSIS
+        // ============================================================================
+        // Log detailed analysis to understand why strategy might be unprofitable
+        if trades.len() >= 5 {
+            let avg_trade_pnl = if !trades.is_empty() {
+                trades.iter().map(|(pnl, _)| *pnl).sum::<f64>() / trades.len() as f64
+            } else { 0.0 };
+            
+            let avg_trade_volume = if !trades.is_empty() {
+                total_volume / trades.len() as f64
+            } else { 0.0 };
+            
+            let avg_fee_per_trade = if !trades.is_empty() {
+                total_fees / trades.len() as f64
+            } else { 0.0 };
+            
+            let fee_as_pct_of_volume = if total_volume > 0.0 {
+                total_fees / total_volume * 100.0
+            } else { 0.0 };
+            
+            let gross_pnl = total_pnl + total_fees;  // P&L before fees
+            let fee_drag = if gross_pnl.abs() > 0.01 {
+                (total_fees / gross_pnl.abs()) * 100.0
+            } else { 0.0 };
+            
+            eprintln!("\n📊 [PROFITABILITY ANALYSIS] {} trades on ${:.0} capital", trades.len(), self.initial_capital);
+            eprintln!("  💰 P&L Breakdown:");
+            eprintln!("      Gross P&L (before fees): ${:.2}", gross_pnl);
+            eprintln!("      Total Fees:              ${:.2}", total_fees);
+            eprintln!("      Net P&L:                 ${:.2}", total_pnl);
+            eprintln!("      Fee Drag:                {:.1}% of gross P&L", fee_drag);
+            eprintln!("  📈 Per-Trade Metrics:");
+            eprintln!("      Avg Trade P&L:           ${:.4}", avg_trade_pnl);
+            eprintln!("      Avg Trade Volume:        ${:.2}", avg_trade_volume);
+            eprintln!("      Avg Fee/Trade:           ${:.4}", avg_fee_per_trade);
+            eprintln!("      Fee Rate:                {:.3}% (effective)", fee_as_pct_of_volume);
+            eprintln!("  📉 Risk Metrics:");
+            eprintln!("      Win Rate:                {:.1}%", win_rate * 100.0);
+            eprintln!("      Profit Factor:           {:.2}", profit_factor);
+            eprintln!("      Max Drawdown:            {:.2}%", max_drawdown * 100.0);
+            eprintln!("      Sharpe Ratio:            {:.4}", sharpe_ratio);
+            eprintln!("  🏦 Fee Tier Progress:");
+            eprintln!("      Starting Fee:            {:.3}%", starting_fee_rate * 100.0);
+            eprintln!("      Final Fee:               {:.3}%", current_fee_rate * 100.0);
+            eprintln!("      Volume Traded:           ${:.0}", total_volume);
+            eprintln!("      Tier Upgrades:           {}", fee_tier_upgrades);
+            
+            // Diagnose the issue
+            eprintln!("  🔍 Diagnosis:");
+            if fee_as_pct_of_volume > 0.20 {
+                eprintln!("      ⚠️  HIGH FEES: {:.3}% effective fee rate is eating profits", fee_as_pct_of_volume);
+                eprintln!("         Consider: wider min_spread_bps or simulate with established 30d volume");
+            }
+            if win_rate < 0.45 {
+                eprintln!("      ⚠️  LOW WIN RATE: {:.1}% suggests adverse selection", win_rate * 100.0);
+                eprintln!("         Consider: increase adverse_selection_sensitivity, widen spreads");
+            }
+            if avg_trade_pnl < 0.0 && avg_fee_per_trade > avg_trade_pnl.abs() {
+                eprintln!("      ⚠️  FEES > GROSS PROFIT: Can't overcome fee structure");
+                eprintln!("         Consider: increase min_spread_bps to > {:.0} bps", fee_as_pct_of_volume * 100.0 * 2.0);
+            }
+            if max_drawdown > 0.10 {
+                eprintln!("      ⚠️  HIGH DRAWDOWN: {:.1}% suggests inventory accumulation", max_drawdown * 100.0);
+                eprintln!("         Consider: reduce max_inventory_multiple, increase risk_aversion");
+            }
+        }
+        
         RealisticSimResult {
             total_pnl,
             sharpe_ratio,

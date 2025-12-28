@@ -511,7 +511,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         'Total P&L', 'Win Rate (%)', 'Profit Factor', 'Total Trades', 'Avg Trade Duration (s)',
         // Configuration
         'Strategy', 'Initial Capital', 'Optimization Method', 'Population Size', 'Generations',
-        'Initial Inventory %', 'Monte Carlo Enabled', 'Monte Carlo Runs',
+        'Initial Inventory %', 'Initial 30d Volume ($)', 'Monte Carlo Enabled', 'Monte Carlo Runs',
         'Walk Forward Enabled', 'Train Ratio', 'Test Ratio', 'Validate Ratio',
         'Commission Rate', 'Start Date', 'End Date',
         // Strategy Parameters
@@ -542,6 +542,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         jobDetails?.population_size?.toString() ?? 'N/A',
         jobDetails?.generations?.toString() ?? 'N/A',
         safeToFixed((jobDetails?.initial_inventory_pct ?? 0) * 100, 1),
+        safeToFixed(jobDetails?.initial_30d_volume ?? 0, 0),
         jobDetails?.monte_carlo_enabled ? 'Yes' : 'No',
         jobDetails?.monte_carlo_runs?.toString() ?? 'N/A',
         jobDetails?.walk_forward_enabled ? 'Yes' : 'No',

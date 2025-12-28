@@ -1484,12 +1484,15 @@ impl Worker {
                 symbol: params.symbol.clone(),
                 exchange: params.exchange.clone(),
                 initial_capital,
+                initial_30d_volume: params.initial_30d_volume,
+                initial_inventory_pct: params.initial_inventory_pct,
                 cache_ttl_seconds: 3600, // 1 hour cache TTL
                 start_time: params.start_date.clone().unwrap_or_else(|| "2024-01-01T00:00:00Z".to_string()),
                 end_time: params.end_date.clone().unwrap_or_else(|| "2024-12-31T23:59:59Z".to_string()),
                 train_ratio: params.train_ratio,
                 validation_ratio: params.test_ratio + params.validate_ratio, // Combined for walk-forward
                 fitness_weights: params.fitness_weights.clone(),
+                monte_carlo_runs: params.monte_carlo_runs,
             };
             eprintln!("🧬 Created DistributedGAConfig with start_time={}, end_time={}, fitness_weights={:?}", 
                 distributed_config.start_time, distributed_config.end_time, distributed_config.fitness_weights);
@@ -1815,6 +1818,7 @@ impl Worker {
             params.initial_capital,
             params.initial_inventory_pct,
             params.commission_rate,
+            params.initial_30d_volume,  // Pass through starting volume for fee tier
             &best_chromosome,
             &data_for_backtest,      // Full data for backtest + Monte Carlo
             &data_for_walkforward,   // Full data for walk-forward
@@ -2615,6 +2619,7 @@ impl Worker {
         initial_capital: f64,
         _initial_inventory_pct: f64,  // Reserved for future use (RealisticSimulator uses order_size_pct)
         _commission_rate: f64,  // Reserved for future use (using exchange_fee_config instead)
+        initial_30d_volume: f64,  // Starting 30-day volume for fee tier calculation
         chromosome: &genetic::chromosome::AvellanedaStoikovChromosome,
         backtest_data: &[MarketData],
         walkforward_data: &[MarketData],
@@ -2632,8 +2637,16 @@ impl Worker {
         // This uses the same RealisticSimulator that GA workers use for chromosome
         // evaluation, ensuring consistency between optimization and final analysis.
         
-        // Get exchange-specific configuration
-        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(exchange);
+        // Get exchange-specific configuration with starting 30-day volume
+        let mut exchange_fee_config = config::ExchangeFeeConfig::for_exchange(exchange);
+        if initial_30d_volume > 0.0 {
+            exchange_fee_config.starting_30d_volume = initial_30d_volume;
+            // Update base fee rates to match the volume tier
+            exchange_fee_config.maker_fee = exchange_fee_config.get_fee_rate(initial_30d_volume, true);
+            exchange_fee_config.taker_fee = exchange_fee_config.get_fee_rate(initial_30d_volume, false);
+            log_info!(MAIN_LOGGER, "Job {} using initial_30d_volume=${:.0} → maker_fee={:.4}% taker_fee={:.4}%",
+                job_id, initial_30d_volume, exchange_fee_config.maker_fee * 100.0, exchange_fee_config.taker_fee * 100.0);
+        }
         
         // Get initial price for inventory calculation
         let asset_price = Self::get_reference_price(backtest_data);

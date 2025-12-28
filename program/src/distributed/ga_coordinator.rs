@@ -173,6 +173,11 @@ pub struct DistributedGAConfig {
     pub exchange: String,
     /// Initial capital
     pub initial_capital: f64,
+    /// Initial 30-day trading volume in USD (for fee tier calculations)
+    /// 0.0 = use exchange default fee tier, higher values = lower fees
+    pub initial_30d_volume: f64,
+    /// Percentage of initial_capital to hold as base asset (e.g., 0.5 = 50% in BTC, 50% in USD)
+    pub initial_inventory_pct: f64,
     /// Data cache TTL in seconds
     pub cache_ttl_seconds: i64,
     /// Start time for data query (ISO 8601 format)
@@ -186,6 +191,8 @@ pub struct DistributedGAConfig {
     pub validation_ratio: f64,
     /// Custom fitness weights for GA optimization (optional, defaults to balanced)
     pub fitness_weights: Option<crate::job_queue::FitnessWeights>,
+    /// Number of Monte Carlo simulation runs (default 1000)
+    pub monte_carlo_runs: usize,
 }
 
 /// Worker capacity tracking
@@ -793,6 +800,10 @@ impl DistributedGACoordinator {
             test_end_idx: self.test_end_idx,
             total_ticks: self.total_ticks,
             fitness_weights_json,
+            // Fee tier and inventory configuration
+            initial_30d_volume: self.config.initial_30d_volume,
+            initial_inventory_pct: self.config.initial_inventory_pct,
+            monte_carlo_runs: self.config.monte_carlo_runs as u32,
         })
     }
     
@@ -837,6 +848,10 @@ impl DistributedGACoordinator {
             test_end_idx: self.test_end_idx,
             total_ticks: self.total_ticks,
             fitness_weights_json,
+            // Fee tier and inventory configuration
+            initial_30d_volume: self.config.initial_30d_volume,
+            initial_inventory_pct: self.config.initial_inventory_pct,
+            monte_carlo_runs: self.config.monte_carlo_runs as u32,
         };
         
         log_info_structured!(MAIN_LOGGER, "GA_FINAL_EVAL_REQUEST",

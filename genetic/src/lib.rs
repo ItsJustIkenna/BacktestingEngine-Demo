@@ -19,8 +19,6 @@ use ultra_logger::{UltraLogger, LoggerConfig, TransportConfig, ConnectionConfig}
 use once_cell::sync::Lazy;
 
 pub mod chromosome;
-// Fitness functions moved to backtest crate to avoid circular dependency
-// pub mod fitness;
 
 /// Regime-aware Monte Carlo simulation for robust backtesting
 pub mod regime_mc;

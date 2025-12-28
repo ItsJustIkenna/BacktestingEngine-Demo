@@ -892,8 +892,8 @@ fn run_backtest_on_range(
     };
     let initial_price = first_tick.price();
     
-    // Initialize portfolio state
-    let inventory_pct = 0.5;
+    // Initialize portfolio state - use configurable inventory percentage
+    let inventory_pct = if params.initial_inventory_pct > 0.0 { params.initial_inventory_pct } else { 0.5 };
     let mut cash = initial_capital * (1.0 - inventory_pct);
     let mut inventory = (initial_capital * inventory_pct) / initial_price;
     

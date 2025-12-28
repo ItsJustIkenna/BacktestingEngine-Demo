@@ -897,6 +897,7 @@ impl DistributedGAWorker {
                     request.initial_capital,
                     request.train_end_idx, // Use only train data for GA fitness
                     &request.exchange,
+                    request.initial_30d_volume,
                 ).await)
             } else {
                 None
@@ -919,7 +920,7 @@ impl DistributedGAWorker {
                         }
                     }
                 };
-                self.evaluate_chromosome(&chromosome, &data, request.initial_capital).await
+                self.evaluate_chromosome(&chromosome, &data, request.initial_capital, request.initial_inventory_pct, request.initial_30d_volume).await
             }
         };
         
@@ -975,6 +976,7 @@ impl DistributedGAWorker {
         initial_capital: f64,
         train_end_idx: i64,
         exchange: &str,
+        initial_30d_volume: f64,
     ) -> FitnessResult {
         use data_prep::OrderBookBinaryReader;
         use backtest::realistic_simulation::{RealisticSimulator, RealisticASParams, OrderBookEvent};
@@ -1021,8 +1023,13 @@ impl DistributedGAWorker {
             return FitnessResult::failure();
         }
         
-        // Get exchange fee configuration
-        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(exchange);
+        // Get exchange fee configuration with proper volume tier
+        let mut exchange_fee_config = config::ExchangeFeeConfig::for_exchange(exchange);
+        if initial_30d_volume > 0.0 {
+            exchange_fee_config.starting_30d_volume = initial_30d_volume;
+            exchange_fee_config.maker_fee = exchange_fee_config.get_fee_rate(initial_30d_volume, true);
+            exchange_fee_config.taker_fee = exchange_fee_config.get_fee_rate(initial_30d_volume, false);
+        }
         
         // Convert chromosome to realistic simulation parameters
         let realistic_params = RealisticASParams {
@@ -1076,6 +1083,8 @@ impl DistributedGAWorker {
         chromosome: &AvellanedaStoikovChromosome,
         data: &[MarketData],
         initial_capital: f64,
+        initial_inventory_pct: f64,
+        _initial_30d_volume: f64,
     ) -> FitnessResult {
         use backtest::BacktestEngine;
         use strategy::StrategyManager;
@@ -1162,7 +1171,7 @@ impl DistributedGAWorker {
             })
             .unwrap_or_else(chrono::Utc::now);
         
-        let inventory_pct = 0.5;
+        let inventory_pct = if initial_inventory_pct > 0.0 { initial_inventory_pct } else { 0.5 };
         let quote_balance = initial_capital * (1.0 - inventory_pct);
         let base_value = initial_capital * inventory_pct;
         let base_quantity = base_value / initial_price;
@@ -1303,6 +1312,7 @@ impl DistributedGAWorker {
         chromosome: &genetic::chromosome::AvellanedaStoikovChromosome,
         exchange: &str,
         initial_capital: f64,
+        initial_30d_volume: f64,
     ) -> walkforward::WalkForwardSummary {
         use backtest::realistic_simulation::{RealisticSimulator, RealisticASParams};
         
@@ -1311,7 +1321,12 @@ impl DistributedGAWorker {
             return walkforward::WalkForwardSummary::new(vec![]);
         }
         
-        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(exchange);
+        let mut exchange_fee_config = config::ExchangeFeeConfig::for_exchange(exchange);
+        if initial_30d_volume > 0.0 {
+            exchange_fee_config.starting_30d_volume = initial_30d_volume;
+            exchange_fee_config.maker_fee = exchange_fee_config.get_fee_rate(initial_30d_volume, true);
+            exchange_fee_config.taker_fee = exchange_fee_config.get_fee_rate(initial_30d_volume, false);
+        }
         
         let realistic_params = RealisticASParams {
             risk_aversion: chromosome.risk_aversion,
@@ -1501,12 +1516,18 @@ impl DistributedGAWorker {
         println!("📊 [WORKER {}] Event breakdown: {} new, {} modify, {} cancel, {} trade (total: {})", 
             self.worker_id, new_count, modify_count, cancel_count, trade_count, events.len());
         
-        // Get exchange fee configuration (uses Kraken's full tier structure)
-        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&request.exchange);
-        println!("📊 [WORKER {}] Using {} config: maker={:.4}%, taker={:.4}%, latency={:.1}ms±{:.1}ms",
+        // Get exchange fee configuration with proper volume tier
+        let mut exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&request.exchange);
+        if request.initial_30d_volume > 0.0 {
+            exchange_fee_config.starting_30d_volume = request.initial_30d_volume;
+            exchange_fee_config.maker_fee = exchange_fee_config.get_fee_rate(request.initial_30d_volume, true);
+            exchange_fee_config.taker_fee = exchange_fee_config.get_fee_rate(request.initial_30d_volume, false);
+        }
+        println!("📊 [WORKER {}] Using {} config: maker={:.4}%, taker={:.4}%, latency={:.1}ms±{:.1}ms, 30d_volume=${:.0}",
             self.worker_id, exchange_fee_config.exchange, 
             exchange_fee_config.maker_fee * 100.0, exchange_fee_config.taker_fee * 100.0,
-            exchange_fee_config.latency_mean_ms, exchange_fee_config.latency_std_ms);
+            exchange_fee_config.latency_mean_ms, exchange_fee_config.latency_std_ms,
+            exchange_fee_config.starting_30d_volume);
         
         // Convert chromosome to realistic simulation parameters with institutional-grade settings
         // All operational parameters come from exchange configuration - no hardcoded values
@@ -1631,13 +1652,14 @@ impl DistributedGAWorker {
                 chromosome,
                 &request.exchange,
                 request.initial_capital,
+                request.initial_30d_volume,
                 Some(train_days),
                 Some(test_days),
                 Some(step_days),
             )
         } else {
             // Not enough data for walk-forward - run single realistic simulation
-            self.run_single_realistic_simulation(&validation_events, chromosome, &request.exchange, request.initial_capital)
+            self.run_single_realistic_simulation(&validation_events, chromosome, &request.exchange, request.initial_capital, request.initial_30d_volume)
         };
         
         println!("🔬 [WORKER {}] Walk-forward PRIMARY validation complete:", self.worker_id);
@@ -1771,11 +1793,13 @@ impl DistributedGAWorker {
         
         // Run Monte Carlo using per-trade returns (statistically valid sample size)
         let monte_carlo_results = if request.run_monte_carlo && !all_trade_returns.is_empty() {
-            println!("🔬 [WORKER {}] Running Monte Carlo simulation on {} trades...", 
-                self.worker_id, all_trade_returns.len());
-            log_info!(MAIN_LOGGER, "Running Monte Carlo simulation for job {} with {} trades", 
-                request.job_id, all_trade_returns.len());
-            match backtest::monte_carlo::run_monte_carlo_simulation(&synthetic_backtest_result, 1000) {
+            // Use request parameter, cap at 200 for speed (1000 is excessive for real-time use)
+            let mc_runs = (request.monte_carlo_runs as usize).min(200).max(100);
+            println!("🔬 [WORKER {}] Running Monte Carlo simulation ({} runs) on {} trades...", 
+                self.worker_id, mc_runs, all_trade_returns.len());
+            log_info!(MAIN_LOGGER, "Running Monte Carlo simulation for job {} with {} trades ({} runs)", 
+                request.job_id, all_trade_returns.len(), mc_runs);
+            match backtest::monte_carlo::run_monte_carlo_simulation(&synthetic_backtest_result, mc_runs) {
                 Ok(mc_result) => {
                     println!("🔬 [WORKER {}] Monte Carlo complete: VaR95={:.2}, CVaR95={:.2}", 
                         self.worker_id, mc_result.var_95, mc_result.cvar_95);
@@ -1962,6 +1986,7 @@ fn run_walkforward_realistic(
     chromosome: &genetic::chromosome::AvellanedaStoikovChromosome,
     exchange: &str,
     initial_capital: f64,
+    initial_30d_volume: f64,
     train_days: Option<i64>,
     test_days: Option<i64>,
     step_days: Option<i64>,
@@ -2021,8 +2046,13 @@ fn run_walkforward_realistic(
         }
     }
     
-    // Get exchange config for realistic simulation
-    let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(exchange);
+    // Get exchange config for realistic simulation with proper fee tier
+    let mut exchange_fee_config = config::ExchangeFeeConfig::for_exchange(exchange);
+    if initial_30d_volume > 0.0 {
+        exchange_fee_config.starting_30d_volume = initial_30d_volume;
+        exchange_fee_config.maker_fee = exchange_fee_config.get_fee_rate(initial_30d_volume, true);
+        exchange_fee_config.taker_fee = exchange_fee_config.get_fee_rate(initial_30d_volume, false);
+    }
     
     // Build realistic params from chromosome
     let realistic_params = RealisticASParams {

@@ -333,11 +333,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     start_time: job.params.start_date.clone().unwrap_or_default(),
                                     end_time: job.params.end_date.clone().unwrap_or_default(),
                                     initial_capital: job.params.initial_capital,
+                                    initial_30d_volume: job.params.initial_30d_volume,
+                                    initial_inventory_pct: job.params.initial_inventory_pct,
                                     cache_ttl_seconds: 14400, // 4 hours - enough for long GA runs + final evaluation
                                     // Simplified: TRAIN for GA, VALIDATE (remaining) for walk-forward
                                     train_ratio: job.params.train_ratio,
                                     validation_ratio: job.params.test_ratio + job.params.validate_ratio, // Combined
                                     fitness_weights: job.params.fitness_weights.clone(),
+                                    monte_carlo_runs: job.params.monte_carlo_runs,
                                 };
                                 
                                 let mut coordinator = DistributedGACoordinator::new(

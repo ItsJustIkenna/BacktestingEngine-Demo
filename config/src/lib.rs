@@ -294,6 +294,17 @@ impl ExchangeFeeConfig {
         }
     }
     
+    /// Create Kraken configuration for an established market maker
+    /// At $5M 30-day volume: 0.02% maker, 0.12% taker
+    /// This is more realistic for backtesting as most serious MMs operate at volume discounts
+    pub fn kraken_established() -> Self {
+        let mut config = Self::kraken();
+        config.starting_30d_volume = 5_000_000.0;  // $5M 30-day volume
+        config.maker_fee = 0.0002;  // 0.02% at $5M tier
+        config.taker_fee = 0.0012;  // 0.12% at $5M tier
+        config
+    }
+    
     /// Create Binance exchange configuration
     pub fn binance() -> Self {
         Self {
