@@ -994,21 +994,23 @@ impl DistributedGARunner {
     /// 
     /// If distributed mode is enabled and enough workers are available,
     /// uses distributed GA. Otherwise falls back to local GA.
-    pub async fn run_with_fallback<F>(
+    pub async fn run_with_fallback<F, P>(
         mode: &DistributedMode,
         config: &DistributedGAConfig,
         _market_data: &[dataloader::MarketData],
         local_fitness_fn: F,
+        progress_callback: Option<P>,
     ) -> (AvellanedaStoikovChromosome, f64)
     where
         F: Fn(&AvellanedaStoikovChromosome) -> std::pin::Pin<Box<dyn std::future::Future<Output = genetic::FitnessResult> + Send>> + Send + Sync + 'static,
+        P: Fn(f64, String) + Send + Sync + 'static,
     {
         if !mode.enabled {
             log_info_structured!(MAIN_LOGGER, "GA_MODE_LOCAL",
                 "event" => "GA_MODE_LOCAL",
                 "reason" => "distributed_disabled"
             );
-            return Self::run_local(config, local_fitness_fn).await;
+            return Self::run_local(config, local_fitness_fn, progress_callback).await;
         }
         
         eprintln!("🌐 DISTRIBUTED: Mode enabled, attempting broker connection...");
@@ -1056,7 +1058,7 @@ impl DistributedGARunner {
         if let Err(e) = broker.connect().await {
             eprintln!("🌐 DISTRIBUTED: Failed to connect: {}. Falling back to local.", e);
             log_warn!(MAIN_LOGGER, "Failed to connect to broker: {}. Falling back to local GA.", e);
-            return Self::run_local(config, local_fitness_fn).await;
+            return Self::run_local(config, local_fitness_fn, progress_callback).await;
         }
         eprintln!("🌐 DISTRIBUTED: Connected to broker!");
         
@@ -1066,7 +1068,7 @@ impl DistributedGARunner {
         if let Err(e) = broker.start_receiver(BrokerRole::Coordinator).await {
             eprintln!("🌐 DISTRIBUTED: Failed to start receiver: {}. Falling back to local.", e);
             log_warn!(MAIN_LOGGER, "Failed to start broker receiver: {}. Falling back to local GA.", e);
-            return Self::run_local(config, local_fitness_fn).await;
+            return Self::run_local(config, local_fitness_fn, progress_callback).await;
         }
         eprintln!("🌐 DISTRIBUTED: Receiver started successfully!");
         
@@ -1077,6 +1079,11 @@ impl DistributedGARunner {
             config.clone(),
             job_id,
         );
+        
+        // Set progress callback if provided
+        if let Some(cb) = progress_callback {
+            coordinator.set_progress_callback(cb);
+        }
         
         // Request workers to load data from database (sends ~200 bytes instead of 500MB+)
         eprintln!("🌐 DISTRIBUTED: Requesting workers to load data from database...");
@@ -1121,28 +1128,44 @@ impl DistributedGARunner {
             }
         }
         
-        // Fallback to local GA
+        // Fallback to local GA - can't use progress_callback here since it was moved
         log_info_structured!(MAIN_LOGGER, "GA_MODE_LOCAL_FALLBACK",
             "event" => "GA_MODE_LOCAL",
             "reason" => "distributed_fallback"
         );
-        Self::run_local(config, local_fitness_fn).await
+        Self::run_local::<F, fn(f64, String)>(config, local_fitness_fn, None).await
     }
     
     /// Run local GA optimization
-    async fn run_local<F>(
+    async fn run_local<F, P>(
         config: &DistributedGAConfig,
         fitness_fn: F,
+        progress_callback: Option<P>,
     ) -> (AvellanedaStoikovChromosome, f64)
     where
         F: Fn(&AvellanedaStoikovChromosome) -> std::pin::Pin<Box<dyn std::future::Future<Output = genetic::FitnessResult> + Send>> + Send + Sync + 'static,
+        P: Fn(f64, String) + Send + Sync + 'static,
     {
         use genetic::GeneticOptimizer;
+        
+        // Convert (f64, String) callback to (usize, usize) -> Future callback
+        let progress_cb: Option<genetic::ProgressCallback> = progress_callback.map(|cb| {
+            let cb = Arc::new(cb);
+            let generations = config.genetic_config.generations;
+            Arc::new(move |current: usize, total: usize| {
+                let cb = Arc::clone(&cb);
+                let progress = 5.0 + (current as f64 / total as f64) * 80.0;
+                let detail = format!("Generation {}/{}: evaluating chromosomes", current, generations);
+                Box::pin(async move {
+                    cb(progress, detail);
+                }) as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+            }) as genetic::ProgressCallback
+        });
         
         let optimizer = GeneticOptimizer {
             config: config.genetic_config.clone(),
             fitness_fn: Arc::new(fitness_fn),
-            progress_callback: None,
+            progress_callback: progress_cb,
             job_id: Some(format!("local-{}", uuid::Uuid::new_v4())),
         };
         

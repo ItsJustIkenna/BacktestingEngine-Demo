@@ -1502,6 +1502,37 @@ impl Worker {
             let initial_inventory_pct_fallback = initial_inventory_pct_for_distributed;
             let commission_rate_fallback = commission_rate_for_distributed;
             
+            // Create progress callback for distributed GA
+            // This parses generation info from the detail string and updates the database
+            let job_id_for_distributed = job.id.clone();
+            let job_queue_for_distributed = Arc::clone(&self.job_queue);
+            let distributed_progress_callback = move |progress: f64, detail: String| {
+                let job_id = job_id_for_distributed.clone();
+                let job_queue = Arc::clone(&job_queue_for_distributed);
+                
+                // Parse generation info from detail string (e.g., "Generation 5/10: evaluating chromosomes")
+                if detail.starts_with("Generation ") {
+                    let gen_str = detail.trim_start_matches("Generation ");
+                    let gen_part = gen_str.split(|c| c == ':' || c == ' ').next().unwrap_or("");
+                    if let Some((current, total)) = gen_part.split_once('/') {
+                        if let (Ok(cur), Ok(tot)) = (current.trim().parse::<usize>(), total.trim().parse::<usize>()) {
+                            // Broadcast and persist progress
+                            get_progress_broadcaster().publish_generation(&job_id, cur, tot);
+                            
+                            // Spawn async task for database updates
+                            tokio::spawn(async move {
+                                if let Err(e) = job_queue.update_progress(&job_id, progress).await {
+                                    log_warn!(MAIN_LOGGER, "Job {} failed to persist progress: {}", job_id, e);
+                                }
+                                if let Err(e) = job_queue.update_generation(&job_id, cur as i32, tot as i32).await {
+                                    log_warn!(MAIN_LOGGER, "Job {} failed to persist generation: {}", job_id, e);
+                                }
+                            });
+                        }
+                    }
+                }
+            };
+            
             // Run with automatic fallback to local if distributed fails
             DistributedGARunner::run_with_fallback(
                 &distributed_mode,
@@ -1612,6 +1643,7 @@ impl Worker {
                         }
                     })
                 },
+                Some(distributed_progress_callback),
             ).await
         } else {
             log_info!(GENETIC_LOGGER, "Job {} starting LOCAL genetic algorithm with robustness-weighted fitness", job.id);
