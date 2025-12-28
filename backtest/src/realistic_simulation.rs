@@ -504,19 +504,19 @@ impl RealisticSimulator {
             eprintln!("📊 [SIM_DEBUG] First NEW events by side:");
             eprintln!("  === BUY (bid) orders ===");
             for event in events.iter() {
-                if event.event_type == EventType::New && event.side == Side::Buy && buy_count < 10 {
-                    eprintln!("  BUY  price={:.6} qty={:.4}", event.price, event.quantity);
+                if event.event_type == EventType::New && event.side == Side::Buy && buy_count < 5 {
+                    eprintln!("  BUY  price={:.6} qty={:.4} id={}", event.price, event.quantity, &event.order_id);
                     buy_count += 1;
                 }
-                if buy_count >= 10 { break; }
+                if buy_count >= 5 { break; }
             }
             eprintln!("  === SELL (ask) orders ===");
             for event in events.iter() {
-                if event.event_type == EventType::New && event.side == Side::Sell && sell_count < 10 {
-                    eprintln!("  SELL price={:.6} qty={:.4}", event.price, event.quantity);
+                if event.event_type == EventType::New && event.side == Side::Sell && sell_count < 5 {
+                    eprintln!("  SELL price={:.6} qty={:.4} id={}", event.price, event.quantity, &event.order_id);
                     sell_count += 1;
                 }
-                if sell_count >= 10 { break; }
+                if sell_count >= 5 { break; }
             }
             
             // Also find min/max prices per side to detect inversion
@@ -594,6 +594,7 @@ impl RealisticSimulator {
         let mut event_count: usize = 0;
         let mut cancel_attempts: usize = 0;
         let mut cancel_successes: usize = 0;
+        let mut first_cancel_failures: Vec<String> = Vec::new();
         
         for event in events {
             event_count += 1;
@@ -675,6 +676,11 @@ impl RealisticSimulator {
                     cancel_attempts += 1;
                     if book.cancel_order(&event.order_id) {
                         cancel_successes += 1;
+                    } else if first_cancel_failures.len() < 5 {
+                        first_cancel_failures.push(format!(
+                            "event#{}: id={} side={:?} price={:.4}", 
+                            event_count, &event.order_id, event.side, event.price
+                        ));
                     }
                 }
                 EventType::Trade => {
@@ -1011,6 +1017,12 @@ impl RealisticSimulator {
             eprintln!("  - cancel_attempts: {}, cancel_successes: {} ({:.1}%)", 
                 cancel_attempts, cancel_successes, 
                 if cancel_attempts > 0 { 100.0 * cancel_successes as f64 / cancel_attempts as f64 } else { 0.0 });
+            if !first_cancel_failures.is_empty() {
+                eprintln!("  - first cancel failures:");
+                for fail in &first_cancel_failures {
+                    eprintln!("      {}", fail);
+                }
+            }
             eprintln!("  - final book state: {} bids, {} asks", book.bids.len(), book.asks.len());
             eprintln!("  - best_bid: {:?}, best_ask: {:?}", book.best_bid(), book.best_ask());
             eprintln!("  - last_price: {:?}", last_price);
