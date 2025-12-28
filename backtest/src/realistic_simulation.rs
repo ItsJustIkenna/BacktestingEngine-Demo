@@ -496,13 +496,83 @@ impl RealisticSimulator {
         let mut skipped_no_price = 0usize;
         let mut quote_refresh_attempts = 0usize;
         
-        // Debug: print first 10 events to understand book construction
+        // Debug: print first 20 NEW events (buys and sells separately) to understand book construction
         if events.len() > 100 {
-            eprintln!("📊 [SIM_DEBUG] First 10 events:");
-            for (i, event) in events.iter().take(10).enumerate() {
-                eprintln!("  [{}] {:?} {:?} price={:.4} qty={:.4} id={}", 
-                    i, event.event_type, event.side, event.price, event.quantity, &event.order_id);
+            let mut buy_count = 0;
+            let mut sell_count = 0;
+            eprintln!("📊 [SIM_DEBUG] First NEW events by side:");
+            eprintln!("  === BUY (bid) orders ===");
+            for event in events.iter() {
+                if event.event_type == EventType::New && event.side == Side::Buy && buy_count < 10 {
+                    eprintln!("  BUY  price={:.6} qty={:.4}", event.price, event.quantity);
+                    buy_count += 1;
+                }
+                if buy_count >= 10 { break; }
             }
+            eprintln!("  === SELL (ask) orders ===");
+            for event in events.iter() {
+                if event.event_type == EventType::New && event.side == Side::Sell && sell_count < 10 {
+                    eprintln!("  SELL price={:.6} qty={:.4}", event.price, event.quantity);
+                    sell_count += 1;
+                }
+                if sell_count >= 10 { break; }
+            }
+            
+            // Also find min/max prices per side to detect inversion
+            let mut min_buy_price = f64::MAX;
+            let mut max_buy_price = f64::MIN;
+            let mut min_sell_price = f64::MAX;
+            let mut max_sell_price = f64::MIN;
+            for event in events.iter() {
+                if event.event_type == EventType::New {
+                    match event.side {
+                        Side::Buy => {
+                            min_buy_price = min_buy_price.min(event.price);
+                            max_buy_price = max_buy_price.max(event.price);
+                        }
+                        Side::Sell => {
+                            min_sell_price = min_sell_price.min(event.price);
+                            max_sell_price = max_sell_price.max(event.price);
+                        }
+                    }
+                }
+            }
+            eprintln!("📊 [SIM_DEBUG] Price ranges from all NEW events:");
+            eprintln!("  BUY  (bids): min={:.6}, max={:.6}", min_buy_price, max_buy_price);
+            eprintln!("  SELL (asks): min={:.6}, max={:.6}", min_sell_price, max_sell_price);
+            if max_buy_price > min_sell_price {
+                eprintln!("⚠️  [SIM_DEBUG] DATA INVERSION DETECTED: max_buy ({:.6}) > min_sell ({:.6})", 
+                    max_buy_price, min_sell_price);
+                eprintln!("     This means BUY and SELL sides are swapped in the source data!");
+            }
+        }
+        
+        // Detect if sides are inverted in the data (buy prices > sell prices)
+        let sides_inverted = {
+            let mut max_buy_price = f64::MIN;
+            let mut min_sell_price = f64::MAX;
+            let mut buy_count = 0;
+            let mut sell_count = 0;
+            for event in events.iter().take(10000) {
+                if event.event_type == EventType::New {
+                    match event.side {
+                        Side::Buy => {
+                            max_buy_price = max_buy_price.max(event.price);
+                            buy_count += 1;
+                        }
+                        Side::Sell => {
+                            min_sell_price = min_sell_price.min(event.price);
+                            sell_count += 1;
+                        }
+                    }
+                }
+            }
+            // If we have enough data and max buy > min sell, sides are inverted
+            buy_count > 100 && sell_count > 100 && max_buy_price > min_sell_price
+        };
+        
+        if sides_inverted {
+            eprintln!("🔄 [SIM_DEBUG] Auto-correcting inverted sides for this simulation");
         }
         
         // Funding rate tracking
@@ -569,9 +639,19 @@ impl RealisticSimulator {
             }
             
             // Update book state based on event type
+            // If sides are inverted in the data, swap them
+            let effective_side = if sides_inverted {
+                match event.side {
+                    Side::Buy => Side::Sell,
+                    Side::Sell => Side::Buy,
+                }
+            } else {
+                event.side
+            };
+            
             match event.event_type {
                 EventType::New => {
-                    book.add_order(event.side, event.price, event.quantity, &event.order_id);
+                    book.add_order(effective_side, event.price, event.quantity, &event.order_id);
                     
                     // Debug: detect first book inversion
                     if event_count < 1000 {
@@ -592,12 +672,12 @@ impl RealisticSimulator {
                     book.cancel_order(&event.order_id);
                 }
                 EventType::Trade => {
-                    // Execute trade in book
-                    let _consumed = book.execute_trade(event.side, event.price, event.quantity);
+                    // Execute trade in book (use effective_side for book operations)
+                    let _consumed = book.execute_trade(effective_side, event.price, event.quantity);
                     
                     // Check if our orders got filled
                     // A buy aggressor hits asks; a sell aggressor hits bids
-                    let check_our_order = match event.side {
+                    let check_our_order = match effective_side {
                         Side::Buy => &mut our_ask,  // Buy aggressor may fill our ask
                         Side::Sell => &mut our_bid,  // Sell aggressor may fill our bid
                     };
