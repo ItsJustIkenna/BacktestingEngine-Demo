@@ -496,6 +496,15 @@ impl RealisticSimulator {
         let mut skipped_no_price = 0usize;
         let mut quote_refresh_attempts = 0usize;
         
+        // Debug: print first 10 events to understand book construction
+        if events.len() > 100 {
+            eprintln!("📊 [SIM_DEBUG] First 10 events:");
+            for (i, event) in events.iter().take(10).enumerate() {
+                eprintln!("  [{}] {:?} {:?} price={:.4} qty={:.4} id={}", 
+                    i, event.event_type, event.side, event.price, event.quantity, &event.order_id);
+            }
+        }
+        
         // Funding rate tracking
         let mut last_funding_time: i64 = 0;
         let mut total_funding_paid = 0.0;
@@ -511,8 +520,23 @@ impl RealisticSimulator {
         
         let mut peak_equity: f64 = capital;
         let mut max_drawdown: f64 = 0.0;
+        let mut event_count: usize = 0;
         
         for event in events {
+            event_count += 1;
+            
+            // Debug: print book state after first 100 events
+            if event_count == 100 && events.len() > 100 {
+                eprintln!("📊 [SIM_DEBUG] Book state after 100 events:");
+                eprintln!("  - bids: {} levels, asks: {} levels", book.bids.len(), book.asks.len());
+                eprintln!("  - best_bid: {:?}, best_ask: {:?}", book.best_bid(), book.best_ask());
+                if let (Some(bid), Some(ask)) = (book.best_bid(), book.best_ask()) {
+                    if bid > ask {
+                        eprintln!("  ❌ INVERTED BOOK DETECTED! bid ({:.4}) > ask ({:.4})", bid, ask);
+                    }
+                }
+            }
+            
             // === Funding Rate Settlement ===
             if params.funding_rate_8h != 0.0 && inventory.abs() > 1e-10 {
                 let funding_intervals_passed = (event.timestamp_ms - last_funding_time) / params.funding_interval_ms;
