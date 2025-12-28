@@ -365,6 +365,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         "total_generations": total_generations
                                     });
                                     
+                                    // Track parsed generation for database update
+                                    let mut parsed_gen: Option<(i32, i32)> = None;
+                                    
                                     // Try to parse generation info (handles both "Generation 5/10:" and "Generation 5/10 complete")
                                     if det.starts_with("Generation ") {
                                         let gen_str = det.trim_start_matches("Generation ");
@@ -374,6 +377,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             if let (Ok(cur), Ok(tot)) = (current.trim().parse::<i32>(), total.trim().parse::<i32>()) {
                                                 phase_details["current_generation"] = serde_json::json!(cur);
                                                 phase_details["total_generations"] = serde_json::json!(tot);
+                                                parsed_gen = Some((cur, tot));
                                             }
                                         }
                                     }
@@ -414,6 +418,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     tokio::spawn(async move {
                                         let _ = jq.update_progress(&jid, progress).await;
                                         let _ = jq.update_phase(&jid, "genetic_optimization", phase_details).await;
+                                        
+                                        // Also update the actual database fields for current_generation/total_generations
+                                        // This ensures the UI shows "Gen X of Y" correctly
+                                        if let Some((cur, tot)) = parsed_gen {
+                                            let _ = jq.update_generation(&jid, cur, tot).await;
+                                        }
                                     });
                                 });
                                 
