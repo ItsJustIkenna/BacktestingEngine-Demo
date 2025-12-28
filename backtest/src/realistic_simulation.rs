@@ -405,6 +405,61 @@ impl SimpleOrderBook {
         }
         f64::MAX  // Order not found
     }
+    
+    /// Sanitize the order book by removing stale orders that are unreasonably far from the reference price.
+    /// This handles the case where L3 data has old limit orders from before our data window that never got cancelled.
+    /// 
+    /// Returns the number of price levels removed.
+    fn sanitize(&mut self, reference_price: f64, max_deviation_pct: f64) -> usize {
+        let min_valid_price = reference_price * (1.0 - max_deviation_pct);
+        let max_valid_price = reference_price * (1.0 + max_deviation_pct);
+        
+        let mut removed = 0;
+        
+        // Remove bids that are too far from reference (e.g., ancient low bids)
+        let stale_bid_prices: Vec<_> = self.bids.keys()
+            .filter(|p| p.0 < min_valid_price || p.0 > max_valid_price)
+            .cloned()
+            .collect();
+        for price in stale_bid_prices {
+            self.bids.remove(&price);
+            removed += 1;
+        }
+        
+        // Remove asks that are too far from reference (e.g., ancient high asks)
+        let stale_ask_prices: Vec<_> = self.asks.keys()
+            .filter(|p| p.0 < min_valid_price || p.0 > max_valid_price)
+            .cloned()
+            .collect();
+        for price in stale_ask_prices {
+            self.asks.remove(&price);
+            removed += 1;
+        }
+        
+        removed
+    }
+    
+    /// Check if the book would be inverted after adding this order
+    fn would_cause_inversion(&self, side: Side, price: f64) -> bool {
+        match side {
+            Side::Buy => {
+                // A buy at this price would cause inversion if it's >= best ask
+                if let Some(best_ask) = self.best_ask() {
+                    price >= best_ask
+                } else {
+                    false
+                }
+            }
+            Side::Sell => {
+                // A sell at this price would cause inversion if it's <= best bid
+                if let Some(best_bid) = self.best_bid() {
+                    price <= best_bid
+                } else {
+                    false
+                }
+            }
+        }
+    }
 }
 
 /// Result from realistic simulation
@@ -586,33 +641,12 @@ impl RealisticSimulator {
             }
         }
         
-        // Detect if sides are inverted in the data (buy prices > sell prices)
-        let sides_inverted = {
-            let mut max_buy_price = f64::MIN;
-            let mut min_sell_price = f64::MAX;
-            let mut buy_count = 0;
-            let mut sell_count = 0;
-            for event in events.iter().take(10000) {
-                if event.event_type == EventType::New {
-                    match event.side {
-                        Side::Buy => {
-                            max_buy_price = max_buy_price.max(event.price);
-                            buy_count += 1;
-                        }
-                        Side::Sell => {
-                            min_sell_price = min_sell_price.min(event.price);
-                            sell_count += 1;
-                        }
-                    }
-                }
-            }
-            // If we have enough data and max buy > min sell, sides are inverted
-            buy_count > 100 && sell_count > 100 && max_buy_price > min_sell_price
-        };
-        
-        if sides_inverted {
-            eprintln!("🔄 [SIM_DEBUG] Auto-correcting inverted sides for this simulation");
-        }
+        // NOTE: We no longer auto-swap sides. The Kraken L3 data has correct side labels.
+        // The overlap in price ranges (buy prices overlapping sell prices) happens because
+        // the data spans months - orders placed when market was at $1.30 overlap with orders
+        // placed when market moved to $1.70. This is temporal, not a labeling error.
+        // Instead, we filter out stale orders in the event loop based on trade prices.
+        let sides_inverted = false;
         
         // Funding rate tracking
         let mut last_funding_time: i64 = 0;
@@ -693,6 +727,22 @@ impl RealisticSimulator {
             
             match event.event_type {
                 EventType::New => {
+                    // Skip orders that would cause or worsen book inversion
+                    // These are likely stale limit orders from before our data window
+                    if let Some(ref_price) = last_price {
+                        let deviation = (event.price - ref_price).abs() / ref_price;
+                        // Skip orders more than 20% from last trade price - they're likely stale
+                        if deviation > 0.20 {
+                            continue;
+                        }
+                    }
+                    
+                    // Also skip if this specific order would cause inversion
+                    if book.would_cause_inversion(effective_side, event.price) {
+                        // This order crossed the spread - likely a stale limit order
+                        continue;
+                    }
+                    
                     book.add_order(effective_side, event.price, event.quantity, &event.order_id);
                     
                     // Debug: detect first book inversion
@@ -722,6 +772,15 @@ impl RealisticSimulator {
                     }
                 }
                 EventType::Trade => {
+                    // Sanitize book on first trade to establish reference price
+                    // Remove orders that are unreasonably far from trade price
+                    if last_price.is_none() && event.price > 0.0 {
+                        let removed = book.sanitize(event.price, 0.10); // 10% max deviation
+                        if removed > 0 {
+                            eprintln!("🧹 [SIM_DEBUG] Sanitized {} stale price levels on first trade at {:.4}", removed, event.price);
+                        }
+                    }
+                    
                     // Execute trade in book (use effective_side for book operations)
                     let _consumed = book.execute_trade(effective_side, event.price, event.quantity);
                     
