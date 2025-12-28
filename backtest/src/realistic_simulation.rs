@@ -976,11 +976,19 @@ impl RealisticSimulator {
                 let q = inventory;
                 
                 // Reservation price: mid - gamma * sigma^2 * T * q
-                let reservation_price = mid_price - gamma * sigma.powi(2) * t_horizon * q;
+                let reservation_price = mid_price - gamma * sigma.powi(2) * t_horizon * q * mid_price;
                 
                 // Optimal spread: gamma * sigma^2 * T + 2/gamma * ln(1 + gamma/k)
+                // NOTE: The original A-S formula produces a dimensionless spread.
+                // We need to multiply by mid_price to get dollar-denominated spread.
+                // Also, the ln term can dominate - we clamp it to be reasonable.
                 let k = 1.5;  // Market maker intensity
-                let optimal_spread = gamma * sigma.powi(2) * t_horizon + (2.0 / gamma) * (1.0 + gamma / k).ln();
+                let variance_term = gamma * sigma.powi(2) * t_horizon;
+                let ln_term = (2.0 / gamma) * (1.0 + gamma / k).ln();
+                // The ln_term can be huge (>1.0) which makes no sense for spread
+                // Clamp it to a reasonable maximum (e.g., 1% = 0.01)
+                let clamped_ln_term = ln_term.min(0.01);
+                let optimal_spread = (variance_term + clamped_ln_term) * mid_price;
                 
                 // Apply minimum spread
                 let min_spread = mid_price * params.min_spread_bps / 10000.0;
