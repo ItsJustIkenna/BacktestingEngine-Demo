@@ -269,17 +269,18 @@ impl SimpleOrderBook {
         level.orders.push_back((order_id.to_string(), quantity));
     }
     
-    fn cancel_order(&mut self, order_id: &str) {
+    fn cancel_order(&mut self, order_id: &str) -> bool {
         // Search both sides
         for levels in [&mut self.bids, &mut self.asks] {
             for (_, level) in levels.iter_mut() {
                 if let Some(pos) = level.orders.iter().position(|(id, _)| id == order_id) {
                     let (_, qty) = level.orders.remove(pos).unwrap();
                     level.total_quantity -= qty;
-                    return;
+                    return true;  // Found and cancelled
                 }
             }
         }
+        false  // Order not found
     }
     
     fn modify_order(&mut self, order_id: &str, new_quantity: f64) {
@@ -591,6 +592,8 @@ impl RealisticSimulator {
         let mut peak_equity: f64 = capital;
         let mut max_drawdown: f64 = 0.0;
         let mut event_count: usize = 0;
+        let mut cancel_attempts: usize = 0;
+        let mut cancel_successes: usize = 0;
         
         for event in events {
             event_count += 1;
@@ -669,7 +672,10 @@ impl RealisticSimulator {
                     book.modify_order(&event.order_id, event.quantity);
                 }
                 EventType::Cancel => {
-                    book.cancel_order(&event.order_id);
+                    cancel_attempts += 1;
+                    if book.cancel_order(&event.order_id) {
+                        cancel_successes += 1;
+                    }
                 }
                 EventType::Trade => {
                     // Execute trade in book (use effective_side for book operations)
@@ -866,12 +872,12 @@ impl RealisticSimulator {
                 // Cancel old orders (counts against rate limit)
                 if our_bid.is_some() {
                     let old_bid = our_bid.take().unwrap();
-                    book.cancel_order(&old_bid.order_id);
+                    let _ = book.cancel_order(&old_bid.order_id);
                     orders_this_second += 1;
                 }
                 if our_ask.is_some() {
                     let old_ask = our_ask.take().unwrap();
-                    book.cancel_order(&old_ask.order_id);
+                    let _ = book.cancel_order(&old_ask.order_id);
                     orders_this_second += 1;
                 }
                 
@@ -1002,10 +1008,16 @@ impl RealisticSimulator {
             eprintln!("  - orders_placed: {}", orders_placed);
             eprintln!("  - orders_filled: {}", orders_filled);
             eprintln!("  - rate_limit_rejections: {}", rate_limit_rejections);
+            eprintln!("  - cancel_attempts: {}, cancel_successes: {} ({:.1}%)", 
+                cancel_attempts, cancel_successes, 
+                if cancel_attempts > 0 { 100.0 * cancel_successes as f64 / cancel_attempts as f64 } else { 0.0 });
             eprintln!("  - final book state: {} bids, {} asks", book.bids.len(), book.asks.len());
             eprintln!("  - best_bid: {:?}, best_ask: {:?}", book.best_bid(), book.best_ask());
             eprintln!("  - last_price: {:?}", last_price);
             eprintln!("  - final volatility: {:.6}", volatility);
+            if sides_inverted {
+                eprintln!("  - ⚠️ SIDES WERE AUTO-SWAPPED due to inversion detection");
+            }
             
             // Count event types
             let new_count = events.iter().filter(|e| matches!(e.event_type, EventType::New)).count();

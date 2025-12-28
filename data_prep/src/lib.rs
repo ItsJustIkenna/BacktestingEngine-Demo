@@ -260,6 +260,10 @@ pub async fn prepare_orderbook_data(
                 // Count event types for debugging
                 *event_type_counts.entry(order.event_type.clone()).or_insert(0) += 1;
                 
+                // Track side distribution and price ranges for debugging
+                let side_key = format!("{}_{}", order.event_type, order.side);
+                *event_type_counts.entry(side_key).or_insert(0) += 1;
+                
                 OrderBookEventTick::new(
                     order.timestamp.timestamp_millis(),
                     &order.order_id,
