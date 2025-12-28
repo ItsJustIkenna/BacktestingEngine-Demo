@@ -71,6 +71,57 @@ pub struct OrderBookEvent {
     pub quantity: f64,
 }
 
+// ============================================================================
+// MARKET DATA CONVERSION
+// ============================================================================
+
+#[cfg(feature = "postgres")]
+use databaseschema::models::historical_order::HistoricalOrder;
+#[cfg(feature = "postgres")]
+use dataloader::MarketData;
+#[cfg(feature = "postgres")]
+use bigdecimal::ToPrimitive;
+
+/// Convert MarketData slice (containing HistoricalOrder) to OrderBookEvent vec
+/// This is the bridge between the data loader and the realistic simulation engine
+#[cfg(feature = "postgres")]
+pub fn market_data_to_order_events(data: &[MarketData]) -> Vec<OrderBookEvent> {
+    data.iter()
+        .filter_map(|md| match md {
+            MarketData::Order(order) => Some(order_to_event(order)),
+            MarketData::Trade(trade) => {
+                // Convert trades to Trade events for price discovery
+                let side = Side::from_str(&trade.side).unwrap_or(Side::Buy);
+                Some(OrderBookEvent {
+                    timestamp_ms: trade.timestamp.timestamp_millis(),
+                    event_type: EventType::Trade,
+                    order_id: trade.trade_id.clone(),
+                    side,
+                    price: trade.price.to_f64().unwrap_or(0.0),
+                    quantity: trade.quantity.to_f64().unwrap_or(0.0),
+                })
+            }
+            _ => None, // Skip Candles and Snapshots
+        })
+        .collect()
+}
+
+/// Convert a HistoricalOrder to an OrderBookEvent
+#[cfg(feature = "postgres")]
+pub fn order_to_event(order: &HistoricalOrder) -> OrderBookEvent {
+    let event_type = EventType::from_str(&order.event_type).unwrap_or(EventType::New);
+    let side = Side::from_str(&order.side).unwrap_or(Side::Buy);
+    
+    OrderBookEvent {
+        timestamp_ms: order.timestamp.timestamp_millis(),
+        event_type,
+        order_id: order.order_id.clone(),
+        side,
+        price: order.price_level.to_f64().unwrap_or(0.0),
+        quantity: order.quantity.to_f64().unwrap_or(0.0),
+    }
+}
+
 /// Parameters for Avellaneda-Stoikov strategy in realistic simulation
 #[derive(Debug, Clone)]
 pub struct RealisticASParams {

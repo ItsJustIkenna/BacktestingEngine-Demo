@@ -43,8 +43,10 @@ pub use fast_simulation::{FastSimulator, MarketFeatures, FastASParams, FastSimRe
 pub use lightweight_sim::{LightweightSim, LightweightSimConfig};
 pub use realistic_simulation::{
     RealisticSimulator, RealisticASParams, RealisticSimResult, 
-    OrderBookEvent, EventType, Side, ticks_to_trade_events
+    OrderBookEvent, EventType, Side, ticks_to_trade_events,
 };
+#[cfg(feature = "postgres")]
+pub use realistic_simulation::market_data_to_order_events;
 pub use statistical_significance::{
     SignificanceResult, BootstrapConfidenceIntervals,
     compute_sharpe_significance, compute_bootstrap_confidence_intervals,
