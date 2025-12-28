@@ -590,6 +590,11 @@ impl RealisticSimulator {
         let mut skipped_no_price = 0usize;
         let mut quote_refresh_attempts = 0usize;
         
+        // Debug: track our quote prices vs trade prices
+        let mut our_bid_prices: Vec<f64> = Vec::new();
+        let mut our_ask_prices: Vec<f64> = Vec::new();
+        let mut trade_prices_debug: Vec<f64> = Vec::new();
+        
         // Debug: print first 20 NEW events (buys and sells separately) to understand book construction
         if events.len() > 100 {
             let mut buy_count = 0;
@@ -899,6 +904,7 @@ impl RealisticSimulator {
                         volatility = (EWMA_ALPHA * volatility.powi(2) + (1.0 - EWMA_ALPHA) * ret.powi(2)).sqrt();
                     }
                     last_price = Some(event.price);
+                    trade_prices_debug.push(event.price);  // Debug tracking
                 }
             }
             
@@ -1012,6 +1018,7 @@ impl RealisticSimulator {
                 });
                 orders_placed += 1;
                 orders_this_second += 1;
+                our_bid_prices.push(bid_price);  // Debug tracking
                 } // End can_buy check
                 
                 // Place new ask (only if we can sell - not at min inventory)
@@ -1028,6 +1035,7 @@ impl RealisticSimulator {
                     timestamp_ms: event.timestamp_ms,
                     quantity_ahead: quantity_at_ask,
                 });
+                our_ask_prices.push(ask_price);  // Debug tracking
                 orders_placed += 1;
                 orders_this_second += 1;
                 } // End can_sell check
@@ -1136,6 +1144,38 @@ impl RealisticSimulator {
             eprintln!("  - best_bid: {:?}, best_ask: {:?}", book.best_bid(), book.best_ask());
             eprintln!("  - last_price: {:?}", last_price);
             eprintln!("  - final volatility: {:.6}", volatility);
+            
+            // Analyze trade prices vs our quote positions
+            let trade_events: Vec<_> = events.iter()
+                .filter(|e| matches!(e.event_type, EventType::Trade))
+                .collect();
+            if !trade_events.is_empty() {
+                let trade_prices: Vec<f64> = trade_events.iter().map(|e| e.price).collect();
+                let min_trade = trade_prices.iter().cloned().fold(f64::INFINITY, f64::min);
+                let max_trade = trade_prices.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let avg_trade = trade_prices.iter().sum::<f64>() / trade_prices.len() as f64;
+                eprintln!("  - trade prices: min={:.4}, avg={:.4}, max={:.4}, count={}", 
+                    min_trade, avg_trade, max_trade, trade_prices.len());
+            }
+            
+            // Compare our quotes to trade prices
+            if !our_bid_prices.is_empty() && !our_ask_prices.is_empty() && !trade_prices_debug.is_empty() {
+                let min_bid = our_bid_prices.iter().cloned().fold(f64::INFINITY, f64::min);
+                let max_bid = our_bid_prices.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let avg_bid = our_bid_prices.iter().sum::<f64>() / our_bid_prices.len() as f64;
+                let min_ask = our_ask_prices.iter().cloned().fold(f64::INFINITY, f64::min);
+                let max_ask = our_ask_prices.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                let avg_ask = our_ask_prices.iter().sum::<f64>() / our_ask_prices.len() as f64;
+                let avg_trade = trade_prices_debug.iter().sum::<f64>() / trade_prices_debug.len() as f64;
+                
+                eprintln!("  - OUR BIDS:  min={:.4}, avg={:.4}, max={:.4}", min_bid, avg_bid, max_bid);
+                eprintln!("  - OUR ASKS:  min={:.4}, avg={:.4}, max={:.4}", min_ask, avg_ask, max_ask);
+                eprintln!("  - TRADES:    avg={:.4}", avg_trade);
+                eprintln!("  - Gap: avg_bid to avg_trade = {:.2}%, avg_ask to avg_trade = {:.2}%",
+                    (avg_trade - avg_bid) / avg_trade * 100.0,
+                    (avg_ask - avg_trade) / avg_trade * 100.0);
+            }
+            
             if sides_inverted {
                 eprintln!("  - ⚠️ SIDES WERE AUTO-SWAPPED due to inversion detection");
             }
