@@ -572,6 +572,18 @@ impl RealisticSimulator {
             match event.event_type {
                 EventType::New => {
                     book.add_order(event.side, event.price, event.quantity, &event.order_id);
+                    
+                    // Debug: detect first book inversion
+                    if event_count < 1000 {
+                        if let (Some(bid), Some(ask)) = (book.best_bid(), book.best_ask()) {
+                            if bid > ask {
+                                eprintln!("❌ [SIM_DEBUG] Book inverted at event {}!", event_count);
+                                eprintln!("  Event: {:?} {:?} price={:.4} qty={:.4}", 
+                                    event.event_type, event.side, event.price, event.quantity);
+                                eprintln!("  Result: best_bid={:.4} > best_ask={:.4}", bid, ask);
+                            }
+                        }
+                    }
                 }
                 EventType::Modify => {
                     book.modify_order(&event.order_id, event.quantity);
