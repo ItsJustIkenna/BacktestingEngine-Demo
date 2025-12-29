@@ -773,9 +773,10 @@ impl RealisticSimulator {
         
         // Snapshot boundary detection - clear book when there's a gap in data
         // A gap indicates DataEngine restarted and received a new snapshot
+        // Use 5 minutes (300s) - normal market quiet periods can have gaps of 30-60s
         let mut last_event_timestamp: i64 = 0;
         let mut snapshot_count: usize = 0;
-        const SNAPSHOT_GAP_THRESHOLD_MS: i64 = 5000;  // 5 seconds = new snapshot
+        const SNAPSHOT_GAP_THRESHOLD_MS: i64 = 300_000;  // 5 minutes = new snapshot
         
         let mut peak_equity: f64 = capital;
         let mut max_drawdown: f64 = 0.0;
