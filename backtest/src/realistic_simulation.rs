@@ -1013,11 +1013,20 @@ impl RealisticSimulator {
                                     let partial = available.min(our_order.quantity);
                                     if partial >= our_order.quantity * params.min_fill_fraction {
                                         partial_fills += 1;
+                                        if trade_debug_count <= 20 {
+                                            eprintln!("🔍 [FILL_DEBUG] PARTIAL_FILL: qty={:.4}", partial);
+                                        }
                                         partial
                                     } else {
+                                        if trade_debug_count <= 20 {
+                                            eprintln!("🔍 [FILL_DEBUG] FULL_FILL (partial too small): qty={:.4}", our_order.quantity);
+                                        }
                                         our_order.quantity // Full fill
                                     }
                                 } else {
+                                    if trade_debug_count <= 20 {
+                                        eprintln!("🔍 [FILL_DEBUG] FULL_FILL: qty={:.4}", our_order.quantity);
+                                    }
                                     our_order.quantity // Full fill
                                 }
                             } else {
@@ -1106,21 +1115,13 @@ impl RealisticSimulator {
                 // The order book can drift from trade prices when:
                 // 1. L3 data spans long time periods (months)
                 // 2. Stale limit orders accumulate at old price levels
+                // 3. Synthetic data generates orders that don't match trades
                 // 
-                // So we prefer trade price when available, with book mid as fallback.
-                // If both exist but diverge significantly, prefer trade price.
+                // For market making simulation, we ALWAYS want to quote where trades happen.
+                // The book mid is useful for queue position modeling, but NOT for pricing.
                 let mid_price = match (last_price, book.mid_price()) {
-                    (Some(trade_price), Some(book_mid)) => {
-                        // If book mid is more than 5% away from last trade, trust the trade
-                        let divergence = (book_mid - trade_price).abs() / trade_price;
-                        if divergence > 0.05 {
-                            trade_price  // Book is stale, use trade price
-                        } else {
-                            book_mid     // Book is in sync, use book mid for better precision
-                        }
-                    }
-                    (Some(trade_price), None) => trade_price,  // No book, use trade
-                    (None, Some(book_mid)) => book_mid,        // No trades yet, use book
+                    (Some(trade_price), _) => trade_price,  // ALWAYS prefer trade price
+                    (None, Some(book_mid)) => book_mid,     // No trades yet, use book
                     (None, None) => {
                         skipped_no_price += 1;
                         continue;  // No price reference at all, skip
@@ -1134,10 +1135,15 @@ impl RealisticSimulator {
                 // should quote in all volatility environments, using spread adjustment instead.
                 
                 // Calculate max inventory limit
-                let order_size = capital * params.order_size_pct;
-                let max_inventory = (order_size / mid_price) * params.max_inventory_multiple;
+                // Use initial_capital for order sizing to maintain consistent position sizes
+                // regardless of current P&L. This simulates a fixed notional trading strategy.
+                let order_size = self.initial_capital * params.order_size_pct;
+                let max_capital_position = self.initial_capital / mid_price;  // Max if all capital was in asset
+                let max_inventory = max_capital_position * params.max_inventory_multiple;
                 
-                // Check if we're at inventory limits
+                // Check if we're at inventory limits  
+                // For buying: can't exceed max_inventory
+                // For selling: we need positive inventory, but don't restrict below 0 (allow shorts up to max)
                 let can_buy = inventory < max_inventory;
                 let can_sell = inventory > -max_inventory;
                 
@@ -1167,8 +1173,23 @@ impl RealisticSimulator {
                 let half_spread = (optimal_spread / 2.0).max(min_spread / 2.0);
                 
                 // Calculate quote prices
-                let bid_price = reservation_price - half_spread;
-                let ask_price = reservation_price + half_spread;
+                // CRITICAL INSIGHT: The book's best bid/ask can be stale and far from actual trades.
+                // What matters for getting fills is being competitive with WHERE TRADES ACTUALLY HAPPEN.
+                // 
+                // Strategy: Quote at a tight spread around the last trade price (the actual market).
+                // Use a small buffer (1-2 bps) to capture the spread while still being competitive.
+                let trade_based_spread = mid_price * 0.0002; // 2 bps each side = 4 bps total spread
+                let (bid_price, ask_price) = if last_price.is_some() {
+                    // Quote tight spreads around where trades are happening
+                    // This ensures we're competitive regardless of stale book levels
+                    (mid_price - trade_based_spread, mid_price + trade_based_spread)
+                } else if let (Some(best_bid), Some(best_ask)) = (book.best_bid(), book.best_ask()) {
+                    // No trades yet - use book inside (may be less accurate)
+                    (best_bid, best_ask)
+                } else {
+                    // No reference - use AS calculated spread
+                    (reservation_price - half_spread, reservation_price + half_spread)
+                };
                 
                 // DEBUG: Log first 5 quote placements (using local counter)
                 quote_debug_count += 1;
