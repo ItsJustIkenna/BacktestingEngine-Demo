@@ -878,12 +878,13 @@ impl RealisticSimulator {
                     static TRADE_DEBUG_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
                     let debug_count = TRADE_DEBUG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     
-                    // DEBUG: Show what we're checking against for first 10 trades
-                    if debug_count < 10 {
+                    // DEBUG: Show what we're checking against for first 20 trades
+                    if debug_count < 20 {
                         eprintln!("🔍 [TRADE_DEBUG] Trade #{}: price={:.4}, side={:?}, eff_side={:?}",
                             debug_count, event.price, event.side, effective_side);
                         eprintln!("    our_bid: {:?}", our_bid.as_ref().map(|o| (o.price, o.quantity_ahead)));
                         eprintln!("    our_ask: {:?}", our_ask.as_ref().map(|o| (o.price, o.quantity_ahead)));
+                        eprintln!("    orders_placed_so_far: {}, last_price: {:?}", orders_placed, last_price);
                     }
                     
                     // Sanitize book on first trade to establish reference price
@@ -948,10 +949,15 @@ impl RealisticSimulator {
                         };
                         
                         // DEBUG: Log why fills aren't happening for first few potential fills
-                        if debug_count < 10 && !price_matches && !trade_crosses_our_quote && !probabilistic_fill {
+                        if debug_count < 20 {
                             let price_diff_bps = ((event.price - our_order.price).abs() / our_order.price) * 10000.0;
-                            eprintln!("🔍 [FILL_DEBUG] NO_FILL: trade={:.4} vs our_{:?}={:.4} (diff={:.0}bps), crosses={}, book_empty={}",
-                                event.price, our_order.side, our_order.price, price_diff_bps, trade_crosses_our_quote, trade_only_mode);
+                            if trade_crosses_our_quote || price_matches {
+                                eprintln!("🔍 [FILL_DEBUG] CROSSES: trade={:.4} vs our_{:?}={:.4} (diff={:.0}bps), qty_ahead={:.2}",
+                                    event.price, our_order.side, our_order.price, price_diff_bps, our_order.quantity_ahead);
+                            } else {
+                                eprintln!("🔍 [FILL_DEBUG] NO_CROSS: trade={:.4} vs our_{:?}={:.4} (diff={:.0}bps)",
+                                    event.price, our_order.side, our_order.price, price_diff_bps);
+                            }
                         }
                         
                         if price_matches || trade_crosses_our_quote || probabilistic_fill {
@@ -960,6 +966,13 @@ impl RealisticSimulator {
                             
                             // === Partial Fill Modeling ===
                             let should_fill = our_order.quantity_ahead <= 0.0;
+                            
+                            // DEBUG: Log fill decision for first 20 trades
+                            if debug_count < 20 {
+                                eprintln!("🔍 [FILL_DEBUG] QUEUE_CHECK: qty_ahead_after={:.2}, should_fill={}, trade_qty={:.4}",
+                                    our_order.quantity_ahead, should_fill, event.quantity);
+                            }
+                            
                             let fill_qty = if should_fill {
                                 if params.enable_partial_fills && event.quantity < our_order.quantity {
                                     // Partial fill: we get filled for the remaining trade volume
