@@ -677,7 +677,9 @@ impl RealisticSimulator {
         let mut partial_fills = 0usize;
         let mut queue_positions_at_fill: Vec<f64> = Vec::new();
         
-        // Rate limiting tracking
+        // Debug counters (local to this simulation run, reset per call)
+        let mut trade_debug_count = 0usize;
+        let mut quote_debug_count = 0usize;
         let mut orders_this_second = 0usize;
         let mut last_rate_limit_window: i64 = 0;
         let mut rate_limited_until: i64 = 0;
@@ -874,14 +876,13 @@ impl RealisticSimulator {
                     }
                 }
                 EventType::Trade => {
-                    // DEBUG: Track first few trade-vs-quote comparisons
-                    static TRADE_DEBUG_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-                    let debug_count = TRADE_DEBUG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    // DEBUG: Use local counter (not static) so it resets per simulation
+                    trade_debug_count += 1;
                     
                     // DEBUG: Show what we're checking against for first 20 trades
-                    if debug_count < 20 {
+                    if trade_debug_count <= 20 {
                         eprintln!("🔍 [TRADE_DEBUG] Trade #{}: price={:.4}, side={:?}, eff_side={:?}",
-                            debug_count, event.price, event.side, effective_side);
+                            trade_debug_count, event.price, event.side, effective_side);
                         eprintln!("    our_bid: {:?}", our_bid.as_ref().map(|o| (o.price, o.quantity_ahead)));
                         eprintln!("    our_ask: {:?}", our_ask.as_ref().map(|o| (o.price, o.quantity_ahead)));
                         eprintln!("    orders_placed_so_far: {}, last_price: {:?}", orders_placed, last_price);
@@ -906,12 +907,12 @@ impl RealisticSimulator {
                         Side::Sell => &mut our_bid,  // Sell aggressor may fill our bid
                     };
                     
-                    // DEBUG: Log trade-vs-quote comparison for first 5 trades where we have an order
-                    if debug_count < 5 {
+                    // DEBUG: Log trade-vs-quote comparison for first 20 trades where we have an order
+                    if trade_debug_count <= 20 {
                         if let Some(ref our_order) = check_our_order {
                             let book_mid = book.mid_price().unwrap_or(0.0);
                             eprintln!("🔍 [FILL_DEBUG] Trade #{}: price={:.4}, our_{:?}={:.4}, book_mid={:.4}, diff={:.4}bps",
-                                debug_count, event.price, our_order.side, our_order.price, book_mid,
+                                trade_debug_count, event.price, our_order.side, our_order.price, book_mid,
                                 ((event.price - our_order.price).abs() / our_order.price) * 10000.0);
                         }
                     }
@@ -949,7 +950,7 @@ impl RealisticSimulator {
                         };
                         
                         // DEBUG: Log why fills aren't happening for first few potential fills
-                        if debug_count < 20 {
+                        if trade_debug_count <= 20 {
                             let price_diff_bps = ((event.price - our_order.price).abs() / our_order.price) * 10000.0;
                             if trade_crosses_our_quote || price_matches {
                                 eprintln!("🔍 [FILL_DEBUG] CROSSES: trade={:.4} vs our_{:?}={:.4} (diff={:.0}bps), qty_ahead={:.2}",
@@ -968,7 +969,7 @@ impl RealisticSimulator {
                             let should_fill = our_order.quantity_ahead <= 0.0;
                             
                             // DEBUG: Log fill decision for first 20 trades
-                            if debug_count < 20 {
+                            if trade_debug_count <= 20 {
                                 eprintln!("🔍 [FILL_DEBUG] QUEUE_CHECK: qty_ahead_after={:.2}, should_fill={}, trade_qty={:.4}",
                                     our_order.quantity_ahead, should_fill, event.quantity);
                             }
@@ -1137,12 +1138,11 @@ impl RealisticSimulator {
                 let bid_price = reservation_price - half_spread;
                 let ask_price = reservation_price + half_spread;
                 
-                // DEBUG: Log first 5 quote placements
-                static QUOTE_DEBUG_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-                let quote_debug = QUOTE_DEBUG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                if quote_debug < 5 {
+                // DEBUG: Log first 5 quote placements (using local counter)
+                quote_debug_count += 1;
+                if quote_debug_count <= 5 {
                     eprintln!("📍 [QUOTE_DEBUG] #{}: mid={:.4} (book_mid={:?}, last_trade={:?}), bid={:.4}, ask={:.4}",
-                        quote_debug, mid_price, book.mid_price(), last_price, bid_price, ask_price);
+                        quote_debug_count, mid_price, book.mid_price(), last_price, bid_price, ask_price);
                 }
                 
                 // Cancel old orders (counts against rate limit)
