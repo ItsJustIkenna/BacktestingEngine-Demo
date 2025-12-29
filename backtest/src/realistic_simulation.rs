@@ -187,7 +187,10 @@ impl Default for RealisticASParams {
             inventory_target: 0.0,
             order_size_pct: 0.01,
             volatility_cap: 0.5,
-            min_spread_bps: 10.0,
+            // min_spread_bps must be > 2x maker_fee to be profitable
+            // Kraken default maker fee is 25 bps, so we need at least 50 bps spread
+            // We use 60 bps as default to provide margin for adverse selection
+            min_spread_bps: 60.0,
             time_horizon_minutes: 5.0,
             
             // Initial inventory: 50% by default (balanced)
@@ -646,11 +649,17 @@ impl RealisticSimulator {
         let mut book = SimpleOrderBook::new();
         
         // Initialize with initial_inventory_pct
-        // If > 0, we need to find the first price and allocate inventory
+        // If > 0, we need to find the first TRADE price and allocate inventory
         // Capital is reduced by the value of initial inventory
+        // IMPORTANT: Use first TRADE event price, not any order price, for accurate mark-to-market
         let initial_price = events.iter()
-            .find_map(|e| if e.event_type == EventType::Trade || e.price > 0.0 { Some(e.price) } else { None })
-            .unwrap_or(1.0);
+            .find_map(|e| if e.event_type == EventType::Trade && e.price > 0.0 { Some(e.price) } else { None })
+            .unwrap_or_else(|| {
+                // Fallback: use first event with any price
+                events.iter()
+                    .find_map(|e| if e.price > 0.0 { Some(e.price) } else { None })
+                    .unwrap_or(1.0)
+            });
         
         let initial_inventory_value = self.initial_capital * params.initial_inventory_pct;
         let initial_inventory_qty = initial_inventory_value / initial_price;
@@ -659,6 +668,10 @@ impl RealisticSimulator {
         let mut inventory: f64 = initial_inventory_qty;
         let mut total_fees: f64 = 0.0;
         let mut total_volume: f64 = 0.0;
+        
+        // Initialize last_price to initial_price so first equity calculation is correct
+        // This ensures equity starts at initial_capital (no immediate mark-to-market loss)
+        let mut last_price: Option<f64> = Some(initial_price);
         
         // Log initial setup
         if params.initial_inventory_pct > 0.0 {
@@ -764,7 +777,7 @@ impl RealisticSimulator {
         
         // Volatility tracking (simplified EWMA)
         let mut volatility: f64 = 0.01;  // Start with 1%
-        let mut last_price: Option<f64> = None;
+        // Note: last_price is initialized earlier to initial_price for proper mark-to-market
         const EWMA_ALPHA: f64 = 0.94;
         
         // Time tracking for order refresh
