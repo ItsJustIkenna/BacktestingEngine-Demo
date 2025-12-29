@@ -2682,6 +2682,7 @@ impl Worker {
             volatility_cap: chromosome.volatility_cap,
             min_spread_bps: chromosome.min_spread_bps,
             time_horizon_minutes: chromosome.time_horizon_minutes,
+            initial_inventory_pct: _initial_inventory_pct,  // Use the passed parameter
             maker_fee_rate: exchange_fee_config.maker_fee,
             taker_fee_rate: exchange_fee_config.taker_fee,
             max_inventory_multiple: 5.0,

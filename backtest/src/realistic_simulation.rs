@@ -132,6 +132,11 @@ pub struct RealisticASParams {
     pub min_spread_bps: f64,
     pub time_horizon_minutes: f64,
     
+    // === Initial Inventory ===
+    /// Initial inventory as percentage of capital (0.5 = 50% in base asset)
+    /// This is converted to base asset quantity using the first available price
+    pub initial_inventory_pct: f64,
+    
     // === Fee Configuration (Maker/Taker) ===
     /// Fee rate for passive (maker) orders - typically negative rebate or lower fee
     pub maker_fee_rate: f64,
@@ -184,6 +189,9 @@ impl Default for RealisticASParams {
             volatility_cap: 0.5,
             min_spread_bps: 10.0,
             time_horizon_minutes: 5.0,
+            
+            // Initial inventory: 50% by default (balanced)
+            initial_inventory_pct: 0.5,
             
             // All operational parameters from exchange configuration
             maker_fee_rate: exchange_config.maker_fee,
@@ -566,6 +574,26 @@ impl From<RealisticSimResult> for crate::types::BacktestResult {
             win_rate: Some(result.win_rate),
             equity_curve: result.equity_curve,
             closed_trades: result.num_trades,
+            // Transaction costs from realistic simulation
+            transaction_costs: Some(crate::types::TransactionCostAnalysis {
+                total_commission: result.total_fees,
+                total_slippage: 0.0,  // Realistic sim doesn't model slippage separately
+                total_market_impact: 0.0,
+                total_transaction_costs: result.total_fees,
+                costs_as_percentage_of_pnl: if result.total_pnl.abs() > 0.01 {
+                    (result.total_fees / result.total_pnl.abs()) * 100.0
+                } else {
+                    0.0
+                },
+                avg_cost_per_trade: if result.num_trades > 0 {
+                    result.total_fees / result.num_trades as f64
+                } else {
+                    0.0
+                },
+                commission_by_exchange: std::collections::HashMap::new(),
+            }),
+            // Trade returns for Monte Carlo
+            trade_returns: result.trade_returns,
             ..Default::default()
         }
     }
@@ -610,10 +638,28 @@ impl RealisticSimulator {
         let mut fee_tier_upgrades = 0usize;
         
         let mut book = SimpleOrderBook::new();
-        let mut capital: f64 = self.initial_capital;
-        let mut inventory: f64 = 0.0;
+        
+        // Initialize with initial_inventory_pct
+        // If > 0, we need to find the first price and allocate inventory
+        // Capital is reduced by the value of initial inventory
+        let initial_price = events.iter()
+            .find_map(|e| if e.event_type == EventType::Trade || e.price > 0.0 { Some(e.price) } else { None })
+            .unwrap_or(1.0);
+        
+        let initial_inventory_value = self.initial_capital * params.initial_inventory_pct;
+        let initial_inventory_qty = initial_inventory_value / initial_price;
+        
+        let mut capital: f64 = self.initial_capital - initial_inventory_value;
+        let mut inventory: f64 = initial_inventory_qty;
         let mut total_fees: f64 = 0.0;
         let mut total_volume: f64 = 0.0;
+        
+        // Log initial setup
+        if params.initial_inventory_pct > 0.0 {
+            eprintln!("📊 [SIM] Initial inventory: {:.4} units @ ${:.4} = ${:.2} ({}% of capital)",
+                initial_inventory_qty, initial_price, initial_inventory_value, 
+                (params.initial_inventory_pct * 100.0) as i32);
+        }
         
         // Track our pending orders
         let mut our_bid: Option<PendingOrder> = None;

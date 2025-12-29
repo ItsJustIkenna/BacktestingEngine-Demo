@@ -898,6 +898,7 @@ impl DistributedGAWorker {
                     request.train_end_idx, // Use only train data for GA fitness
                     &request.exchange,
                     request.initial_30d_volume,
+                    request.initial_inventory_pct,
                 ).await)
             } else {
                 None
@@ -977,6 +978,7 @@ impl DistributedGAWorker {
         train_end_idx: i64,
         exchange: &str,
         initial_30d_volume: f64,
+        initial_inventory_pct: f64,
     ) -> FitnessResult {
         use data_prep::OrderBookBinaryReader;
         use backtest::realistic_simulation::{RealisticSimulator, RealisticASParams, OrderBookEvent};
@@ -1039,6 +1041,7 @@ impl DistributedGAWorker {
             volatility_cap: chromosome.volatility_cap,
             min_spread_bps: chromosome.min_spread_bps,
             time_horizon_minutes: chromosome.time_horizon_minutes,
+            initial_inventory_pct: initial_inventory_pct,
             maker_fee_rate: exchange_fee_config.maker_fee,
             taker_fee_rate: exchange_fee_config.taker_fee,
             max_inventory_multiple: 5.0,
@@ -1335,6 +1338,7 @@ impl DistributedGAWorker {
             volatility_cap: chromosome.volatility_cap,
             min_spread_bps: chromosome.min_spread_bps,
             time_horizon_minutes: chromosome.time_horizon_minutes,
+            initial_inventory_pct: 0.5,  // Default 50% for single simulation
             maker_fee_rate: exchange_fee_config.maker_fee,
             taker_fee_rate: exchange_fee_config.taker_fee,
             max_inventory_multiple: 5.0,
@@ -1538,6 +1542,7 @@ impl DistributedGAWorker {
             volatility_cap: chromosome.volatility_cap,
             min_spread_bps: chromosome.min_spread_bps,
             time_horizon_minutes: chromosome.time_horizon_minutes,
+            initial_inventory_pct: 0.5,  // Default 50%
             
             // Maker/taker fees from exchange configuration
             maker_fee_rate: exchange_fee_config.maker_fee,
@@ -2062,6 +2067,7 @@ fn run_walkforward_realistic(
         volatility_cap: chromosome.volatility_cap,
         min_spread_bps: chromosome.min_spread_bps,
         time_horizon_minutes: chromosome.time_horizon_minutes,
+        initial_inventory_pct: 0.5,  // Default 50% for walk-forward
         maker_fee_rate: exchange_fee_config.maker_fee,
         taker_fee_rate: exchange_fee_config.taker_fee,
         max_inventory_multiple: 5.0,
