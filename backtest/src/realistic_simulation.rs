@@ -316,6 +316,12 @@ impl SimpleOrderBook {
         Self::default()
     }
     
+    /// Clear all orders from the book (used on snapshot boundary detection)
+    fn clear(&mut self) {
+        self.bids.clear();
+        self.asks.clear();
+    }
+    
     fn add_order(&mut self, side: Side, price: f64, quantity: f64, order_id: &str) {
         // First, remove any existing order with the same ID (handles order amends/replaces)
         // Kraken reuses order_ids when orders are amended to a new price
@@ -765,6 +771,12 @@ impl RealisticSimulator {
         let mut last_quote_time: i64 = 0;
         const QUOTE_REFRESH_MS: i64 = 1000;  // Refresh quotes every second
         
+        // Snapshot boundary detection - clear book when there's a gap in data
+        // A gap indicates DataEngine restarted and received a new snapshot
+        let mut last_event_timestamp: i64 = 0;
+        let mut snapshot_count: usize = 0;
+        const SNAPSHOT_GAP_THRESHOLD_MS: i64 = 5000;  // 5 seconds = new snapshot
+        
         let mut peak_equity: f64 = capital;
         let mut max_drawdown: f64 = 0.0;
         let mut event_count: usize = 0;
@@ -774,6 +786,25 @@ impl RealisticSimulator {
         
         for event in events {
             event_count += 1;
+            
+            // === SNAPSHOT BOUNDARY DETECTION ===
+            // If there's a gap > 5 seconds, a new snapshot started
+            // Clear the book to avoid stale order accumulation
+            if last_event_timestamp > 0 {
+                let gap_ms = event.timestamp_ms - last_event_timestamp;
+                if gap_ms > SNAPSHOT_GAP_THRESHOLD_MS {
+                    snapshot_count += 1;
+                    let old_bids = book.bids.len();
+                    let old_asks = book.asks.len();
+                    book.clear();
+                    // Also cancel our pending orders - they're from the old snapshot context
+                    our_bid = None;
+                    our_ask = None;
+                    eprintln!("📸 [SNAPSHOT] Detected gap of {:.1}s - cleared book (had {} bids, {} asks). Snapshot #{}",
+                        gap_ms as f64 / 1000.0, old_bids, old_asks, snapshot_count);
+                }
+            }
+            last_event_timestamp = event.timestamp_ms;
             
             // Debug: print book state after first 100 events
             if event_count == 100 && events.len() > 100 {
@@ -1281,6 +1312,7 @@ impl RealisticSimulator {
         // Debug logging for 0 trades investigation
         if trades.is_empty() && events.len() > 1000 {
             eprintln!("⚠️ [SIM_DEBUG] 0 trades with {} events!", events.len());
+            eprintln!("  - snapshot_boundaries_detected: {}", snapshot_count);
             eprintln!("  - quote_refresh_attempts: {}", quote_refresh_attempts);
             eprintln!("  - skipped_no_price: {}", skipped_no_price);
             eprintln!("  - orders_placed: {}", orders_placed);
