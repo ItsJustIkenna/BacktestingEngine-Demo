@@ -5,6 +5,8 @@
 
 use std::sync::Arc;
 use std::collections::HashMap;
+#[cfg(feature = "postgres")]
+use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 use chrono::Utc;
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
