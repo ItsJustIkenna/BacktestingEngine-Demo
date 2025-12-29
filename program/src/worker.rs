@@ -5,7 +5,6 @@
 
 use std::sync::Arc;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use tokio::time::{sleep, Duration};
 use chrono::Utc;
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
@@ -2610,6 +2609,7 @@ impl Worker {
     /// 
     /// backtest_data: Sampled data (200K) for fast backtest + Monte Carlo
     /// walkforward_data: Full data for walk-forward (engine samples per-window)
+    #[cfg(feature = "postgres")]
     #[allow(clippy::too_many_arguments)]
     async fn run_full_analysis_with_chromosome(
         &self,
@@ -2658,6 +2658,7 @@ impl Worker {
         // ============================================================================
         // Use the same data format that GA workers use for consistency
         use backtest::{RealisticSimulator, RealisticASParams};
+        #[cfg(feature = "postgres")]
         use backtest::realistic_simulation::market_data_to_order_events;
         use backtest::monte_carlo;
         
@@ -2996,6 +2997,29 @@ impl Worker {
             metrics_profile: Some(Self::build_metrics_profile("market_making")),
         })
     }
+    
+    /// Stub version when postgres feature is not enabled
+    #[cfg(not(feature = "postgres"))]
+    #[allow(clippy::too_many_arguments)]
+    async fn run_full_analysis_with_chromosome(
+        &self,
+        _job_id: &str,
+        _symbol: &str,
+        _exchange: &str,
+        _initial_capital: f64,
+        _initial_inventory_pct: f64,
+        _commission_rate: f64,
+        _initial_30d_volume: f64,
+        _chromosome: &genetic::chromosome::AvellanedaStoikovChromosome,
+        _backtest_data: &[MarketData],
+        _walkforward_data: &[MarketData],
+        _monte_carlo_enabled: bool,
+        _monte_carlo_runs: usize,
+        _walk_forward_enabled: bool,
+    ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
+        Err("Full analysis requires postgres feature to be enabled".into())
+    }
+    
     /// Used for fitness evaluation and walk-forward window testing
     async fn run_backtest_with_chromosome(
         &self,
