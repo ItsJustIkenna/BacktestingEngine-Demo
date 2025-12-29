@@ -162,64 +162,12 @@ impl PostgresQueue {
             _ => JobStatus::Queued,
         };
         
+        // Deserialize params from JSON - no fallback to hardcoded values
+        let params: BacktestJobParams = serde_json::from_value(record.params_json)?;
+        
         Ok(BacktestJob {
             id: record.job_id,
-            params: BacktestJobParams {
-                symbol: record.symbol,
-                exchange: record.exchange,
-                strategy_type: record.strategy_type,
-                initial_capital: f64::from_str(&record.initial_capital.to_string())?,
-                initial_inventory_pct: 0.5,  // Default 50% - not stored in DB yet
-                initial_30d_volume: 0.0,     // Default 0 - not stored in DB yet
-                optimization_method: record.optimization_method,
-                population_size: record.population_size.unwrap_or(30) as usize,  // Reduced from 50
-                generations: record.generations.unwrap_or(15) as usize,        // Reduced from 20
-                // Walk-forward params - default to None when loading from DB
-                walkforward_optimization_days: None,
-                walkforward_test_days: None,
-                walkforward_step_days: None,
-                // Monte Carlo and Walk-Forward settings - default to enabled
-                monte_carlo_enabled: true,
-                monte_carlo_runs: 1000,
-                walk_forward_enabled: true,
-                // Custom fitness weights - default to None (use balanced)
-                fitness_weights: None,
-                // Data split ratios - defaults for train/test/validate
-                train_ratio: 0.6,
-                test_ratio: 0.2,
-                validate_ratio: 0.2,
-                // Profitability criteria - use defaults when loading from DB
-                auto_save_profitable: true,
-                min_sharpe_ratio: 1.0,
-                min_profit_factor: 1.2,
-                max_drawdown: 0.25,
-                min_win_rate: 0.40,
-                min_trades: 30,
-                min_sortino_ratio: None,
-                min_calmar_ratio: None,
-                min_total_pnl: None,
-                risk_aversion: f64::from_str(&record.risk_aversion.to_string())?,
-                inventory_target: f64::from_str(&record.inventory_target.to_string())?,
-                order_size: f64::from_str(&record.order_size.to_string())?,
-                order_size_pct: 0.02, // Default 2% of capital - not stored in DB yet
-                window_ms: 5000,
-                min_quote_lifetime_ms: 100,
-                fee_rate: f64::from_str(&record.commission_rate.to_string())?,
-                volatility_cap: 0.05,
-                time_horizon_minutes: 60,
-                market_depth_k: 1.5,
-                volatility_adjustment_factor: 0.5,
-                inventory_penalty_factor: 0.3,
-                trend_sensitivity: 0.2,
-                flow_sensitivity: -0.1,
-                take_profit_pct: 0.005,
-                stop_loss_pct: 0.003,
-                min_spread_bps: 15.0,
-                max_trades_per_minute: 30.0,
-                commission_rate: f64::from_str(&record.commission_rate.to_string())?,
-                start_date: record.start_date.map(|dt| dt.to_rfc3339()),
-                end_date: record.end_date.map(|dt| dt.to_rfc3339()),
-            },
+            params,
             status,
             created_at: record.created_at,
             started_at: record.started_at,
@@ -246,6 +194,9 @@ impl JobQueue for PostgresQueue {
         
         let mut conn = self.get_conn_with_timeout().await?;
         
+        // Serialize all params to JSON for full persistence
+        let params_json = serde_json::to_value(&params)?;
+        
         let new_job = NewBacktestJob {
             job_id: job_id.clone(),
             symbol: params.symbol,
@@ -261,6 +212,7 @@ impl JobQueue for PostgresQueue {
             commission_rate: BigDecimal::from_str(&params.commission_rate.to_string())?,
             start_date: params.start_date.as_ref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc))),
             end_date: params.end_date.as_ref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc))),
+            params_json,
         };
         
         diesel::insert_into(backtest_jobs::table)

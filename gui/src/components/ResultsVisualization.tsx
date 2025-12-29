@@ -661,6 +661,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 <div><strong>Strategy:</strong> {jobDetails.strategy}</div>
                 <div><strong>Initial Capital:</strong> ${jobDetails.initial_capital.toLocaleString()}</div>
                 <div><strong>Initial Inventory:</strong> {safeToFixed((jobDetails.initial_inventory_pct ?? 0) * 100, 0)}%</div>
+                <div><strong>30d Volume:</strong> {(jobDetails.initial_30d_volume ?? 0) > 0 ? `$${(jobDetails.initial_30d_volume ?? 0).toLocaleString()}` : 'Default Tier'}</div>
                 <div><strong>Commission Rate:</strong> {safeToFixed((jobDetails.commission_rate ?? 0) * 100, 4)}%</div>
                 <div><strong>Start Date:</strong> {jobDetails.start_date ? new Date(jobDetails.start_date).toLocaleDateString() : 'N/A'}</div>
                 <div><strong>End Date:</strong> {jobDetails.end_date ? new Date(jobDetails.end_date).toLocaleDateString() : 'N/A'}</div>

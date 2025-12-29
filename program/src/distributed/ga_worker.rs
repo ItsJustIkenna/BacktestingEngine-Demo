@@ -1359,6 +1359,20 @@ impl DistributedGAWorker {
         println!("🔬 [WORKER {}] Single simulation: trades={}, sharpe={:.4}, pnl={:.2}",
             self.worker_id, result.num_trades, result.sharpe_ratio, result.total_pnl);
         
+        // DEBUG: Log trade returns for equity curve construction tracing
+        println!("🔍 [WORKER {}] SINGLE_SIM_DEBUG: trade_returns.len()={}, sim_equity_curve.len()={}",
+            self.worker_id, result.trade_returns.len(), result.equity_curve.len());
+        if result.num_trades == 0 {
+            println!("⚠️ [WORKER {}] SINGLE_SIM_DEBUG: 0 trades! trade_returns should be empty: is_empty={}",
+                self.worker_id, result.trade_returns.is_empty());
+            if !result.equity_curve.is_empty() {
+                println!("🔍 [WORKER {}] SINGLE_SIM_DEBUG: sim_equity_curve (mark-to-market): first={:.2}, last={:.2}",
+                    self.worker_id, 
+                    result.equity_curve.first().copied().unwrap_or(0.0),
+                    result.equity_curve.last().copied().unwrap_or(0.0));
+            }
+        }
+        
         // Get date range for the "window"
         let first_ts = events.first().map(|e| e.timestamp_ms).unwrap_or(0);
         let last_ts = events.last().map(|e| e.timestamp_ms).unwrap_or(0);
@@ -1714,6 +1728,14 @@ impl DistributedGAWorker {
             .flat_map(|w| w.trade_returns.iter().copied())
             .collect();
         
+        // DEBUG: Log trade returns aggregation
+        println!("🔍 [WORKER {}] EQUITY_CURVE_DEBUG: initial_capital={:.2}, num_windows={}, total_trade_returns={}",
+            self.worker_id, request.initial_capital, wf_summary.num_windows, all_trade_returns.len());
+        for (i, window) in wf_summary.window_results.iter().enumerate() {
+            println!("🔍 [WORKER {}] EQUITY_CURVE_DEBUG: window[{}] trades={}, net_profit={:.2}, trade_returns_count={}",
+                self.worker_id, i, window.test_metrics.number_of_trades, window.test_metrics.net_profit, window.trade_returns.len());
+        }
+        
         // Build an aggregate equity curve from per-trade returns
         // Do this BEFORE calculating net_pnl so they are consistent
         let mut aggregate_equity_curve: Vec<f64> = Vec::with_capacity(all_trade_returns.len() + 1);
@@ -1722,6 +1744,15 @@ impl DistributedGAWorker {
         for trade_pnl in &all_trade_returns {
             current_equity += trade_pnl;
             aggregate_equity_curve.push(current_equity);
+        }
+        
+        // DEBUG: Log equity curve construction
+        println!("🔍 [WORKER {}] EQUITY_CURVE_DEBUG: curve_len={}, first={:.2}, last={:.2}",
+            self.worker_id, aggregate_equity_curve.len(),
+            aggregate_equity_curve.first().copied().unwrap_or(0.0),
+            aggregate_equity_curve.last().copied().unwrap_or(0.0));
+        if aggregate_equity_curve.len() <= 5 {
+            println!("🔍 [WORKER {}] EQUITY_CURVE_DEBUG: full_curve={:?}", self.worker_id, aggregate_equity_curve);
         }
         
         // Calculate net_pnl from equity curve to ensure consistency with displayed curve
@@ -1736,7 +1767,11 @@ impl DistributedGAWorker {
         if (net_pnl_from_curve - net_pnl_from_windows).abs() > 1.0 {
             println!("⚠️ [WORKER {}] net_pnl discrepancy: curve={:.2} vs windows={:.2}, using curve value",
                 self.worker_id, net_pnl_from_curve, net_pnl_from_windows);
+            println!("⚠️ [WORKER {}] MISMATCH_DEBUG: This indicates window metrics (mark-to-market) differ from trade-based curve",
+                self.worker_id);
         }
+        println!("🔍 [WORKER {}] EQUITY_CURVE_DEBUG: net_pnl_from_curve={:.2}, net_pnl_from_windows={:.2}, using={:.2}",
+            self.worker_id, net_pnl_from_curve, net_pnl_from_windows, net_pnl_from_curve);
         let net_pnl = net_pnl_from_curve;
         
         // Parse fitness weights from request (if provided)
@@ -1904,6 +1939,23 @@ impl DistributedGAWorker {
         
         // Sample equity curve to avoid huge payloads
         let sampled_curve = sample_equity_curve(&aggregate_equity_curve, MAX_EQUITY_CURVE_POINTS);
+        
+        // DEBUG: Final sanity check before sending
+        println!("🔍 [WORKER {}] FINAL_RESULT_DEBUG: sampled_curve_len={}, first={:.2}, last={:.2}",
+            self.worker_id, sampled_curve.len(),
+            sampled_curve.first().copied().unwrap_or(0.0),
+            sampled_curve.last().copied().unwrap_or(0.0));
+        println!("🔍 [WORKER {}] FINAL_RESULT_DEBUG: net_pnl={:.2}, num_trades={}, is_final=true",
+            self.worker_id, net_pnl, num_trades);
+        
+        // Sanity check: equity curve should start near initial_capital
+        if let Some(&first_equity) = sampled_curve.first() {
+            if (first_equity - request.initial_capital).abs() > 1.0 {
+                println!("🚨 [WORKER {}] EQUITY_CURVE_ERROR: First equity ({:.2}) differs from initial_capital ({:.2})!",
+                    self.worker_id, first_equity, request.initial_capital);
+                println!("🚨 [WORKER {}] EQUITY_CURVE_ERROR: This should NOT happen with trade-based curve!", self.worker_id);
+            }
+        }
         
         // Send comprehensive result
         let response = protocol::broker::messages::ChromosomeEvalResult {

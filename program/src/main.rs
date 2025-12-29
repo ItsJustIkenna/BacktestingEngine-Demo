@@ -533,6 +533,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                         let equity_curve: Vec<f64> = serde_json::from_slice(&eval_result.equity_curve)
                                                             .unwrap_or_default();
                                                         
+                                                        // DEBUG: Log received equity curve for tracing
+                                                        eprintln!("🔍 [COORDINATOR] RESULT_DEBUG: equity_curve.len()={}, net_pnl={:.2}, num_trades={}",
+                                                            equity_curve.len(), eval_result.net_pnl, eval_result.num_trades);
+                                                        if !equity_curve.is_empty() {
+                                                            eprintln!("🔍 [COORDINATOR] RESULT_DEBUG: equity_curve first={:.2}, last={:.2}",
+                                                                equity_curve.first().copied().unwrap_or(0.0),
+                                                                equity_curve.last().copied().unwrap_or(0.0));
+                                                            // Check for suspicious negative starting equity
+                                                            if let Some(&first) = equity_curve.first() {
+                                                                if first < 0.0 {
+                                                                    eprintln!("🚨 [COORDINATOR] RESULT_ERROR: Equity curve starts NEGATIVE ({:.2})!", first);
+                                                                    eprintln!("🚨 [COORDINATOR] RESULT_ERROR: This indicates stale binary or wrong code path!");
+                                                                }
+                                                            }
+                                                        }
+                                                        
                                                         // Parse closed trades data to get individual trade P&Ls
                                                         let trade_returns: Vec<f64> = serde_json::from_slice(&eval_result.closed_trades_data)
                                                             .unwrap_or_default();
