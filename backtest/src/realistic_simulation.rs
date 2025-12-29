@@ -874,6 +874,10 @@ impl RealisticSimulator {
                     }
                 }
                 EventType::Trade => {
+                    // DEBUG: Track first few trade-vs-quote comparisons
+                    static TRADE_DEBUG_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                    let debug_count = TRADE_DEBUG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    
                     // Sanitize book on first trade to establish reference price
                     // Remove orders that are unreasonably far from trade price
                     if last_price.is_none() && event.price > 0.0 {
@@ -892,6 +896,16 @@ impl RealisticSimulator {
                         Side::Buy => &mut our_ask,  // Buy aggressor may fill our ask
                         Side::Sell => &mut our_bid,  // Sell aggressor may fill our bid
                     };
+                    
+                    // DEBUG: Log trade-vs-quote comparison for first 5 trades where we have an order
+                    if debug_count < 5 {
+                        if let Some(ref our_order) = check_our_order {
+                            let book_mid = book.mid_price().unwrap_or(0.0);
+                            eprintln!("🔍 [FILL_DEBUG] Trade #{}: price={:.4}, our_{:?}={:.4}, book_mid={:.4}, diff={:.4}bps",
+                                debug_count, event.price, our_order.side, our_order.price, book_mid,
+                                ((event.price - our_order.price).abs() / our_order.price) * 10000.0);
+                        }
+                    }
                     
                     if let Some(ref mut our_order) = check_our_order {
                         // For trade-only data (no order book events), we can't track queue position.
@@ -924,6 +938,13 @@ impl RealisticSimulator {
                         } else {
                             false
                         };
+                        
+                        // DEBUG: Log why fills aren't happening for first few potential fills
+                        if debug_count < 10 && !price_matches && !trade_crosses_our_quote && !probabilistic_fill {
+                            let price_diff_bps = ((event.price - our_order.price).abs() / our_order.price) * 10000.0;
+                            eprintln!("🔍 [FILL_DEBUG] NO_FILL: trade={:.4} vs our_{:?}={:.4} (diff={:.0}bps), crosses={}, book_empty={}",
+                                event.price, our_order.side, our_order.price, price_diff_bps, trade_crosses_our_quote, trade_only_mode);
+                        }
                         
                         if price_matches || trade_crosses_our_quote || probabilistic_fill {
                             // Trade at or through our price level - check queue position
