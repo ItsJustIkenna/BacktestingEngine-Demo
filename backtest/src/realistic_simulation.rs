@@ -878,6 +878,14 @@ impl RealisticSimulator {
                     static TRADE_DEBUG_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
                     let debug_count = TRADE_DEBUG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     
+                    // DEBUG: Show what we're checking against for first 10 trades
+                    if debug_count < 10 {
+                        eprintln!("🔍 [TRADE_DEBUG] Trade #{}: price={:.4}, side={:?}, eff_side={:?}",
+                            debug_count, event.price, event.side, effective_side);
+                        eprintln!("    our_bid: {:?}", our_bid.as_ref().map(|o| (o.price, o.quantity_ahead)));
+                        eprintln!("    our_ask: {:?}", our_ask.as_ref().map(|o| (o.price, o.quantity_ahead)));
+                    }
+                    
                     // Sanitize book on first trade to establish reference price
                     // Remove orders that are unreasonably far from trade price
                     if last_price.is_none() && event.price > 0.0 {
@@ -1115,6 +1123,14 @@ impl RealisticSimulator {
                 // Calculate quote prices
                 let bid_price = reservation_price - half_spread;
                 let ask_price = reservation_price + half_spread;
+                
+                // DEBUG: Log first 5 quote placements
+                static QUOTE_DEBUG_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+                let quote_debug = QUOTE_DEBUG_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                if quote_debug < 5 {
+                    eprintln!("📍 [QUOTE_DEBUG] #{}: mid={:.4} (book_mid={:?}, last_trade={:?}), bid={:.4}, ask={:.4}",
+                        quote_debug, mid_price, book.mid_price(), last_price, bid_price, ask_price);
+                }
                 
                 // Cancel old orders (counts against rate limit)
                 if our_bid.is_some() {
