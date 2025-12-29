@@ -1181,21 +1181,24 @@ impl RealisticSimulator {
                 let clamped_ln_term = ln_term.min(0.01);
                 let optimal_spread = (variance_term + clamped_ln_term) * mid_price;
                 
-                // Apply minimum spread
-                let min_spread = mid_price * params.min_spread_bps / 10000.0;
+                // Apply minimum spread: must be at least 2x the current maker fee to be profitable
+                // This ensures we capture spread > fees on a round trip
+                // Use the dynamic fee rate (current_fee_rate) which adjusts with volume tiers
+                let fee_based_min_spread_bps = current_fee_rate * 10000.0 * 2.5;  // 2.5x fee in bps
+                let effective_min_spread_bps = params.min_spread_bps.max(fee_based_min_spread_bps);
+                let min_spread = mid_price * effective_min_spread_bps / 10000.0;
                 let half_spread = (optimal_spread / 2.0).max(min_spread / 2.0);
                 
                 // Calculate quote prices
                 // CRITICAL INSIGHT: The book's best bid/ask can be stale and far from actual trades.
                 // What matters for getting fills is being competitive with WHERE TRADES ACTUALLY HAPPEN.
                 // 
-                // Strategy: Quote at a tight spread around the last trade price (the actual market).
-                // Use a small buffer (1-2 bps) to capture the spread while still being competitive.
-                let trade_based_spread = mid_price * 0.0002; // 2 bps each side = 4 bps total spread
+                // Strategy: Quote at the minimum profitable spread around mid price.
+                // The spread must exceed fees to be profitable.
                 let (bid_price, ask_price) = if last_price.is_some() {
-                    // Quote tight spreads around where trades are happening
-                    // This ensures we're competitive regardless of stale book levels
-                    (mid_price - trade_based_spread, mid_price + trade_based_spread)
+                    // Quote at half_spread around mid (which is the trade price)
+                    // half_spread is already the larger of AS optimal or fee-based minimum
+                    (mid_price - half_spread, mid_price + half_spread)
                 } else if let (Some(best_bid), Some(best_ask)) = (book.best_bid(), book.best_ask()) {
                     // No trades yet - use book inside (may be less accurate)
                     (best_bid, best_ask)
