@@ -1194,10 +1194,11 @@ impl RealisticSimulator {
                 let clamped_ln_term = ln_term.min(0.01);
                 let optimal_spread = (variance_term + clamped_ln_term) * mid_price;
                 
-                // Apply minimum spread: must be at least 2x the current maker fee to be profitable
-                // This ensures we capture spread > fees on a round trip
+                // Apply minimum spread: must cover round-trip fees + profit margin
+                // With 25 bps maker fee, round-trip = 50 bps. Use 4x single fee = 100 bps spread
+                // This gives ~50 bps profit per round-trip after 50 bps in fees
                 // Use the dynamic fee rate (current_fee_rate) which adjusts with volume tiers
-                let fee_based_min_spread_bps = current_fee_rate * 10000.0 * 2.5;  // 2.5x fee in bps
+                let fee_based_min_spread_bps = current_fee_rate * 10000.0 * 4.0;  // 4x fee = 2x round-trip fees
                 let effective_min_spread_bps = params.min_spread_bps.max(fee_based_min_spread_bps);
                 let min_spread = mid_price * effective_min_spread_bps / 10000.0;
                 let half_spread = (optimal_spread / 2.0).max(min_spread / 2.0);
