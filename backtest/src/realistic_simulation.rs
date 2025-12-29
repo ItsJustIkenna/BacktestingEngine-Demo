@@ -669,6 +669,12 @@ impl RealisticSimulator {
         let mut total_fees: f64 = 0.0;
         let mut total_volume: f64 = 0.0;
         
+        // DEBUG: Log capital immediately after initialization
+        eprintln!("💵 [CAPITAL_INIT] initial_capital={:.2}, initial_inventory_value={:.2}, capital={:.2}, inventory={:.4}",
+            self.initial_capital, initial_inventory_value, capital, inventory);
+        eprintln!("💵 [CAPITAL_INIT] Expected equity = capital + inventory * initial_price = {:.2} + {:.4} * {:.4} = {:.2}",
+            capital, inventory, initial_price, capital + inventory * initial_price);
+        
         // Initialize last_price to initial_price so first equity calculation is correct
         // This ensures equity starts at initial_capital (no immediate mark-to-market loss)
         let mut last_price: Option<f64> = Some(initial_price);
@@ -1061,6 +1067,7 @@ impl RealisticSimulator {
                                     current_fee_rate = dynamic_maker_fee;
                                 }
                                 
+                                let capital_before = capital;
                                 match our_order.side {
                                     Side::Buy => {
                                         // Bought: pay price, receive inventory
@@ -1072,6 +1079,12 @@ impl RealisticSimulator {
                                         capital += fill_qty * fill_price - fee;
                                         inventory -= fill_qty;
                                     }
+                                }
+                                
+                                // DEBUG: Log first 5 capital changes
+                                if orders_filled < 5 {
+                                    eprintln!("💵 [CAPITAL_CHANGE] Fill #{}: {:?} {:.4} @ {:.4}, capital: {:.2} -> {:.2}, inventory: {:.4}",
+                                        orders_filled + 1, our_order.side, fill_qty, fill_price, capital_before, capital, inventory);
                                 }
                                 
                                 total_fees += fee;
