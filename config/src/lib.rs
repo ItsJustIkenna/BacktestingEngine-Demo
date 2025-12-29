@@ -288,8 +288,8 @@ impl ExchangeFeeConfig {
             // Kraken rate limits: 15/sec burst for adding orders
             max_orders_per_second: 15.0,
             rate_limit_cooldown_ms: 1000,
-            // Standard perpetual funding (Kraken Futures)
-            funding_rate_8h: 0.0001,
+            // Spot trading - no funding rates (only applies to perpetuals)
+            funding_rate_8h: 0.0,
             funding_interval_ms: 8 * 60 * 60 * 1000,
         }
     }

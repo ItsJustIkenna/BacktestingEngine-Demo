@@ -777,7 +777,7 @@ impl RealisticSimulator {
         // Instead, we filter out stale orders in the event loop based on trade prices.
         let sides_inverted = false;
         
-        // Funding rate tracking
+        // Funding rate tracking (only applies to perpetuals, not spot)
         let mut last_funding_time: i64 = 0;
         let mut total_funding_paid = 0.0;
         
