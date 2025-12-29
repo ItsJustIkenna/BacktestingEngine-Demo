@@ -1267,6 +1267,17 @@ impl RealisticSimulator {
                 // Track equity
                 let mark_price = mid_price;
                 let equity = capital + inventory * mark_price;
+                
+                // DEBUG: Log first equity calculation to trace the -$20k issue
+                if equity_curve.is_empty() {
+                    eprintln!("💰 [EQUITY_DEBUG] FIRST equity calculation:");
+                    eprintln!("    capital = {:.2}", capital);
+                    eprintln!("    inventory = {:.4}", inventory);
+                    eprintln!("    mark_price = {:.4}", mark_price);
+                    eprintln!("    equity = capital + inventory * mark_price = {:.2}", equity);
+                    eprintln!("    initial_capital = {:.2}", self.initial_capital);
+                }
+                
                 equity_curve.push(equity);
                 
                 // Track drawdown
