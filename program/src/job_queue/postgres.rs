@@ -626,6 +626,13 @@ impl JobQueue for PostgresQueue {
                     "inventory_target": job.inventory_target.to_string(),
                     "order_size": job.order_size.to_string(),
                 },
+                // Trade breakdown - helps explain PnL vs win_rate discrepancies
+                "trade_breakdown": {
+                    "closed_trades": result.closed_trades,
+                    "open_positions": result.open_positions,
+                    "realized_pnl": result.realized_pnl,
+                    "unrealized_pnl": result.unrealized_pnl
+                },
                 "equity_curve": equity_curve_downsampled,
                 "monte_carlo": result.monte_carlo.as_ref().map(|mc| serde_json::json!({
                     "num_runs": mc.num_runs,
@@ -634,14 +641,65 @@ impl JobQueue for PostgresQueue {
                     "var_95": mc.var_95,
                     "cvar_95": mc.cvar_95,
                     "confidence_lower": mc.confidence_lower,
-                    "confidence_upper": mc.confidence_upper
+                    "confidence_upper": mc.confidence_upper,
+                    "data_points": mc.data_points,
+                    "var_unreliable": mc.var_unreliable,
+                    // Percentile distributions
+                    "p5_total_pnl": mc.p5_total_pnl,
+                    "p50_total_pnl": mc.p50_total_pnl,
+                    "p95_total_pnl": mc.p95_total_pnl,
+                    "p5_max_drawdown": mc.p5_max_drawdown,
+                    "p50_max_drawdown": mc.p50_max_drawdown,
+                    "p95_max_drawdown": mc.p95_max_drawdown,
+                    "p50_sharpe": mc.p50_sharpe,
+                    "p5_win_rate": mc.p5_win_rate,
+                    "p50_win_rate": mc.p50_win_rate,
+                    "p95_win_rate": mc.p95_win_rate
                 })),
                 "walk_forward": result.walk_forward.as_ref().map(|wf| serde_json::json!({
                     "periods_tested": wf.periods_tested,
                     "average_performance": wf.average_performance,
                     "consistency_score": wf.consistency_score,
                     "out_of_sample_degradation": wf.out_of_sample_degradation
-                }))
+                })),
+                // Inventory metrics for market-making strategies
+                "inventory_metrics": result.inventory_metrics.as_ref().map(|inv| serde_json::json!({
+                    "total_volume": inv.total_volume,
+                    "avg_inventory_value": inv.avg_inventory_value,
+                    "turnover_per_day": inv.turnover_per_day,
+                    "buy_fills": inv.buy_fills,
+                    "sell_fills": inv.sell_fills,
+                    "buy_volume": inv.buy_volume,
+                    "sell_volume": inv.sell_volume,
+                    "imbalance_ratio": inv.imbalance_ratio
+                })),
+                // Execution quality metrics
+                "execution_metrics": result.execution_metrics.as_ref().map(|exec| serde_json::json!({
+                    "orders_placed": exec.orders_placed,
+                    "orders_filled": exec.orders_filled,
+                    "orders_cancelled": exec.orders_cancelled,
+                    "total_fills": exec.total_fills,
+                    "fill_rate": exec.fill_rate,
+                    "cancellation_rate": exec.cancellation_rate,
+                    "avg_fills_per_order": exec.avg_fills_per_order,
+                    "avg_time_to_fill_seconds": exec.avg_time_to_fill_seconds,
+                    "median_time_to_fill_seconds": exec.median_time_to_fill_seconds,
+                    "bid_orders": exec.bid_orders,
+                    "ask_orders": exec.ask_orders,
+                    "bid_fills": exec.bid_fills,
+                    "ask_fills": exec.ask_fills,
+                    "bid_fill_rate": exec.bid_fill_rate,
+                    "ask_fill_rate": exec.ask_fill_rate,
+                    "avg_quote_spread_bps": exec.avg_quote_spread_bps,
+                    "round_trip_win_rate": exec.round_trip_win_rate,
+                    "total_round_trips": exec.total_round_trips,
+                    "profitable_round_trips": exec.profitable_round_trips,
+                    "spread_capture_rate": exec.spread_capture_rate,
+                    "adverse_selection_rate": exec.adverse_selection_rate,
+                    "avg_pnl_per_round_trip": exec.avg_pnl_per_round_trip
+                })),
+                // Strategy-specific metrics profile
+                "metrics_profile": result.metrics_profile
             })),
             created_at: now,
             updated_at: now,
@@ -783,7 +841,7 @@ impl JobQueue for PostgresQueue {
                   result_start_date, result_end_date)) => {
                 
                 // Extract equity curve and advanced analysis from strategy_metrics JSON
-                let (equity_curve, monte_carlo, walk_forward, strategy_params) = if let Some(ref metrics) = strategy_metrics {
+                let (equity_curve, monte_carlo, walk_forward, strategy_params, trade_breakdown, inventory_metrics, execution_metrics, metrics_profile) = if let Some(ref metrics) = strategy_metrics {
                     let equity = metrics.get("equity_curve")
                         .and_then(|v| serde_json::from_value(v.clone()).ok())
                         .unwrap_or_else(Vec::new);
@@ -846,9 +904,61 @@ impl JobQueue for PostgresQueue {
                             }))
                         });
                     
-                    (equity, mc, wf, params)
+                    // Extract trade breakdown
+                    let tb = metrics.get("trade_breakdown");
+                    
+                    // Extract inventory metrics for market-making strategies
+                    let inv = metrics.get("inventory_metrics")
+                        .and_then(|v| {
+                            if v.is_null() { return None; }
+                            Some(InventorySummary {
+                                total_volume: v.get("total_volume")?.as_f64()?,
+                                avg_inventory_value: v.get("avg_inventory_value")?.as_f64()?,
+                                turnover_per_day: v.get("turnover_per_day")?.as_f64()?,
+                                buy_fills: v.get("buy_fills")?.as_u64()? as usize,
+                                sell_fills: v.get("sell_fills")?.as_u64()? as usize,
+                                buy_volume: v.get("buy_volume")?.as_f64()?,
+                                sell_volume: v.get("sell_volume")?.as_f64()?,
+                                imbalance_ratio: v.get("imbalance_ratio")?.as_f64()?,
+                            })
+                        });
+                    
+                    // Extract execution quality metrics
+                    let exec = metrics.get("execution_metrics")
+                        .and_then(|v| {
+                            if v.is_null() { return None; }
+                            Some(ExecutionSummary {
+                                orders_placed: v.get("orders_placed")?.as_u64()? as usize,
+                                orders_filled: v.get("orders_filled")?.as_u64()? as usize,
+                                orders_cancelled: v.get("orders_cancelled")?.as_u64()? as usize,
+                                total_fills: v.get("total_fills")?.as_u64()? as usize,
+                                fill_rate: v.get("fill_rate")?.as_f64()?,
+                                cancellation_rate: v.get("cancellation_rate")?.as_f64()?,
+                                avg_fills_per_order: v.get("avg_fills_per_order")?.as_f64()?,
+                                avg_time_to_fill_seconds: v.get("avg_time_to_fill_seconds")?.as_f64()?,
+                                median_time_to_fill_seconds: v.get("median_time_to_fill_seconds")?.as_f64()?,
+                                bid_orders: v.get("bid_orders")?.as_u64()? as usize,
+                                ask_orders: v.get("ask_orders")?.as_u64()? as usize,
+                                bid_fills: v.get("bid_fills")?.as_u64()? as usize,
+                                ask_fills: v.get("ask_fills")?.as_u64()? as usize,
+                                bid_fill_rate: v.get("bid_fill_rate")?.as_f64()?,
+                                ask_fill_rate: v.get("ask_fill_rate")?.as_f64()?,
+                                avg_quote_spread_bps: v.get("avg_quote_spread_bps")?.as_f64()?,
+                                round_trip_win_rate: v.get("round_trip_win_rate").and_then(|x| x.as_f64()),
+                                total_round_trips: v.get("total_round_trips").and_then(|x| x.as_u64()).map(|x| x as usize).unwrap_or(0),
+                                profitable_round_trips: v.get("profitable_round_trips").and_then(|x| x.as_u64()).map(|x| x as usize).unwrap_or(0),
+                                spread_capture_rate: v.get("spread_capture_rate").and_then(|x| x.as_f64()),
+                                adverse_selection_rate: v.get("adverse_selection_rate").and_then(|x| x.as_f64()),
+                                avg_pnl_per_round_trip: v.get("avg_pnl_per_round_trip").and_then(|x| x.as_f64()),
+                            })
+                        });
+                    
+                    // Extract metrics profile
+                    let mp = metrics.get("metrics_profile").cloned();
+                    
+                    (equity, mc, wf, params, tb.cloned(), inv, exec, mp)
                 } else {
-                    (Vec::new(), None, None, None)
+                    (Vec::new(), None, None, None, None, None, None, None)
                 };
                 
                 // Helper to convert BigDecimal to f64
@@ -870,11 +980,21 @@ impl JobQueue for PostgresQueue {
                     profit_factor: bd_to_f64(&profit_factor),
                     equity_curve,
                     completed_at: created_at,
-                    // Trade breakdown not stored in DB (legacy), default to None
-                    closed_trades: None,
-                    open_positions: None,
-                    realized_pnl: None,
-                    unrealized_pnl: None,
+                    // Trade breakdown - extract from strategy_metrics if available
+                    closed_trades: trade_breakdown.as_ref()
+                        .and_then(|tb| tb.get("closed_trades"))
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as usize),
+                    open_positions: trade_breakdown.as_ref()
+                        .and_then(|tb| tb.get("open_positions"))
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as usize),
+                    realized_pnl: trade_breakdown.as_ref()
+                        .and_then(|tb| tb.get("realized_pnl"))
+                        .and_then(|v| v.as_f64()),
+                    unrealized_pnl: trade_breakdown.as_ref()
+                        .and_then(|tb| tb.get("unrealized_pnl"))
+                        .and_then(|v| v.as_f64()),
                     annualized_return: Some(bd_to_f64(&annualized_return)),
                     volatility: Some(bd_to_f64(&volatility)),
                     sortino_ratio: opt_bd_to_f64(&sortino_ratio),
@@ -899,9 +1019,9 @@ impl JobQueue for PostgresQueue {
                     start_date: Some(result_start_date.to_rfc3339()),
                     end_date: Some(result_end_date.to_rfc3339()),
                     risk_halt_reason: None, // Not stored in DB
-                    inventory_metrics: None, // Not stored in DB (legacy)
-                    execution_metrics: None, // Not stored in DB (legacy)
-                    metrics_profile: None, // Not stored in DB (legacy)
+                    inventory_metrics,
+                    execution_metrics,
+                    metrics_profile,
                 }))
             }
             None => Ok(None),

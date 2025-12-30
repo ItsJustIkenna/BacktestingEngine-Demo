@@ -1713,13 +1713,29 @@ impl RealisticSimulator {
         let total_pnl = final_equity - self.initial_capital;
         
         // Calculate Sharpe ratio (annualized)
+        // Use actual time span of the data to properly annualize
         let sharpe_ratio: f64 = if returns.len() > 10 {
             let mean_return: f64 = returns.iter().sum::<f64>() / returns.len() as f64;
             let variance: f64 = returns.iter().map(|r| (r - mean_return).powi(2)).sum::<f64>() / returns.len() as f64;
             let std_dev: f64 = variance.sqrt();
             if std_dev > 1e-10 {
-                // Assume 1 second samples, ~31.5M seconds/year
-                let annualization: f64 = (365.25_f64 * 24.0 * 3600.0 / 1.0).sqrt();
+                // Calculate actual trading days from timestamp span
+                // last_event_timestamp is in milliseconds
+                let duration_days = if last_event_timestamp > 0 && events.len() > 1 {
+                    let first_ts = events.first().map(|e| e.timestamp_ms).unwrap_or(0);
+                    let duration_ms = last_event_timestamp - first_ts;
+                    (duration_ms as f64 / 1000.0 / 86400.0).max(1.0) // At least 1 day
+                } else {
+                    30.0 // Default to 30 days
+                };
+                
+                // Samples per day = num_returns / duration_days
+                let samples_per_day = returns.len() as f64 / duration_days;
+                // Annualize: sqrt(252 trading days * samples_per_day)
+                let annualization = (252.0 * samples_per_day).sqrt();
+                // Cap to prevent extreme values from very high frequency data
+                let annualization = annualization.min(100.0);
+                
                 (mean_return / std_dev) * annualization
             } else {
                 0.0
