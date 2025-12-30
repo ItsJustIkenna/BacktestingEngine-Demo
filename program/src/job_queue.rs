@@ -135,6 +135,14 @@ pub struct BacktestJobParams {
     #[serde(default = "default_flow_sensitivity")]
     pub flow_sensitivity: f64,
     
+    // Fee and adverse selection parameters
+    /// Multiplier for exchange fee to set minimum spread (e.g., 4.0 = 4x fee as min spread)
+    #[serde(default = "default_fee_spread_multiplier")]
+    pub fee_spread_multiplier: f64,
+    /// Sensitivity to adverse selection (0.0 = ignore, 1.0 = fully adjust for order flow)
+    #[serde(default = "default_adverse_selection_sensitivity")]
+    pub adverse_selection_sensitivity: f64,
+    
     // Exit and trading control parameters
     #[serde(default = "default_take_profit_pct")]
     pub take_profit_pct: f64,
@@ -219,6 +227,8 @@ fn default_volatility_adjustment() -> f64 { 0.5 }
 fn default_inventory_penalty() -> f64 { 0.3 }
 fn default_trend_sensitivity() -> f64 { 0.2 }
 fn default_flow_sensitivity() -> f64 { -0.1 }
+fn default_fee_spread_multiplier() -> f64 { 4.0 }  // 4x fee as minimum spread
+fn default_adverse_selection_sensitivity() -> f64 { 1.0 }  // Full adverse selection adjustment
 fn default_take_profit_pct() -> f64 { 0.005 }  // 0.5% take profit
 fn default_stop_loss_pct() -> f64 { 0.003 }    // 0.3% stop loss
 fn default_min_spread_bps() -> f64 { 15.0 }    // 15 basis points minimum spread
@@ -265,6 +275,8 @@ impl Default for BacktestJobParams {
             inventory_penalty_factor: default_inventory_penalty(),
             trend_sensitivity: default_trend_sensitivity(),
             flow_sensitivity: default_flow_sensitivity(),
+            fee_spread_multiplier: default_fee_spread_multiplier(),
+            adverse_selection_sensitivity: default_adverse_selection_sensitivity(),
             monte_carlo_enabled: default_monte_carlo_enabled(),
             monte_carlo_runs: default_monte_carlo_runs(),
             walk_forward_enabled: default_walk_forward_enabled(),

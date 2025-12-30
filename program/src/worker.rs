@@ -2016,8 +2016,8 @@ impl Worker {
             stop_loss_pct: params.stop_loss_pct,
             min_spread_bps: params.min_spread_bps,
             max_trades_per_minute: params.max_trades_per_minute,
-            adverse_selection_sensitivity: 1.0,  // Default moderate sensitivity
-            fee_spread_multiplier: 4.0,  // Default balanced multiplier (4x fee)
+            adverse_selection_sensitivity: params.adverse_selection_sensitivity,
+            fee_spread_multiplier: params.fee_spread_multiplier,
         };
         
         log_info_structured!(WALKFORWARD_LOGGER, "WALKFORWARD_FIXED_PARAMS",

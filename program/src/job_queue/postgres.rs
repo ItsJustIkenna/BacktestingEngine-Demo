@@ -1104,6 +1104,8 @@ mod tests {
             inventory_penalty_factor: 0.3,
             trend_sensitivity: 0.2,
             flow_sensitivity: -0.1,
+            fee_spread_multiplier: 4.0,
+            adverse_selection_sensitivity: 1.0,
             monte_carlo_enabled: true,
             monte_carlo_runs: 1000,
             walk_forward_enabled: true,
