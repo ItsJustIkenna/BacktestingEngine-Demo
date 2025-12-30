@@ -2708,6 +2708,8 @@ impl Worker {
             max_trades_per_minute: chromosome.max_trades_per_minute,
             window_ms: chromosome.window_ms as i64,
             min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,
+            // Fill model from job params
+            fill_model: backtest::FillModelType::from_str(&job.params.fill_model),
         };
         
         // Store params for walk-forward (will need to reconstruct for each window)

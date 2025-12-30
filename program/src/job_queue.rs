@@ -199,6 +199,12 @@ pub struct BacktestJobParams {
     #[serde(default)]
     pub min_total_pnl: Option<f64>,
     
+    // Fill model configuration for realistic backtesting
+    /// Fill model realism level: "optimistic", "standard", "realistic", "pessimistic"
+    /// Default is "realistic" for conservative estimates
+    #[serde(default = "default_fill_model")]
+    pub fill_model: String,
+    
     // Auto-populated fields
     #[serde(default)]
     pub commission_rate: f64, // Auto-populated from exchange
@@ -245,6 +251,7 @@ fn default_min_profit_factor() -> f64 { 1.2 }
 fn default_max_drawdown() -> f64 { 0.25 }
 fn default_min_win_rate() -> f64 { 0.40 }
 fn default_min_trades() -> usize { 30 }
+fn default_fill_model() -> String { "realistic".to_string() }  // Conservative fill model by default
 
 impl Default for BacktestJobParams {
     fn default() -> Self {
@@ -297,6 +304,7 @@ impl Default for BacktestJobParams {
             stop_loss_pct: default_stop_loss_pct(),
             min_spread_bps: default_min_spread_bps(),
             max_trades_per_minute: default_max_trades_per_minute(),
+            fill_model: default_fill_model(),
             commission_rate: 0.0,
             start_date: None,
             end_date: None,

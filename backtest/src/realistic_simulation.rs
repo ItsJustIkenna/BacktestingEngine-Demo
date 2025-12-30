@@ -122,6 +122,91 @@ pub fn order_to_event(order: &HistoricalOrder) -> OrderBookEvent {
     }
 }
 
+/// Fill model realism level
+/// Controls how optimistically/pessimistically fills are simulated
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FillModelType {
+    /// Optimistic: You get filled whenever price touches your level
+    /// Assumes you're first in queue - UNREALISTIC for live trading
+    Optimistic,
+    
+    /// Standard: Queue-based fills with probabilistic model
+    /// Assumes average queue position - moderately optimistic
+    #[default]
+    Standard,
+    
+    /// Realistic: Conservative fills modeling HFT competition
+    /// Assumes you're in back 70% of queue, need price to trade THROUGH
+    Realistic,
+    
+    /// Pessimistic: Very conservative for stress testing
+    /// Only fills on adverse selection (price moves against you after fill)
+    Pessimistic,
+}
+
+impl FillModelType {
+    /// Queue position percentile (0.0 = front, 1.0 = back)
+    pub fn queue_position_percentile(&self) -> f64 {
+        match self {
+            FillModelType::Optimistic => 0.1,   // Front 10% of queue
+            FillModelType::Standard => 0.5,     // Middle of queue
+            FillModelType::Realistic => 0.7,    // Back 70% of queue
+            FillModelType::Pessimistic => 0.9,  // Back 90% of queue
+        }
+    }
+    
+    /// Require price to trade through (not just touch) for fill
+    pub fn require_trade_through(&self) -> bool {
+        match self {
+            FillModelType::Optimistic => false,
+            FillModelType::Standard => false,
+            FillModelType::Realistic => true,  // Must trade through, not touch
+            FillModelType::Pessimistic => true,
+        }
+    }
+    
+    /// Base fill probability when price matches (before queue adjustment)
+    pub fn base_fill_probability(&self) -> f64 {
+        match self {
+            FillModelType::Optimistic => 0.95,
+            FillModelType::Standard => 0.70,
+            FillModelType::Realistic => 0.30,
+            FillModelType::Pessimistic => 0.10,
+        }
+    }
+    
+    /// Latency penalty: reduces fill chance due to quote staleness
+    pub fn latency_penalty_factor(&self) -> f64 {
+        match self {
+            FillModelType::Optimistic => 0.0,   // No penalty
+            FillModelType::Standard => 0.1,     // 10% reduction per 100ms
+            FillModelType::Realistic => 0.3,    // 30% reduction per 100ms
+            FillModelType::Pessimistic => 0.5,  // 50% reduction per 100ms
+        }
+    }
+    
+    /// Adverse selection multiplier: how much more likely fills are on adverse moves
+    pub fn adverse_selection_fill_boost(&self) -> f64 {
+        match self {
+            FillModelType::Optimistic => 1.0,   // No boost
+            FillModelType::Standard => 1.5,     // 1.5x more fills on adverse moves
+            FillModelType::Realistic => 2.5,    // 2.5x more fills on adverse moves
+            FillModelType::Pessimistic => 5.0,  // 5x more fills on adverse moves (mostly toxic)
+        }
+    }
+    
+    /// Parse fill model from string (case-insensitive)
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "optimistic" => FillModelType::Optimistic,
+            "standard" => FillModelType::Standard,
+            "realistic" => FillModelType::Realistic,
+            "pessimistic" => FillModelType::Pessimistic,
+            _ => FillModelType::Realistic,  // Default to conservative
+        }
+    }
+}
+
 /// Parameters for Avellaneda-Stoikov strategy in realistic simulation
 #[derive(Debug, Clone)]
 pub struct RealisticASParams {
@@ -208,6 +293,10 @@ pub struct RealisticASParams {
     pub window_ms: i64,
     /// Minimum quote lifetime before requoting (milliseconds)
     pub min_quote_lifetime_ms: i64,
+    
+    // === Fill Model Configuration ===
+    /// Fill model realism level (Optimistic, Standard, Realistic, Pessimistic)
+    pub fill_model: FillModelType,
 }
 
 impl Default for RealisticASParams {
@@ -274,6 +363,9 @@ impl Default for RealisticASParams {
             // Timing parameters
             window_ms: 60_000,              // 1 minute volatility window
             min_quote_lifetime_ms: 1000,    // 1 second minimum quote lifetime
+            
+            // Fill model: Realistic by default for conservative estimates
+            fill_model: FillModelType::Realistic,
         }
     }
 }
@@ -1163,66 +1255,84 @@ impl RealisticSimulator {
                     }
                     
                     if let Some(ref mut our_order) = check_our_order {
-                        // For trade-only data (no order book events), we can't track queue position.
-                        // Instead, check if the trade price crosses our quote:
-                        // - For our bid: sell aggressor trades at price <= our bid (we buy)
-                        // - For our ask: buy aggressor trades at price >= our ask (we sell)
-                        let price_matches = (our_order.price - event.price).abs() < 1e-10;
-                        let trade_crosses_our_quote = match our_order.side {
-                            Side::Buy => event.price <= our_order.price,   // Seller willing to sell at/below our bid
-                            Side::Sell => event.price >= our_order.price,  // Buyer willing to buy at/above our ask
-                        };
+                        // === REALISTIC FILL MODEL ===
+                        // Uses configurable fill_model to determine fill probability
                         
-                        // IMPROVED FILL MODEL: When quoting inside the spread, we improve the market.
-                        // If a trade happens at a price that we're competitive with, we should get filled.
-                        // This models reality: if we're the best bid/ask, aggressors hit us first.
                         let price_diff = (event.price - our_order.price).abs();
                         let price_diff_bps = (price_diff / our_order.price) * 10000.0;
                         
-                        // We're competitive if:
-                        // 1. Our bid is >= trade price (we'd be hit by seller), OR
-                        // 2. Our ask is <= trade price (we'd be hit by buyer), OR
-                        // 3. We're within the fee-based spread of the trade (we're quoting competitively)
-                        // Use half the fee_spread_multiplier × fee as the competitive threshold
-                        let competitive_threshold_bps = params.maker_fee_rate * 10000.0 * params.fee_spread_multiplier * 0.5;
-                        let we_are_competitive = match our_order.side {
-                            Side::Buy => our_order.price >= event.price || price_diff_bps <= competitive_threshold_bps,
-                            Side::Sell => our_order.price <= event.price || price_diff_bps <= competitive_threshold_bps,
+                        // Basic crossing checks
+                        let price_matches = price_diff_bps < 0.01; // Within 0.01 bps
+                        let trade_crosses_our_quote = match our_order.side {
+                            Side::Buy => event.price <= our_order.price,
+                            Side::Sell => event.price >= our_order.price,
                         };
                         
-                        // For trade-only data (empty book), use probabilistic fills based on proximity
-                        let trade_only_mode = book.bids.is_empty() && book.asks.is_empty();
-                        let probabilistic_fill = if (trade_only_mode || we_are_competitive) && !price_matches && !trade_crosses_our_quote {
-                            // Calculate how close the trade is to our quote as a percentage
-                            let price_diff = (event.price - our_order.price).abs();
-                            // Use fee-based spread as tolerance (half spread on each side)
-                            let price_tolerance = our_order.price * params.maker_fee_rate * params.fee_spread_multiplier * 0.5;
-                            
-                            if price_diff <= price_tolerance {
-                                // The closer the trade is to our price, the higher our fill probability
-                                // At our exact price: 80% fill chance, linear decay to 0% at tolerance edge
-                                let fill_prob = 0.8 * (1.0 - price_diff / price_tolerance);
-                                rng.gen::<f64>() < fill_prob
-                            } else {
-                                false
+                        // For realistic/pessimistic modes, require trade THROUGH our level, not just touch
+                        let trade_through = match our_order.side {
+                            Side::Buy => event.price < our_order.price,   // Strictly better for us
+                            Side::Sell => event.price > our_order.price,
+                        };
+                        
+                        // Check if this is an adverse selection fill (price moving against us)
+                        // Compare to previous trade price
+                        let is_adverse_fill = if let Some(prev_price) = last_price {
+                            match our_order.side {
+                                Side::Buy => event.price < prev_price,   // Price dropping = adverse for bid
+                                Side::Sell => event.price > prev_price,  // Price rising = adverse for ask
                             }
                         } else {
                             false
                         };
                         
-                        // DEBUG: Log why fills aren't happening for first few potential fills
-                        if trade_debug_count <= 20 {
-                            let price_diff_bps = ((event.price - our_order.price).abs() / our_order.price) * 10000.0;
-                            if trade_crosses_our_quote || price_matches {
-                                eprintln!("🔍 [FILL_DEBUG] CROSSES: trade={:.4} vs our_{:?}={:.4} (diff={:.0}bps), qty_ahead={:.2}",
-                                    event.price, our_order.side, our_order.price, price_diff_bps, our_order.quantity_ahead);
-                            } else {
-                                eprintln!("🔍 [FILL_DEBUG] NO_CROSS: trade={:.4} vs our_{:?}={:.4} (diff={:.0}bps)",
-                                    event.price, our_order.side, our_order.price, price_diff_bps);
-                            }
+                        // Calculate fill probability based on fill model
+                        let base_prob = params.fill_model.base_fill_probability();
+                        let queue_percentile = params.fill_model.queue_position_percentile();
+                        let require_through = params.fill_model.require_trade_through();
+                        let adverse_boost = params.fill_model.adverse_selection_fill_boost();
+                        let latency_penalty = params.fill_model.latency_penalty_factor();
+                        
+                        // Start with base probability
+                        let mut fill_prob = base_prob;
+                        
+                        // Adjust for queue position: if we're back of queue, need more volume
+                        // Model: we get filled when (1 - queue_percentile) of the level volume trades
+                        let queue_factor = 1.0 - queue_percentile;
+                        let level_volume_traded = event.quantity / our_order.quantity.max(0.001);
+                        fill_prob *= (level_volume_traded * queue_factor).min(1.0);
+                        
+                        // Boost probability for adverse selection fills (we get filled more when wrong)
+                        if is_adverse_fill {
+                            fill_prob *= adverse_boost;
                         }
                         
-                        if price_matches || trade_crosses_our_quote || probabilistic_fill {
+                        // Latency penalty: older quotes are less likely to be valid
+                        let quote_age_ms = event.timestamp_ms - our_order.timestamp_ms;
+                        let latency_factor = 1.0 - (latency_penalty * (quote_age_ms as f64 / 100.0)).min(0.9);
+                        fill_prob *= latency_factor;
+                        
+                        // Cap at 95%
+                        fill_prob = fill_prob.min(0.95);
+                        
+                        // Determine if we should attempt fill
+                        let should_check_fill = if require_through {
+                            trade_through || price_matches
+                        } else {
+                            trade_crosses_our_quote || price_matches
+                        };
+                        
+                        // Probabilistic fill decision
+                        let probabilistic_fill = should_check_fill && rng.gen::<f64>() < fill_prob;
+                        
+                        // DEBUG: Log fill model decisions for first few trades
+                        if trade_debug_count <= 20 {
+                            eprintln!("🎲 [FILL_MODEL] {:?} | trade={:.4} vs our_{:?}={:.4} | crosses={} through={} adverse={} | prob={:.2}% → fill={}",
+                                params.fill_model, event.price, our_order.side, our_order.price,
+                                trade_crosses_our_quote, trade_through, is_adverse_fill,
+                                fill_prob * 100.0, probabilistic_fill);
+                        }
+                        
+                        if probabilistic_fill {
                             // Trade at or through our price level - check queue position
                             our_order.quantity_ahead -= event.quantity;
                             

@@ -44,6 +44,7 @@ pub use lightweight_sim::{LightweightSim, LightweightSimConfig};
 pub use realistic_simulation::{
     RealisticSimulator, RealisticASParams, RealisticSimResult, 
     OrderBookEvent, EventType, Side, ticks_to_trade_events,
+    FillModelType,
 };
 #[cfg(feature = "postgres")]
 pub use realistic_simulation::market_data_to_order_events;
