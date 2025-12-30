@@ -34,6 +34,20 @@ pub struct AvellanedaStoikovChromosome {
     pub adverse_selection_sensitivity: f64,
 }
 
+impl AvellanedaStoikovChromosome {
+    /// Enforce bounds on all parameters to prevent invalid values
+    pub fn enforce_bounds(&mut self) {
+        self.risk_aversion = self.risk_aversion.clamp(0.0001, 1.0);
+        self.order_size_pct = self.order_size_pct.clamp(0.005, 0.05);
+        self.inventory_target = self.inventory_target.clamp(0.0, 0.5);
+        self.volatility_cap = self.volatility_cap.clamp(0.20, 5.0);
+        self.time_horizon_minutes = self.time_horizon_minutes.clamp(0.167, 60.0);
+        self.market_depth_k = self.market_depth_k.clamp(1.0, 50.0);
+        self.min_spread_bps = self.min_spread_bps.clamp(1.0, 100.0);
+        self.adverse_selection_sensitivity = self.adverse_selection_sensitivity.clamp(0.0, 2.0);
+    }
+}
+
 impl Chromosome for AvellanedaStoikovChromosome {
     fn random<R: Rng + ?Sized>(rng: &mut R) -> Self {
         Self {
@@ -57,9 +71,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
             // fee_rate removed - use exchange maker fee from config instead
             // latency_buffer removed - latency now simulated in order matching
             
-            // Target inventory position - constrained for reasonable market making
-            // Range (-0.3..0.3) allows mild directional lean without extreme bias
-            inventory_target: rng.gen_range(-0.3..0.3),
+            // Target inventory position - constrained for market making
+            // Range (0.0..0.5) keeps inventory balanced (0.5 = target 50% in base asset)
+            // Negative values don't make sense for market makers
+            inventory_target: rng.gen_range(0.0..0.5),
             
             // Volatility cap to prevent extreme spread widening
             // NOTE: Must be >= vol_floor (0.15) in fast_simulation.rs or all events get skipped
@@ -105,7 +120,7 @@ impl Chromosome for AvellanedaStoikovChromosome {
     }
 
     fn crossover(&self, other: &Self, rng: &mut impl Rng) -> Self {
-        Self {
+        let mut child = Self {
             risk_aversion: if rng.gen_bool(0.5) { self.risk_aversion } else { other.risk_aversion },
             order_size_pct: if rng.gen_bool(0.5) { self.order_size_pct } else { other.order_size_pct },
             window_ms: if rng.gen_bool(0.5) { self.window_ms } else { other.window_ms },
@@ -131,7 +146,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
             
             // Adverse selection crossover
             adverse_selection_sensitivity: if rng.gen_bool(0.5) { self.adverse_selection_sensitivity } else { other.adverse_selection_sensitivity },
-        }
+        };
+        // Ensure bounds are enforced after crossover
+        child.enforce_bounds();
+        child
     }
 
     fn mutate(&mut self, rng: &mut impl Rng, mutation_rate: f64) {
@@ -157,10 +175,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
         }
         // fee_rate removed - use exchange config
         // latency_buffer removed - latency now simulated in order matching
-        // Inventory target: constrained for reasonable market making
+        // Inventory target: constrained for market making (0 to 0.5 = % of capital in base asset)
         if rng.gen_bool(mutation_rate) {
-            self.inventory_target += rng.gen_range(-0.15..0.15);
-            self.inventory_target = self.inventory_target.clamp(-0.3, 0.3);  // Reasonable bounds
+            self.inventory_target += rng.gen_range(-0.1..0.1);
+            self.inventory_target = self.inventory_target.clamp(0.0, 0.5);  // No negative targets for MM
         }
         // Volatility cap: range 0.20-5.0 (must be above vol_floor of 0.15)
         if rng.gen_bool(mutation_rate) {

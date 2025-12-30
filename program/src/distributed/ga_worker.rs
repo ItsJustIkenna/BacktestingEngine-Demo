@@ -1586,26 +1586,28 @@ impl DistributedGAWorker {
         };
         
         // WALK-FORWARD IS THE PRIMARY VALIDATION
-        // We run walk-forward on ALL validation data (train_end to end) and use its metrics as the primary output
-        // This provides multiple out-of-sample tests which is more robust than a single period simulation
+        // We run walk-forward on the TEST set only (train_end to test_end)
+        // The validation set (test_end to end) is reserved for final out-of-sample confirmation
         
-        println!("🔬 [WORKER {}] Running WALK-FORWARD as PRIMARY validation on validation data", self.worker_id);
+        println!("🔬 [WORKER {}] Running WALK-FORWARD as PRIMARY validation on TEST data", self.worker_id);
         
-        // Filter events to validation period based on timestamp
-        let validation_events = if request.train_end_idx > 0 {
-            // Use L3 binary reader to get timestamp range for validation window
+        // Filter events to TEST period based on timestamp (train_end to test_end)
+        let test_events = if request.train_end_idx > 0 && request.test_end_idx > request.train_end_idx {
+            // Use L3 binary reader to get timestamp range for test window
             let binary_path = self.data_dir.join(format!("{}_{}.bin", 
                 request.symbol.replace("/", "_"), request.exchange));
             
             if let Ok(reader) = data_prep::OrderBookBinaryReader::open(&binary_path) {
                 let start_ts = reader.get(request.train_end_idx as usize)
                     .map(|t| t.timestamp_ms).unwrap_or(0);
+                let end_ts = reader.get(request.test_end_idx as usize)
+                    .map(|t| t.timestamp_ms).unwrap_or(i64::MAX);
                 
-                println!("🔬 [WORKER {}] Filtering to validation period: from tick {} (ts={})", 
-                    self.worker_id, request.train_end_idx, start_ts);
+                println!("🔬 [WORKER {}] Filtering to TEST period: from tick {} to {} (ts {} to {})", 
+                    self.worker_id, request.train_end_idx, request.test_end_idx, start_ts, end_ts);
                 
                 events.iter()
-                    .filter(|e| e.timestamp_ms >= start_ts)
+                    .filter(|e| e.timestamp_ms >= start_ts && e.timestamp_ms < end_ts)
                     .cloned()
                     .collect::<Vec<_>>()
             } else {
@@ -1616,12 +1618,12 @@ impl DistributedGAWorker {
             events.clone()
         };
         
-        println!("🔬 [WORKER {}] Validation events: {} (from {} total)", 
-            self.worker_id, validation_events.len(), events.len());
+        println!("🔬 [WORKER {}] Test events: {} (from {} total)", 
+            self.worker_id, test_events.len(), events.len());
         
         // Calculate data date range to determine appropriate window sizes
-        let first_event_ts = validation_events.first().map(|e| e.timestamp_ms).unwrap_or(0);
-        let last_event_ts = validation_events.last().map(|e| e.timestamp_ms).unwrap_or(0);
+        let first_event_ts = test_events.first().map(|e| e.timestamp_ms).unwrap_or(0);
+        let last_event_ts = test_events.last().map(|e| e.timestamp_ms).unwrap_or(0);
         let data_days = (last_event_ts - first_event_ts) as f64 / (1000.0 * 60.0 * 60.0 * 24.0);
         
         // PROPORTIONAL window sizing: train=60%, test=20%, step=20% of total data
@@ -1662,12 +1664,12 @@ impl DistributedGAWorker {
             test_days, (test_days as f64 / data_days) * 100.0,
             step_days, expected_windows);
         
-        // Run walk-forward analysis on validation data
+        // Run walk-forward analysis on TEST data (20% holdout)
         // This is the PRIMARY evaluation - multiple out-of-sample windows
         // Using local run_walkforward_realistic to avoid circular dependency
         let wf_summary = if train_days > 0 {
             run_walkforward_realistic(
-                &validation_events,
+                &test_events,
                 chromosome,
                 &request.exchange,
                 request.initial_capital,
@@ -1678,7 +1680,7 @@ impl DistributedGAWorker {
             )
         } else {
             // Not enough data for walk-forward - run single realistic simulation
-            self.run_single_realistic_simulation(&validation_events, chromosome, &request.exchange, request.initial_capital, request.initial_30d_volume)
+            self.run_single_realistic_simulation(&test_events, chromosome, &request.exchange, request.initial_capital, request.initial_30d_volume)
         };
         
         println!("🔬 [WORKER {}] Walk-forward PRIMARY validation complete:", self.worker_id);
@@ -1833,8 +1835,8 @@ impl DistributedGAWorker {
         
         // Run Monte Carlo using per-trade returns (statistically valid sample size)
         let monte_carlo_results = if request.run_monte_carlo && !all_trade_returns.is_empty() {
-            // Use request parameter, cap at 200 for speed (1000 is excessive for real-time use)
-            let mc_runs = (request.monte_carlo_runs as usize).min(200).max(100);
+            // Use request parameter directly - user controls the run count
+            let mc_runs = (request.monte_carlo_runs as usize).max(100);
             println!("🔬 [WORKER {}] Running Monte Carlo simulation ({} runs) on {} trades...", 
                 self.worker_id, mc_runs, all_trade_returns.len());
             log_info!(MAIN_LOGGER, "Running Monte Carlo simulation for job {} with {} trades ({} runs)", 

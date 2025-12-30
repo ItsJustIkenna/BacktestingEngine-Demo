@@ -160,7 +160,8 @@ impl GACheckpoint {
 }
 
 /// Timeout for waiting for all chromosome results
-const EVAL_TIMEOUT_SECS: u64 = 900; // 15 minutes per generation max
+/// Final evaluation with walk-forward + Monte Carlo can take 20+ minutes for large datasets
+const EVAL_TIMEOUT_SECS: u64 = 18000; // 5 hours per generation/final eval max
 
 /// Configuration for distributed GA
 #[derive(Debug, Clone)]
