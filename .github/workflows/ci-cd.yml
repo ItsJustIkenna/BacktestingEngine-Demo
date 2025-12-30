@@ -47,7 +47,6 @@ jobs:
           repository: Nwagbara-Group-LLC/databaseschema
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           path: databaseschema
-          ref: main
 
       - name: Checkout LoggingEngine
         uses: actions/checkout@v4
