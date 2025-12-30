@@ -373,6 +373,7 @@ mod tests {
             test_ratio: 0.2,
             validate_ratio: 0.2,
             fitness_weights: None,
+            fill_model: "realistic".to_string(),
         };
 
         // Need to set up default for BacktestJobParams
@@ -436,6 +437,7 @@ mod tests {
             test_ratio: 0.2,
             validate_ratio: 0.2,
             fitness_weights: None,
+            fill_model: "realistic".to_string(),
         };
 
         let job_id = broker.submit_job(params).await;

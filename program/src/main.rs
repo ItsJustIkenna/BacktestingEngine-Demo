@@ -673,17 +673,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                             equity_curve,
                                                             completed_at: chrono::Utc::now(),
                                                             strategy_params: Some(serde_json::json!({
+                                                                // Core AS parameters
                                                                 "risk_aversion": best_chromosome.risk_aversion,
                                                                 "order_size_pct": best_chromosome.order_size_pct,
-                                                                "window_ms": best_chromosome.window_ms,
                                                                 "inventory_target": best_chromosome.inventory_target,
+                                                                
+                                                                // Timing parameters
+                                                                "window_ms": best_chromosome.window_ms,
+                                                                "min_quote_lifetime_ms": best_chromosome.min_quote_lifetime_ms,
                                                                 "time_horizon_minutes": best_chromosome.time_horizon_minutes,
+                                                                
+                                                                // Spread and sizing parameters
+                                                                "volatility_cap": best_chromosome.volatility_cap,
                                                                 "market_depth_k": best_chromosome.market_depth_k,
+                                                                "min_spread_bps": best_chromosome.min_spread_bps,
+                                                                "fee_spread_multiplier": best_chromosome.fee_spread_multiplier,
+                                                                
+                                                                // Risk control parameters
+                                                                "max_trades_per_minute": best_chromosome.max_trades_per_minute,
                                                                 "take_profit_pct": best_chromosome.take_profit_pct,
                                                                 "stop_loss_pct": best_chromosome.stop_loss_pct,
-                                                                "volatility_cap": best_chromosome.volatility_cap,
-                                                                "min_spread_bps": best_chromosome.min_spread_bps,
+                                                                
+                                                                // Dynamic adjustment parameters
+                                                                "volatility_adjustment_factor": best_chromosome.volatility_adjustment_factor,
+                                                                "inventory_penalty_factor": best_chromosome.inventory_penalty_factor,
+                                                                "trend_sensitivity": best_chromosome.trend_sensitivity,
+                                                                "flow_sensitivity": best_chromosome.flow_sensitivity,
+                                                                "adverse_selection_sensitivity": best_chromosome.adverse_selection_sensitivity,
+                                                                
+                                                                // Exchange info
+                                                                "exchange": job.params.exchange,
+                                                                "symbol": job.params.symbol,
+                                                                
+                                                                // Optimization metadata
                                                                 "fitness": best_fitness,
+                                                                "optimization_source": "distributed_genetic_algorithm",
                                                             })),
                                                             start_date: job.params.start_date.clone(),
                                                             end_date: job.params.end_date.clone(),
@@ -770,17 +794,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                             equity_curve: vec![],
                                                             completed_at: chrono::Utc::now(),
                                                             strategy_params: Some(serde_json::json!({
+                                                                // Core AS parameters
                                                                 "risk_aversion": best_chromosome.risk_aversion,
                                                                 "order_size_pct": best_chromosome.order_size_pct,
-                                                                "window_ms": best_chromosome.window_ms,
                                                                 "inventory_target": best_chromosome.inventory_target,
+                                                                
+                                                                // Timing parameters
+                                                                "window_ms": best_chromosome.window_ms,
+                                                                "min_quote_lifetime_ms": best_chromosome.min_quote_lifetime_ms,
                                                                 "time_horizon_minutes": best_chromosome.time_horizon_minutes,
+                                                                
+                                                                // Spread and sizing parameters
+                                                                "volatility_cap": best_chromosome.volatility_cap,
                                                                 "market_depth_k": best_chromosome.market_depth_k,
+                                                                "min_spread_bps": best_chromosome.min_spread_bps,
+                                                                "fee_spread_multiplier": best_chromosome.fee_spread_multiplier,
+                                                                
+                                                                // Risk control parameters
+                                                                "max_trades_per_minute": best_chromosome.max_trades_per_minute,
                                                                 "take_profit_pct": best_chromosome.take_profit_pct,
                                                                 "stop_loss_pct": best_chromosome.stop_loss_pct,
-                                                                "volatility_cap": best_chromosome.volatility_cap,
-                                                                "min_spread_bps": best_chromosome.min_spread_bps,
+                                                                
+                                                                // Dynamic adjustment parameters
+                                                                "volatility_adjustment_factor": best_chromosome.volatility_adjustment_factor,
+                                                                "inventory_penalty_factor": best_chromosome.inventory_penalty_factor,
+                                                                "trend_sensitivity": best_chromosome.trend_sensitivity,
+                                                                "flow_sensitivity": best_chromosome.flow_sensitivity,
+                                                                "adverse_selection_sensitivity": best_chromosome.adverse_selection_sensitivity,
+                                                                
+                                                                // Exchange info
+                                                                "exchange": job.params.exchange,
+                                                                "symbol": job.params.symbol,
+                                                                
+                                                                // Optimization metadata
                                                                 "fitness": best_fitness,
+                                                                "optimization_source": "distributed_genetic_algorithm",
                                                                 "final_eval_error": format!("{:?}", e),
                                                             })),
                                                             start_date: job.params.start_date.clone(),

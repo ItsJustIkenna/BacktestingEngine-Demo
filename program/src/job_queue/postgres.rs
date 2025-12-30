@@ -1246,6 +1246,7 @@ mod tests {
             test_ratio: 0.2,
             validate_ratio: 0.2,
             fitness_weights: None,
+            fill_model: "realistic".to_string(),
         };
         
         let job_id = queue.submit_job(params).await.unwrap();

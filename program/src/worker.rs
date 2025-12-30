@@ -926,11 +926,8 @@ impl Worker {
             cancelled_orders: Some(0),
             avg_slippage: result.core.transaction_costs.as_ref().map(|tc| tc.total_slippage / result.core.num_trades.max(1) as f64),
             total_commission_paid: result.core.transaction_costs.as_ref().map(|tc| tc.total_commission),
-            strategy_params: Some(serde_json::json!({
-                "risk_aversion": job.params.risk_aversion,
-                "inventory_target": job.params.inventory_target,
-                "order_size": job.params.order_size
-            })),
+            // Comprehensive strategy params for live trading deployment
+            strategy_params: Some(Self::build_strategy_params_for_live(&job.params)),
             // Date range for equity curve x-axis
             start_date: job.params.start_date.clone(),
             end_date: job.params.end_date.clone(),
@@ -3244,12 +3241,10 @@ impl Worker {
             cancelled_orders: Some(0),
             avg_slippage: result.core.transaction_costs.as_ref().map(|tc| tc.total_slippage / result.core.num_trades.max(1) as f64),
             total_commission_paid: result.core.transaction_costs.as_ref().map(|tc| tc.total_commission),
-            strategy_params: Some(serde_json::json!({
-                "risk_aversion": chromosome.risk_aversion,
-                "inventory_target": chromosome.inventory_target,
-                "order_size_pct": chromosome.order_size_pct,
-                "order_size_units": order_size_units
-            })),
+            // Comprehensive strategy params from GA-optimized chromosome for live trading
+            strategy_params: Some(Self::build_strategy_params_from_chromosome(
+                chromosome, order_size_units, exchange, symbol
+            )),
             start_date: None, // Chromosome evaluation doesn't have date range
             end_date: None,
             monte_carlo: None, // Chromosome evaluation doesn't run MC
@@ -3557,6 +3552,104 @@ impl Worker {
             log_error!(MAIN_LOGGER, "PostgreSQL feature not enabled - cannot load market data");
             Err("PostgreSQL feature not enabled".into())
         }
+    }
+    
+    /// Build comprehensive strategy parameters for live trading deployment
+    /// 
+    /// This ensures all parameters needed for live trading are saved to the database,
+    /// not just the basic 3 params that were being saved before.
+    fn build_strategy_params_for_live(params: &crate::job_queue::BacktestJobParams) -> serde_json::Value {
+        serde_json::json!({
+            // Core AS parameters
+            "risk_aversion": params.risk_aversion,
+            "inventory_target": params.inventory_target,
+            "order_size": params.order_size,
+            "order_size_pct": params.order_size_pct,
+            "initial_capital": params.initial_capital,
+            "initial_inventory_pct": params.initial_inventory_pct,
+            
+            // Timing parameters
+            "window_ms": params.window_ms,
+            "min_quote_lifetime_ms": params.min_quote_lifetime_ms,
+            "time_horizon_minutes": params.time_horizon_minutes,
+            
+            // Spread and sizing parameters
+            "volatility_cap": params.volatility_cap,
+            "market_depth_k": params.market_depth_k,
+            "min_spread_bps": params.min_spread_bps,
+            "fee_spread_multiplier": params.fee_spread_multiplier,
+            
+            // Risk control parameters
+            "max_trades_per_minute": params.max_trades_per_minute,
+            "take_profit_pct": params.take_profit_pct,
+            "stop_loss_pct": params.stop_loss_pct,
+            
+            // Dynamic adjustment parameters
+            "volatility_adjustment_factor": params.volatility_adjustment_factor,
+            "inventory_penalty_factor": params.inventory_penalty_factor,
+            "trend_sensitivity": params.trend_sensitivity,
+            "flow_sensitivity": params.flow_sensitivity,
+            "adverse_selection_sensitivity": params.adverse_selection_sensitivity,
+            
+            // Exchange and fee configuration
+            "exchange": params.exchange,
+            "symbol": params.symbol,
+            "fee_rate": params.fee_rate,
+            "commission_rate": params.commission_rate,
+            
+            // Fill model configuration
+            "fill_model": params.fill_model,
+            
+            // Metadata for deployment
+            "strategy_type": params.strategy_type,
+            "optimization_method": params.optimization_method,
+        })
+    }
+    
+    /// Build comprehensive strategy parameters from a GA chromosome
+    fn build_strategy_params_from_chromosome(
+        chromosome: &genetic::chromosome::AvellanedaStoikovChromosome, 
+        order_size_units: f64,
+        exchange: &str,
+        symbol: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            // Core AS parameters (from optimized chromosome)
+            "risk_aversion": chromosome.risk_aversion,
+            "inventory_target": chromosome.inventory_target,
+            "order_size_pct": chromosome.order_size_pct,
+            "order_size_units": order_size_units,
+            
+            // Timing parameters
+            "window_ms": chromosome.window_ms,
+            "min_quote_lifetime_ms": chromosome.min_quote_lifetime_ms,
+            "time_horizon_minutes": chromosome.time_horizon_minutes,
+            
+            // Spread and sizing parameters
+            "volatility_cap": chromosome.volatility_cap,
+            "market_depth_k": chromosome.market_depth_k,
+            "min_spread_bps": chromosome.min_spread_bps,
+            "fee_spread_multiplier": chromosome.fee_spread_multiplier,
+            
+            // Risk control parameters
+            "max_trades_per_minute": chromosome.max_trades_per_minute,
+            "take_profit_pct": chromosome.take_profit_pct,
+            "stop_loss_pct": chromosome.stop_loss_pct,
+            
+            // Dynamic adjustment parameters (optimized)
+            "volatility_adjustment_factor": chromosome.volatility_adjustment_factor,
+            "inventory_penalty_factor": chromosome.inventory_penalty_factor,
+            "trend_sensitivity": chromosome.trend_sensitivity,
+            "flow_sensitivity": chromosome.flow_sensitivity,
+            "adverse_selection_sensitivity": chromosome.adverse_selection_sensitivity,
+            
+            // Exchange info
+            "exchange": exchange,
+            "symbol": symbol,
+            
+            // Mark as GA-optimized
+            "optimization_source": "genetic_algorithm",
+        })
     }
     
     /// Build a metrics profile JSON for a given strategy type
