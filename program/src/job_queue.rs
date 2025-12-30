@@ -214,7 +214,7 @@ fn default_initial_30d_volume() -> f64 { 0.0 }  // 0 = use exchange default fee 
 fn default_optimization_method() -> String { "genetic".to_string() }
 fn default_population_size() -> usize { 30 }  // Reduced from 50 for faster optimization
 fn default_generations() -> usize { 15 }      // Reduced from 20, early stopping handles convergence
-fn default_risk_aversion() -> f64 { 0.5 }
+fn default_risk_aversion() -> f64 { 0.1 }  // Lower = tighter spreads, more fills
 fn default_inventory_target() -> f64 { 0.5 }
 fn default_order_size() -> f64 { 0.01 }
 fn default_order_size_pct() -> f64 { 0.02 }  // 2% of capital per trade
@@ -227,7 +227,7 @@ fn default_volatility_adjustment() -> f64 { 0.5 }
 fn default_inventory_penalty() -> f64 { 0.3 }
 fn default_trend_sensitivity() -> f64 { 0.2 }
 fn default_flow_sensitivity() -> f64 { -0.1 }
-fn default_fee_spread_multiplier() -> f64 { 3.0 }  // 3x fee as minimum spread (tighter for more fills)
+fn default_fee_spread_multiplier() -> f64 { 2.5 }  // 2.5x fee = tighter spreads for more fills (2x is breakeven)
 fn default_adverse_selection_sensitivity() -> f64 { 0.5 }  // Moderate adverse selection adjustment
 fn default_take_profit_pct() -> f64 { 0.0 }  // Disabled for MM (profit from spread, not direction)
 fn default_stop_loss_pct() -> f64 { 0.0 }    // Disabled for MM (use inventory limits instead)

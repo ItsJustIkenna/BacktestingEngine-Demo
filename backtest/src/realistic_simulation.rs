@@ -216,14 +216,13 @@ impl Default for RealisticASParams {
         let exchange_config = config::ExchangeFeeConfig::kraken();
         
         Self {
-            risk_aversion: 0.5,
+            risk_aversion: 0.1,  // Lower = tighter spreads, more fills
             inventory_target: 0.0,
             order_size_pct: 0.01,
             volatility_cap: 0.5,
-            // min_spread_bps must be > 2x maker_fee to be profitable
-            // Kraken default maker fee is 25 bps, so we need at least 50 bps spread
-            // We use 60 bps as default to provide margin for adverse selection
-            min_spread_bps: 60.0,
+            // min_spread_bps: soft floor for low-fee exchanges
+            // fee_spread_multiplier is the primary spread control
+            min_spread_bps: 15.0,
             time_horizon_minutes: 5.0,
             
             // Initial inventory: 50% by default (balanced)
@@ -253,10 +252,10 @@ impl Default for RealisticASParams {
             funding_interval_ms: exchange_config.funding_interval_ms,
             
             // Adverse selection: moderate sensitivity by default
-            adverse_selection_sensitivity: 1.0,
+            adverse_selection_sensitivity: 0.5,
             
-            // Fee spread multiplier: 4x by default (balanced trade-off)
-            fee_spread_multiplier: 4.0,
+            // Fee spread multiplier: 2.5x for tighter spreads (2x is breakeven)
+            fee_spread_multiplier: 2.5,
             
             // Advanced AS parameters
             market_depth_k: 1.5,                    // Standard market depth
@@ -1174,11 +1173,24 @@ impl RealisticSimulator {
                             Side::Sell => event.price >= our_order.price,  // Buyer willing to buy at/above our ask
                         };
                         
+                        // IMPROVED FILL MODEL: When quoting inside the spread, we improve the market.
+                        // If a trade happens at a price that we're competitive with, we should get filled.
+                        // This models reality: if we're the best bid/ask, aggressors hit us first.
+                        let price_diff = (event.price - our_order.price).abs();
+                        let price_diff_bps = (price_diff / our_order.price) * 10000.0;
+                        
+                        // We're competitive if:
+                        // 1. Our bid is >= trade price (we'd be hit by seller), OR
+                        // 2. Our ask is <= trade price (we'd be hit by buyer), OR
+                        // 3. We're within 5 bps of the trade (we're very close to where action is)
+                        let we_are_competitive = match our_order.side {
+                            Side::Buy => our_order.price >= event.price || price_diff_bps <= 5.0,
+                            Side::Sell => our_order.price <= event.price || price_diff_bps <= 5.0,
+                        };
+                        
                         // For trade-only data (empty book), use probabilistic fills based on proximity
-                        // If trade is within our spread of the mid, we have a chance to get filled
-                        // This models the reality that we'd be competitive if we were actually in the book
                         let trade_only_mode = book.bids.is_empty() && book.asks.is_empty();
-                        let probabilistic_fill = if trade_only_mode && !price_matches && !trade_crosses_our_quote {
+                        let probabilistic_fill = if (trade_only_mode || we_are_competitive) && !price_matches && !trade_crosses_our_quote {
                             // Calculate how close the trade is to our quote as a percentage
                             let price_diff = (event.price - our_order.price).abs();
                             let price_tolerance = our_order.price * 0.002; // 0.2% tolerance (20 bps)
@@ -1516,8 +1528,10 @@ impl RealisticSimulator {
                 let variance_term = gamma * adjusted_sigma.powi(2) * t_horizon;
                 let ln_term = (2.0 / gamma) * (1.0 + gamma / k).ln();
                 // The ln_term can be huge (>1.0) which makes no sense for spread
-                // Clamp it to a reasonable maximum (e.g., 1% = 0.01)
-                let clamped_ln_term = ln_term.min(0.01);
+                // Clamp to fee-based minimum - A-S shouldn't produce wider spreads than our fee floor
+                // This ensures we don't quote so wide that we never get fills
+                let fee_based_spread_pct = current_fee_rate * params.fee_spread_multiplier;
+                let clamped_ln_term = ln_term.min(fee_based_spread_pct);
                 let optimal_spread = (variance_term + clamped_ln_term) * mid_price;
                 
                 // === FLOW ANALYSIS (shared by multiple features) ===
