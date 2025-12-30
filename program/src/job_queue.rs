@@ -227,10 +227,10 @@ fn default_volatility_adjustment() -> f64 { 0.5 }
 fn default_inventory_penalty() -> f64 { 0.3 }
 fn default_trend_sensitivity() -> f64 { 0.2 }
 fn default_flow_sensitivity() -> f64 { -0.1 }
-fn default_fee_spread_multiplier() -> f64 { 4.0 }  // 4x fee as minimum spread
-fn default_adverse_selection_sensitivity() -> f64 { 1.0 }  // Full adverse selection adjustment
-fn default_take_profit_pct() -> f64 { 0.005 }  // 0.5% take profit
-fn default_stop_loss_pct() -> f64 { 0.003 }    // 0.3% stop loss
+fn default_fee_spread_multiplier() -> f64 { 3.0 }  // 3x fee as minimum spread (tighter for more fills)
+fn default_adverse_selection_sensitivity() -> f64 { 0.5 }  // Moderate adverse selection adjustment
+fn default_take_profit_pct() -> f64 { 0.0 }  // Disabled for MM (profit from spread, not direction)
+fn default_stop_loss_pct() -> f64 { 0.0 }    // Disabled for MM (use inventory limits instead)
 fn default_min_spread_bps() -> f64 { 15.0 }    // 15 basis points minimum spread
 fn default_max_trades_per_minute() -> f64 { 30.0 }  // 30 trades per minute max
 fn default_monte_carlo_enabled() -> bool { true }

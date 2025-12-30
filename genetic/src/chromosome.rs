@@ -53,10 +53,9 @@ impl AvellanedaStoikovChromosome {
         // Range 5-150 bps allows flexibility for both low-fee and high-fee exchanges
         self.min_spread_bps = self.min_spread_bps.clamp(5.0, 150.0);
         self.adverse_selection_sensitivity = self.adverse_selection_sensitivity.clamp(0.0, 2.0);
-        // Min 3x fee multiplier ensures profitability: spread >= 3 × maker_fee
-        // With 25 bps fee: 75 bps spread, 25 bps profit per RT
-        // With 5 bps fee: 15 bps spread, 5 bps profit per RT
-        self.fee_spread_multiplier = self.fee_spread_multiplier.clamp(3.0, 8.0);
+        // Min 2x fee multiplier is breakeven: spread >= 2 × maker_fee
+        // With 25 bps fee: 2x = 50 bps (breakeven), 3x = 75 bps (25 bps profit/RT)
+        self.fee_spread_multiplier = self.fee_spread_multiplier.clamp(2.0, 6.0);
     }
 }
 
@@ -110,10 +109,11 @@ impl Chromosome for AvellanedaStoikovChromosome {
             flow_sensitivity: rng.gen_range(-1.0..1.0),             // Strong fade to strong follow
             
             // Exit and trading control parameters
-            // Take profit: 0.05% to 10% (scalping to swing)
-            take_profit_pct: rng.gen_range(0.0005..0.10),
-            // Stop loss: 0.05% to 5% (tight to wide)
-            stop_loss_pct: rng.gen_range(0.0005..0.05),
+            // Take profit: 0.0 to 2.0% (0.0 = disabled for MM, up to 2% for momentum)
+            // NOTE: 0.0 is included to allow GA to learn that TP/SL hurts pure MM strategies
+            take_profit_pct: rng.gen_range(0.0..0.02),
+            // Stop loss: 0.0 to 2.0% (0.0 = disabled, use inventory limits instead)
+            stop_loss_pct: rng.gen_range(0.0..0.02),
             
             // Minimum spread in basis points (soft floor)
             // The REAL profitability floor comes from fee_spread_multiplier × maker_fee
@@ -130,9 +130,9 @@ impl Chromosome for AvellanedaStoikovChromosome {
             adverse_selection_sensitivity: rng.gen_range(0.0..2.0),
             
             // Fee-based spread multiplier: how many times the exchange fee to use as min spread
-            // Range 3.0-8.0: 3x = minimum profitable (25 bps profit/RT), 8x = wide (more profit per trade)
-            // With 25 bps maker fee: 3x = 75 bps, 4x = 100 bps, 6x = 150 bps spread
-            fee_spread_multiplier: rng.gen_range(3.0..8.0),
+            // Range 2.0-6.0: 2x = minimum breakeven, 3x = small profit margin, 6x = wide (more profit per trade)
+            // With 25 bps maker fee: 2x = 50 bps, 3x = 75 bps, 4x = 100 bps spread
+            fee_spread_multiplier: rng.gen_range(2.0..6.0),
         }
     }
 
@@ -261,7 +261,7 @@ impl Chromosome for AvellanedaStoikovChromosome {
         // Fee spread multiplier: range 3.0-8.0 (ensures minimum 25 bps profit per round-trip)
         if rng.gen_bool(mutation_rate) {
             self.fee_spread_multiplier += rng.gen_range(-0.5..0.5);
-            self.fee_spread_multiplier = self.fee_spread_multiplier.clamp(3.0, 8.0);
+            self.fee_spread_multiplier = self.fee_spread_multiplier.clamp(2.0, 6.0);
         }
     }
     
