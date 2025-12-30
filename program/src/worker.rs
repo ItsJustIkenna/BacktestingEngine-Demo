@@ -2697,6 +2697,17 @@ impl Worker {
             funding_interval_ms: exchange_fee_config.funding_interval_ms,
             adverse_selection_sensitivity: chromosome.adverse_selection_sensitivity,
             fee_spread_multiplier: chromosome.fee_spread_multiplier,
+            // New advanced AS parameters from chromosome
+            market_depth_k: chromosome.market_depth_k,
+            volatility_adjustment_factor: chromosome.volatility_adjustment_factor,
+            inventory_penalty_factor: chromosome.inventory_penalty_factor,
+            trend_sensitivity: chromosome.trend_sensitivity,
+            flow_sensitivity: chromosome.flow_sensitivity,
+            take_profit_pct: chromosome.take_profit_pct,
+            stop_loss_pct: chromosome.stop_loss_pct,
+            max_trades_per_minute: chromosome.max_trades_per_minute,
+            window_ms: chromosome.window_ms as i64,
+            min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,
         };
         
         // Store params for walk-forward (will need to reconstruct for each window)
