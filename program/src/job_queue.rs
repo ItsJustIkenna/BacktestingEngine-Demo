@@ -209,7 +209,7 @@ pub struct BacktestJobParams {
 }
 
 // Default functions for serde
-fn default_initial_inventory_pct() -> f64 { 0.5 }  // 50% in base asset, 50% in quote
+fn default_initial_inventory_pct() -> f64 { 0.0 }  // Start with 0% inventory to avoid directional exposure
 fn default_initial_30d_volume() -> f64 { 0.0 }  // 0 = use exchange default fee tier
 fn default_optimization_method() -> String { "genetic".to_string() }
 fn default_population_size() -> usize { 30 }  // Reduced from 50 for faster optimization

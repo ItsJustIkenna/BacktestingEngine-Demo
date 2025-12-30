@@ -1182,10 +1182,12 @@ impl RealisticSimulator {
                         // We're competitive if:
                         // 1. Our bid is >= trade price (we'd be hit by seller), OR
                         // 2. Our ask is <= trade price (we'd be hit by buyer), OR
-                        // 3. We're within 5 bps of the trade (we're very close to where action is)
+                        // 3. We're within the fee-based spread of the trade (we're quoting competitively)
+                        // Use half the fee_spread_multiplier × fee as the competitive threshold
+                        let competitive_threshold_bps = params.maker_fee_rate * 10000.0 * params.fee_spread_multiplier * 0.5;
                         let we_are_competitive = match our_order.side {
-                            Side::Buy => our_order.price >= event.price || price_diff_bps <= 5.0,
-                            Side::Sell => our_order.price <= event.price || price_diff_bps <= 5.0,
+                            Side::Buy => our_order.price >= event.price || price_diff_bps <= competitive_threshold_bps,
+                            Side::Sell => our_order.price <= event.price || price_diff_bps <= competitive_threshold_bps,
                         };
                         
                         // For trade-only data (empty book), use probabilistic fills based on proximity
@@ -1193,7 +1195,8 @@ impl RealisticSimulator {
                         let probabilistic_fill = if (trade_only_mode || we_are_competitive) && !price_matches && !trade_crosses_our_quote {
                             // Calculate how close the trade is to our quote as a percentage
                             let price_diff = (event.price - our_order.price).abs();
-                            let price_tolerance = our_order.price * 0.002; // 0.2% tolerance (20 bps)
+                            // Use fee-based spread as tolerance (half spread on each side)
+                            let price_tolerance = our_order.price * params.maker_fee_rate * params.fee_spread_multiplier * 0.5;
                             
                             if price_diff <= price_tolerance {
                                 // The closer the trade is to our price, the higher our fill probability
