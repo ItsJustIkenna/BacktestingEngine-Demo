@@ -1796,7 +1796,7 @@ impl Worker {
             "sub_phase": "backtest",
             "current_generation": total_generations,
             "total_generations": total_generations,
-            "monte_carlo_runs": params.monte_carlo_runs.min(200),
+            "monte_carlo_runs": params.monte_carlo_runs,
         })).await;
         let _ = progress_tracker.persist_progress(87.0).await; // 87% - starting final analysis
         
@@ -1824,7 +1824,7 @@ impl Worker {
             &data_for_backtest,      // Full data for backtest + Monte Carlo
             &data_for_walkforward,   // Full data for walk-forward
             params.monte_carlo_enabled,
-            params.monte_carlo_runs.min(200), // Cap at 200 runs for speed (1000 is excessive)
+            params.monte_carlo_runs, // Use requested MC runs (no cap)
             params.walk_forward_enabled,
         ).await?;
         
@@ -2017,6 +2017,7 @@ impl Worker {
             min_spread_bps: params.min_spread_bps,
             max_trades_per_minute: params.max_trades_per_minute,
             adverse_selection_sensitivity: 1.0,  // Default moderate sensitivity
+            fee_spread_multiplier: 4.0,  // Default balanced multiplier (4x fee)
         };
         
         log_info_structured!(WALKFORWARD_LOGGER, "WALKFORWARD_FIXED_PARAMS",
@@ -2695,6 +2696,7 @@ impl Worker {
             funding_rate_8h: exchange_fee_config.funding_rate_8h,
             funding_interval_ms: exchange_fee_config.funding_interval_ms,
             adverse_selection_sensitivity: chromosome.adverse_selection_sensitivity,
+            fee_spread_multiplier: chromosome.fee_spread_multiplier,
         };
         
         // Store params for walk-forward (will need to reconstruct for each window)

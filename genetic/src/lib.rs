@@ -128,6 +128,32 @@ pub struct FitnessResult {
     pub max_drawdown: f64,
     pub win_rate: f64,
     pub profit_factor: f64,
+    /// Total volume traded in USD
+    pub total_volume: f64,
+    /// Total fees paid in USD
+    pub total_fees: f64,
+    /// Best trade P&L in USD
+    pub best_trade_pnl: f64,
+    /// Worst trade P&L in USD
+    pub worst_trade_pnl: f64,
+    /// Average trade P&L in USD
+    pub avg_trade_pnl: f64,
+    /// Average time in trade in milliseconds
+    pub avg_time_in_trade_ms: f64,
+    /// Average inventory over backtest
+    pub avg_inventory: f64,
+    /// Maximum inventory held
+    pub max_inventory: f64,
+    /// Number of inventory zero crossings
+    pub zero_crossings: i32,
+    /// Average fill rate (0.0-1.0)
+    pub avg_fill_rate: f64,
+    /// Average queue position
+    pub avg_queue_position: f64,
+    /// Partial fill percentage (0.0-100.0)
+    pub partial_fill_pct: f64,
+    /// Average latency in milliseconds
+    pub avg_latency_ms: f64,
 }
 
 impl FitnessResult {
@@ -141,6 +167,19 @@ impl FitnessResult {
             max_drawdown: 0.0,
             win_rate: 0.0,
             profit_factor: 0.0,
+            total_volume: 0.0,
+            total_fees: 0.0,
+            best_trade_pnl: 0.0,
+            worst_trade_pnl: 0.0,
+            avg_trade_pnl: 0.0,
+            avg_time_in_trade_ms: 0.0,
+            avg_inventory: 0.0,
+            max_inventory: 0.0,
+            zero_crossings: 0,
+            avg_fill_rate: 0.0,
+            avg_queue_position: 0.0,
+            partial_fill_pct: 0.0,
+            avg_latency_ms: 0.0,
         }
     }
     
@@ -164,6 +203,68 @@ impl FitnessResult {
             max_drawdown,
             win_rate,
             profit_factor,
+            total_volume: 0.0,
+            total_fees: 0.0,
+            best_trade_pnl: 0.0,
+            worst_trade_pnl: 0.0,
+            avg_trade_pnl: 0.0,
+            avg_time_in_trade_ms: 0.0,
+            avg_inventory: 0.0,
+            max_inventory: 0.0,
+            zero_crossings: 0,
+            avg_fill_rate: 0.0,
+            avg_queue_position: 0.0,
+            partial_fill_pct: 0.0,
+            avg_latency_ms: 0.0,
+        }
+    }
+    
+    /// Create a FitnessResult with ALL metrics from a realistic simulation
+    pub fn with_full_metrics(
+        fitness: f64,
+        equity_curve: Vec<f64>,
+        net_pnl: f64,
+        sharpe_ratio: f64,
+        num_trades: i32,
+        max_drawdown: f64,
+        win_rate: f64,
+        profit_factor: f64,
+        total_volume: f64,
+        total_fees: f64,
+        best_trade_pnl: f64,
+        worst_trade_pnl: f64,
+        avg_trade_pnl: f64,
+        avg_time_in_trade_ms: f64,
+        avg_inventory: f64,
+        max_inventory: f64,
+        zero_crossings: i32,
+        avg_fill_rate: f64,
+        avg_queue_position: f64,
+        partial_fill_pct: f64,
+        avg_latency_ms: f64,
+    ) -> Self {
+        Self {
+            fitness,
+            equity_curve,
+            net_pnl,
+            sharpe_ratio,
+            num_trades,
+            max_drawdown,
+            win_rate,
+            profit_factor,
+            total_volume,
+            total_fees,
+            best_trade_pnl,
+            worst_trade_pnl,
+            avg_trade_pnl,
+            avg_time_in_trade_ms,
+            avg_inventory,
+            max_inventory,
+            zero_crossings,
+            avg_fill_rate,
+            avg_queue_position,
+            partial_fill_pct,
+            avg_latency_ms,
         }
     }
     

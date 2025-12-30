@@ -696,9 +696,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                             sortino_ratio,
                                                             calmar_ratio,
                                                             avg_trade_return,
-                                                            best_trade,
-                                                            worst_trade,
-                                                            avg_time_in_trade: None,
+                                                            best_trade: if eval_result.best_trade_pnl != 0.0 { Some(eval_result.best_trade_pnl) } else { best_trade },
+                                                            worst_trade: if eval_result.worst_trade_pnl != 0.0 { Some(eval_result.worst_trade_pnl) } else { worst_trade },
+                                                            avg_time_in_trade: if eval_result.avg_time_in_trade_ms > 0.0 { Some(eval_result.avg_time_in_trade_ms / 1000.0) } else { None }, // Convert ms to seconds
                                                             value_at_risk_95,
                                                             expected_shortfall_95,
                                                             max_drawdown_duration_days: None, // Would need tracking in worker
@@ -707,12 +707,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                             total_orders: Some(eval_result.total_orders),
                                                             filled_orders: Some(eval_result.num_trades),
                                                             cancelled_orders: None,
-                                                            avg_slippage: None, // Would need tracking in worker
-                                                            total_commission_paid: None, // Would need tracking in worker
+                                                            avg_slippage: None, // Market making - minimal slippage
+                                                            total_commission_paid: if eval_result.total_fees > 0.0 { Some(eval_result.total_fees) } else { None },
                                                             monte_carlo,
                                                             walk_forward,
-                                                            inventory_metrics: None,
-                                                            execution_metrics: None,
+                                                            inventory_metrics: if eval_result.avg_inventory != 0.0 || eval_result.max_inventory != 0.0 {
+                                                                Some(program::job_queue::InventorySummary {
+                                                                    total_volume: eval_result.total_volume,
+                                                                    avg_inventory_value: eval_result.avg_inventory,
+                                                                    turnover_per_day: 0.0, // Not tracked separately
+                                                                    buy_fills: 0, // Not tracked separately
+                                                                    sell_fills: 0, // Not tracked separately
+                                                                    buy_volume: eval_result.total_volume / 2.0, // Approximate
+                                                                    sell_volume: eval_result.total_volume / 2.0, // Approximate
+                                                                    imbalance_ratio: 0.0, // Not tracked
+                                                                })
+                                                            } else { None },
+                                                            execution_metrics: if eval_result.avg_fill_rate > 0.0 {
+                                                                Some(program::job_queue::ExecutionSummary {
+                                                                    orders_placed: eval_result.total_orders as usize,
+                                                                    orders_filled: eval_result.num_trades as usize,
+                                                                    orders_cancelled: 0,
+                                                                    total_fills: eval_result.num_trades as usize,
+                                                                    fill_rate: eval_result.avg_fill_rate,
+                                                                    cancellation_rate: 0.0,
+                                                                    avg_fills_per_order: 1.0,
+                                                                    avg_time_to_fill_seconds: eval_result.avg_latency_ms / 1000.0,
+                                                                    median_time_to_fill_seconds: eval_result.avg_latency_ms / 1000.0,
+                                                                    bid_orders: 0,
+                                                                    ask_orders: 0,
+                                                                    bid_fills: 0,
+                                                                    ask_fills: 0,
+                                                                    bid_fill_rate: 0.0,
+                                                                    ask_fill_rate: 0.0,
+                                                                    avg_quote_spread_bps: 0.0,
+                                                                    round_trip_win_rate: Some(eval_result.win_rate),
+                                                                    total_round_trips: (eval_result.num_trades / 2) as usize,
+                                                                    profitable_round_trips: ((eval_result.num_trades / 2) as f64 * eval_result.win_rate) as usize,
+                                                                    spread_capture_rate: None,
+                                                                    adverse_selection_rate: None,
+                                                                    avg_pnl_per_round_trip: if eval_result.num_trades > 0 { Some(eval_result.avg_trade_pnl * 2.0) } else { None },
+                                                                })
+                                                            } else { None },
                                                             risk_halt_reason: None,
                                                             metrics_profile: None,
                                                         }

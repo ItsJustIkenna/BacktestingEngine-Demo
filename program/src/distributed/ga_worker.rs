@@ -957,6 +957,22 @@ impl DistributedGAWorker {
             closed_trades_data: Vec::new(), // Only populated in final evaluation
             is_final_evaluation: false,
             statistical_significance: String::new(), // Only populated in final evaluation
+            // New comprehensive metrics
+            best_trade_pnl: result.best_trade_pnl,
+            worst_trade_pnl: result.worst_trade_pnl,
+            avg_trade_pnl: result.avg_trade_pnl,
+            avg_time_in_trade_ms: result.avg_time_in_trade_ms,
+            total_volume: result.total_volume,
+            total_fees: result.total_fees,
+            inventory_metrics: Vec::new(), // Full serialized metrics only in final eval
+            execution_metrics: Vec::new(), // Full serialized metrics only in final eval
+            avg_inventory: result.avg_inventory,
+            max_inventory: result.max_inventory,
+            zero_crossings: result.zero_crossings,
+            avg_fill_rate: result.avg_fill_rate,
+            avg_queue_position: result.avg_queue_position,
+            partial_fill_pct: result.partial_fill_pct,
+            avg_latency_ms: result.avg_latency_ms,
         };
         
         println!("📤 [WORKER {}] Sending result for chromosome {}/{} fitness={:.4} in {:?}", 
@@ -1054,9 +1070,19 @@ impl DistributedGAWorker {
             funding_rate_8h: exchange_fee_config.funding_rate_8h,
             funding_interval_ms: exchange_fee_config.funding_interval_ms,
             adverse_selection_sensitivity: chromosome.adverse_selection_sensitivity,
+            fee_spread_multiplier: chromosome.fee_spread_multiplier,
+            // New advanced AS parameters from chromosome
+            market_depth_k: chromosome.market_depth_k,
+            volatility_adjustment_factor: chromosome.volatility_adjustment_factor,
+            inventory_penalty_factor: chromosome.inventory_penalty_factor,
+            trend_sensitivity: chromosome.trend_sensitivity,
+            flow_sensitivity: chromosome.flow_sensitivity,
+            take_profit_pct: chromosome.take_profit_pct,
+            stop_loss_pct: chromosome.stop_loss_pct,
+            max_trades_per_minute: chromosome.max_trades_per_minute,
+            window_ms: chromosome.window_ms as i64,
+            min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,
         };
-        
-        // Run realistic simulation
         let simulator = RealisticSimulator::with_exchange_config(initial_capital, exchange_fee_config);
         let result = simulator.run(&events, &realistic_params);
         
@@ -1068,7 +1094,7 @@ impl DistributedGAWorker {
         let backtest_result: backtest::types::BacktestResult = result.clone().into();
         let fitness = calculate_comprehensive_fitness(&backtest_result, initial_capital);
         
-        FitnessResult::with_metrics(
+        FitnessResult::with_full_metrics(
             fitness,
             backtest_result.equity_curve,
             result.total_pnl,
@@ -1077,6 +1103,19 @@ impl DistributedGAWorker {
             result.max_drawdown,
             result.win_rate,
             result.profit_factor,
+            result.total_volume,
+            result.total_fees,
+            result.best_trade_pnl,
+            result.worst_trade_pnl,
+            result.avg_trade_pnl,
+            result.avg_time_in_trade_ms,
+            result.inventory_metrics.avg_inventory,
+            result.inventory_metrics.max_inventory,
+            result.inventory_metrics.zero_crossings as i32,
+            result.avg_fill_rate,
+            result.avg_queue_position,
+            result.execution_metrics.partial_fill_pct,
+            result.execution_metrics.avg_latency_ms,
         )
     }
     
@@ -1242,6 +1281,22 @@ impl DistributedGAWorker {
             closed_trades_data: Vec::new(),
             is_final_evaluation: false,
             statistical_significance: String::new(),
+            // New comprehensive metrics (zeroed for error case)
+            best_trade_pnl: 0.0,
+            worst_trade_pnl: 0.0,
+            avg_trade_pnl: 0.0,
+            avg_time_in_trade_ms: 0.0,
+            total_volume: 0.0,
+            total_fees: 0.0,
+            inventory_metrics: Vec::new(),
+            execution_metrics: Vec::new(),
+            avg_inventory: 0.0,
+            max_inventory: 0.0,
+            zero_crossings: 0,
+            avg_fill_rate: 0.0,
+            avg_queue_position: 0.0,
+            partial_fill_pct: 0.0,
+            avg_latency_ms: 0.0,
         };
         
         let _ = self.broker.publish_chromosome_result(response).await;
@@ -1351,6 +1406,18 @@ impl DistributedGAWorker {
             funding_rate_8h: exchange_fee_config.funding_rate_8h,
             funding_interval_ms: exchange_fee_config.funding_interval_ms,
             adverse_selection_sensitivity: chromosome.adverse_selection_sensitivity,
+            fee_spread_multiplier: chromosome.fee_spread_multiplier,
+            // New advanced AS parameters from chromosome
+            market_depth_k: chromosome.market_depth_k,
+            volatility_adjustment_factor: chromosome.volatility_adjustment_factor,
+            inventory_penalty_factor: chromosome.inventory_penalty_factor,
+            trend_sensitivity: chromosome.trend_sensitivity,
+            flow_sensitivity: chromosome.flow_sensitivity,
+            take_profit_pct: chromosome.take_profit_pct,
+            stop_loss_pct: chromosome.stop_loss_pct,
+            max_trades_per_minute: chromosome.max_trades_per_minute,
+            window_ms: chromosome.window_ms as i64,
+            min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,
         };
         
         let simulator = RealisticSimulator::with_exchange_config(initial_capital, exchange_fee_config);
@@ -1583,6 +1650,21 @@ impl DistributedGAWorker {
             
             // Adverse selection from chromosome
             adverse_selection_sensitivity: chromosome.adverse_selection_sensitivity,
+            
+            // Fee spread multiplier from chromosome
+            fee_spread_multiplier: chromosome.fee_spread_multiplier,
+            
+            // New advanced AS parameters from chromosome
+            market_depth_k: chromosome.market_depth_k,
+            volatility_adjustment_factor: chromosome.volatility_adjustment_factor,
+            inventory_penalty_factor: chromosome.inventory_penalty_factor,
+            trend_sensitivity: chromosome.trend_sensitivity,
+            flow_sensitivity: chromosome.flow_sensitivity,
+            take_profit_pct: chromosome.take_profit_pct,
+            stop_loss_pct: chromosome.stop_loss_pct,
+            max_trades_per_minute: chromosome.max_trades_per_minute,
+            window_ms: chromosome.window_ms as i64,
+            min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,
         };
         
         // WALK-FORWARD IS THE PRIMARY VALIDATION
@@ -1986,6 +2068,30 @@ impl DistributedGAWorker {
             closed_trades_data,
             is_final_evaluation: true,
             statistical_significance,
+            // New comprehensive metrics - aggregate from walk-forward windows
+            best_trade_pnl: all_trade_returns.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
+            worst_trade_pnl: all_trade_returns.iter().cloned().fold(f64::INFINITY, f64::min),
+            avg_trade_pnl: if !all_trade_returns.is_empty() {
+                all_trade_returns.iter().sum::<f64>() / all_trade_returns.len() as f64
+            } else { 0.0 },
+            avg_time_in_trade_ms: wf_summary.window_results.iter()
+                .map(|w| w.test_metrics.average_trade_duration)
+                .sum::<f64>() / wf_summary.num_windows.max(1) as f64 * 1000.0 * 60.0, // Convert hours to ms
+            total_volume: wf_summary.window_results.iter()
+                .map(|w| w.trade_returns.iter().map(|r| r.abs()).sum::<f64>())
+                .sum::<f64>(), // Approximate from trade returns
+            total_fees: wf_summary.window_results.iter()
+                .map(|w| w.test_metrics.total_commission)
+                .sum::<f64>(),
+            inventory_metrics: Vec::new(), // Walk-forward doesn't track inventory
+            execution_metrics: Vec::new(), // Walk-forward doesn't track execution metrics
+            avg_inventory: 0.0, // Not tracked in walk-forward
+            max_inventory: 0.0, // Not tracked in walk-forward
+            zero_crossings: 0, // Not tracked in walk-forward
+            avg_fill_rate: 1.0, // Assume 100% in walk-forward (simulated fills)
+            avg_queue_position: 0.0, // Not tracked in walk-forward
+            partial_fill_pct: 0.0, // Not tracked in walk-forward
+            avg_latency_ms: 0.0, // Not tracked in walk-forward
         };
         
         println!("📤 [WORKER {}] Publishing FINAL result: job={}, pnl={:.2}, trades={}, is_final=true",
@@ -2134,6 +2240,18 @@ fn run_walkforward_realistic(
         funding_rate_8h: exchange_fee_config.funding_rate_8h,
         funding_interval_ms: exchange_fee_config.funding_interval_ms,
         adverse_selection_sensitivity: chromosome.adverse_selection_sensitivity,
+        fee_spread_multiplier: chromosome.fee_spread_multiplier,
+        // New advanced AS parameters from chromosome
+        market_depth_k: chromosome.market_depth_k,
+        volatility_adjustment_factor: chromosome.volatility_adjustment_factor,
+        inventory_penalty_factor: chromosome.inventory_penalty_factor,
+        trend_sensitivity: chromosome.trend_sensitivity,
+        flow_sensitivity: chromosome.flow_sensitivity,
+        take_profit_pct: chromosome.take_profit_pct,
+        stop_loss_pct: chromosome.stop_loss_pct,
+        max_trades_per_minute: chromosome.max_trades_per_minute,
+        window_ms: chromosome.window_ms as i64,
+        min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,
     };
     
     // Process each window using RealisticSimulator

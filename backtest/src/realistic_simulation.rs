@@ -175,6 +175,39 @@ pub struct RealisticASParams {
     /// Sensitivity to toxic order flow: 0.0 = ignore, 1.0 = proportional widening, 2.0 = aggressive
     /// When detected, spreads are widened by this multiplier of the toxicity signal
     pub adverse_selection_sensitivity: f64,
+    
+    // === Fee-Based Spread Control ===
+    /// Multiplier for fee-based minimum spread: spread >= fee_rate * multiplier
+    /// 2.0 = 2x fee (tight, more trades), 4.0 = balanced, 6.0 = wide (fewer trades, more profit)
+    pub fee_spread_multiplier: f64,
+    
+    // === Advanced AS Parameters ===
+    /// Market depth parameter (k in AS model): higher = more depth = tighter spreads
+    pub market_depth_k: f64,
+    /// Volatility adjustment factor: scales volatility impact on spreads (<1.0 = less sensitive)
+    pub volatility_adjustment_factor: f64,
+    /// Inventory penalty factor: scales how much inventory affects reservation price
+    pub inventory_penalty_factor: f64,
+    
+    // === Trend and Flow Following ===
+    /// Trend sensitivity: bias quotes based on price momentum (0.0 = ignore, 1.0 = follow)
+    pub trend_sensitivity: f64,
+    /// Flow sensitivity: follow (>0) or fade (<0) order flow
+    pub flow_sensitivity: f64,
+    
+    // === Trade Exit Controls ===
+    /// Take profit threshold as percentage (0.0 = disabled, 2.0 = exit at +2% PnL)
+    pub take_profit_pct: f64,
+    /// Stop loss threshold as percentage (0.0 = disabled, 1.0 = exit at -1% PnL)
+    pub stop_loss_pct: f64,
+    /// Maximum trades per minute (0.0 = unlimited)
+    pub max_trades_per_minute: f64,
+    
+    // === Timing Parameters ===
+    /// Volatility estimation window in milliseconds
+    pub window_ms: i64,
+    /// Minimum quote lifetime before requoting (milliseconds)
+    pub min_quote_lifetime_ms: i64,
 }
 
 impl Default for RealisticASParams {
@@ -221,6 +254,27 @@ impl Default for RealisticASParams {
             
             // Adverse selection: moderate sensitivity by default
             adverse_selection_sensitivity: 1.0,
+            
+            // Fee spread multiplier: 4x by default (balanced trade-off)
+            fee_spread_multiplier: 4.0,
+            
+            // Advanced AS parameters
+            market_depth_k: 1.5,                    // Standard market depth
+            volatility_adjustment_factor: 1.0,      // No adjustment by default
+            inventory_penalty_factor: 1.0,          // Standard AS inventory penalty
+            
+            // Trend and flow following: neutral by default
+            trend_sensitivity: 0.0,
+            flow_sensitivity: 0.0,
+            
+            // Trade exit controls: disabled by default
+            take_profit_pct: 0.0,
+            stop_loss_pct: 0.0,
+            max_trades_per_minute: 0.0,  // Unlimited
+            
+            // Timing parameters
+            window_ms: 60_000,              // 1 minute volatility window
+            min_quote_lifetime_ms: 1000,    // 1 second minimum quote lifetime
         }
     }
 }
@@ -530,6 +584,63 @@ impl SimpleOrderBook {
     }
 }
 
+/// Individual trade record with full details
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradeRecord {
+    /// Trade entry timestamp (ms)
+    pub entry_time_ms: i64,
+    /// Trade exit timestamp (ms) - same as entry for market making (instant fill)
+    pub exit_time_ms: i64,
+    /// Trade side (Buy or Sell)
+    pub side: String,
+    /// Fill quantity
+    pub quantity: f64,
+    /// Fill price
+    pub price: f64,
+    /// Fee paid on this trade
+    pub fee: f64,
+    /// Realized P&L for this trade (mark-to-market)
+    pub pnl: f64,
+    /// Duration in milliseconds (exit - entry)
+    pub duration_ms: i64,
+}
+
+/// Inventory metrics summary
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InventoryMetrics {
+    /// Average inventory level (in base asset)
+    pub avg_inventory: f64,
+    /// Maximum inventory level reached
+    pub max_inventory: f64,
+    /// Minimum inventory level reached
+    pub min_inventory: f64,
+    /// Inventory turnover rate (total volume / avg inventory)
+    pub turnover_rate: f64,
+    /// Time-weighted average inventory
+    pub twap_inventory: f64,
+    /// Number of times inventory crossed zero
+    pub zero_crossings: usize,
+}
+
+/// Execution quality metrics
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExecutionMetrics {
+    /// Average latency in milliseconds
+    pub avg_latency_ms: f64,
+    /// Maximum latency experienced
+    pub max_latency_ms: f64,
+    /// Fill rate (filled orders / total orders attempted)
+    pub fill_rate: f64,
+    /// Average queue position at fill
+    pub avg_queue_position: f64,
+    /// Average slippage (in bps from quote price)
+    pub avg_slippage_bps: f64,
+    /// Partial fill percentage
+    pub partial_fill_pct: f64,
+    /// Order rejection rate
+    pub rejection_rate: f64,
+}
+
 /// Result from realistic simulation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RealisticSimResult {
@@ -570,6 +681,24 @@ pub struct RealisticSimResult {
     pub final_fee_rate: f64,
     /// Number of fee tier upgrades during simulation
     pub fee_tier_upgrades: usize,
+    
+    // === Detailed Trade Records ===
+    /// All individual trade records with full details
+    pub trade_records: Vec<TradeRecord>,
+    /// Best trade P&L
+    pub best_trade_pnl: f64,
+    /// Worst trade P&L
+    pub worst_trade_pnl: f64,
+    /// Average trade P&L
+    pub avg_trade_pnl: f64,
+    /// Average time in trade (ms)
+    pub avg_time_in_trade_ms: f64,
+    
+    // === Inventory & Execution Metrics ===
+    /// Inventory tracking metrics
+    pub inventory_metrics: InventoryMetrics,
+    /// Execution quality metrics
+    pub execution_metrics: ExecutionMetrics,
 }
 
 impl From<RealisticSimResult> for crate::types::BacktestResult {
@@ -693,6 +822,7 @@ impl RealisticSimulator {
         
         // Trading metrics
         let mut trades: Vec<(f64, f64)> = Vec::new();  // (pnl, timestamp)
+        let mut trade_records: Vec<TradeRecord> = Vec::new();  // Full trade details
         let mut equity_curve = Vec::with_capacity(events.len() / 100);
         let mut returns: Vec<f64> = Vec::new();
         
@@ -701,6 +831,35 @@ impl RealisticSimulator {
         let mut orders_filled = 0usize;
         let mut partial_fills = 0usize;
         let mut queue_positions_at_fill: Vec<f64> = Vec::new();
+        
+        // Inventory tracking for metrics
+        let mut inventory_samples: Vec<(f64, i64)> = Vec::new(); // (inventory, timestamp)
+        let mut max_inventory = inventory;
+        let mut min_inventory = inventory;
+        let mut zero_crossings = 0usize;
+        let mut last_inventory_sign = if inventory > 0.0 { 1 } else if inventory < 0.0 { -1 } else { 0 };
+        
+        // Latency tracking
+        let mut latencies: Vec<f64> = Vec::new();
+        
+        // Adverse selection tracking - detect toxic order flow
+        // Track recent trade imbalance to detect informed traders
+        let mut recent_buy_volume: f64 = 0.0;
+        let mut recent_sell_volume: f64 = 0.0;
+        let mut recent_trade_window_start: i64 = 0;
+        const ADVERSE_SELECTION_WINDOW_MS: i64 = 5000; // 5 second window for flow detection
+        
+        // Trend tracking for trend_sensitivity parameter
+        let mut recent_price_changes: Vec<f64> = Vec::new();
+        
+        // Trade rate limiting for max_trades_per_minute
+        let mut trades_this_minute: usize = 0;
+        let mut trade_minute_start: i64 = 0;
+        
+        // Take profit / stop loss tracking per position
+        let mut position_entry_price: Option<f64> = None;
+        #[allow(unused)]
+        let mut position_entry_time: Option<i64> = None;
         
         // Debug counters (local to this simulation run, reset per call)
         let mut trade_debug_count = 0usize;
@@ -781,14 +940,24 @@ impl RealisticSimulator {
         let mut last_funding_time: i64 = 0;
         let mut total_funding_paid = 0.0;
         
-        // Volatility tracking (simplified EWMA)
+        // === VOLATILITY TRACKING ===
+        // window_ms controls the effective memory of volatility estimate
+        // EWMA alpha is derived from window_ms: alpha = 1 - (2 / (n + 1)) where n = window samples
+        // Assuming ~1 trade per 100ms on average, window_ms / 100 gives approximate sample count
+        let effective_window_samples = (params.window_ms as f64 / 100.0).max(2.0);
+        let ewma_alpha = 1.0 - (2.0 / (effective_window_samples + 1.0));
+        let ewma_alpha = ewma_alpha.clamp(0.5, 0.99);  // Keep alpha reasonable
+        
         let mut volatility: f64 = 0.01;  // Start with 1%
         // Note: last_price is initialized earlier to initial_price for proper mark-to-market
-        const EWMA_ALPHA: f64 = 0.94;
+        
+        // === QUOTE REFRESH RATE ===
+        // min_quote_lifetime_ms: minimum time before requoting
+        // Use chromosome value instead of hardcoded constant
+        let quote_refresh_ms = params.min_quote_lifetime_ms.max(100) as i64;  // At least 100ms
         
         // Time tracking for order refresh
         let mut last_quote_time: i64 = 0;
-        const QUOTE_REFRESH_MS: i64 = 1000;  // Refresh quotes every second
         
         // Snapshot boundary detection - clear book when there's a gap in data
         // A gap indicates DataEngine restarted and received a new snapshot
@@ -929,6 +1098,32 @@ impl RealisticSimulator {
                 EventType::Trade => {
                     // DEBUG: Use local counter (not static) so it resets per simulation
                     trade_debug_count += 1;
+                    
+                    // === ADVERSE SELECTION TRACKING ===
+                    // Track buy/sell volume imbalance to detect informed/toxic flow
+                    // Reset window if expired
+                    if event.timestamp_ms > recent_trade_window_start + ADVERSE_SELECTION_WINDOW_MS {
+                        recent_buy_volume = 0.0;
+                        recent_sell_volume = 0.0;
+                        recent_trade_window_start = event.timestamp_ms;
+                    }
+                    // Track volume by side
+                    let trade_value = event.price * event.quantity;
+                    match effective_side {
+                        Side::Buy => recent_buy_volume += trade_value,
+                        Side::Sell => recent_sell_volume += trade_value,
+                    }
+                    
+                    // === TREND TRACKING ===
+                    // Track recent price changes for trend_sensitivity parameter
+                    if let Some(last) = last_price {
+                        let price_change = (event.price - last) / last;
+                        recent_price_changes.push(price_change);
+                        // Keep only last 20 price changes for momentum calculation
+                        if recent_price_changes.len() > 20 {
+                            recent_price_changes.remove(0);
+                        }
+                    }
                     
                     // DEBUG: Show what we're checking against for first 20 trades
                     if trade_debug_count <= 20 {
@@ -1092,7 +1287,7 @@ impl RealisticSimulator {
                                 orders_filled += 1;
                                 queue_positions_at_fill.push(-our_order.quantity_ahead.max(0.0));
                                 
-                                // Record trade
+                                // Record trade with full details
                                 let mark_price = book.mid_price().unwrap_or(fill_price);
                                 let pnl = match our_order.side {
                                     Side::Buy => (mark_price - fill_price) * fill_qty - fee,
@@ -1100,15 +1295,80 @@ impl RealisticSimulator {
                                 };
                                 trades.push((pnl, event.timestamp_ms as f64));
                                 
+                                // Create full trade record
+                                trade_records.push(TradeRecord {
+                                    entry_time_ms: event.timestamp_ms,
+                                    exit_time_ms: event.timestamp_ms, // Instant fill for market making
+                                    side: match our_order.side {
+                                        Side::Buy => "Buy".to_string(),
+                                        Side::Sell => "Sell".to_string(),
+                                    },
+                                    quantity: fill_qty,
+                                    price: fill_price,
+                                    fee,
+                                    pnl,
+                                    duration_ms: 0, // Instant fill
+                                });
+                                
+                                // Track inventory extremes
+                                if inventory > max_inventory { max_inventory = inventory; }
+                                if inventory < min_inventory { min_inventory = inventory; }
+                                
+                                // Track zero crossings
+                                let current_sign = if inventory > 0.0 { 1 } else if inventory < 0.0 { -1 } else { 0 };
+                                if current_sign != 0 && last_inventory_sign != 0 && current_sign != last_inventory_sign {
+                                    zero_crossings += 1;
+                                }
+                                last_inventory_sign = current_sign;
+                                
+                                // === TRADE RATE TRACKING ===
+                                // Track trades per minute for max_trades_per_minute limit
+                                let current_minute = event.timestamp_ms / 60_000;
+                                if current_minute != trade_minute_start {
+                                    trade_minute_start = current_minute;
+                                    trades_this_minute = 0;
+                                }
+                                trades_this_minute += 1;
+                                
+                                // === POSITION ENTRY TRACKING ===
+                                // Track entry price for take_profit/stop_loss evaluation
+                                // Use VWAP of position as entry price
+                                if inventory.abs() > 1e-10 {
+                                    if position_entry_price.is_none() {
+                                        // New position opened
+                                        position_entry_price = Some(fill_price);
+                                        position_entry_time = Some(event.timestamp_ms);
+                                    } else {
+                                        // Existing position - update VWAP if adding to position
+                                        let prev_entry = position_entry_price.unwrap();
+                                        let prev_inv = inventory - match our_order.side {
+                                            Side::Buy => fill_qty,
+                                            Side::Sell => -fill_qty,
+                                        };
+                                        if (prev_inv > 0.0 && inventory > prev_inv) || (prev_inv < 0.0 && inventory < prev_inv) {
+                                            // Adding to position - update VWAP
+                                            let total_value = prev_inv.abs() * prev_entry + fill_qty * fill_price;
+                                            position_entry_price = Some(total_value / inventory.abs());
+                                        }
+                                    }
+                                } else {
+                                    // Position closed
+                                    position_entry_price = None;
+                                    position_entry_time = None;
+                                }
+                                
+                                // Sample inventory for TWAP calculation
+                                inventory_samples.push((inventory, event.timestamp_ms));
+                                
                                 *check_our_order = None;
                             }
                         }
                     }
                     
-                    // Update volatility estimate
+                    // Update volatility estimate using window_ms-derived alpha
                     if let Some(last) = last_price {
                         let ret: f64 = (event.price / last).ln();
-                        volatility = (EWMA_ALPHA * volatility.powi(2) + (1.0 - EWMA_ALPHA) * ret.powi(2)).sqrt();
+                        volatility = (ewma_alpha * volatility.powi(2) + (1.0 - ewma_alpha) * ret.powi(2)).sqrt();
                     }
                     last_price = Some(event.price);
                     trade_prices_debug.push(event.price);  // Debug tracking
@@ -1117,9 +1377,11 @@ impl RealisticSimulator {
             
             // === Latency Jitter Calculation ===
             let current_latency = latency_dist.sample(&mut rng).max(1.0) as i64;
+            latencies.push(current_latency as f64);  // Track for metrics
             
             // Periodically update our quotes (accounting for latency with jitter)
-            if event.timestamp_ms - last_quote_time >= QUOTE_REFRESH_MS + current_latency {
+            // Uses min_quote_lifetime_ms from chromosome instead of hardcoded value
+            if event.timestamp_ms - last_quote_time >= quote_refresh_ms + current_latency {
                 // === Rate Limit Check ===
                 if event.timestamp_ms < rate_limited_until {
                     // Still in cooldown, skip this quote update
@@ -1170,8 +1432,51 @@ impl RealisticSimulator {
                 // Check if we're at inventory limits  
                 // For buying: can't exceed max_inventory
                 // For selling: we need positive inventory, but don't restrict below 0 (allow shorts up to max)
-                let can_buy = inventory < max_inventory;
-                let can_sell = inventory > -max_inventory;
+                let mut can_buy = inventory < max_inventory;
+                let mut can_sell = inventory > -max_inventory;
+                
+                // === TRADE RATE LIMITING ===
+                // max_trades_per_minute: 0 = unlimited, >0 = rate limit
+                // Prevents overtrading in choppy markets
+                if params.max_trades_per_minute > 0.0 && trades_this_minute as f64 >= params.max_trades_per_minute {
+                    can_buy = false;
+                    can_sell = false;
+                }
+                
+                // === TAKE PROFIT / STOP LOSS ===
+                // Evaluate position PnL vs entry price to trigger forced exits
+                if let Some(entry_price) = position_entry_price {
+                    if inventory.abs() > 1e-10 {
+                        // Calculate unrealized PnL percentage
+                        let position_pnl_pct = if inventory > 0.0 {
+                            // Long position: profit if price went up
+                            (mid_price - entry_price) / entry_price * 100.0
+                        } else {
+                            // Short position: profit if price went down
+                            (entry_price - mid_price) / entry_price * 100.0
+                        };
+                        
+                        // Check take_profit (only when in profit)
+                        if params.take_profit_pct > 0.0 && position_pnl_pct >= params.take_profit_pct {
+                            // Force exit: if long, only allow sells; if short, only allow buys
+                            if inventory > 0.0 {
+                                can_buy = false;  // Force selling to take profit
+                            } else {
+                                can_sell = false;  // Force buying to take profit on short
+                            }
+                        }
+                        
+                        // Check stop_loss (only when in loss)
+                        if params.stop_loss_pct > 0.0 && position_pnl_pct <= -params.stop_loss_pct {
+                            // Force exit: same logic as take_profit
+                            if inventory > 0.0 {
+                                can_buy = false;  // Force selling to cut loss
+                            } else {
+                                can_sell = false;  // Force buying to cut short loss
+                            }
+                        }
+                    }
+                }
                 
                 // Avellaneda-Stoikov spread calculation
                 let gamma = params.risk_aversion;
@@ -1179,40 +1484,112 @@ impl RealisticSimulator {
                 let t_horizon = params.time_horizon_minutes / 1440.0;  // Convert to days
                 let q = inventory;
                 
-                // Reservation price: mid - gamma * sigma^2 * T * q
-                let reservation_price = mid_price - gamma * sigma.powi(2) * t_horizon * q * mid_price;
+                // === INVENTORY TARGET ADJUSTMENT ===
+                // inventory_target: 0.0 = neutral, >0 = want long, <0 = want short
+                // Shift reservation price to encourage trades toward target
+                let inventory_deviation = q - params.inventory_target;
+                
+                // === VOLATILITY ADJUSTMENT ===
+                // volatility_adjustment_factor scales the volatility impact
+                // <1.0 = less vol-sensitive spreads, >1.0 = more vol-sensitive
+                let adjusted_sigma = sigma * params.volatility_adjustment_factor;
+                
+                // === INVENTORY PENALTY ===
+                // inventory_penalty_factor scales how much inventory affects reservation price
+                // <1.0 = less inventory skew, >1.0 = more aggressive inventory reduction
+                let inventory_penalty = gamma * adjusted_sigma.powi(2) * t_horizon * inventory_deviation 
+                    * params.inventory_penalty_factor;
+                
+                // Reservation price: mid - inventory penalty
+                // Using inventory_deviation (vs target) instead of raw inventory
+                let reservation_price = mid_price - inventory_penalty * mid_price;
+                
+                // === MARKET DEPTH (k parameter) ===
+                // market_depth_k: higher = more depth, tighter optimal spread
+                // Use chromosome value instead of hardcoded k=1.5
+                let k = params.market_depth_k;
                 
                 // Optimal spread: gamma * sigma^2 * T + 2/gamma * ln(1 + gamma/k)
                 // NOTE: The original A-S formula produces a dimensionless spread.
                 // We need to multiply by mid_price to get dollar-denominated spread.
                 // Also, the ln term can dominate - we clamp it to be reasonable.
-                let k = 1.5;  // Market maker intensity
-                let variance_term = gamma * sigma.powi(2) * t_horizon;
+                let variance_term = gamma * adjusted_sigma.powi(2) * t_horizon;
                 let ln_term = (2.0 / gamma) * (1.0 + gamma / k).ln();
                 // The ln_term can be huge (>1.0) which makes no sense for spread
                 // Clamp it to a reasonable maximum (e.g., 1% = 0.01)
                 let clamped_ln_term = ln_term.min(0.01);
                 let optimal_spread = (variance_term + clamped_ln_term) * mid_price;
                 
+                // === FLOW ANALYSIS (shared by multiple features) ===
+                let total_recent_volume = recent_buy_volume + recent_sell_volume;
+                
+                // === TREND SENSITIVITY ===
+                // Bias quotes based on recent price momentum
+                // Positive momentum: shade ask down (more eager to sell), shade bid down (less eager to buy)
+                // This follows momentum - sells high in uptrends, buys low in downtrends
+                let momentum = if !recent_price_changes.is_empty() {
+                    recent_price_changes.iter().sum::<f64>() / recent_price_changes.len() as f64
+                } else {
+                    0.0
+                };
+                // trend_sensitivity: 0.0 = ignore trend, 1.0 = proportional adjustment
+                // A 1% momentum with sensitivity 1.0 shifts quotes by ~0.5%
+                let trend_bias = momentum * params.trend_sensitivity * 0.5 * mid_price;
+                
+                // === FLOW SENSITIVITY ===
+                // flow_sensitivity: positive = follow flow (momentum), negative = fade flow (mean reversion)
+                // Different from adverse_selection_sensitivity which widens spread
+                // This SHIFTS quotes toward the flow direction
+                let flow_direction = if total_recent_volume > 0.0 {
+                    // +1.0 = all buys (bullish flow), -1.0 = all sells (bearish flow)
+                    (recent_buy_volume - recent_sell_volume) / total_recent_volume
+                } else {
+                    0.0
+                };
+                // flow_sensitivity: 1.0 = follow flow (shift quotes up if buying pressure)
+                // -1.0 = fade flow (shift quotes down if buying pressure)
+                let flow_bias = flow_direction * params.flow_sensitivity * 0.001 * mid_price;
+                
+                // === ADVERSE SELECTION SPREAD WIDENING ===
+                // Detect toxic order flow via buy/sell imbalance
+                // If one side dominates, informed traders may be trading against us
+                let flow_imbalance = if total_recent_volume > 0.0 {
+                    // Imbalance: 0.0 = balanced, 1.0 = all one side
+                    let buy_pct = recent_buy_volume / total_recent_volume;
+                    (buy_pct - 0.5).abs() * 2.0  // Scale to 0.0-1.0
+                } else {
+                    0.0
+                };
+                
+                // Apply adverse selection spread multiplier
+                // adverse_selection_sensitivity: 0.0 = ignore flow, 1.0 = proportional, 2.0 = aggressive
+                // At max imbalance (1.0) with sensitivity 1.0: spread widened by 50%
+                let adverse_selection_multiplier = 1.0 + (flow_imbalance * params.adverse_selection_sensitivity * 0.5);
+                
                 // Apply minimum spread: must cover round-trip fees + profit margin
-                // With 25 bps maker fee, round-trip = 50 bps. Use 3x single fee = 75 bps spread
-                // This gives ~25 bps profit per round-trip after 50 bps in fees
                 // Trade-off: wider spread = more profit per trade but fewer fills
-                let fee_based_min_spread_bps = current_fee_rate * 10000.0 * 3.0;  // 3x fee
+                // fee_spread_multiplier controls this trade-off (2.0 = tight, 6.0 = wide)
+                let fee_based_min_spread_bps = current_fee_rate * 10000.0 * params.fee_spread_multiplier;
                 let effective_min_spread_bps = params.min_spread_bps.max(fee_based_min_spread_bps);
                 let min_spread = mid_price * effective_min_spread_bps / 10000.0;
-                let half_spread = (optimal_spread / 2.0).max(min_spread / 2.0);
                 
-                // Calculate quote prices
+                // Apply adverse selection widening to the final spread
+                let base_half_spread = (optimal_spread / 2.0).max(min_spread / 2.0);
+                let half_spread = base_half_spread * adverse_selection_multiplier;
+                
+                // Calculate quote prices with trend and flow biases
                 // CRITICAL INSIGHT: The book's best bid/ask can be stale and far from actual trades.
                 // What matters for getting fills is being competitive with WHERE TRADES ACTUALLY HAPPEN.
                 // 
                 // Strategy: Quote at the minimum profitable spread around mid price.
                 // The spread must exceed fees to be profitable.
+                // Apply trend_bias and flow_bias to shift both quotes
+                let quote_shift = trend_bias + flow_bias;
                 let (bid_price, ask_price) = if last_price.is_some() {
                     // Quote at half_spread around mid (which is the trade price)
                     // half_spread is already the larger of AS optimal or fee-based minimum
-                    (mid_price - half_spread, mid_price + half_spread)
+                    // Apply biases to shift quotes with momentum/flow
+                    (mid_price - half_spread + quote_shift, mid_price + half_spread + quote_shift)
                 } else if let (Some(best_bid), Some(best_ask)) = (book.best_bid(), book.best_ask()) {
                     // No trades yet - use book inside (may be less accurate)
                     (best_bid, best_ask)
@@ -1507,6 +1884,72 @@ impl RealisticSimulator {
             }
         }
         
+        // ============================================================================
+        // CALCULATE AGGREGATED METRICS FOR RESULT
+        // ============================================================================
+        
+        // Trade-level metrics from trade_records
+        let (best_trade_pnl, worst_trade_pnl, avg_trade_pnl_final, avg_time_in_trade_ms) = if !trade_records.is_empty() {
+            let pnls: Vec<f64> = trade_records.iter().map(|t| t.pnl).collect();
+            let best = pnls.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let worst = pnls.iter().cloned().fold(f64::INFINITY, f64::min);
+            let avg = pnls.iter().sum::<f64>() / pnls.len() as f64;
+            let total_duration_ms: f64 = trade_records.iter().map(|t| t.duration_ms as f64).sum();
+            let avg_duration = total_duration_ms / trade_records.len() as f64;
+            (best, worst, avg, avg_duration)
+        } else {
+            (0.0, 0.0, 0.0, 0.0)
+        };
+        
+        // Inventory metrics
+        let avg_inventory = if !inventory_samples.is_empty() {
+            inventory_samples.iter().map(|(inv, _)| inv).sum::<f64>() / inventory_samples.len() as f64
+        } else {
+            0.0
+        };
+        
+        let twap_inventory = avg_inventory; // Same as avg for now (time-weighted average)
+        
+        let inventory_turnover = if avg_inventory.abs() > 0.001 {
+            total_volume / (avg_inventory.abs() * 2.0)  // Approximate turnover
+        } else {
+            0.0
+        };
+        
+        let final_inventory_metrics = InventoryMetrics {
+            avg_inventory,
+            max_inventory,
+            min_inventory,
+            turnover_rate: inventory_turnover,
+            twap_inventory,
+            zero_crossings: zero_crossings as usize,
+        };
+        
+        // Execution metrics
+        let (avg_latency_ms, max_latency_ms) = if !latencies.is_empty() {
+            let avg = latencies.iter().sum::<f64>() / latencies.len() as f64;
+            let max = latencies.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            (avg, max)
+        } else {
+            (0.0, 0.0)
+        };
+        
+        let partial_fill_pct = if trades.len() > 0 {
+            (partial_fills as f64 / trades.len() as f64) * 100.0
+        } else {
+            0.0
+        };
+        
+        let final_execution_metrics = ExecutionMetrics {
+            avg_latency_ms,
+            max_latency_ms,
+            fill_rate: avg_fill_rate,
+            avg_queue_position,
+            partial_fill_pct,
+            avg_slippage_bps: 0.0, // Market making has minimal slippage (we're the passive side)
+            rejection_rate: if trades.len() > 0 { rate_limit_rejections as f64 / trades.len() as f64 } else { 0.0 },
+        };
+        
         RealisticSimResult {
             total_pnl,
             sharpe_ratio,
@@ -1530,6 +1973,14 @@ impl RealisticSimulator {
             starting_fee_rate,
             final_fee_rate: current_fee_rate,
             fee_tier_upgrades,
+            // New comprehensive metrics
+            trade_records,
+            best_trade_pnl,
+            worst_trade_pnl,
+            avg_trade_pnl: avg_trade_pnl_final,
+            avg_time_in_trade_ms,
+            inventory_metrics: final_inventory_metrics,
+            execution_metrics: final_execution_metrics,
         }
     }
 }

@@ -32,6 +32,12 @@ pub struct AvellanedaStoikovChromosome {
     // Adverse selection protection
     // 0.0 = ignore toxic flow, 1.0 = widen spreads proportionally, 2.0 = aggressive widening
     pub adverse_selection_sensitivity: f64,
+    
+    // Fee-based spread multiplier: how many times the fee rate to use as minimum spread
+    // 2.0 = 2x fee (tight, more trades, higher fee drag)
+    // 4.0 = 4x fee (balanced)
+    // 6.0 = 6x fee (wide, fewer trades, more profit per trade)
+    pub fee_spread_multiplier: f64,
 }
 
 impl AvellanedaStoikovChromosome {
@@ -43,8 +49,14 @@ impl AvellanedaStoikovChromosome {
         self.volatility_cap = self.volatility_cap.clamp(0.20, 5.0);
         self.time_horizon_minutes = self.time_horizon_minutes.clamp(0.167, 60.0);
         self.market_depth_k = self.market_depth_k.clamp(1.0, 50.0);
-        self.min_spread_bps = self.min_spread_bps.clamp(1.0, 100.0);
+        // min_spread_bps is a soft floor - the REAL floor comes from fee_spread_multiplier
+        // Range 5-150 bps allows flexibility for both low-fee and high-fee exchanges
+        self.min_spread_bps = self.min_spread_bps.clamp(5.0, 150.0);
         self.adverse_selection_sensitivity = self.adverse_selection_sensitivity.clamp(0.0, 2.0);
+        // Min 3x fee multiplier ensures profitability: spread >= 3 × maker_fee
+        // With 25 bps fee: 75 bps spread, 25 bps profit per RT
+        // With 5 bps fee: 15 bps spread, 5 bps profit per RT
+        self.fee_spread_multiplier = self.fee_spread_multiplier.clamp(3.0, 8.0);
     }
 }
 
@@ -103,11 +115,11 @@ impl Chromosome for AvellanedaStoikovChromosome {
             // Stop loss: 0.05% to 5% (tight to wide)
             stop_loss_pct: rng.gen_range(0.0005..0.05),
             
-            // Minimum spread in basis points
-            // Range: 1-100 bps - GA will find optimal based on exchange fees
-            // Low fee exchanges (DeepBook 5bps): can be competitive at 10-20 bps
-            // High fee exchanges (Kraken 25bps): needs 50+ bps to be profitable
-            min_spread_bps: rng.gen_range(1.0..100.0),
+            // Minimum spread in basis points (soft floor)
+            // The REAL profitability floor comes from fee_spread_multiplier × maker_fee
+            // This is a secondary constraint for market conditions (volatility, liquidity)
+            // Range 5-150 bps allows GA to find optimal for each exchange's fee structure
+            min_spread_bps: rng.gen_range(5.0..150.0),
             
             // Trade frequency: 0.01 to 60 trades per minute
             // 0.01 = 1 trade per 100 minutes (swing), 60 = 1 trade per second (HFT)
@@ -116,6 +128,11 @@ impl Chromosome for AvellanedaStoikovChromosome {
             // Adverse selection sensitivity: how much to widen spreads when detecting toxic flow
             // 0.0 = ignore (aggressive), 1.0 = proportional widening, 2.0 = defensive
             adverse_selection_sensitivity: rng.gen_range(0.0..2.0),
+            
+            // Fee-based spread multiplier: how many times the exchange fee to use as min spread
+            // Range 3.0-8.0: 3x = minimum profitable (25 bps profit/RT), 8x = wide (more profit per trade)
+            // With 25 bps maker fee: 3x = 75 bps, 4x = 100 bps, 6x = 150 bps spread
+            fee_spread_multiplier: rng.gen_range(3.0..8.0),
         }
     }
 
@@ -146,6 +163,9 @@ impl Chromosome for AvellanedaStoikovChromosome {
             
             // Adverse selection crossover
             adverse_selection_sensitivity: if rng.gen_bool(0.5) { self.adverse_selection_sensitivity } else { other.adverse_selection_sensitivity },
+            
+            // Fee spread multiplier crossover
+            fee_spread_multiplier: if rng.gen_bool(0.5) { self.fee_spread_multiplier } else { other.fee_spread_multiplier },
         };
         // Ensure bounds are enforced after crossover
         child.enforce_bounds();
@@ -223,10 +243,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.stop_loss_pct *= rng.gen_range(0.5..2.0);
             self.stop_loss_pct = self.stop_loss_pct.clamp(0.0005, 0.05);
         }
-        // Min spread: range 1-150 bps (GA finds optimal based on exchange fees)
+        // Min spread: soft floor (profitability ensured by fee_spread_multiplier)
         if rng.gen_bool(mutation_rate) {
             self.min_spread_bps *= rng.gen_range(0.5..2.0);
-            self.min_spread_bps = self.min_spread_bps.clamp(1.0, 150.0);
+            self.min_spread_bps = self.min_spread_bps.clamp(5.0, 150.0);
         }
         // Trade frequency: range 0.01-60 trades/min
         if rng.gen_bool(mutation_rate) {
@@ -237,6 +257,11 @@ impl Chromosome for AvellanedaStoikovChromosome {
         if rng.gen_bool(mutation_rate) {
             self.adverse_selection_sensitivity += rng.gen_range(-0.3..0.3);
             self.adverse_selection_sensitivity = self.adverse_selection_sensitivity.clamp(0.0, 2.0);
+        }
+        // Fee spread multiplier: range 3.0-8.0 (ensures minimum 25 bps profit per round-trip)
+        if rng.gen_bool(mutation_rate) {
+            self.fee_spread_multiplier += rng.gen_range(-0.5..0.5);
+            self.fee_spread_multiplier = self.fee_spread_multiplier.clamp(3.0, 8.0);
         }
     }
     
@@ -271,11 +296,14 @@ impl Chromosome for AvellanedaStoikovChromosome {
         // Adverse selection distance
         let d_adverse = (self.adverse_selection_sensitivity - other.adverse_selection_sensitivity).abs() / 2.0; // Range: 0.0-2.0
         
-        // Euclidean distance in 17D normalized space
+        // Fee spread multiplier distance
+        let d_fee_mult = (self.fee_spread_multiplier - other.fee_spread_multiplier).abs() / 4.0; // Range: 2.0-6.0
+        
+        // Euclidean distance in 18D normalized space
         (d_risk.powi(2) + d_size.powi(2) + d_window.powi(2) + d_lifetime.powi(2) + 
          d_inventory.powi(2) + d_vol_cap.powi(2) +
          d_horizon.powi(2) + d_depth.powi(2) + d_vol_adj.powi(2) + d_inv_penalty.powi(2) +
          d_trend.powi(2) + d_flow.powi(2) + d_tp.powi(2) + d_sl.powi(2) +
-         d_spread.powi(2) + d_trades.powi(2) + d_adverse.powi(2)).sqrt()
+         d_spread.powi(2) + d_trades.powi(2) + d_adverse.powi(2) + d_fee_mult.powi(2)).sqrt()
     }
 }
