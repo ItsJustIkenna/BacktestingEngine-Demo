@@ -3250,6 +3250,9 @@ impl Worker {
             }),
             risk_halt_reason: None,
             metrics_profile: Some(Self::build_metrics_profile("market_making")),
+            is_portfolio: false,
+            portfolio_metrics: None,
+            routing_metrics: None,
         })
     }
     
