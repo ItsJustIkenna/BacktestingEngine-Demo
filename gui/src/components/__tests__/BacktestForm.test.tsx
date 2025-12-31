@@ -6,6 +6,10 @@ import { BacktestForm } from '../BacktestForm';
 // Mock fetch globally
 global.fetch = jest.fn();
 
+// Helper to get the main symbol select (not portfolio header)
+const getSymbolSelect = () => screen.getByRole('combobox', { name: /^symbol$/i }) as HTMLSelectElement;
+const getExchangeSelect = () => screen.getByRole('combobox', { name: /^exchange$/i }) as HTMLSelectElement;
+
 describe('BacktestForm', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -30,10 +34,10 @@ describe('BacktestForm', () => {
     render(<BacktestForm />);
     
     await waitFor(() => {
-      expect(screen.getByLabelText(/symbol/i)).toBeInTheDocument();
+      expect(getSymbolSelect()).toBeInTheDocument();
     });
 
-    expect(screen.getByLabelText(/exchange/i)).toBeInTheDocument();
+    expect(getExchangeSelect()).toBeInTheDocument();
     expect(screen.getByLabelText(/strategy type/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/initial capital/i)).toBeInTheDocument();
     expect(screen.getByText(/optimization method/i)).toBeInTheDocument();
@@ -43,13 +47,13 @@ describe('BacktestForm', () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
-      const symbolSelect = screen.getByLabelText(/symbol/i) as HTMLSelectElement;
+      const symbolSelect = getSymbolSelect();
       expect(symbolSelect.options).toHaveLength(2);
       expect(symbolSelect.options[0]!.value).toBe('BTC-USD');
       expect(symbolSelect.options[1]!.value).toBe('ETH-USD');
     });
 
-    const exchangeSelect = screen.getByLabelText(/exchange/i) as HTMLSelectElement;
+    const exchangeSelect = getExchangeSelect();
     expect(exchangeSelect.options).toHaveLength(2);
     expect(exchangeSelect.options[0]!.value).toBe('coinbase');
     expect(exchangeSelect.options[1]!.value).toBe('binance');
@@ -70,7 +74,7 @@ describe('BacktestForm', () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/symbol/i)).toBeInTheDocument();
+      expect(getSymbolSelect()).toBeInTheDocument();
     });
 
     const manualRadio = screen.getByRole('radio', { name: /manual parameters/i });
@@ -111,7 +115,7 @@ describe('BacktestForm', () => {
     render(<BacktestForm onJobSubmit={mockOnJobSubmit} />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/symbol/i)).toBeInTheDocument();
+      expect(getSymbolSelect()).toBeInTheDocument();
     });
 
     const submitButton = screen.getByRole('button', { name: /submit backtest/i });
@@ -148,7 +152,7 @@ describe('BacktestForm', () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/symbol/i)).toBeInTheDocument();
+      expect(getSymbolSelect()).toBeInTheDocument();
     });
 
     const submitButton = screen.getByRole('button', { name: /submit backtest/i });
@@ -163,7 +167,7 @@ describe('BacktestForm', () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/symbol/i)).toBeInTheDocument();
+      expect(getSymbolSelect()).toBeInTheDocument();
     });
 
     const submitButton = screen.getByRole('button', { name: /submit backtest/i });
@@ -181,7 +185,7 @@ describe('BacktestForm', () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/symbol/i)).toBeInTheDocument();
+      expect(getSymbolSelect()).toBeInTheDocument();
     });
 
     const capitalInput = screen.getByLabelText(/initial capital/i) as HTMLInputElement;
@@ -195,7 +199,7 @@ describe('BacktestForm', () => {
 
     render(<BacktestForm />);
 
-    const symbolSelect = screen.getByLabelText(/symbol/i) as HTMLSelectElement;
+    const symbolSelect = getSymbolSelect();
     expect(symbolSelect).toBeDisabled();
     expect(screen.getAllByText(/loading\.\.\./i).length).toBeGreaterThan(0);
   });
@@ -207,7 +211,7 @@ describe('BacktestForm', () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
-      const symbolSelect = screen.getByLabelText(/symbol/i) as HTMLSelectElement;
+      const symbolSelect = getSymbolSelect();
       expect(symbolSelect).not.toBeDisabled();
     });
 
@@ -232,7 +236,7 @@ describe('BacktestForm', () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/symbol/i)).toBeInTheDocument();
+      expect(getSymbolSelect()).toBeInTheDocument();
     });
 
     const manualRadio = screen.getByRole('radio', { name: /manual parameters/i });
