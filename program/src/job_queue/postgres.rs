@@ -1250,6 +1250,17 @@ mod tests {
             validate_ratio: 0.2,
             fitness_weights: None,
             fill_model: "realistic".to_string(),
+            portfolio_assets: None,
+            symbols: None,
+            symbol_exchanges: None,
+            allocation_weights: None,
+            routing_mode: None,
+            routing_exchanges: None,
+            max_venues_per_order: None,
+            min_venue_allocation: None,
+            execution_style: None,
+            execution_duration_ms: None,
+            min_arb_profit_bps: None,
         };
         
         let job_id = queue.submit_job(params).await.unwrap();

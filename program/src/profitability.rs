@@ -487,6 +487,9 @@ mod tests {
             execution_metrics: None,
             risk_halt_reason: None,
             metrics_profile: None,
+            is_portfolio: false,
+            portfolio_metrics: None,
+            routing_metrics: None,
         }
     }
     

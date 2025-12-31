@@ -487,8 +487,8 @@ mod tests {
         
         for _symbol in &symbols {
             // Each should get ~33.3% of capital
-            let allocated = 100_000.0 * expected_weight;
-            assert!((allocated - 33333.33).abs() < 1.0);
+            let allocated: f64 = 100_000.0 * expected_weight;
+            assert!((allocated - 33333.33_f64).abs() < 1.0);
         }
     }
     
