@@ -140,15 +140,6 @@ interface BacktestFormData {
   inventory_penalty_factor: number;
   trend_sensitivity: number;
   flow_sensitivity: number;
-  // Smart Order Routing configuration
-  routing_enabled: boolean;
-  routing_mode: 'best_venue' | 'multi_venue' | 'arbitrage';
-  routing_exchanges: string[];
-  max_venues_per_order: number;
-  min_venue_allocation: number;
-  execution_style: 'aggressive' | 'passive' | 'balanced' | 'twap' | 'vwap';
-  execution_duration_ms: number;
-  min_arb_profit_bps: number;
 }
 
 interface BacktestFormProps {
@@ -214,15 +205,6 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     inventory_penalty_factor: 0.3,
     trend_sensitivity: 0.2,
     flow_sensitivity: -0.1,
-    // Smart Order Routing - ENABLED BY DEFAULT, routes to all portfolio exchanges
-    routing_enabled: true,
-    routing_mode: 'multi_venue',
-    routing_exchanges: [],  // Will be auto-populated from portfolio_assets
-    max_venues_per_order: 3,
-    min_venue_allocation: 0.1,
-    execution_style: 'balanced',
-    execution_duration_ms: 1000,
-    min_arb_profit_bps: 10,
   });
 
   const [loading, setLoading] = useState(false);
@@ -472,9 +454,7 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                   if (!exists && symbol && exchange) {
                     setFormData(prev => ({
                       ...prev,
-                      portfolio_assets: [...prev.portfolio_assets, { symbol, exchange }],
-                      // Auto-update routing exchanges
-                      routing_exchanges: [...new Set([...prev.routing_exchanges, exchange])]
+                      portfolio_assets: [...prev.portfolio_assets, { symbol, exchange }]
                     }));
                   }
                 }}
@@ -533,17 +513,10 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                     <button
                       type="button"
                       onClick={() => {
-                        const removedExchange = formData.portfolio_assets[idx]?.exchange;
                         const newAssets = formData.portfolio_assets.filter((_, i) => i !== idx);
-                        // Check if any remaining asset uses this exchange
-                        const exchangeStillUsed = newAssets.some(a => a.exchange === removedExchange);
                         setFormData(prev => ({
                           ...prev,
-                          portfolio_assets: newAssets,
-                          // Remove exchange from routing if no longer used
-                          routing_exchanges: exchangeStillUsed 
-                            ? prev.routing_exchanges 
-                            : prev.routing_exchanges.filter(e => e !== removedExchange)
+                          portfolio_assets: newAssets
                         }));
                       }}
                       style={{
@@ -590,86 +563,40 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
           )}
         </AccordionSection>
 
-        {/* ==================== SECTION 2: STRATEGY & ROUTING ==================== */}
+        {/* ==================== SECTION 2: STRATEGY ==================== */}
         <AccordionSection
-          title="Strategy & Order Routing"
-          icon="🔀"
+          title="Strategy"
+          icon="📊"
           isExpanded={expandedSections.strategy ?? true}
           onToggle={() => toggleSection('strategy')}
-          badge={formData.routing_mode === 'arbitrage' ? 'Arbitrage' : formData.routing_mode === 'multi_venue' ? 'Multi-Venue' : 'Best Venue'}
-          badgeColor={formData.routing_mode === 'arbitrage' ? '#6f42c1' : '#17a2b8'}
+          badge="Market Making"
+          badgeColor="#17a2b8"
         >
           <div style={{ display: 'grid', gap: '16px' }}>
-            {/* Strategy Type */}
-            <div>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>Strategy Type</label>
-              <select
-                name="strategy_type"
-                value={formData.strategy_type}
-                onChange={handleChange}
-                style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '6px', fontSize: '14px' }}
-              >
-                <option value="market_making">Market Making (Avellaneda-Stoikov)</option>
-              </select>
-              <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
-                The strategy determines how quotes are generated and orders are managed.
+            {/* Strategy Info */}
+            <div style={{ 
+              padding: '16px', 
+              backgroundColor: '#f0f7ff', 
+              borderRadius: '8px',
+              border: '1px solid #cce5ff'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                <span style={{ fontSize: '24px' }}>📈</span>
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: '15px', color: '#004085' }}>Avellaneda-Stoikov Market Making</div>
+                  <div style={{ fontSize: '12px', color: '#666', marginTop: '2px' }}>
+                    Optimal bid-ask quoting with inventory management
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontSize: '12px', color: '#555', lineHeight: 1.5 }}>
+                The strategy places limit orders on both sides of the order book, earning the bid-ask spread 
+                while managing inventory risk. The Genetic Algorithm optimizes ~18 parameters per symbol 
+                and capital allocation weights across your portfolio.
               </div>
             </div>
 
-            {/* Routing Mode */}
-            <div>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>Order Routing Mode</label>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
-                {[
-                  { value: 'multi_venue', label: 'Multi-Venue', desc: 'Split orders across exchanges', icon: '🔀' },
-                  { value: 'best_venue', label: 'Best Venue', desc: 'Route to best price', icon: '🎯' },
-                  { value: 'arbitrage', label: 'Arbitrage', desc: 'Exploit price differences', icon: '💹' },
-                ].map(mode => (
-                  <label
-                    key={mode.value}
-                    style={{
-                      padding: '12px',
-                      border: formData.routing_mode === mode.value ? '2px solid #0066cc' : '1px solid #ddd',
-                      borderRadius: '8px',
-                      cursor: 'pointer',
-                      backgroundColor: formData.routing_mode === mode.value ? '#f0f7ff' : 'white',
-                      textAlign: 'center'
-                    }}
-                  >
-                    <input
-                      type="radio"
-                      name="routing_mode"
-                      value={mode.value}
-                      checked={formData.routing_mode === mode.value}
-                      onChange={handleChange}
-                      style={{ display: 'none' }}
-                    />
-                    <div style={{ fontSize: '20px', marginBottom: '4px' }}>{mode.icon}</div>
-                    <div style={{ fontWeight: 600, fontSize: '13px' }}>{mode.label}</div>
-                    <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>{mode.desc}</div>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            {/* Execution Style */}
-            <div>
-              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>Execution Style</label>
-              <select
-                name="execution_style"
-                value={formData.execution_style}
-                onChange={handleChange}
-                style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '6px', fontSize: '14px' }}
-              >
-                <option value="balanced">Balanced - Mix of aggressive and passive</option>
-                <option value="aggressive">Aggressive - Take liquidity immediately</option>
-                <option value="passive">Passive - Provide liquidity (maker)</option>
-                <option value="twap">TWAP - Time-weighted execution</option>
-                <option value="vwap">VWAP - Volume-weighted execution</option>
-              </select>
-            </div>
-
-            {/* Routing Exchanges (auto-populated from portfolio) */}
+            {/* Active Exchanges (auto-populated from portfolio) */}
             <div style={{ 
               padding: '12px', 
               backgroundColor: '#f8f9fa', 
@@ -677,7 +604,7 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
               border: '1px solid #e9ecef'
             }}>
               <div style={{ fontWeight: 500, marginBottom: '8px', fontSize: '13px' }}>
-                Orders will be routed to:
+                📍 Active Exchanges:
               </div>
               {formData.portfolio_assets.length > 0 ? (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
@@ -695,50 +622,9 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                   ))}
                 </div>
               ) : (
-                <div style={{ color: '#999', fontSize: '12px' }}>Add assets above to configure routing exchanges</div>
+                <div style={{ color: '#999', fontSize: '12px' }}>Add assets above to see active exchanges</div>
               )}
             </div>
-
-            {/* Arbitrage-specific settings */}
-            {formData.routing_mode === 'arbitrage' && (
-              <div>
-                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>
-                  Min Arbitrage Profit (basis points)
-                </label>
-                <input
-                  type="number"
-                  name="min_arb_profit_bps"
-                  value={formData.min_arb_profit_bps}
-                  onChange={handleChange}
-                  min="1"
-                  max="100"
-                  style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '6px' }}
-                />
-                <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
-                  10 bps = 0.1% profit threshold before executing arbitrage
-                </div>
-              </div>
-            )}
-
-            {/* TWAP/VWAP duration */}
-            {(formData.execution_style === 'twap' || formData.execution_style === 'vwap') && (
-              <div>
-                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>
-                  Execution Duration (seconds)
-                </label>
-                <input
-                  type="number"
-                  value={formData.execution_duration_ms / 1000}
-                  onChange={(e) => setFormData(prev => ({ 
-                    ...prev, 
-                    execution_duration_ms: parseFloat(e.target.value) * 1000 
-                  }))}
-                  min="1"
-                  max="3600"
-                  style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '6px' }}
-                />
-              </div>
-            )}
           </div>
         </AccordionSection>
 
@@ -1200,8 +1086,7 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
           }}>
             {formData.portfolio_assets.length} asset{formData.portfolio_assets.length !== 1 ? 's' : ''} • 
             ${formData.initial_capital.toLocaleString()} capital • 
-            {formData.optimization_method === 'genetic' ? 'GA optimization' : 'Manual params'} • 
-            {formData.routing_mode} routing
+            {formData.optimization_method === 'genetic' ? 'GA optimization' : 'Manual params'}
           </div>
         </div>
 
