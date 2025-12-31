@@ -88,11 +88,10 @@ interface FitnessWeights {
   calmar: number;
 }
 
-// Portfolio asset: symbol + exchange pair with weight
+// Portfolio asset: symbol + exchange pair (weights optimized by GA)
 interface PortfolioAsset {
   symbol: string;
   exchange: string;
-  weight: number;
 }
 
 interface BacktestFormData {
@@ -104,12 +103,7 @@ interface BacktestFormData {
   initial_30d_volume: number;     // Starting 30-day volume for fee tier calculation
   optimization_method: 'genetic' | 'manual';
   // Portfolio mode - multi-symbol/multi-exchange backtesting
-  portfolio_mode: boolean;
-  portfolio_assets: PortfolioAsset[];  // Symbol+exchange pairs with weights
-  // Legacy fields (deprecated)
-  additional_symbols: string[];
-  symbol_exchanges: { [symbol: string]: string };
-  allocation_weights: number[];
+  portfolio_assets: PortfolioAsset[];  // Symbol+exchange pairs (weights optimized by GA)
   // Genetic algorithm parameters
   population_size: number;
   generations: number;
@@ -183,12 +177,8 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     initial_inventory_pct: 0.5,
     initial_30d_volume: 0,
     optimization_method: 'genetic',
-    // Portfolio mode is always on - even single asset is a portfolio
-    portfolio_mode: true,
+    // Portfolio assets (always used, single asset is a 1-item portfolio)
     portfolio_assets: [],
-    additional_symbols: [],
-    symbol_exchanges: {},
-    allocation_weights: [],
     // Genetic algorithm defaults
     population_size: 50,
     generations: 20,
@@ -321,13 +311,21 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
       };
 
       // Add portfolio mode parameters if enabled
-      if (formData.portfolio_mode && formData.portfolio_assets.length > 0) {
-        // Use new portfolio_assets format for symbol+exchange pairs
+      // Always send portfolio_assets - if empty, use the primary symbol/exchange
+      if (formData.portfolio_assets.length > 0) {
+        // Use explicitly added portfolio assets (weight = null so GA optimizes)
         params.portfolio_assets = formData.portfolio_assets.map(asset => ({
           symbol: asset.symbol,
           exchange: asset.exchange,
-          weight: asset.weight > 0 ? asset.weight : null,  // null weight = equal distribution
+          weight: null,  // null weight = GA will optimize
         }));
+      } else if (formData.symbol && formData.exchange) {
+        // Fallback: use primary symbol/exchange as single-asset portfolio
+        params.portfolio_assets = [{
+          symbol: formData.symbol,
+          exchange: formData.exchange,
+          weight: null,
+        }];
       }
 
       if (formData.optimization_method === 'genetic') {
@@ -421,7 +419,7 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
           {/* Add New Asset Row */}
           <div style={{ 
             display: 'grid', 
-            gridTemplateColumns: '1fr 1fr 90px auto',
+            gridTemplateColumns: '1fr 1fr auto',
             gap: '10px',
             marginBottom: '15px',
             padding: '12px',
@@ -457,29 +455,15 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                 )}
               </select>
             </div>
-            <div>
-              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '4px' }}>Weight</label>
-              <input
-                id="new_asset_weight"
-                type="number"
-                min="0"
-                max="1"
-                step="0.01"
-                placeholder="Auto"
-                style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-              />
-            </div>
             <div style={{ display: 'flex', alignItems: 'flex-end' }}>
               <button
                 type="button"
                 onClick={() => {
                   const symEl = document.getElementById('new_asset_symbol') as HTMLSelectElement;
                   const exchEl = document.getElementById('new_asset_exchange') as HTMLSelectElement;
-                  const weightEl = document.getElementById('new_asset_weight') as HTMLInputElement;
                   
                   const symbol = symEl?.value || symbols[0];
                   const exchange = exchEl?.value || exchanges[0];
-                  const weight = parseFloat(weightEl?.value) || 0;
                   
                   const exists = formData.portfolio_assets.some(
                     a => a.symbol === symbol && a.exchange === exchange
@@ -488,11 +472,10 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                   if (!exists && symbol && exchange) {
                     setFormData(prev => ({
                       ...prev,
-                      portfolio_assets: [...prev.portfolio_assets, { symbol, exchange, weight }],
+                      portfolio_assets: [...prev.portfolio_assets, { symbol, exchange }],
                       // Auto-update routing exchanges
                       routing_exchanges: [...new Set([...prev.routing_exchanges, exchange])]
                     }));
-                    if (weightEl) weightEl.value = '';
                   }
                 }}
                 style={{
@@ -516,14 +499,13 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
             <div>
               <div style={{ 
                 display: 'grid', 
-                gridTemplateColumns: '1fr 1fr 90px 36px',
+                gridTemplateColumns: '1fr 1fr 36px',
                 gap: '8px',
                 fontSize: '13px'
               }}>
                 {/* Header */}
                 <div style={{ fontWeight: 600, color: '#666', padding: '6px 0' }}>Symbol</div>
                 <div style={{ fontWeight: 600, color: '#666', padding: '6px 0' }}>Exchange</div>
-                <div style={{ fontWeight: 600, color: '#666', padding: '6px 0' }}>Weight</div>
                 <div></div>
                 
                 {formData.portfolio_assets.map((asset, idx) => (
@@ -548,32 +530,6 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                     }}>
                       {asset.exchange}
                     </div>
-                    <input
-                      type="number"
-                      min="0"
-                      max="1"
-                      step="0.01"
-                      value={asset.weight || ''}
-                      onChange={(e) => {
-                        const newAssets = [...formData.portfolio_assets];
-                        const currentAsset = newAssets[idx];
-                        if (currentAsset) {
-                          newAssets[idx] = { 
-                            symbol: currentAsset.symbol, 
-                            exchange: currentAsset.exchange, 
-                            weight: parseFloat(e.target.value) || 0 
-                          };
-                          setFormData(prev => ({ ...prev, portfolio_assets: newAssets }));
-                        }
-                      }}
-                      style={{ 
-                        padding: '8px', 
-                        border: '1px solid #ddd', 
-                        borderRadius: '6px',
-                        textAlign: 'center'
-                      }}
-                      placeholder="Auto"
-                    />
                     <button
                       type="button"
                       onClick={() => {
@@ -607,49 +563,16 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                 ))}
               </div>
               
-              {/* Weight Summary */}
+              {/* GA Info */}
               <div style={{ 
                 marginTop: '12px', 
                 padding: '10px 12px', 
-                backgroundColor: '#f8f9fa', 
+                backgroundColor: '#e8f4fd', 
                 borderRadius: '6px',
                 fontSize: '12px',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center'
+                color: '#0066cc'
               }}>
-                {(() => {
-                  const totalWeight = formData.portfolio_assets.reduce((sum, a) => sum + (a.weight || 0), 0);
-                  const assetsWithWeight = formData.portfolio_assets.filter(a => a.weight > 0).length;
-                  
-                  if (assetsWithWeight === 0) {
-                    return <span style={{ color: '#666' }}>⚖️ Equal weight: {(100 / formData.portfolio_assets.length).toFixed(1)}% each</span>;
-                  } else if (Math.abs(totalWeight - 1) > 0.01) {
-                    return <span style={{ color: '#cc0000' }}>⚠️ Weights sum to {(totalWeight * 100).toFixed(1)}% (should = 100%)</span>;
-                  } else {
-                    return <span style={{ color: '#28a745' }}>✓ Weights sum to 100%</span>;
-                  }
-                })()}
-                <button
-                  type="button"
-                  onClick={() => {
-                    const equalWeight = 1 / formData.portfolio_assets.length;
-                    setFormData(prev => ({
-                      ...prev,
-                      portfolio_assets: prev.portfolio_assets.map(a => ({ ...a, weight: equalWeight }))
-                    }));
-                  }}
-                  style={{
-                    padding: '4px 10px',
-                    backgroundColor: '#e9ecef',
-                    border: '1px solid #ced4da',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '11px'
-                  }}
-                >
-                  ⚖️ Equal Weight
-                </button>
+                ⚙️ Weights will be optimized by the Genetic Algorithm
               </div>
             </div>
           ) : (

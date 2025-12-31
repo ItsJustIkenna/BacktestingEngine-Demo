@@ -424,11 +424,11 @@ impl BacktestJobParams {
     
     /// Check if this is a multi-symbol (portfolio) backtest
     pub fn is_portfolio(&self) -> bool {
-        // New field takes precedence
+        // Portfolio mode if there are 2+ assets
         if let Some(ref assets) = self.portfolio_assets {
-            return !assets.is_empty();
+            return assets.len() > 1;
         }
-        // Legacy check
+        // Legacy check - deprecated
         self.symbols.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
     }
     

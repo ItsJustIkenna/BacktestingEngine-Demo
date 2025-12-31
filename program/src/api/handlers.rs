@@ -134,13 +134,65 @@ pub async fn submit_backtest(
     
     // Auto-populate date range if not provided
     if params.start_date.is_none() || params.end_date.is_none() {
-        match get_date_range_for_symbol(&state.job_queue, &params.symbol, &params.exchange).await {
-            Ok((start, end)) => {
-                params.start_date = Some(start.clone());
-                params.end_date = Some(end.clone());
-            },
-            Err(_e) => {
-                // Date range lookup failed - will use defaults
+        // For portfolio backtests, find the intersection of all asset date ranges
+        if let Some(ref portfolio_assets) = params.portfolio_assets {
+            if portfolio_assets.len() > 1 {
+                // Multi-asset portfolio: find intersection of all date ranges
+                let mut latest_start: Option<String> = None;
+                let mut earliest_end: Option<String> = None;
+                
+                for asset in portfolio_assets.iter() {
+                    match get_date_range_for_symbol(&state.job_queue, &asset.symbol, &asset.exchange).await {
+                        Ok((start, end)) => {
+                            // Use the latest start date (intersection)
+                            if latest_start.is_none() || start > latest_start.clone().unwrap() {
+                                latest_start = Some(start);
+                            }
+                            // Use the earliest end date (intersection)
+                            if earliest_end.is_none() || end < earliest_end.clone().unwrap() {
+                                earliest_end = Some(end);
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!("⚠️ [API] Date range lookup failed for {}/{}: {}", 
+                                asset.symbol, asset.exchange, e);
+                        }
+                    }
+                }
+                
+                if let (Some(start), Some(end)) = (latest_start, earliest_end) {
+                    if start < end {
+                        params.start_date = Some(start);
+                        params.end_date = Some(end);
+                        eprintln!("📅 [API] Portfolio date range: {} to {}", 
+                            params.start_date.as_ref().unwrap(), params.end_date.as_ref().unwrap());
+                    } else {
+                        eprintln!("⚠️ [API] Portfolio date ranges don't overlap (start {} >= end {})", start, end);
+                    }
+                }
+            } else if portfolio_assets.len() == 1 {
+                // Single asset in portfolio, use its date range
+                let asset = &portfolio_assets[0];
+                match get_date_range_for_symbol(&state.job_queue, &asset.symbol, &asset.exchange).await {
+                    Ok((start, end)) => {
+                        params.start_date = Some(start);
+                        params.end_date = Some(end);
+                    },
+                    Err(_e) => {
+                        // Date range lookup failed - will use defaults
+                    }
+                }
+            }
+        } else {
+            // Single-symbol backtest: use primary symbol
+            match get_date_range_for_symbol(&state.job_queue, &params.symbol, &params.exchange).await {
+                Ok((start, end)) => {
+                    params.start_date = Some(start);
+                    params.end_date = Some(end);
+                },
+                Err(_e) => {
+                    // Date range lookup failed - will use defaults
+                }
             }
         }
     }

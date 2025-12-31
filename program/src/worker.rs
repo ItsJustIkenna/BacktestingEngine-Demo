@@ -1957,6 +1957,138 @@ impl Worker {
         let value_at_risk_95 = portfolio_result.risk_metrics.as_ref().map(|rm| rm.portfolio_var_95);
         let expected_shortfall_95 = portfolio_result.risk_metrics.as_ref().map(|rm| rm.portfolio_es_95);
         
+        // Calculate drawdown metrics from equity curve
+        let (max_drawdown_duration_days, current_drawdown, avg_drawdown) = {
+            let equity = &portfolio_result.equity_curve;
+            if equity.len() >= 2 {
+                let mut peak = equity[0];
+                let mut drawdowns: Vec<f64> = Vec::new();
+                let mut current_dd_start: Option<usize> = None;
+                let mut max_dd_duration: usize = 0;
+                let mut current_dd: f64 = 0.0;
+                
+                for (i, &val) in equity.iter().enumerate() {
+                    if val > peak {
+                        // New peak, end any drawdown period
+                        if let Some(start) = current_dd_start {
+                            max_dd_duration = max_dd_duration.max(i - start);
+                        }
+                        peak = val;
+                        current_dd_start = None;
+                    } else if peak > 0.0 {
+                        let dd = (peak - val) / peak;
+                        drawdowns.push(dd);
+                        if current_dd_start.is_none() && dd > 0.001 {
+                            current_dd_start = Some(i);
+                        }
+                        if i == equity.len() - 1 {
+                            current_dd = dd;
+                        }
+                    }
+                }
+                
+                // Convert duration from data points to days (assuming ~1 point per minute)
+                let minutes_per_day = 6.5 * 60.0; // Trading hours
+                let duration_days = (max_dd_duration as f64 / minutes_per_day).ceil() as i32;
+                
+                let avg_dd = if !drawdowns.is_empty() {
+                    drawdowns.iter().sum::<f64>() / drawdowns.len() as f64
+                } else {
+                    0.0
+                };
+                
+                (Some(duration_days), Some(current_dd), Some(avg_dd))
+            } else {
+                (None, None, None)
+            }
+        };
+        
+        // ========== MONTE CARLO SIMULATION FOR PORTFOLIO ==========
+        let monte_carlo_enabled = params.monte_carlo_enabled;
+        let monte_carlo_runs = params.monte_carlo_runs;
+        
+        let monte_carlo_summary = if monte_carlo_enabled && portfolio_result.total_trades >= 30 {
+            log_info!(MAIN_LOGGER, "🎲 [{}] Running Monte Carlo simulation with {} trades", job.id, portfolio_result.total_trades);
+            
+            // Build a BacktestResult compatible with monte_carlo module
+            use bigdecimal::FromPrimitive;
+            let core_result = backtest::types::BacktestResult {
+                total_pnl: bigdecimal::BigDecimal::from_f64(portfolio_result.total_pnl).unwrap_or_default(),
+                num_trades: portfolio_result.total_trades,
+                closed_trades: portfolio_result.total_trades,
+                open_positions: 0,
+                first_trade_timestamp: None,
+                last_trade_timestamp: None,
+                first_trade_price: None,
+                last_trade_price: None,
+                realized_pnl: Some(portfolio_result.total_pnl),
+                unrealized_pnl: Some(0.0),
+                max_drawdown: bigdecimal::BigDecimal::from_f64(portfolio_result.portfolio_max_drawdown).unwrap_or_default(),
+                sharpe_ratio: Some(portfolio_result.portfolio_sharpe),
+                sortino_ratio,
+                calmar_ratio,
+                profit_factor: Some(portfolio_result.portfolio_profit_factor),
+                win_rate: Some(portfolio_result.portfolio_win_rate),
+                avg_trade_return,
+                median_trade_return: None,
+                avg_trade_duration: Some(portfolio_result.avg_time_in_trade_ms / 1000.0 / 60.0), // Convert to minutes
+                volatility,
+                gross_profit: None,
+                gross_loss: None,
+                net_profit: Some(portfolio_result.total_pnl),
+                equity_curve: portfolio_result.equity_curve.clone(),
+                trade_returns: portfolio_result.trade_returns.clone(),
+                initial_capital,
+                data_quality: None,
+                transaction_costs: None,
+                market_impact: None,
+                inventory_metrics: None,
+                execution_metrics: None,
+                risk_halt_reason: None,
+            };
+            
+            let mc_start = std::time::Instant::now();
+            match backtest::monte_carlo::run_monte_carlo_simulation(&core_result, monte_carlo_runs) {
+                Ok(mc) => {
+                    let mc_elapsed = mc_start.elapsed();
+                    log_info!(MAIN_LOGGER, "✅ [{}] Monte Carlo complete in {:.2}s | mean_sharpe={:.3} VaR95=${:.2}",
+                        job.id, mc_elapsed.as_secs_f64(), mc.mean_metrics.sharpe_ratio, mc.var_95);
+                    
+                    Some(MonteCarloSummary {
+                        num_runs: mc.num_runs,
+                        mean_sharpe: mc.mean_metrics.sharpe_ratio,
+                        stddev_sharpe: mc.stddev_metrics.sharpe_ratio,
+                        var_95: mc.var_95,
+                        cvar_95: mc.cvar_95,
+                        confidence_lower: mc.percentile_metrics.get(&5).map(|m| m.sharpe_ratio).unwrap_or(0.0),
+                        confidence_upper: mc.percentile_metrics.get(&95).map(|m| m.sharpe_ratio).unwrap_or(0.0),
+                        data_points: mc.data_points,
+                        var_unreliable: mc.var_unreliable,
+                        p5_total_pnl: mc.percentile_metrics.get(&5).map(|m| m.net_profit),
+                        p50_total_pnl: mc.percentile_metrics.get(&50).map(|m| m.net_profit),
+                        p95_total_pnl: mc.percentile_metrics.get(&95).map(|m| m.net_profit),
+                        p5_max_drawdown: mc.percentile_metrics.get(&5).map(|m| m.max_drawdown),
+                        p50_max_drawdown: mc.percentile_metrics.get(&50).map(|m| m.max_drawdown),
+                        p95_max_drawdown: mc.percentile_metrics.get(&95).map(|m| m.max_drawdown),
+                        p50_sharpe: mc.percentile_metrics.get(&50).map(|m| m.sharpe_ratio),
+                        p5_win_rate: mc.percentile_metrics.get(&5).map(|m| m.win_rate),
+                        p50_win_rate: mc.percentile_metrics.get(&50).map(|m| m.win_rate),
+                        p95_win_rate: mc.percentile_metrics.get(&95).map(|m| m.win_rate),
+                    })
+                }
+                Err(e) => {
+                    log_warn!(MAIN_LOGGER, "[{}] Monte Carlo failed: {} - continuing without MC", job.id, e);
+                    None
+                }
+            }
+        } else {
+            if monte_carlo_enabled {
+                log_info!(MAIN_LOGGER, "[{}] Skipping Monte Carlo: only {} trades (min 30 required)", 
+                    job.id, portfolio_result.total_trades);
+            }
+            None
+        };
+        
         // Build aggregated inventory metrics for the portfolio
         let inventory_metrics = Some(InventorySummary {
             total_volume: portfolio_result.total_volume,
@@ -1967,6 +2099,47 @@ impl Worker {
             buy_volume: 0.0,
             sell_volume: 0.0,
             imbalance_ratio: 0.0,
+        });
+        
+        // Build execution metrics summary for the portfolio
+        let fill_rate = if portfolio_result.total_orders_placed > 0 {
+            portfolio_result.total_orders_filled as f64 / portfolio_result.total_orders_placed as f64
+        } else {
+            0.0
+        };
+        let cancellation_rate = if portfolio_result.total_orders_placed > 0 {
+            (portfolio_result.total_orders_placed - portfolio_result.total_orders_filled) as f64 / portfolio_result.total_orders_placed as f64
+        } else {
+            0.0
+        };
+        
+        let execution_metrics = Some(ExecutionSummary {
+            orders_placed: portfolio_result.total_orders_placed,
+            orders_filled: portfolio_result.total_orders_filled,
+            orders_cancelled: portfolio_result.total_orders_placed.saturating_sub(portfolio_result.total_orders_filled),
+            total_fills: portfolio_result.total_orders_filled,
+            fill_rate,
+            cancellation_rate,
+            avg_fills_per_order: if portfolio_result.total_orders_filled > 0 { 1.0 } else { 0.0 },
+            avg_time_to_fill_seconds: portfolio_result.avg_time_in_trade_ms / 1000.0,
+            median_time_to_fill_seconds: portfolio_result.avg_time_in_trade_ms / 1000.0, // Approximate
+            bid_orders: portfolio_result.total_orders_placed / 2, // Approximate 50/50 split
+            ask_orders: portfolio_result.total_orders_placed / 2,
+            bid_fills: portfolio_result.total_orders_filled / 2,
+            ask_fills: portfolio_result.total_orders_filled / 2,
+            bid_fill_rate: fill_rate,
+            ask_fill_rate: fill_rate,
+            avg_quote_spread_bps: 0.0, // Not tracked at portfolio level
+            round_trip_win_rate: Some(portfolio_result.portfolio_win_rate),
+            total_round_trips: portfolio_result.total_trades,
+            profitable_round_trips: (portfolio_result.total_trades as f64 * portfolio_result.portfolio_win_rate) as usize,
+            spread_capture_rate: None,
+            adverse_selection_rate: None,
+            avg_pnl_per_round_trip: if portfolio_result.total_trades > 0 {
+                Some(portfolio_result.total_pnl / portfolio_result.total_trades as f64)
+            } else {
+                None
+            },
         });
         
         // Build result
@@ -1982,7 +2155,7 @@ impl Worker {
             equity_curve: portfolio_result.equity_curve,
             completed_at: Utc::now(),
             closed_trades: Some(portfolio_result.total_trades),
-            open_positions: None,
+            open_positions: Some(0),
             realized_pnl: Some(portfolio_result.total_pnl),
             unrealized_pnl: Some(0.0),
             // Additional calculated metrics
@@ -1994,18 +2167,33 @@ impl Worker {
             best_trade,
             worst_trade,
             avg_time_in_trade: Some(portfolio_result.avg_time_in_trade_ms / 1000.0), // Convert ms to seconds
+            // Risk metrics
             value_at_risk_95,
             expected_shortfall_95,
-            // Execution metrics - use actual tracked values
+            max_drawdown_duration_days,
+            current_drawdown,
+            avg_drawdown,
+            // Execution metrics - individual fields
             total_orders: Some(portfolio_result.total_orders_placed as i32),
             filled_orders: Some(portfolio_result.total_orders_filled as i32),
             cancelled_orders: Some((portfolio_result.total_orders_placed - portfolio_result.total_orders_filled) as i32),
             avg_slippage: None,
             total_commission_paid: Some(portfolio_result.total_fees),
+            // Full execution metrics struct
+            execution_metrics,
+            // Monte Carlo results
+            monte_carlo: monte_carlo_summary,
+            // Walk-forward not yet implemented for portfolio
+            walk_forward: None,
             // Portfolio specific
             is_portfolio: true,
             portfolio_metrics: Some(portfolio_metrics),
             inventory_metrics,
+            // No routing metrics for portfolio GA
+            routing_metrics: None,
+            // Metrics profile for UI display
+            metrics_profile: Some(Self::build_metrics_profile("portfolio_ga")),
+            // Strategy params with full optimization details
             strategy_params: Some(serde_json::json!({
                 "portfolio_mode": true,
                 "ga_optimized": true,
@@ -2019,7 +2207,7 @@ impl Worker {
             })),
             start_date: job.params.start_date.clone(),
             end_date: job.params.end_date.clone(),
-            ..Default::default()
+            risk_halt_reason: None,
         };
         
         let _ = self.job_queue.update_progress(&job.id, 100.0).await;
