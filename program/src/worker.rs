@@ -1823,6 +1823,7 @@ impl Worker {
             params.monte_carlo_enabled,
             params.monte_carlo_runs, // Use requested MC runs (no cap)
             params.walk_forward_enabled,
+            &params.fill_model,  // Fill model realism level
         ).await?;
         
         let timing_analysis_elapsed = timing_analysis_start.elapsed();
@@ -2626,6 +2627,7 @@ impl Worker {
         monte_carlo_enabled: bool,
         monte_carlo_runs: usize,
         walk_forward_enabled: bool,
+        fill_model: &str,  // Fill model realism level: "optimistic", "standard", "realistic", "pessimistic"
     ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
         // Run backtest + Monte Carlo on sampled data for speed
         log_info!(MAIN_LOGGER, "Job {} FINAL_ANALYSIS_ENTER | backtest_pts={} walkforward_pts={} mc={} wf={}", 
@@ -2705,8 +2707,8 @@ impl Worker {
             max_trades_per_minute: chromosome.max_trades_per_minute,
             window_ms: chromosome.window_ms as i64,
             min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,
-            // Fill model from job params
-            fill_model: backtest::FillModelType::from_str(&job.params.fill_model),
+            // Fill model from function parameter
+            fill_model: backtest::FillModelType::from_str(fill_model),
         };
         
         // Store params for walk-forward (will need to reconstruct for each window)
@@ -3031,6 +3033,7 @@ impl Worker {
         _monte_carlo_enabled: bool,
         _monte_carlo_runs: usize,
         _walk_forward_enabled: bool,
+        _fill_model: &str,  // Fill model realism level
     ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
         Err("Full analysis requires postgres feature to be enabled".into())
     }
