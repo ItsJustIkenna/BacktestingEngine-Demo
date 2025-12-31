@@ -76,6 +76,15 @@ interface BacktestFormData {
   inventory_penalty_factor: number;
   trend_sensitivity: number;
   flow_sensitivity: number;
+  // Smart Order Routing configuration
+  routing_enabled: boolean;
+  routing_mode: 'best_venue' | 'multi_venue' | 'arbitrage';
+  routing_exchanges: string[];
+  max_venues_per_order: number;
+  min_venue_allocation: number;
+  execution_style: 'aggressive' | 'passive' | 'balanced' | 'twap' | 'vwap';
+  execution_duration_ms: number;
+  min_arb_profit_bps: number;
 }
 
 interface BacktestFormProps {
@@ -132,6 +141,15 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     inventory_penalty_factor: 0.3,
     trend_sensitivity: 0.2,
     flow_sensitivity: -0.1,
+    // Smart Order Routing defaults
+    routing_enabled: false,
+    routing_mode: 'best_venue',
+    routing_exchanges: [],
+    max_venues_per_order: 3,
+    min_venue_allocation: 0.1,
+    execution_style: 'balanced',
+    execution_duration_ms: 1000,
+    min_arb_profit_bps: 10,
   });
 
   const [loading, setLoading] = useState(false);
@@ -607,6 +625,199 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                   No assets added yet. Use the form above to add symbol+exchange pairs.
                 </div>
               )}
+            </div>
+          )}
+        </div>
+
+        {/* Smart Order Routing Configuration */}
+        <div style={{ 
+          padding: '15px', 
+          backgroundColor: '#f5f0ff', 
+          borderRadius: '8px',
+          border: '1px solid #d0c4e8'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '15px' }}>
+            <input
+              type="checkbox"
+              id="routing_enabled"
+              name="routing_enabled"
+              checked={formData.routing_enabled}
+              onChange={(e) => setFormData(prev => ({ ...prev, routing_enabled: e.target.checked }))}
+              style={{ marginRight: '10px' }}
+            />
+            <label htmlFor="routing_enabled" style={{ fontWeight: 'bold', cursor: 'pointer' }}>
+              🔀 Enable Smart Order Routing
+            </label>
+          </div>
+
+          {formData.routing_enabled && (
+            <div style={{ display: 'grid', gap: '15px' }}>
+              {/* Routing Mode */}
+              <div>
+                <label htmlFor="routing_mode" style={{ display: 'block', marginBottom: '5px' }}>
+                  Routing Mode
+                </label>
+                <select
+                  id="routing_mode"
+                  name="routing_mode"
+                  value={formData.routing_mode}
+                  onChange={handleChange}
+                  style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
+                >
+                  <option value="best_venue">Best Venue - Route to single best venue</option>
+                  <option value="multi_venue">Multi-Venue - Split across venues</option>
+                  <option value="arbitrage">Arbitrage - Exploit price differences</option>
+                </select>
+              </div>
+
+              {/* Execution Style */}
+              <div>
+                <label htmlFor="execution_style" style={{ display: 'block', marginBottom: '5px' }}>
+                  Execution Style
+                </label>
+                <select
+                  id="execution_style"
+                  name="execution_style"
+                  value={formData.execution_style}
+                  onChange={handleChange}
+                  style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
+                >
+                  <option value="aggressive">Aggressive - Take liquidity immediately</option>
+                  <option value="passive">Passive - Provide liquidity (maker)</option>
+                  <option value="balanced">Balanced - Mix of aggressive and passive</option>
+                  <option value="twap">TWAP - Time-weighted execution</option>
+                  <option value="vwap">VWAP - Volume-weighted execution</option>
+                </select>
+              </div>
+
+              {/* Multi-venue settings */}
+              {formData.routing_mode === 'multi_venue' && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <div>
+                    <label htmlFor="max_venues_per_order" style={{ display: 'block', marginBottom: '5px' }}>
+                      Max Venues Per Order
+                    </label>
+                    <input
+                      type="number"
+                      id="max_venues_per_order"
+                      name="max_venues_per_order"
+                      value={formData.max_venues_per_order}
+                      onChange={handleChange}
+                      min="1"
+                      max="10"
+                      style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="min_venue_allocation" style={{ display: 'block', marginBottom: '5px' }}>
+                      Min Venue Allocation (%)
+                    </label>
+                    <input
+                      type="number"
+                      id="min_venue_allocation"
+                      name="min_venue_allocation"
+                      value={formData.min_venue_allocation * 100}
+                      onChange={(e) => setFormData(prev => ({ 
+                        ...prev, 
+                        min_venue_allocation: parseFloat(e.target.value) / 100 
+                      }))}
+                      min="1"
+                      max="50"
+                      step="1"
+                      style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* TWAP/VWAP duration */}
+              {(formData.execution_style === 'twap' || formData.execution_style === 'vwap') && (
+                <div>
+                  <label htmlFor="execution_duration_ms" style={{ display: 'block', marginBottom: '5px' }}>
+                    Execution Duration (seconds)
+                  </label>
+                  <input
+                    type="number"
+                    id="execution_duration_ms"
+                    name="execution_duration_ms"
+                    value={formData.execution_duration_ms / 1000}
+                    onChange={(e) => setFormData(prev => ({ 
+                      ...prev, 
+                      execution_duration_ms: parseFloat(e.target.value) * 1000 
+                    }))}
+                    min="1"
+                    max="3600"
+                    step="1"
+                    style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
+                  />
+                </div>
+              )}
+
+              {/* Arbitrage settings */}
+              {formData.routing_mode === 'arbitrage' && (
+                <div>
+                  <label htmlFor="min_arb_profit_bps" style={{ display: 'block', marginBottom: '5px' }}>
+                    Min Arbitrage Profit (basis points)
+                  </label>
+                  <input
+                    type="number"
+                    id="min_arb_profit_bps"
+                    name="min_arb_profit_bps"
+                    value={formData.min_arb_profit_bps}
+                    onChange={handleChange}
+                    min="1"
+                    max="100"
+                    step="1"
+                    style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
+                  />
+                  <small style={{ color: '#666', fontSize: '12px' }}>
+                    10 bps = 0.1% profit threshold
+                  </small>
+                </div>
+              )}
+
+              {/* Routing Exchanges */}
+              <div>
+                <label style={{ display: 'block', marginBottom: '5px' }}>
+                  Routing Exchanges
+                </label>
+                <div style={{ 
+                  display: 'grid', 
+                  gridTemplateColumns: 'repeat(3, 1fr)', 
+                  gap: '8px',
+                  padding: '10px',
+                  backgroundColor: '#fff',
+                  borderRadius: '4px',
+                  border: '1px solid #ccc'
+                }}>
+                  {['binance', 'coinbase', 'kraken', 'kucoin', 'okx', 'bybit'].map(exchange => (
+                    <label key={exchange} style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={formData.routing_exchanges.includes(exchange)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setFormData(prev => ({ 
+                              ...prev, 
+                              routing_exchanges: [...prev.routing_exchanges, exchange] 
+                            }));
+                          } else {
+                            setFormData(prev => ({ 
+                              ...prev, 
+                              routing_exchanges: prev.routing_exchanges.filter(ex => ex !== exchange) 
+                            }));
+                          }
+                        }}
+                        style={{ marginRight: '6px' }}
+                      />
+                      {exchange.charAt(0).toUpperCase() + exchange.slice(1)}
+                    </label>
+                  ))}
+                </div>
+                <small style={{ color: '#666', fontSize: '12px' }}>
+                  Select venues for order routing. Leave empty to use all available venues.
+                </small>
+              </div>
             </div>
           )}
         </div>

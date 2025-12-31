@@ -75,6 +75,35 @@ interface ExecutionSummary {
   avg_pnl_per_round_trip?: number;
 }
 
+// Smart Order Routing Metrics
+interface VenueBreakdown {
+  venue: string;
+  orders_routed: number;
+  volume_routed: number;
+  avg_fill_rate: number;
+  avg_slippage_bps: number;
+  total_fees: number;
+}
+
+interface RoutingMetrics {
+  routing_mode: string;
+  execution_style: string;
+  total_parent_orders: number;
+  total_child_orders: number;
+  venue_breakdown: VenueBreakdown[];
+  avg_venues_per_order: number;
+  routing_efficiency: number;  // 0-1, how well orders were split
+  price_improvement_bps: number;  // vs single venue
+  // Arbitrage-specific
+  arbitrage_opportunities_detected?: number;
+  arbitrage_opportunities_executed?: number;
+  arbitrage_pnl?: number;
+  avg_arb_spread_captured_bps?: number;
+  // TWAP/VWAP-specific
+  execution_time_avg_ms?: number;
+  execution_slices_avg?: number;
+}
+
 // Portfolio-specific interfaces
 interface SymbolResult {
   symbol: string;
@@ -125,6 +154,9 @@ interface BacktestResult {
   // Portfolio mode results
   portfolio_metrics?: PortfolioMetrics;
   is_portfolio?: boolean;
+  
+  // Smart Order Routing results
+  routing_metrics?: RoutingMetrics;
   
   // Trade breakdown
   closed_trades?: number;
@@ -1485,6 +1517,221 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 <span style={{ marginRight: '15px' }}>🔴 High correlation (&gt;0.7)</span>
                 <span style={{ marginRight: '15px' }}>🟢 Negative correlation (&lt;-0.3)</span>
                 <span>🔵 Low correlation</span>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Smart Order Routing Analysis */}
+      {result.routing_metrics && (
+        <div style={{
+          backgroundColor: 'white',
+          padding: '20px',
+          borderRadius: '8px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          marginBottom: '20px',
+        }}>
+          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>
+            🔀 Smart Order Routing Analysis
+          </h3>
+          
+          {/* Routing Summary */}
+          <div style={{
+            backgroundColor: '#f5f0ff',
+            border: '1px solid #d0c4e8',
+            borderRadius: '8px',
+            padding: '15px',
+            marginBottom: '20px',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-around', flexWrap: 'wrap', gap: '15px' }}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Routing Mode</div>
+                <div style={{ fontSize: '16px', fontWeight: 600, color: '#6f42c1', textTransform: 'capitalize' }}>
+                  {result.routing_metrics.routing_mode.replace('_', ' ')}
+                </div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Execution Style</div>
+                <div style={{ fontSize: '16px', fontWeight: 600, color: '#6f42c1', textTransform: 'capitalize' }}>
+                  {result.routing_metrics.execution_style}
+                </div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Parent Orders</div>
+                <div style={{ fontSize: '20px', fontWeight: 600, color: '#0066cc' }}>
+                  {result.routing_metrics.total_parent_orders.toLocaleString()}
+                </div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Child Orders</div>
+                <div style={{ fontSize: '20px', fontWeight: 600, color: '#0066cc' }}>
+                  {result.routing_metrics.total_child_orders.toLocaleString()}
+                </div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Avg Venues/Order</div>
+                <div style={{ fontSize: '20px', fontWeight: 600, color: '#17a2b8' }}>
+                  {safeToFixed(result.routing_metrics.avg_venues_per_order, 1)}
+                </div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Price Improvement</div>
+                <div style={{ 
+                  fontSize: '20px', 
+                  fontWeight: 600, 
+                  color: result.routing_metrics.price_improvement_bps >= 0 ? '#28a745' : '#dc3545' 
+                }}>
+                  {result.routing_metrics.price_improvement_bps >= 0 ? '+' : ''}{safeToFixed(result.routing_metrics.price_improvement_bps, 1)} bps
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Venue Breakdown Table */}
+          {result.routing_metrics.venue_breakdown && result.routing_metrics.venue_breakdown.length > 0 && (
+            <>
+              <h4 style={{ marginBottom: '10px', color: '#333' }}>📍 Venue Breakdown</h4>
+              <div style={{ overflowX: 'auto', marginBottom: '20px' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px' }}>
+                  <thead>
+                    <tr style={{ backgroundColor: '#f8f9fa' }}>
+                      <th style={{ padding: '10px', textAlign: 'left', borderBottom: '2px solid #dee2e6' }}>Venue</th>
+                      <th style={{ padding: '10px', textAlign: 'right', borderBottom: '2px solid #dee2e6' }}>Orders Routed</th>
+                      <th style={{ padding: '10px', textAlign: 'right', borderBottom: '2px solid #dee2e6' }}>Volume</th>
+                      <th style={{ padding: '10px', textAlign: 'right', borderBottom: '2px solid #dee2e6' }}>Fill Rate</th>
+                      <th style={{ padding: '10px', textAlign: 'right', borderBottom: '2px solid #dee2e6' }}>Avg Slippage</th>
+                      <th style={{ padding: '10px', textAlign: 'right', borderBottom: '2px solid #dee2e6' }}>Total Fees</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.routing_metrics.venue_breakdown.map((venue, idx) => (
+                      <tr key={idx} style={{ borderBottom: '1px solid #dee2e6' }}>
+                        <td style={{ padding: '10px', fontWeight: 500, textTransform: 'capitalize' }}>
+                          {venue.venue}
+                        </td>
+                        <td style={{ padding: '10px', textAlign: 'right' }}>
+                          {venue.orders_routed.toLocaleString()}
+                        </td>
+                        <td style={{ padding: '10px', textAlign: 'right' }}>
+                          ${venue.volume_routed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td style={{ 
+                          padding: '10px', 
+                          textAlign: 'right',
+                          color: venue.avg_fill_rate >= 0.9 ? '#28a745' : venue.avg_fill_rate >= 0.7 ? '#ffc107' : '#dc3545'
+                        }}>
+                          {safeToFixed(venue.avg_fill_rate * 100, 1)}%
+                        </td>
+                        <td style={{ 
+                          padding: '10px', 
+                          textAlign: 'right',
+                          color: venue.avg_slippage_bps <= 2 ? '#28a745' : venue.avg_slippage_bps <= 5 ? '#ffc107' : '#dc3545'
+                        }}>
+                          {safeToFixed(venue.avg_slippage_bps, 2)} bps
+                        </td>
+                        <td style={{ padding: '10px', textAlign: 'right' }}>
+                          ${venue.total_fees.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+
+          {/* Arbitrage Performance (if in arbitrage mode) */}
+          {result.routing_metrics.routing_mode === 'arbitrage' && (
+            <>
+              <h4 style={{ marginBottom: '10px', color: '#333' }}>💹 Arbitrage Performance</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                gap: '15px',
+                backgroundColor: '#f0fff4',
+                border: '1px solid #c3e6cb',
+                borderRadius: '8px',
+                padding: '15px',
+                marginBottom: '20px',
+              }}>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Opportunities Detected</div>
+                  <div style={{ fontSize: '20px', fontWeight: 600, color: '#17a2b8' }}>
+                    {(result.routing_metrics.arbitrage_opportunities_detected || 0).toLocaleString()}
+                  </div>
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Opportunities Executed</div>
+                  <div style={{ fontSize: '20px', fontWeight: 600, color: '#28a745' }}>
+                    {(result.routing_metrics.arbitrage_opportunities_executed || 0).toLocaleString()}
+                  </div>
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Execution Rate</div>
+                  <div style={{ fontSize: '20px', fontWeight: 600, color: '#6f42c1' }}>
+                    {result.routing_metrics.arbitrage_opportunities_detected 
+                      ? safeToFixed((result.routing_metrics.arbitrage_opportunities_executed || 0) / result.routing_metrics.arbitrage_opportunities_detected * 100, 1) 
+                      : '0'}%
+                  </div>
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Arbitrage PnL</div>
+                  <div style={{ 
+                    fontSize: '20px', 
+                    fontWeight: 600, 
+                    color: (result.routing_metrics.arbitrage_pnl || 0) >= 0 ? '#28a745' : '#dc3545' 
+                  }}>
+                    ${(result.routing_metrics.arbitrage_pnl || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </div>
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Avg Spread Captured</div>
+                  <div style={{ fontSize: '20px', fontWeight: 600, color: '#28a745' }}>
+                    {safeToFixed(result.routing_metrics.avg_arb_spread_captured_bps || 0, 1)} bps
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* TWAP/VWAP Execution Stats */}
+          {(result.routing_metrics.execution_style === 'twap' || result.routing_metrics.execution_style === 'vwap') && (
+            <>
+              <h4 style={{ marginBottom: '10px', color: '#333' }}>
+                ⏱️ {result.routing_metrics.execution_style.toUpperCase()} Execution Stats
+              </h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                gap: '15px',
+                backgroundColor: '#fff3cd',
+                border: '1px solid #ffc107',
+                borderRadius: '8px',
+                padding: '15px',
+              }}>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Avg Execution Time</div>
+                  <div style={{ fontSize: '20px', fontWeight: 600, color: '#856404' }}>
+                    {safeToFixed((result.routing_metrics.execution_time_avg_ms || 0) / 1000, 1)}s
+                  </div>
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Avg Execution Slices</div>
+                  <div style={{ fontSize: '20px', fontWeight: 600, color: '#856404' }}>
+                    {safeToFixed(result.routing_metrics.execution_slices_avg || 0, 1)}
+                  </div>
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Routing Efficiency</div>
+                  <div style={{ 
+                    fontSize: '20px', 
+                    fontWeight: 600, 
+                    color: result.routing_metrics.routing_efficiency >= 0.9 ? '#28a745' : '#856404'
+                  }}>
+                    {safeToFixed(result.routing_metrics.routing_efficiency * 100, 1)}%
+                  </div>
+                </div>
               </div>
             </>
           )}
