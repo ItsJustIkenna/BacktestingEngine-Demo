@@ -492,8 +492,15 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                           value={asset.weight || ''}
                           onChange={(e) => {
                             const newAssets = [...formData.portfolio_assets];
-                            newAssets[idx] = { ...newAssets[idx], weight: parseFloat(e.target.value) || 0 };
-                            setFormData(prev => ({ ...prev, portfolio_assets: newAssets }));
+                            const currentAsset = newAssets[idx];
+                            if (currentAsset) {
+                              newAssets[idx] = { 
+                                symbol: currentAsset.symbol, 
+                                exchange: currentAsset.exchange, 
+                                weight: parseFloat(e.target.value) || 0 
+                              };
+                              setFormData(prev => ({ ...prev, portfolio_assets: newAssets }));
+                            }
                           }}
                           style={{ 
                             padding: '5px', 
