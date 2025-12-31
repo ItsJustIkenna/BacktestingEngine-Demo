@@ -35,7 +35,7 @@ describe('BacktestForm', () => {
     });
 
     // Check accordion sections are present
-    expect(screen.getByText(/strategy & order routing/i)).toBeInTheDocument();
+    expect(screen.getByText(/^strategy$/i)).toBeInTheDocument();
     expect(screen.getByText(/capital & allocation/i)).toBeInTheDocument();
     expect(screen.getByText(/optimization method/i)).toBeInTheDocument();
     expect(screen.getByText(/analysis & validation/i)).toBeInTheDocument();
@@ -100,8 +100,9 @@ describe('BacktestForm', () => {
       expect(screen.getByText(/optimization method/i)).toBeInTheDocument();
     });
 
-    // Genetic Algorithm is shown as a badge on the collapsed optimization section
-    expect(screen.getByText(/genetic algorithm/i)).toBeInTheDocument();
+    // Genetic Algorithm is mentioned in the Strategy section and shown as a badge on optimization
+    const gaElements = screen.getAllByText(/genetic algorithm/i);
+    expect(gaElements.length).toBeGreaterThan(0);
   });
 
   test('can expand optimization section to see settings', async () => {
@@ -320,20 +321,20 @@ describe('BacktestForm', () => {
     });
   });
 
-  test('order routing section is present in Strategy accordion', async () => {
+  test('strategy section is present with market making info', async () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
       expect(screen.getByText(/portfolio assets/i)).toBeInTheDocument();
     });
 
-    // Check that strategy & routing section exists
-    expect(screen.getByText(/strategy & order routing/i)).toBeInTheDocument();
-    // Check routing mode options
-    expect(screen.getByText(/order routing mode/i)).toBeInTheDocument();
+    // Check that strategy section exists
+    expect(screen.getByText(/^strategy$/i)).toBeInTheDocument();
+    // Check market making strategy info is shown
+    expect(screen.getByText(/avellaneda-stoikov/i)).toBeInTheDocument();
   });
 
-  test('adding assets updates routing info', async () => {
+  test('adding assets updates active exchanges display', async () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
@@ -348,7 +349,7 @@ describe('BacktestForm', () => {
       expect(screen.getByText(/1.*asset.*configured/i)).toBeInTheDocument();
     });
 
-    // The routing info should be updated - check it shows exchanges
-    expect(screen.getByText(/orders will be routed to/i)).toBeInTheDocument();
+    // The active exchanges display should show the exchange
+    expect(screen.getByText(/active exchanges/i)).toBeInTheDocument();
   });
 });
