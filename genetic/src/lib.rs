@@ -20,6 +20,9 @@ use once_cell::sync::Lazy;
 
 pub mod chromosome;
 
+/// Portfolio-level genetic algorithm optimization
+pub mod portfolio;
+
 /// Regime-aware Monte Carlo simulation for robust backtesting
 pub mod regime_mc;
 
@@ -28,6 +31,12 @@ pub mod hmm_regime;
 
 /// Adaptive sampling and optimization utilities
 pub mod adaptive_sampling;
+
+pub use portfolio::{
+    PortfolioGAOptimizer, PortfolioFitnessConfig, PortfolioOptimizationResult,
+    SymbolOptimizationResult, SharedParams, PerSymbolParams,
+    AllocationChromosome, AllocationChromosomeFactory,
+};
 
 pub use regime_mc::{
     RegimeMCConfig, RegimeMCResult, RegimeAwareMC, RegimeInfo,

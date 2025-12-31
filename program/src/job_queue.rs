@@ -731,6 +731,32 @@ pub struct SymbolResult {
     pub profit_factor: f64,
     pub total_trades: usize,
     pub allocation_weight: f64,
+    
+    // Per-symbol position tracking
+    /// Starting cash allocation for this symbol
+    #[serde(default)]
+    pub starting_capital: Option<f64>,
+    /// Ending cash for this symbol
+    #[serde(default)]
+    pub ending_capital: Option<f64>,
+    /// Starting inventory quantity (in base asset units, e.g., BTC)
+    #[serde(default)]
+    pub starting_inventory: Option<f64>,
+    /// Ending inventory quantity
+    #[serde(default)]
+    pub ending_inventory: Option<f64>,
+    /// Starting inventory value in quote currency (e.g., USD)
+    #[serde(default)]
+    pub starting_inventory_value: Option<f64>,
+    /// Ending inventory value in quote currency
+    #[serde(default)]
+    pub ending_inventory_value: Option<f64>,
+    /// Starting mark price used for valuation
+    #[serde(default)]
+    pub starting_mark_price: Option<f64>,
+    /// Ending mark price used for valuation
+    #[serde(default)]
+    pub ending_mark_price: Option<f64>,
 }
 
 /// Correlation pair for portfolio analysis

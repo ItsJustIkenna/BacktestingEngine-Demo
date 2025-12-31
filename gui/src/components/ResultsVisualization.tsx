@@ -126,6 +126,15 @@ interface SymbolResult {
   profit_factor: number;
   total_trades: number;
   allocation_weight: number;
+  // Per-symbol position tracking
+  starting_capital?: number;
+  ending_capital?: number;
+  starting_inventory?: number;
+  ending_inventory?: number;
+  starting_inventory_value?: number;
+  ending_inventory_value?: number;
+  starting_mark_price?: number;
+  ending_mark_price?: number;
 }
 
 interface CorrelationPair {
@@ -313,6 +322,14 @@ const formatLargeNumber = (value: number): string => {
     return `${(value / 1_000).toFixed(2)}K`;
   }
   return value.toFixed(2);
+};
+
+// Helper function to format currency with full dollar amounts (e.g., $10,000 instead of $10.00K)
+const formatCurrency = (value: number | undefined | null, decimals: number = 2): string => {
+  if (value === undefined || value === null || isNaN(value)) {
+    return 'N/A';
+  }
+  return value.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 };
 
 export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({ 
@@ -1692,6 +1709,114 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
               })}
             </div>
           </div>
+
+          {/* ==================== PER-SYMBOL POSITIONS ==================== */}
+          {symbolResults.some((sr: SymbolResult) => sr.starting_capital !== undefined || sr.ending_capital !== undefined) && (
+            <div style={{
+              backgroundColor: 'white',
+              borderRadius: '12px',
+              padding: '24px',
+              marginBottom: '24px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.08)'
+            }}>
+              <h3 style={{ margin: '0 0 20px 0', color: '#333', fontSize: '18px' }}>
+                💰 Per-Symbol Position Tracking
+              </h3>
+              
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ 
+                  width: '100%', 
+                  borderCollapse: 'collapse',
+                  fontSize: '13px'
+                }}>
+                  <thead>
+                    <tr style={{ backgroundColor: '#f8f9fa' }}>
+                      <th style={{ padding: '12px 8px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>Symbol</th>
+                      <th style={{ padding: '12px 8px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>Start Cash</th>
+                      <th style={{ padding: '12px 8px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>Start Inv</th>
+                      <th style={{ padding: '12px 8px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>Start Inv Value</th>
+                      <th style={{ padding: '12px 8px', textAlign: 'center', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>→</th>
+                      <th style={{ padding: '12px 8px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>End Cash</th>
+                      <th style={{ padding: '12px 8px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>End Inv</th>
+                      <th style={{ padding: '12px 8px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>End Inv Value</th>
+                      <th style={{ padding: '12px 8px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>P&L</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {symbolResults.map((sr: SymbolResult, idx: number) => {
+                      const baseAsset = sr.symbol?.split('/')[0] ?? 'Asset';
+                      const isProfitable = (sr.total_pnl ?? 0) >= 0;
+                      return (
+                        <tr key={sr.symbol} style={{ backgroundColor: idx % 2 === 0 ? 'white' : '#f8f9fa' }}>
+                          <td style={{ padding: '10px 8px', borderBottom: '1px solid #dee2e6', fontWeight: 600 }}>
+                            {sr.symbol}
+                            {sr.exchange && <span style={{ color: '#6c757d', fontSize: '11px', marginLeft: '4px' }}>@{sr.exchange}</span>}
+                          </td>
+                          <td style={{ padding: '10px 8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>
+                            ${formatCurrency(sr.starting_capital ?? 0)}
+                          </td>
+                          <td style={{ padding: '10px 8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>
+                            {safeToFixed(sr.starting_inventory ?? 0, 6)} {baseAsset}
+                          </td>
+                          <td style={{ padding: '10px 8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>
+                            ${formatCurrency(sr.starting_inventory_value ?? 0)}
+                          </td>
+                          <td style={{ padding: '10px 8px', textAlign: 'center', borderBottom: '1px solid #dee2e6', color: '#6c757d' }}>
+                            →
+                          </td>
+                          <td style={{ padding: '10px 8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>
+                            ${formatCurrency(sr.ending_capital ?? 0)}
+                          </td>
+                          <td style={{ padding: '10px 8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>
+                            {safeToFixed(sr.ending_inventory ?? 0, 6)} {baseAsset}
+                          </td>
+                          <td style={{ padding: '10px 8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>
+                            ${formatCurrency(sr.ending_inventory_value ?? 0)}
+                          </td>
+                          <td style={{ 
+                            padding: '10px 8px', 
+                            textAlign: 'right', 
+                            borderBottom: '1px solid #dee2e6',
+                            fontWeight: 600,
+                            color: isProfitable ? '#28a745' : '#dc3545'
+                          }}>
+                            {isProfitable ? '+' : ''}${formatCurrency(sr.total_pnl ?? 0)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {/* Totals Row */}
+                    <tr style={{ backgroundColor: '#e9ecef', fontWeight: 600 }}>
+                      <td style={{ padding: '12px 8px', borderTop: '2px solid #dee2e6' }}>TOTAL</td>
+                      <td style={{ padding: '12px 8px', textAlign: 'right', borderTop: '2px solid #dee2e6' }}>
+                        ${formatCurrency(symbolResults.reduce((sum: number, sr: SymbolResult) => sum + (sr.starting_capital ?? 0), 0))}
+                      </td>
+                      <td style={{ padding: '12px 8px', textAlign: 'right', borderTop: '2px solid #dee2e6', color: '#6c757d' }}>—</td>
+                      <td style={{ padding: '12px 8px', textAlign: 'right', borderTop: '2px solid #dee2e6' }}>
+                        ${formatCurrency(symbolResults.reduce((sum: number, sr: SymbolResult) => sum + (sr.starting_inventory_value ?? 0), 0))}
+                      </td>
+                      <td style={{ padding: '12px 8px', textAlign: 'center', borderTop: '2px solid #dee2e6' }}>→</td>
+                      <td style={{ padding: '12px 8px', textAlign: 'right', borderTop: '2px solid #dee2e6' }}>
+                        ${formatCurrency(symbolResults.reduce((sum: number, sr: SymbolResult) => sum + (sr.ending_capital ?? 0), 0))}
+                      </td>
+                      <td style={{ padding: '12px 8px', textAlign: 'right', borderTop: '2px solid #dee2e6', color: '#6c757d' }}>—</td>
+                      <td style={{ padding: '12px 8px', textAlign: 'right', borderTop: '2px solid #dee2e6' }}>
+                        ${formatCurrency(symbolResults.reduce((sum: number, sr: SymbolResult) => sum + (sr.ending_inventory_value ?? 0), 0))}
+                      </td>
+                      <td style={{ 
+                        padding: '12px 8px', 
+                        textAlign: 'right', 
+                        borderTop: '2px solid #dee2e6',
+                        color: totalPnL >= 0 ? '#28a745' : '#dc3545'
+                      }}>
+                        {totalPnL >= 0 ? '+' : ''}${formatCurrency(totalPnL)}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {/* ==================== CORRELATION MATRIX ==================== */}
           {correlationMatrix.length > 0 && (
@@ -3292,24 +3417,24 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                   <h5 style={{ margin: '0 0 10px', color: '#495057' }}>📊 Starting Position</h5>
                   <div style={{ fontSize: '14px', lineHeight: '1.8' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: '#6c757d' }}>Capital (Cash):</span>
-                      <span style={{ fontWeight: 600 }}>${formatLargeNumber(result.inventory_metrics.starting_capital ?? 0)}</span>
+                      <span style={{ color: '#6c757d' }}>Cash:</span>
+                      <span style={{ fontWeight: 600 }}>${formatCurrency(result.inventory_metrics.starting_capital ?? 0)}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: '#6c757d' }}>Inventory Qty:</span>
+                      <span style={{ color: '#6c757d' }}>Inventory ({result.symbol?.split('/')[0] ?? 'Asset'}):</span>
                       <span style={{ fontWeight: 600 }}>{safeToFixed(result.inventory_metrics.starting_inventory ?? 0, 6)}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                       <span style={{ color: '#6c757d' }}>Inventory Value:</span>
-                      <span style={{ fontWeight: 600 }}>${formatLargeNumber(result.inventory_metrics.starting_inventory_value ?? 0)}</span>
+                      <span style={{ fontWeight: 600 }}>${formatCurrency(result.inventory_metrics.starting_inventory_value ?? 0)}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                       <span style={{ color: '#6c757d' }}>Mark Price:</span>
-                      <span style={{ fontWeight: 600 }}>${safeToFixed(result.inventory_metrics.starting_mark_price ?? 0, 4)}</span>
+                      <span style={{ fontWeight: 600 }}>${formatCurrency(result.inventory_metrics.starting_mark_price ?? 0, 4)}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #dee2e6', paddingTop: '5px', marginTop: '5px' }}>
                       <span style={{ color: '#495057', fontWeight: 600 }}>Total Equity:</span>
-                      <span style={{ fontWeight: 700, color: '#007bff' }}>${formatLargeNumber(result.inventory_metrics.starting_capital ?? 0)}</span>
+                      <span style={{ fontWeight: 700, color: '#007bff' }}>${formatCurrency((result.inventory_metrics.starting_capital ?? 0) + (result.inventory_metrics.starting_inventory_value ?? 0))}</span>
                     </div>
                   </div>
                 </div>
@@ -3324,27 +3449,25 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                   <h5 style={{ margin: '0 0 10px', color: '#495057' }}>📊 Ending Position</h5>
                   <div style={{ fontSize: '14px', lineHeight: '1.8' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: '#6c757d' }}>Capital (Cash):</span>
-                      <span style={{ fontWeight: 600 }}>${formatLargeNumber(result.inventory_metrics.ending_capital ?? 0)}</span>
+                      <span style={{ color: '#6c757d' }}>Cash:</span>
+                      <span style={{ fontWeight: 600 }}>${formatCurrency(result.inventory_metrics.ending_capital ?? 0)}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: '#6c757d' }}>Inventory Qty:</span>
+                      <span style={{ color: '#6c757d' }}>Inventory ({result.symbol?.split('/')[0] ?? 'Asset'}):</span>
                       <span style={{ fontWeight: 600 }}>{safeToFixed(result.inventory_metrics.ending_inventory ?? 0, 6)}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                       <span style={{ color: '#6c757d' }}>Inventory Value:</span>
-                      <span style={{ fontWeight: 600, color: (result.inventory_metrics.ending_inventory_value ?? 0) > 0 ? '#28a745' : (result.inventory_metrics.ending_inventory_value ?? 0) < 0 ? '#dc3545' : '#6c757d' }}>
-                        ${formatLargeNumber(result.inventory_metrics.ending_inventory_value ?? 0)}
-                      </span>
+                      <span style={{ fontWeight: 600 }}>${formatCurrency(result.inventory_metrics.ending_inventory_value ?? 0)}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                       <span style={{ color: '#6c757d' }}>Mark Price:</span>
-                      <span style={{ fontWeight: 600 }}>${safeToFixed(result.inventory_metrics.ending_mark_price ?? 0, 4)}</span>
+                      <span style={{ fontWeight: 600 }}>${formatCurrency(result.inventory_metrics.ending_mark_price ?? 0, 4)}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #dee2e6', paddingTop: '5px', marginTop: '5px' }}>
                       <span style={{ color: '#495057', fontWeight: 600 }}>Final Equity:</span>
                       <span style={{ fontWeight: 700, color: (result.inventory_metrics.final_equity ?? 0) >= (result.inventory_metrics.starting_capital ?? 0) ? '#28a745' : '#dc3545' }}>
-                        ${formatLargeNumber(result.inventory_metrics.final_equity ?? 0)}
+                        ${formatCurrency(result.inventory_metrics.final_equity ?? 0)}
                       </span>
                     </div>
                   </div>
@@ -3361,7 +3484,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
               }}>
                 <span style={{ fontSize: '14px', color: '#6c757d' }}>Net P&L (After All Fees): </span>
                 <span style={{ fontSize: '18px', fontWeight: 700, color: (result.total_pnl ?? 0) >= 0 ? '#28a745' : '#dc3545' }}>
-                  {(result.total_pnl ?? 0) >= 0 ? '+' : ''}${formatLargeNumber(result.total_pnl ?? 0)}
+                  {(result.total_pnl ?? 0) >= 0 ? '+' : ''}${formatCurrency(result.total_pnl ?? 0)}
                 </span>
                 <span style={{ fontSize: '14px', color: '#6c757d', marginLeft: '10px' }}>
                   ({safeToFixed(((result.inventory_metrics.final_equity ?? 0) / (result.inventory_metrics.starting_capital ?? 1) - 1) * 100, 2)}%)

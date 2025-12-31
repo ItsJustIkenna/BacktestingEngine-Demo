@@ -163,7 +163,21 @@ impl PostgresQueue {
         };
         
         // Deserialize params from JSON - no fallback to hardcoded values
-        let params: BacktestJobParams = serde_json::from_value(record.params_json)?;
+        let mut params: BacktestJobParams = serde_json::from_value(record.params_json)?;
+        
+        // Override params dates with database column values if params dates are missing
+        // This handles cases where get_date_range_for_symbol failed during job submission
+        // but the dates were stored in the dedicated columns
+        if params.start_date.is_none() {
+            if let Some(ref start) = record.start_date {
+                params.start_date = Some(start.to_rfc3339());
+            }
+        }
+        if params.end_date.is_none() {
+            if let Some(ref end) = record.end_date {
+                params.end_date = Some(end.to_rfc3339());
+            }
+        }
         
         Ok(BacktestJob {
             id: record.job_id,
@@ -1041,6 +1055,15 @@ impl JobQueue for PostgresQueue {
                                             profit_factor: sr.get("profit_factor").and_then(|x| x.as_f64()).unwrap_or(0.0),
                                             total_trades: sr.get("total_trades")?.as_u64()? as usize,
                                             allocation_weight: sr.get("allocation_weight")?.as_f64()?,
+                                            // Per-symbol position tracking
+                                            starting_capital: sr.get("starting_capital").and_then(|x| x.as_f64()),
+                                            ending_capital: sr.get("ending_capital").and_then(|x| x.as_f64()),
+                                            starting_inventory: sr.get("starting_inventory").and_then(|x| x.as_f64()),
+                                            ending_inventory: sr.get("ending_inventory").and_then(|x| x.as_f64()),
+                                            starting_inventory_value: sr.get("starting_inventory_value").and_then(|x| x.as_f64()),
+                                            ending_inventory_value: sr.get("ending_inventory_value").and_then(|x| x.as_f64()),
+                                            starting_mark_price: sr.get("starting_mark_price").and_then(|x| x.as_f64()),
+                                            ending_mark_price: sr.get("ending_mark_price").and_then(|x| x.as_f64()),
                                         })
                                     }).collect())
                                     .unwrap_or_default(),
@@ -1283,6 +1306,25 @@ impl PostgresQueue {
                 .and_then(|v| v.as_i64())
                 .map(|v| v as i32);
             
+            // Extract portfolio_assets from params_json if present
+            let portfolio_assets: Option<Vec<crate::api::history::PortfolioAssetSummary>> = 
+                job.params_json.get("portfolio_assets")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|asset| {
+                                let symbol = asset.get("symbol")?.as_str()?;
+                                let exchange = asset.get("exchange")?.as_str()?;
+                                let weight = asset.get("weight").and_then(|w| w.as_f64());
+                                Some(crate::api::history::PortfolioAssetSummary {
+                                    symbol: symbol.to_string(),
+                                    exchange: exchange.to_string(),
+                                    weight,
+                                })
+                            })
+                            .collect()
+                    });
+            
             let mut summary = crate::api::history::BacktestSummary {
                 job_id: job.job_id.clone(),
                 symbol: job.symbol,
@@ -1292,6 +1334,7 @@ impl PostgresQueue {
                 created_at: job.created_at.to_rfc3339(),
                 started_at: job.started_at.map(|dt| dt.to_rfc3339()),
                 completed_at: job.completed_at.map(|dt| dt.to_rfc3339()),
+                portfolio_assets,
                 current_phase: job.current_phase.unwrap_or_else(|| "initializing".to_string()),
                 phase_details,
                 current_generation,

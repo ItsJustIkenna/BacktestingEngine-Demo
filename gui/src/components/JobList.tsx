@@ -1,9 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
+interface PortfolioAsset {
+  symbol: string;
+  exchange: string;
+  weight?: number;
+}
+
 interface BacktestJob {
   job_id: string;
   symbol: string;
   exchange: string;
+  portfolio_assets?: PortfolioAsset[];
   status: string;
   progress: number;
   created_at: string;
@@ -558,12 +565,37 @@ export const JobList: React.FC<JobListProps> = ({
                     
                     {/* Symbol & Exchange */}
                     <div>
-                      <div style={{ fontWeight: 700, fontSize: '16px', color: '#333' }}>
-                        {job.symbol}
-                      </div>
-                      <div style={{ fontSize: '12px', color: '#666' }}>
-                        {job.exchange}
-                      </div>
+                      {job.portfolio_assets && job.portfolio_assets.length > 1 ? (
+                        <>
+                          <div style={{ fontWeight: 700, fontSize: '16px', color: '#333' }}>
+                            📊 Portfolio ({job.portfolio_assets.length} assets)
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#666', display: 'flex', flexWrap: 'wrap', gap: '4px', maxWidth: '300px' }}>
+                            {job.portfolio_assets.map((asset, idx) => (
+                              <span key={idx} style={{ 
+                                backgroundColor: '#f0f0f0', 
+                                padding: '2px 6px', 
+                                borderRadius: '4px',
+                                whiteSpace: 'nowrap'
+                              }}>
+                                {asset.symbol}
+                                <span style={{ color: '#999', fontSize: '10px', marginLeft: '2px' }}>
+                                  @{asset.exchange}
+                                </span>
+                              </span>
+                            ))}
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ fontWeight: 700, fontSize: '16px', color: '#333' }}>
+                            {job.symbol}
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#666' }}>
+                            {job.exchange}
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                   

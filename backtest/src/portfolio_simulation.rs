@@ -27,10 +27,22 @@ pub struct SymbolResult {
     pub total_fees: f64,
     pub allocation_weight: f64,
     pub allocated_capital: f64,
+    // Starting position
+    pub starting_inventory: f64,
+    pub starting_inventory_value: f64,
+    pub starting_capital: f64,
+    pub starting_mark_price: f64,
+    // Ending position
     pub ending_inventory: f64,
     pub ending_inventory_value: f64,
     pub ending_capital: f64,
+    pub ending_mark_price: f64,
     pub final_equity: f64,
+    // Execution metrics
+    pub orders_placed: usize,
+    pub orders_filled: usize,
+    pub fill_rate: f64,
+    pub avg_time_in_trade_ms: f64,
 }
 
 /// Portfolio-level aggregated result
@@ -65,6 +77,12 @@ pub struct PortfolioSimResult {
     
     /// Correlation matrix between symbols
     pub correlation_matrix: Option<Vec<CorrelationPair>>,
+    
+    /// Aggregated execution metrics
+    pub total_orders_placed: usize,
+    pub total_orders_filled: usize,
+    pub avg_fill_rate: f64,
+    pub avg_time_in_trade_ms: f64,
 }
 
 /// Correlation between two symbols
@@ -155,10 +173,27 @@ impl PortfolioSimulator {
                     total_fees: result.total_fees,
                     allocation_weight: weight,
                     allocated_capital,
+                    // Starting position
+                    starting_inventory: result.inventory_metrics.starting_inventory,
+                    starting_inventory_value: result.inventory_metrics.starting_inventory_value,
+                    starting_capital: result.inventory_metrics.starting_capital,
+                    starting_mark_price: result.inventory_metrics.starting_mark_price,
+                    // Ending position
                     ending_inventory: result.inventory_metrics.ending_inventory,
                     ending_inventory_value: result.inventory_metrics.ending_inventory_value,
                     ending_capital: result.inventory_metrics.ending_capital,
+                    ending_mark_price: result.inventory_metrics.ending_mark_price,
                     final_equity: result.inventory_metrics.final_equity,
+                    // Execution metrics - derive from fill rate
+                    // We estimate orders_placed based on num_trades and fill_rate
+                    orders_placed: if result.avg_fill_rate > 0.0 {
+                        (result.num_trades as f64 / result.avg_fill_rate).round() as usize
+                    } else {
+                        result.num_trades
+                    },
+                    orders_filled: result.num_trades,
+                    fill_rate: result.avg_fill_rate,
+                    avg_time_in_trade_ms: result.avg_time_in_trade_ms,
                 });
             }
         }
@@ -208,6 +243,23 @@ impl PortfolioSimulator {
         // Calculate correlation matrix between symbol returns
         let correlation_matrix = self.calculate_correlation_matrix(&symbol_results, &all_equity_curves);
         
+        // Aggregate execution metrics
+        let total_orders_placed: usize = symbol_results.iter().map(|r| r.orders_placed).sum();
+        let total_orders_filled: usize = symbol_results.iter().map(|r| r.orders_filled).sum();
+        let avg_fill_rate = if total_orders_placed > 0 {
+            total_orders_filled as f64 / total_orders_placed as f64
+        } else {
+            0.0
+        };
+        // Weighted average of time in trade (weighted by number of trades)
+        let avg_time_in_trade_ms = if total_trades > 0 {
+            symbol_results.iter()
+                .map(|r| r.avg_time_in_trade_ms * r.num_trades as f64)
+                .sum::<f64>() / total_trades as f64
+        } else {
+            0.0
+        };
+        
         PortfolioSimResult {
             symbol_results,
             total_pnl,
@@ -224,6 +276,10 @@ impl PortfolioSimulator {
             initial_capital: self.initial_capital,
             final_equity,
             correlation_matrix: Some(correlation_matrix),
+            total_orders_placed,
+            total_orders_filled,
+            avg_fill_rate,
+            avg_time_in_trade_ms,
         }
     }
     
@@ -398,6 +454,10 @@ impl PortfolioSimulator {
             initial_capital: self.initial_capital,
             final_equity: self.initial_capital,
             correlation_matrix: None,
+            total_orders_placed: 0,
+            total_orders_filled: 0,
+            avg_fill_rate: 0.0,
+            avg_time_in_trade_ms: 0.0,
         }
     }
 }

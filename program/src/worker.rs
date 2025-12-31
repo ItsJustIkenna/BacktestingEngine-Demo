@@ -536,7 +536,18 @@ impl Worker {
             );
             log_info!(MAIN_LOGGER, "🏦 Starting portfolio backtest for job {} with {} symbols", 
                 job.id, job.params.all_symbols().len());
-            self.execute_portfolio_backtest(&job).await
+            
+            // Route portfolio backtests through GA optimization
+            match job.params.optimization_method.as_str() {
+                "genetic" => {
+                    log_info!(MAIN_LOGGER, "🧬 Portfolio GA optimization for job {}", job.id);
+                    self.execute_portfolio_backtest_with_ga(&job).await
+                }
+                _ => {
+                    // Non-GA portfolio backtest (use default params)
+                    self.execute_portfolio_backtest(&job).await
+                }
+            }
         } else {
             // Single-symbol backtest - use existing logic
             match job.params.optimization_method.as_str() {
@@ -1177,6 +1188,15 @@ impl Worker {
                     profit_factor: r.profit_factor,
                     total_trades: r.num_trades,
                     allocation_weight: r.allocation_weight,
+                    // Per-symbol position tracking
+                    starting_capital: Some(r.starting_capital),
+                    ending_capital: Some(r.ending_capital),
+                    starting_inventory: Some(r.starting_inventory),
+                    ending_inventory: Some(r.ending_inventory),
+                    starting_inventory_value: Some(r.starting_inventory_value),
+                    ending_inventory_value: Some(r.ending_inventory_value),
+                    starting_mark_price: Some(r.starting_mark_price),
+                    ending_mark_price: Some(r.ending_mark_price),
                 }
             }).collect(),
             correlation_matrix: portfolio_result.correlation_matrix.as_ref().map(|corrs| {
@@ -1319,13 +1339,14 @@ impl Worker {
             avg_trade_return,
             best_trade,
             worst_trade,
-            avg_time_in_trade: None, // Not tracked in portfolio mode yet
+            avg_time_in_trade: Some(portfolio_result.avg_time_in_trade_ms / 1000.0), // Convert ms to seconds
             value_at_risk_95,
             expected_shortfall_95,
-            // Execution metrics
-            total_orders: Some(portfolio_result.total_trades as i32),
-            filled_orders: Some(portfolio_result.total_trades as i32),
-            cancelled_orders: Some(0),
+            // Execution metrics - use actual tracked values
+            total_orders: Some(portfolio_result.total_orders_placed as i32),
+            filled_orders: Some(portfolio_result.total_orders_filled as i32),
+            cancelled_orders: Some((portfolio_result.total_orders_placed - portfolio_result.total_orders_filled) as i32),
+            avg_slippage: None,
             total_commission_paid: Some(portfolio_result.total_fees),
             // Portfolio specific
             is_portfolio: true,
@@ -1342,6 +1363,666 @@ impl Worker {
             end_date: job.params.end_date.clone(),
             ..Default::default()
         };
+        
+        Ok(backtest_result)
+    }
+    
+    /// Execute portfolio backtest with GA optimization
+    /// 
+    /// Phase 1: Per-symbol GA optimization (parallel)
+    /// Phase 2: Allocation weight optimization  
+    /// Phase 3: Final portfolio simulation with optimized params
+    async fn execute_portfolio_backtest_with_ga(
+        &self,
+        job: &BacktestJob,
+    ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
+        use genetic::{
+            PortfolioGAOptimizer, PortfolioFitnessConfig, 
+            GeneticOptimizer, FitnessResult, AsyncFitnessFn,
+        };
+        use genetic::chromosome::AvellanedaStoikovChromosome;
+        use backtest::portfolio_simulation::PortfolioSimulator;
+        use backtest::realistic_simulation::RealisticASParams;
+        use config::GeneticConfig;
+        
+        let params = &job.params;
+        let symbol_exchange_pairs = params.all_symbol_exchange_pairs();
+        let num_symbols = symbol_exchange_pairs.len();
+        
+        log_info!(MAIN_LOGGER, "🧬 [{}] Portfolio GA: Starting optimization for {} symbols", 
+            job.id, num_symbols);
+        
+        // Update phase
+        let _ = self.job_queue.update_phase(&job.id, "portfolio_ga_loading", serde_json::json!({
+            "phase": "data_loading",
+            "symbols": num_symbols,
+        })).await;
+        
+        // ========== PHASE 0: Load market data for all symbols ==========
+        let mut symbol_data: std::collections::HashMap<String, Vec<dataloader::MarketData>> = std::collections::HashMap::new();
+        let mut symbol_events: std::collections::HashMap<String, Vec<backtest::realistic_simulation::OrderBookEvent>> = std::collections::HashMap::new();
+        
+        for (idx, (symbol, exchange, _weight)) in symbol_exchange_pairs.iter().enumerate() {
+            let asset_key = crate::job_queue::BacktestJobParams::asset_key(symbol, exchange);
+            let _ = self.job_queue.update_progress(&job.id, 5.0 + (idx as f64 * 10.0 / num_symbols as f64)).await;
+            
+            log_info!(MAIN_LOGGER, "📊 [{}] Loading data for {}", job.id, asset_key);
+            
+            match self.load_market_data_for_strategy(symbol, exchange, &params.strategy_type).await {
+                Ok(data) => {
+                    if data.is_empty() {
+                        log_warn!(MAIN_LOGGER, "[{}] No data for {}, skipping", job.id, asset_key);
+                        continue;
+                    }
+                    let events = backtest::ticks_to_trade_events(&data);
+                    log_info!(MAIN_LOGGER, "[{}] Loaded {} events for {}", job.id, events.len(), asset_key);
+                    symbol_data.insert(asset_key.clone(), data);
+                    symbol_events.insert(asset_key, events);
+                }
+                Err(e) => {
+                    log_error!(MAIN_LOGGER, "[{}] Failed to load {}: {}", job.id, asset_key, e);
+                }
+            }
+        }
+        
+        if symbol_events.is_empty() {
+            return Err("No market data available for any symbol".into());
+        }
+        
+        let symbols: Vec<String> = symbol_events.keys().cloned().collect();
+        let actual_num_symbols = symbols.len();
+        
+        // ========== PHASE 1: Per-symbol GA optimization (parallel) ==========
+        let _ = self.job_queue.update_phase(&job.id, "portfolio_ga_symbol_optimization", serde_json::json!({
+            "phase": "per_symbol_ga",
+            "total_symbols": actual_num_symbols,
+        })).await;
+        let _ = self.job_queue.update_progress(&job.id, 15.0).await;
+        
+        log_info!(MAIN_LOGGER, "🧬 [{}] Phase 1: Starting parallel per-symbol GA optimization", job.id);
+        
+        // GA config for per-symbol optimization
+        let ga_config = GeneticConfig {
+            population_size: params.population_size,
+            generations: params.generations,
+            mutation_rate: 0.1,
+            crossover_rate: 0.7,
+            ..Default::default()
+        };
+        
+        // Create fitness config
+        let fitness_config = PortfolioFitnessConfig::default();
+        
+        // Create portfolio optimizer
+        let portfolio_optimizer = PortfolioGAOptimizer::new(
+            ga_config.clone(),
+            fitness_config.clone(),
+            job.id.clone(),
+        );
+        
+        // Create fitness function factory for each symbol
+        let symbol_data_arc = std::sync::Arc::new(symbol_data.clone());
+        let initial_capital = params.initial_capital;
+        let commission_rate = params.commission_rate;
+        let exchange = params.exchange.clone();
+        
+        // Run parallel per-symbol optimization
+        let symbol_results = {
+            use tokio::task::JoinSet;
+            
+            let mut join_set: JoinSet<Result<genetic::SymbolOptimizationResult, Box<dyn std::error::Error + Send + Sync>>> = JoinSet::new();
+            
+            for asset_key in symbols.iter() {
+                let asset_key = asset_key.clone();
+                let symbol_data_arc = std::sync::Arc::clone(&symbol_data_arc);
+                let ga_config = ga_config.clone();
+                let job_id = job.id.clone();
+                let exchange = exchange.clone();
+                
+                join_set.spawn(async move {
+                    let data = symbol_data_arc.get(&asset_key)
+                        .ok_or_else(|| format!("No data for {}", asset_key))?;
+                    
+                    // Convert to events
+                    let events = backtest::ticks_to_trade_events(data);
+                    let events_arc = std::sync::Arc::new(events);
+                    
+                    // Pre-compute market features for fast simulation
+                    let market_features = std::sync::Arc::new(
+                        backtest::fast_simulation::MarketFeatures::from_market_data(data)
+                    );
+                    
+                    eprintln!("🧬 [{}] GA for {} with {} events", job_id, asset_key, events_arc.len());
+                    
+                    // Create fitness function for this symbol
+                    let fitness_fn: AsyncFitnessFn<AvellanedaStoikovChromosome> = {
+                        let features = std::sync::Arc::clone(&market_features);
+                        let asset_key = asset_key.clone();
+                        
+                        std::sync::Arc::new(move |chr: &AvellanedaStoikovChromosome| {
+                            let features = std::sync::Arc::clone(&features);
+                            let chr = chr.clone();
+                            
+                            Box::pin(async move {
+                                // Use fast simulation for GA fitness
+                                let fast_params = backtest::fast_simulation::FastASParams {
+                                    risk_aversion: chr.risk_aversion,
+                                    inventory_target: chr.inventory_target,
+                                    order_size_pct: chr.order_size_pct,
+                                    volatility_cap: chr.volatility_cap,
+                                    min_spread_bps: chr.min_spread_bps,
+                                    time_horizon_minutes: chr.time_horizon_minutes,
+                                    fee_rate: commission_rate,
+                                };
+                                
+                                let simulator = backtest::fast_simulation::FastSimulator::new(
+                                    &features,
+                                    initial_capital,
+                                );
+                                let sim_result = simulator.evaluate(&fast_params);
+                                
+                                // Calculate fitness
+                                let sharpe = sim_result.sharpe_ratio;
+                                let profit_factor = sim_result.profit_factor;
+                                let drawdown_penalty = if sim_result.max_drawdown > 0.25 { -0.5 } else { 0.0 };
+                                let trade_penalty = if sim_result.num_trades < 30 { -0.3 } else { 0.0 };
+                                
+                                let fitness = sharpe * 0.4 
+                                    + (sim_result.total_pnl / initial_capital) * 0.3 
+                                    + (profit_factor - 1.0).min(1.0) * 0.2
+                                    + (sim_result.win_rate - 0.5) * 0.1
+                                    + drawdown_penalty
+                                    + trade_penalty;
+                                
+                                FitnessResult::with_metrics(
+                                    fitness,
+                                    sim_result.equity_curve,
+                                    sim_result.total_pnl,
+                                    sim_result.sharpe_ratio,
+                                    sim_result.num_trades as i32,
+                                    sim_result.max_drawdown,
+                                    sim_result.win_rate,
+                                    sim_result.profit_factor,
+                                )
+                            })
+                        })
+                    };
+                    
+                    // Run GA for this symbol
+                    let optimizer = GeneticOptimizer::<AvellanedaStoikovChromosome> {
+                        config: ga_config,
+                        fitness_fn,
+                        progress_callback: None,
+                        job_id: Some(format!("{}-{}", job_id, asset_key)),
+                    };
+                    
+                    let (best_chromosome, best_fitness) = optimizer.run().await;
+                    
+                    // Get final metrics
+                    let final_result = (optimizer.fitness_fn)(&best_chromosome).await;
+                    
+                    eprintln!("✅ [{}] {} complete: fitness={:.4}, sharpe={:.3}, pnl=${:.2}", 
+                        job_id, asset_key, best_fitness, final_result.sharpe_ratio, final_result.net_pnl);
+                    
+                    Ok(genetic::SymbolOptimizationResult {
+                        asset_key,
+                        chromosome: best_chromosome,
+                        fitness: best_fitness,
+                        sharpe_ratio: final_result.sharpe_ratio,
+                        net_pnl: final_result.net_pnl,
+                        num_trades: final_result.num_trades,
+                        max_drawdown: final_result.max_drawdown,
+                    })
+                });
+            }
+            
+            // Collect results
+            let mut results = Vec::with_capacity(actual_num_symbols);
+            while let Some(result) = join_set.join_next().await {
+                match result {
+                    Ok(Ok(opt_result)) => results.push(opt_result),
+                    Ok(Err(e)) => {
+                        log_error!(MAIN_LOGGER, "[{}] Symbol optimization error: {}", job.id, e);
+                        return Err(e);
+                    }
+                    Err(e) => {
+                        log_error!(MAIN_LOGGER, "[{}] Join error: {}", job.id, e);
+                        return Err(format!("Task join error: {}", e).into());
+                    }
+                }
+            }
+            results
+        };
+        
+        let _ = self.job_queue.update_progress(&job.id, 60.0).await;
+        
+        // Build chromosome map
+        let mut symbol_chromosomes: std::collections::HashMap<String, AvellanedaStoikovChromosome> = 
+            std::collections::HashMap::new();
+        for result in &symbol_results {
+            symbol_chromosomes.insert(result.asset_key.clone(), result.chromosome.clone());
+        }
+        
+        // ========== PHASE 2: Allocation weight optimization ==========
+        let _ = self.job_queue.update_phase(&job.id, "portfolio_ga_weight_optimization", serde_json::json!({
+            "phase": "weight_optimization",
+            "symbols": actual_num_symbols,
+        })).await;
+        
+        log_info!(MAIN_LOGGER, "🧬 [{}] Phase 2: Optimizing allocation weights", job.id);
+        
+        // Get exchange fee config
+        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&params.exchange);
+        
+        // Run weight optimization GA
+        let optimized_weights = {
+            use genetic::AllocationChromosomeFactory;
+            use rand::prelude::*;
+            
+            let factory = AllocationChromosomeFactory::new(actual_num_symbols);
+            let mut rng = rand::rngs::StdRng::from_entropy();
+            
+            let weight_pop_size = 30;
+            let weight_generations = 15;
+            
+            let mut population: Vec<genetic::AllocationChromosome> = (0..weight_pop_size)
+                .map(|_| factory.random(&mut rng))
+                .collect();
+            
+            let mut best_weights = vec![1.0 / actual_num_symbols as f64; actual_num_symbols];
+            let mut best_fitness = f64::NEG_INFINITY;
+            
+            let symbols_ordered: Vec<String> = symbol_results.iter().map(|r| r.asset_key.clone()).collect();
+            
+            for gen in 0..weight_generations {
+                let mut fitness_results: Vec<(genetic::AllocationChromosome, f64)> = Vec::new();
+                
+                for chr in &population {
+                    let weights = chr.normalized_weights();
+                    
+                    // Run portfolio simulation with these weights and optimized params
+                    let mut symbol_events_for_sim: std::collections::HashMap<String, Vec<backtest::realistic_simulation::OrderBookEvent>> = 
+                        std::collections::HashMap::new();
+                    
+                    for asset_key in &symbols_ordered {
+                        if let Some(data) = symbol_data.get(asset_key) {
+                            symbol_events_for_sim.insert(asset_key.clone(), backtest::ticks_to_trade_events(data));
+                        }
+                    }
+                    
+                    // Build sim params from best chromosome (use first symbol's as base)
+                    let base_chr = symbol_chromosomes.values().next().unwrap();
+                    let sim_params = RealisticASParams {
+                        risk_aversion: base_chr.risk_aversion,
+                        inventory_target: base_chr.inventory_target,
+                        order_size_pct: base_chr.order_size_pct,
+                        initial_inventory_pct: params.initial_inventory_pct,
+                        volatility_cap: base_chr.volatility_cap,
+                        time_horizon_minutes: base_chr.time_horizon_minutes,
+                        min_spread_bps: base_chr.min_spread_bps,
+                        max_inventory_multiple: 1.0,
+                        maker_fee_rate: exchange_fee_config.maker_fee,
+                        taker_fee_rate: exchange_fee_config.taker_fee,
+                        fee_spread_multiplier: base_chr.fee_spread_multiplier,
+                        adverse_selection_sensitivity: base_chr.adverse_selection_sensitivity,
+                        take_profit_pct: base_chr.take_profit_pct,
+                        stop_loss_pct: base_chr.stop_loss_pct,
+                        max_trades_per_minute: base_chr.max_trades_per_minute,
+                        max_orders_per_second: 10.0,
+                        rate_limit_cooldown_ms: 1000,
+                        window_ms: base_chr.window_ms as i64,
+                        min_quote_lifetime_ms: base_chr.min_quote_lifetime_ms as i64,
+                        fill_model: backtest::FillModelType::Realistic,
+                        ..Default::default()
+                    };
+                    
+                    let simulator = PortfolioSimulator::new(initial_capital, exchange_fee_config.clone());
+                    let portfolio_result = simulator.run(
+                        &symbol_events_for_sim,
+                        &sim_params,
+                        Some(&weights),
+                    );
+                    
+                    // Calculate fitness
+                    let fitness = fitness_config.calculate_fitness(
+                        portfolio_result.portfolio_sharpe,
+                        None, // sortino
+                        portfolio_result.total_pnl,
+                        portfolio_result.portfolio_profit_factor,
+                        portfolio_result.portfolio_win_rate,
+                        portfolio_result.portfolio_max_drawdown,
+                        None, // diversification
+                        None, // calmar
+                        portfolio_result.total_trades,
+                        actual_num_symbols,
+                    );
+                    
+                    fitness_results.push((chr.clone(), fitness));
+                }
+                
+                // Sort by fitness
+                fitness_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                
+                // Update best
+                if let Some((best_chr, fitness)) = fitness_results.first() {
+                    if *fitness > best_fitness {
+                        best_fitness = *fitness;
+                        best_weights = best_chr.normalized_weights();
+                        eprintln!("📊 [{}] Weight Gen {}: fitness={:.4}, weights={:?}", 
+                            job.id, gen + 1, best_fitness, best_weights);
+                    }
+                }
+                
+                // Next generation
+                let elite_size = 3;
+                let mut next_pop: Vec<genetic::AllocationChromosome> = fitness_results.iter()
+                    .take(elite_size)
+                    .map(|(chr, _)| chr.clone())
+                    .collect();
+                
+                while next_pop.len() < weight_pop_size {
+                    let idx1 = rng.gen_range(0..fitness_results.len().min(10));
+                    let idx2 = rng.gen_range(0..fitness_results.len().min(10));
+                    let mut child = genetic::Chromosome::crossover(&fitness_results[idx1].0, &fitness_results[idx2].0, &mut rng);
+                    genetic::Chromosome::mutate(&mut child, &mut rng, 0.15);
+                    child.enforce_min_weight(0.05);
+                    next_pop.push(child);
+                }
+                
+                population = next_pop;
+            }
+            
+            best_weights
+        };
+        
+        log_info!(MAIN_LOGGER, "✅ [{}] Optimized weights: {:?}", job.id, optimized_weights);
+        
+        let _ = self.job_queue.update_progress(&job.id, 80.0).await;
+        
+        // ========== PHASE 3: Final portfolio simulation ==========
+        let _ = self.job_queue.update_phase(&job.id, "portfolio_final_simulation", serde_json::json!({
+            "phase": "final_simulation",
+            "optimized_weights": &optimized_weights,
+        })).await;
+        
+        log_info!(MAIN_LOGGER, "🧬 [{}] Phase 3: Final portfolio simulation with optimized params", job.id);
+        
+        // Run final simulation with optimized params and weights
+        let base_chr = symbol_chromosomes.values().next().unwrap();
+        let sim_params = RealisticASParams {
+            risk_aversion: base_chr.risk_aversion,
+            inventory_target: base_chr.inventory_target,
+            order_size_pct: base_chr.order_size_pct,
+            initial_inventory_pct: params.initial_inventory_pct,
+            volatility_cap: base_chr.volatility_cap,
+            time_horizon_minutes: base_chr.time_horizon_minutes,
+            min_spread_bps: base_chr.min_spread_bps,
+            max_inventory_multiple: 1.0,
+            maker_fee_rate: exchange_fee_config.maker_fee,
+            taker_fee_rate: exchange_fee_config.taker_fee,
+            fee_spread_multiplier: base_chr.fee_spread_multiplier,
+            adverse_selection_sensitivity: base_chr.adverse_selection_sensitivity,
+            take_profit_pct: base_chr.take_profit_pct,
+            stop_loss_pct: base_chr.stop_loss_pct,
+            max_trades_per_minute: base_chr.max_trades_per_minute,
+            max_orders_per_second: 10.0,
+            rate_limit_cooldown_ms: 1000,
+            window_ms: base_chr.window_ms as i64,
+            min_quote_lifetime_ms: base_chr.min_quote_lifetime_ms as i64,
+            fill_model: backtest::FillModelType::from_str(&params.fill_model),
+            ..Default::default()
+        };
+        
+        let simulator = PortfolioSimulator::new(initial_capital, exchange_fee_config);
+        let portfolio_result = simulator.run(
+            &symbol_events,
+            &sim_params,
+            Some(&optimized_weights),
+        );
+        
+        log_info!(MAIN_LOGGER, "✅ [{}] Portfolio GA complete: pnl=${:.2}, sharpe={:.3}, trades={}", 
+            job.id, portfolio_result.total_pnl, portfolio_result.portfolio_sharpe, portfolio_result.total_trades);
+        
+        // Build portfolio metrics
+        let symbols_ordered: Vec<String> = symbol_results.iter().map(|r| r.asset_key.clone()).collect();
+        let portfolio_metrics = crate::job_queue::PortfolioMetrics {
+            total_symbols: actual_num_symbols,
+            symbol_results: portfolio_result.symbol_results.iter().enumerate().map(|(idx, r)| {
+                let (symbol, exchange) = if r.symbol.contains('@') {
+                    let parts: Vec<&str> = r.symbol.splitn(2, '@').collect();
+                    (parts[0].to_string(), Some(parts[1].to_string()))
+                } else {
+                    (r.symbol.clone(), Some(params.exchange.clone()))
+                };
+                
+                crate::job_queue::SymbolResult {
+                    symbol,
+                    exchange,
+                    sharpe_ratio: r.sharpe_ratio,
+                    max_drawdown: r.max_drawdown,
+                    total_pnl: r.total_pnl,
+                    win_rate: r.win_rate,
+                    profit_factor: r.profit_factor,
+                    total_trades: r.num_trades,
+                    allocation_weight: optimized_weights.get(idx).copied().unwrap_or(1.0 / actual_num_symbols as f64),
+                    // Per-symbol position tracking
+                    starting_capital: Some(r.starting_capital),
+                    ending_capital: Some(r.ending_capital),
+                    starting_inventory: Some(r.starting_inventory),
+                    ending_inventory: Some(r.ending_inventory),
+                    starting_inventory_value: Some(r.starting_inventory_value),
+                    ending_inventory_value: Some(r.ending_inventory_value),
+                    starting_mark_price: Some(r.starting_mark_price),
+                    ending_mark_price: Some(r.ending_mark_price),
+                }
+            }).collect(),
+            correlation_matrix: portfolio_result.correlation_matrix.as_ref().map(|corrs| {
+                corrs.iter().map(|c| {
+                    crate::job_queue::CorrelationPair {
+                        symbol_a: c.symbol1.clone(),
+                        symbol_b: c.symbol2.clone(),
+                        correlation: c.correlation,
+                    }
+                }).collect()
+            }).unwrap_or_default(),
+            portfolio_sharpe: portfolio_result.portfolio_sharpe,
+            portfolio_max_drawdown: portfolio_result.portfolio_max_drawdown,
+            diversification_ratio: None,
+        };
+        
+        // Build per-symbol optimization details
+        let symbol_optimization_details: Vec<serde_json::Value> = symbol_results.iter()
+            .enumerate()
+            .map(|(idx, r)| {
+                let chr = &r.chromosome;
+                serde_json::json!({
+                    "asset_key": r.asset_key,
+                    "fitness": r.fitness,
+                    "sharpe_ratio": r.sharpe_ratio,
+                    "net_pnl": r.net_pnl,
+                    "num_trades": r.num_trades,
+                    "max_drawdown": r.max_drawdown,
+                    "allocation_weight": optimized_weights.get(idx).copied().unwrap_or(0.0),
+                    "optimized_params": {
+                        "risk_aversion": chr.risk_aversion,
+                        "order_size_pct": chr.order_size_pct,
+                        "min_spread_bps": chr.min_spread_bps,
+                        "volatility_cap": chr.volatility_cap,
+                        "time_horizon_minutes": chr.time_horizon_minutes,
+                        "inventory_target": chr.inventory_target,
+                        "adverse_selection_sensitivity": chr.adverse_selection_sensitivity,
+                        "fee_spread_multiplier": chr.fee_spread_multiplier,
+                    }
+                })
+            })
+            .collect();
+        
+        // Calculate additional metrics from portfolio equity curve and trade returns
+        let equity_curve = &portfolio_result.equity_curve;
+        
+        // Calculate annualized return from equity curve
+        let annualized_return = if equity_curve.len() >= 2 {
+            let initial = equity_curve.first().copied().unwrap_or(1.0);
+            let final_val = equity_curve.last().copied().unwrap_or(1.0);
+            if initial > 0.0 {
+                let total_return = (final_val - initial) / initial;
+                let minutes = equity_curve.len() as f64;
+                let trading_days = minutes / (6.5 * 60.0);
+                if trading_days > 0.0 {
+                    Some((1.0 + total_return).powf(252.0 / trading_days) - 1.0)
+                } else {
+                    Some(total_return)
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        
+        // Calculate volatility from equity curve returns
+        let volatility = if equity_curve.len() >= 2 {
+            let mut returns = Vec::with_capacity(equity_curve.len() - 1);
+            for i in 1..equity_curve.len() {
+                if equity_curve[i - 1] > 0.0 {
+                    returns.push((equity_curve[i] - equity_curve[i - 1]) / equity_curve[i - 1]);
+                }
+            }
+            if !returns.is_empty() {
+                let mean: f64 = returns.iter().sum::<f64>() / returns.len() as f64;
+                let variance: f64 = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / returns.len() as f64;
+                let std = variance.sqrt();
+                let samples_per_year: f64 = 252.0 * 6.5 * 60.0;
+                Some(std * samples_per_year.sqrt())
+            } else {
+                Some(0.0)
+            }
+        } else {
+            Some(0.0)
+        };
+        
+        // Calculate Sortino ratio (only penalizes downside volatility)
+        let sortino_ratio = if equity_curve.len() >= 2 {
+            let mut returns = Vec::with_capacity(equity_curve.len() - 1);
+            for i in 1..equity_curve.len() {
+                if equity_curve[i - 1] > 0.0 {
+                    returns.push((equity_curve[i] - equity_curve[i - 1]) / equity_curve[i - 1]);
+                }
+            }
+            if !returns.is_empty() {
+                let mean: f64 = returns.iter().sum::<f64>() / returns.len() as f64;
+                let downside_returns: Vec<f64> = returns.iter().filter(|&&r| r < 0.0).cloned().collect();
+                if downside_returns.is_empty() {
+                    if mean > 0.0 { Some(10.0) } else { Some(0.0) }
+                } else {
+                    let downside_variance: f64 = downside_returns.iter().map(|r| r.powi(2)).sum::<f64>() / returns.len() as f64;
+                    let downside_std = downside_variance.sqrt();
+                    if downside_std > 1e-10 {
+                        let samples_per_year: f64 = 252.0 * 6.5 * 60.0;
+                        Some((mean / downside_std) * samples_per_year.sqrt())
+                    } else {
+                        Some(0.0)
+                    }
+                }
+            } else {
+                Some(0.0)
+            }
+        } else {
+            Some(0.0)
+        };
+        
+        // Calculate Calmar ratio (annualized return / max drawdown)
+        let calmar_ratio = match (annualized_return, portfolio_result.portfolio_max_drawdown) {
+            (Some(ret), dd) if dd > 0.001 => Some(ret / dd),
+            (Some(ret), _) if ret > 0.0 => Some(10.0),
+            _ => Some(0.0),
+        };
+        
+        // Get best and worst trade from trade returns
+        let best_trade = portfolio_result.trade_returns.iter().cloned().fold(None, |max: Option<f64>, r| {
+            Some(max.map_or(r, |m| m.max(r)))
+        });
+        let worst_trade = portfolio_result.trade_returns.iter().cloned().fold(None, |min: Option<f64>, r| {
+            Some(min.map_or(r, |m| m.min(r)))
+        });
+        
+        // Calculate average trade return
+        let avg_trade_return = if !portfolio_result.trade_returns.is_empty() {
+            Some(portfolio_result.trade_returns.iter().sum::<f64>() / portfolio_result.trade_returns.len() as f64)
+        } else {
+            None
+        };
+        
+        // VaR and ES from portfolio risk metrics if available
+        let value_at_risk_95 = portfolio_result.risk_metrics.as_ref().map(|rm| rm.portfolio_var_95);
+        let expected_shortfall_95 = portfolio_result.risk_metrics.as_ref().map(|rm| rm.portfolio_es_95);
+        
+        // Build aggregated inventory metrics for the portfolio
+        let inventory_metrics = Some(InventorySummary {
+            total_volume: portfolio_result.total_volume,
+            avg_inventory_value: 0.0, // Not tracked at portfolio level
+            turnover_per_day: 0.0,
+            buy_fills: 0,
+            sell_fills: 0,
+            buy_volume: 0.0,
+            sell_volume: 0.0,
+            imbalance_ratio: 0.0,
+        });
+        
+        // Build result
+        let backtest_result = BacktestResult {
+            job_id: job.id.clone(),
+            strategy_type: Some("portfolio_ga".to_string()),
+            total_pnl: portfolio_result.total_pnl,
+            sharpe_ratio: portfolio_result.portfolio_sharpe,
+            max_drawdown: portfolio_result.portfolio_max_drawdown,
+            win_rate: portfolio_result.portfolio_win_rate,
+            total_trades: portfolio_result.total_trades,
+            profit_factor: portfolio_result.portfolio_profit_factor,
+            equity_curve: portfolio_result.equity_curve,
+            completed_at: Utc::now(),
+            closed_trades: Some(portfolio_result.total_trades),
+            open_positions: None,
+            realized_pnl: Some(portfolio_result.total_pnl),
+            unrealized_pnl: Some(0.0),
+            // Additional calculated metrics
+            annualized_return,
+            volatility,
+            sortino_ratio,
+            calmar_ratio,
+            avg_trade_return,
+            best_trade,
+            worst_trade,
+            avg_time_in_trade: Some(portfolio_result.avg_time_in_trade_ms / 1000.0), // Convert ms to seconds
+            value_at_risk_95,
+            expected_shortfall_95,
+            // Execution metrics - use actual tracked values
+            total_orders: Some(portfolio_result.total_orders_placed as i32),
+            filled_orders: Some(portfolio_result.total_orders_filled as i32),
+            cancelled_orders: Some((portfolio_result.total_orders_placed - portfolio_result.total_orders_filled) as i32),
+            avg_slippage: None,
+            total_commission_paid: Some(portfolio_result.total_fees),
+            // Portfolio specific
+            is_portfolio: true,
+            portfolio_metrics: Some(portfolio_metrics),
+            inventory_metrics,
+            strategy_params: Some(serde_json::json!({
+                "portfolio_mode": true,
+                "ga_optimized": true,
+                "symbols": symbols_ordered,
+                "optimized_weights": optimized_weights,
+                "symbol_optimization": symbol_optimization_details,
+                "initial_capital": params.initial_capital,
+                "population_size": params.population_size,
+                "generations": params.generations,
+                "correlation_matrix": portfolio_result.correlation_matrix,
+            })),
+            start_date: job.params.start_date.clone(),
+            end_date: job.params.end_date.clone(),
+            ..Default::default()
+        };
+        
+        let _ = self.job_queue.update_progress(&job.id, 100.0).await;
         
         Ok(backtest_result)
     }

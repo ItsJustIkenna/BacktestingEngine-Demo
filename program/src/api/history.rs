@@ -39,6 +39,15 @@ fn default_limit() -> i64 {
     50
 }
 
+/// Portfolio asset for API response
+#[derive(Debug, Clone, Serialize)]
+pub struct PortfolioAssetSummary {
+    pub symbol: String,
+    pub exchange: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weight: Option<f64>,
+}
+
 /// Historical backtest summary
 #[derive(Debug, Serialize)]
 pub struct BacktestSummary {
@@ -50,6 +59,10 @@ pub struct BacktestSummary {
     pub created_at: String,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
+    
+    // Portfolio assets for multi-symbol backtests
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub portfolio_assets: Option<Vec<PortfolioAssetSummary>>,
     
     // Phase tracking for better visibility
     pub current_phase: String,
