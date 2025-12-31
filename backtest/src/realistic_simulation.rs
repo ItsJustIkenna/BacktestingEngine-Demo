@@ -711,6 +711,26 @@ pub struct InventoryMetrics {
     pub twap_inventory: f64,
     /// Number of times inventory crossed zero
     pub zero_crossings: usize,
+    
+    // === Starting/Ending Position Tracking ===
+    /// Starting inventory quantity (always 0 for fresh backtest)
+    pub starting_inventory: f64,
+    /// Starting inventory value in USD (starting_inventory * starting_price)
+    pub starting_inventory_value: f64,
+    /// Starting mark price used for valuation
+    pub starting_mark_price: f64,
+    /// Ending inventory quantity (base asset units)
+    pub ending_inventory: f64,
+    /// Ending inventory value in USD (ending_inventory * ending_price)
+    pub ending_inventory_value: f64,
+    /// Ending mark price used for valuation
+    pub ending_mark_price: f64,
+    /// Starting capital (USD)
+    pub starting_capital: f64,
+    /// Ending capital (USD cash after all trades)
+    pub ending_capital: f64,
+    /// Final equity (ending_capital + ending_inventory_value)
+    pub final_equity: f64,
 }
 
 /// Execution quality metrics
@@ -823,6 +843,28 @@ impl From<RealisticSimResult> for crate::types::BacktestResult {
             }),
             // Trade returns for Monte Carlo
             trade_returns: result.trade_returns,
+            // Inventory metrics with position tracking
+            inventory_metrics: Some(crate::types::InventoryMetrics {
+                total_volume_traded: result.total_volume,
+                avg_inventory_value: result.inventory_metrics.avg_inventory,
+                turnover_per_day: result.inventory_metrics.turnover_rate,
+                buy_fills: 0,  // Not tracked separately yet
+                sell_fills: 0,
+                buy_volume: 0.0,
+                sell_volume: 0.0,
+                imbalance_ratio: 0.0,
+                // Position tracking fields
+                starting_inventory: result.inventory_metrics.starting_inventory,
+                starting_inventory_value: result.inventory_metrics.starting_inventory_value,
+                starting_mark_price: result.inventory_metrics.starting_mark_price,
+                ending_inventory: result.inventory_metrics.ending_inventory,
+                ending_inventory_value: result.inventory_metrics.ending_inventory_value,
+                ending_mark_price: result.inventory_metrics.ending_mark_price,
+                starting_capital: result.inventory_metrics.starting_capital,
+                ending_capital: result.inventory_metrics.ending_capital,
+                final_equity: result.inventory_metrics.final_equity,
+            }),
+            initial_capital: result.inventory_metrics.starting_capital,
             ..Default::default()
         }
     }
@@ -2066,6 +2108,16 @@ impl RealisticSimulator {
             turnover_rate: inventory_turnover,
             twap_inventory,
             zero_crossings: zero_crossings as usize,
+            // Position tracking
+            starting_inventory: initial_inventory_qty,
+            starting_inventory_value: initial_inventory_value,
+            starting_mark_price: initial_price,
+            ending_inventory: inventory,
+            ending_inventory_value: inventory * final_mark,
+            ending_mark_price: final_mark,
+            starting_capital: self.initial_capital,
+            ending_capital: capital,
+            final_equity,
         };
         
         // Execution metrics

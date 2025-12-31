@@ -37,6 +37,16 @@ interface InventorySummary {
   buy_volume: number;
   sell_volume: number;
   imbalance_ratio: number;
+  // Position tracking fields
+  starting_inventory?: number;
+  starting_inventory_value?: number;
+  starting_mark_price?: number;
+  ending_inventory?: number;
+  ending_inventory_value?: number;
+  ending_mark_price?: number;
+  starting_capital?: number;
+  ending_capital?: number;
+  final_equity?: number;
 }
 
 interface ExecutionSummary {
@@ -2356,6 +2366,104 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
               tooltip="Buy vs Sell volume imbalance. Near 0% = balanced trading."
             />
           </div>
+          
+          {/* Position Breakdown - Starting vs Ending */}
+          {(result.inventory_metrics.starting_capital !== undefined || result.inventory_metrics.final_equity !== undefined) && (
+            <>
+              <h4 style={{ margin: '20px 0 10px', fontSize: '14px', color: '#666' }}>💰 Position Breakdown</h4>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(2, 1fr)',
+                gap: '20px',
+                marginBottom: '10px',
+              }}>
+                {/* Starting Position */}
+                <div style={{
+                  backgroundColor: '#f8f9fa',
+                  padding: '15px',
+                  borderRadius: '6px',
+                  border: '1px solid #e9ecef',
+                }}>
+                  <h5 style={{ margin: '0 0 10px', color: '#495057' }}>📊 Starting Position</h5>
+                  <div style={{ fontSize: '14px', lineHeight: '1.8' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#6c757d' }}>Capital (Cash):</span>
+                      <span style={{ fontWeight: 600 }}>${formatLargeNumber(result.inventory_metrics.starting_capital ?? 0)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#6c757d' }}>Inventory Qty:</span>
+                      <span style={{ fontWeight: 600 }}>{safeToFixed(result.inventory_metrics.starting_inventory ?? 0, 6)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#6c757d' }}>Inventory Value:</span>
+                      <span style={{ fontWeight: 600 }}>${formatLargeNumber(result.inventory_metrics.starting_inventory_value ?? 0)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#6c757d' }}>Mark Price:</span>
+                      <span style={{ fontWeight: 600 }}>${safeToFixed(result.inventory_metrics.starting_mark_price ?? 0, 4)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #dee2e6', paddingTop: '5px', marginTop: '5px' }}>
+                      <span style={{ color: '#495057', fontWeight: 600 }}>Total Equity:</span>
+                      <span style={{ fontWeight: 700, color: '#007bff' }}>${formatLargeNumber(result.inventory_metrics.starting_capital ?? 0)}</span>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Ending Position */}
+                <div style={{
+                  backgroundColor: '#f8f9fa',
+                  padding: '15px',
+                  borderRadius: '6px',
+                  border: '1px solid #e9ecef',
+                }}>
+                  <h5 style={{ margin: '0 0 10px', color: '#495057' }}>📊 Ending Position</h5>
+                  <div style={{ fontSize: '14px', lineHeight: '1.8' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#6c757d' }}>Capital (Cash):</span>
+                      <span style={{ fontWeight: 600 }}>${formatLargeNumber(result.inventory_metrics.ending_capital ?? 0)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#6c757d' }}>Inventory Qty:</span>
+                      <span style={{ fontWeight: 600 }}>{safeToFixed(result.inventory_metrics.ending_inventory ?? 0, 6)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#6c757d' }}>Inventory Value:</span>
+                      <span style={{ fontWeight: 600, color: (result.inventory_metrics.ending_inventory_value ?? 0) > 0 ? '#28a745' : (result.inventory_metrics.ending_inventory_value ?? 0) < 0 ? '#dc3545' : '#6c757d' }}>
+                        ${formatLargeNumber(result.inventory_metrics.ending_inventory_value ?? 0)}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#6c757d' }}>Mark Price:</span>
+                      <span style={{ fontWeight: 600 }}>${safeToFixed(result.inventory_metrics.ending_mark_price ?? 0, 4)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid #dee2e6', paddingTop: '5px', marginTop: '5px' }}>
+                      <span style={{ color: '#495057', fontWeight: 600 }}>Final Equity:</span>
+                      <span style={{ fontWeight: 700, color: (result.inventory_metrics.final_equity ?? 0) >= (result.inventory_metrics.starting_capital ?? 0) ? '#28a745' : '#dc3545' }}>
+                        ${formatLargeNumber(result.inventory_metrics.final_equity ?? 0)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              {/* P&L Summary */}
+              <div style={{
+                backgroundColor: (result.total_pnl ?? 0) >= 0 ? 'rgba(40, 167, 69, 0.1)' : 'rgba(220, 53, 69, 0.1)',
+                padding: '15px',
+                borderRadius: '6px',
+                border: `1px solid ${(result.total_pnl ?? 0) >= 0 ? '#28a745' : '#dc3545'}`,
+                textAlign: 'center',
+              }}>
+                <span style={{ fontSize: '14px', color: '#6c757d' }}>Net P&L (After All Fees): </span>
+                <span style={{ fontSize: '18px', fontWeight: 700, color: (result.total_pnl ?? 0) >= 0 ? '#28a745' : '#dc3545' }}>
+                  {(result.total_pnl ?? 0) >= 0 ? '+' : ''}${formatLargeNumber(result.total_pnl ?? 0)}
+                </span>
+                <span style={{ fontSize: '14px', color: '#6c757d', marginLeft: '10px' }}>
+                  ({safeToFixed(((result.inventory_metrics.final_equity ?? 0) / (result.inventory_metrics.starting_capital ?? 1) - 1) * 100, 2)}%)
+                </span>
+              </div>
+            </>
+          )}
         </div>
       )}
 

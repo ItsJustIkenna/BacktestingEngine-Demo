@@ -1595,6 +1595,16 @@ impl SimulationLoop {
             buy_volume: self.buy_volume,
             sell_volume: self.sell_volume,
             imbalance_ratio,
+            // Position tracking - use defaults for legacy simulation
+            starting_inventory: 0.0,
+            starting_inventory_value: 0.0,
+            starting_mark_price: 0.0,
+            ending_inventory: 0.0,
+            ending_inventory_value: 0.0,
+            ending_mark_price: 0.0,
+            starting_capital: 0.0,
+            ending_capital: 0.0,
+            final_equity: 0.0,
         });
         
         // Calculate execution metrics for order lifecycle analysis

@@ -186,6 +186,35 @@ pub struct InventoryMetrics {
     pub sell_volume: f64,
     /// Inventory imbalance ratio (buy_volume - sell_volume) / total_volume
     pub imbalance_ratio: f64,
+    
+    // === Starting/Ending Position Tracking ===
+    /// Starting inventory quantity (base asset units)
+    #[serde(default)]
+    pub starting_inventory: f64,
+    /// Starting inventory value in USD
+    #[serde(default)]
+    pub starting_inventory_value: f64,
+    /// Starting mark price used for valuation
+    #[serde(default)]
+    pub starting_mark_price: f64,
+    /// Ending inventory quantity (base asset units)
+    #[serde(default)]
+    pub ending_inventory: f64,
+    /// Ending inventory value in USD
+    #[serde(default)]
+    pub ending_inventory_value: f64,
+    /// Ending mark price used for valuation
+    #[serde(default)]
+    pub ending_mark_price: f64,
+    /// Starting capital (USD)
+    #[serde(default)]
+    pub starting_capital: f64,
+    /// Ending capital (USD cash after all trades)
+    #[serde(default)]
+    pub ending_capital: f64,
+    /// Final equity (ending_capital + ending_inventory_value)
+    #[serde(default)]
+    pub final_equity: f64,
 }
 
 /// Market impact modeling results
