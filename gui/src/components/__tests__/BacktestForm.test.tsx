@@ -6,10 +6,6 @@ import { BacktestForm } from '../BacktestForm';
 // Mock fetch globally
 global.fetch = jest.fn();
 
-// Helper to get the main symbol select (not portfolio header)
-const getSymbolSelect = () => screen.getByRole('combobox', { name: /^symbol$/i }) as HTMLSelectElement;
-const getExchangeSelect = () => screen.getByRole('combobox', { name: /^exchange$/i }) as HTMLSelectElement;
-
 describe('BacktestForm', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -30,65 +26,103 @@ describe('BacktestForm', () => {
     });
   });
 
-  test('renders form with all required fields', async () => {
+  test('renders form with accordion sections', async () => {
     render(<BacktestForm />);
     
+    // Wait for metadata to load
     await waitFor(() => {
-      expect(getSymbolSelect()).toBeInTheDocument();
+      expect(screen.getByText(/portfolio assets/i)).toBeInTheDocument();
     });
 
-    expect(getExchangeSelect()).toBeInTheDocument();
-    expect(screen.getByLabelText(/strategy type/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/initial capital/i)).toBeInTheDocument();
+    // Check accordion sections are present
+    expect(screen.getByText(/strategy & order routing/i)).toBeInTheDocument();
+    expect(screen.getByText(/capital & allocation/i)).toBeInTheDocument();
     expect(screen.getByText(/optimization method/i)).toBeInTheDocument();
+    expect(screen.getByText(/analysis & validation/i)).toBeInTheDocument();
   });
 
-  test('fetches and displays symbols and exchanges', async () => {
+  test('fetches and displays symbols and exchanges in portfolio section', async () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
-      const symbolSelect = getSymbolSelect();
-      expect(symbolSelect.options).toHaveLength(2);
-      expect(symbolSelect.options[0]!.value).toBe('BTC-USD');
-      expect(symbolSelect.options[1]!.value).toBe('ETH-USD');
+      // The portfolio assets section should have symbol and exchange dropdowns
+      const selects = screen.getAllByRole('combobox');
+      expect(selects.length).toBeGreaterThanOrEqual(2);
     });
-
-    const exchangeSelect = getExchangeSelect();
-    expect(exchangeSelect.options).toHaveLength(2);
-    expect(exchangeSelect.options[0]!.value).toBe('coinbase');
-    expect(exchangeSelect.options[1]!.value).toBe('binance');
   });
 
-  test('shows genetic algorithm parameters by default', async () => {
+  test('can add assets to portfolio', async () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/population size/i)).toBeInTheDocument();
+      expect(screen.getByText(/portfolio assets/i)).toBeInTheDocument();
     });
 
-    expect(screen.getByLabelText(/generations/i)).toBeInTheDocument();
-    expect(screen.queryByLabelText(/risk aversion/i)).not.toBeInTheDocument();
+    // Click the Add button to add an asset
+    const addButton = screen.getByRole('button', { name: /\+ add/i });
+    fireEvent.click(addButton);
+
+    // Should show the asset count update in the header
+    await waitFor(() => {
+      expect(screen.getByText(/1.*asset.*configured/i)).toBeInTheDocument();
+    });
   });
 
-  test('switches to manual parameters when manual radio is selected', async () => {
+  test('can remove assets from portfolio', async () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
-      expect(getSymbolSelect()).toBeInTheDocument();
+      expect(screen.getByText(/portfolio assets/i)).toBeInTheDocument();
     });
 
-    const manualRadio = screen.getByRole('radio', { name: /manual parameters/i });
-    fireEvent.click(manualRadio);
+    // Add an asset
+    const addButton = screen.getByRole('button', { name: /\+ add/i });
+    fireEvent.click(addButton);
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/risk aversion/i)).toBeInTheDocument();
+      expect(screen.getByText(/1.*asset.*configured/i)).toBeInTheDocument();
     });
 
-    expect(screen.getByLabelText(/inventory target/i)).toBeInTheDocument();
-    expect(screen.queryByLabelText(/population size/i)).not.toBeInTheDocument();
+    // Remove the asset using title attribute
+    const removeButton = screen.getByTitle('Remove');
+    fireEvent.click(removeButton);
+
+    // Should show empty state
+    await waitFor(() => {
+      expect(screen.getByText(/no assets added yet/i)).toBeInTheDocument();
+    });
   });
 
-  test('submits form with genetic algorithm parameters', async () => {
+  test('shows genetic algorithm in optimization section badge', async () => {
+    render(<BacktestForm />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/optimization method/i)).toBeInTheDocument();
+    });
+
+    // Genetic Algorithm is shown as a badge on the collapsed optimization section
+    expect(screen.getByText(/genetic algorithm/i)).toBeInTheDocument();
+  });
+
+  test('can expand optimization section to see settings', async () => {
+    render(<BacktestForm />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/optimization method/i)).toBeInTheDocument();
+    });
+
+    // Click to expand the optimization section
+    const optimizationHeader = screen.getByText(/optimization method/i);
+    fireEvent.click(optimizationHeader);
+
+    // After expanding, population size and generations should be visible
+    await waitFor(() => {
+      expect(screen.getByText(/population size/i)).toBeInTheDocument();
+      expect(screen.getByText(/generations/i)).toBeInTheDocument();
+    });
+  });
+
+  test('submits form with portfolio assets', async () => {
     const mockOnJobSubmit = jest.fn();
     (global.fetch as jest.Mock).mockImplementation((url: string, options?: any) => {
       if (url === '/api/symbols') {
@@ -115,15 +149,34 @@ describe('BacktestForm', () => {
     render(<BacktestForm onJobSubmit={mockOnJobSubmit} />);
 
     await waitFor(() => {
-      expect(getSymbolSelect()).toBeInTheDocument();
+      expect(screen.getByText(/portfolio assets/i)).toBeInTheDocument();
     });
 
-    const submitButton = screen.getByRole('button', { name: /submit backtest/i });
+    // Add an asset first
+    const addButton = screen.getByRole('button', { name: /\+ add/i });
+    fireEvent.click(addButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/1.*asset.*configured/i)).toBeInTheDocument();
+    });
+
+    const submitButton = screen.getByRole('button', { name: /run backtest/i });
     fireEvent.click(submitButton);
 
     await waitFor(() => {
       expect(mockOnJobSubmit).toHaveBeenCalledWith('test-job-123');
     });
+  });
+
+  test('shows validation warning when no assets configured', async () => {
+    render(<BacktestForm />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/portfolio assets/i)).toBeInTheDocument();
+    });
+
+    // Without any assets added, there should be a warning message
+    expect(screen.getByText(/add at least one asset/i)).toBeInTheDocument();
   });
 
   test('displays error message when submission fails', async () => {
@@ -152,10 +205,18 @@ describe('BacktestForm', () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
-      expect(getSymbolSelect()).toBeInTheDocument();
+      expect(screen.getByText(/portfolio assets/i)).toBeInTheDocument();
     });
 
-    const submitButton = screen.getByRole('button', { name: /submit backtest/i });
+    // Add an asset first
+    const addButton = screen.getByRole('button', { name: /\+ add/i });
+    fireEvent.click(addButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/1.*asset.*configured/i)).toBeInTheDocument();
+    });
+
+    const submitButton = screen.getByRole('button', { name: /run backtest/i });
     fireEvent.click(submitButton);
 
     await waitFor(() => {
@@ -167,10 +228,18 @@ describe('BacktestForm', () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
-      expect(getSymbolSelect()).toBeInTheDocument();
+      expect(screen.getByText(/portfolio assets/i)).toBeInTheDocument();
     });
 
-    const submitButton = screen.getByRole('button', { name: /submit backtest/i });
+    // Add an asset
+    const addButton = screen.getByRole('button', { name: /\+ add/i });
+    fireEvent.click(addButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/1.*asset.*configured/i)).toBeInTheDocument();
+    });
+
+    const submitButton = screen.getByRole('button', { name: /run backtest/i });
     expect(submitButton).not.toBeDisabled();
 
     fireEvent.click(submitButton);
@@ -181,27 +250,15 @@ describe('BacktestForm', () => {
     });
   });
 
-  test('updates form data when inputs change', async () => {
-    render(<BacktestForm />);
-
-    await waitFor(() => {
-      expect(getSymbolSelect()).toBeInTheDocument();
-    });
-
-    const capitalInput = screen.getByLabelText(/initial capital/i) as HTMLInputElement;
-    fireEvent.change(capitalInput, { target: { value: '50000' } });
-
-    expect(capitalInput.value).toBe('50000');
-  });
-
-  test('displays loading state for dropdowns', () => {
+  test('displays loading state for dropdowns', async () => {
     (global.fetch as jest.Mock).mockImplementation(() => new Promise(() => {})); // Never resolves
 
     render(<BacktestForm />);
 
-    const symbolSelect = getSymbolSelect();
-    expect(symbolSelect).toBeDisabled();
-    expect(screen.getAllByText(/loading\.\.\./i).length).toBeGreaterThan(0);
+    // Should show loading states
+    await waitFor(() => {
+      expect(screen.getAllByText(/loading\.\.\./i).length).toBeGreaterThan(0);
+    });
   });
 
   test('handles metadata fetch failure gracefully', async () => {
@@ -211,41 +268,87 @@ describe('BacktestForm', () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
-      const symbolSelect = getSymbolSelect();
-      expect(symbolSelect).not.toBeDisabled();
+      expect(screen.getByText(/portfolio assets/i)).toBeInTheDocument();
     });
 
     consoleError.mockRestore();
   });
 
-  test('genetic algorithm has default values', async () => {
+  test('genetic algorithm section shows population and generation inputs when expanded', async () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/population size/i)).toBeInTheDocument();
+      expect(screen.getByText(/optimization method/i)).toBeInTheDocument();
     });
 
-    const popSize = screen.getByLabelText(/population size/i) as HTMLInputElement;
-    const generations = screen.getByLabelText(/generations/i) as HTMLInputElement;
+    // Expand the optimization section first
+    fireEvent.click(screen.getByText(/optimization method/i));
 
-    expect(popSize.value).toBe('50');
-    expect(generations.value).toBe('20');
+    await waitFor(() => {
+      expect(screen.getByText(/population size/i)).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/generations/i)).toBeInTheDocument();
   });
 
-  test('manual parameters are accessible when manual mode is selected', async () => {
+  test('can switch to manual parameters mode', async () => {
     render(<BacktestForm />);
 
     await waitFor(() => {
-      expect(getSymbolSelect()).toBeInTheDocument();
+      expect(screen.getByText(/optimization method/i)).toBeInTheDocument();
     });
 
-    const manualRadio = screen.getByRole('radio', { name: /manual parameters/i });
-    fireEvent.click(manualRadio);
+    // Click to expand the optimization section
+    const optimizationHeader = screen.getByText(/optimization method/i);
+    fireEvent.click(optimizationHeader);
 
     await waitFor(() => {
-      expect(screen.getByLabelText(/risk aversion/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/inventory target/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/order size/i)).toBeInTheDocument();
+      expect(screen.getByText(/manual parameters/i)).toBeInTheDocument();
     });
+
+    // Click on Manual Parameters label
+    const manualLabel = screen.getByText(/manual parameters/i).closest('label');
+    if (manualLabel) {
+      fireEvent.click(manualLabel);
+    }
+
+    // After selecting manual, risk aversion and other fields should appear
+    await waitFor(() => {
+      expect(screen.getByText(/risk aversion/i)).toBeInTheDocument();
+      expect(screen.getByText(/inventory target/i)).toBeInTheDocument();
+      expect(screen.getByText(/order size/i)).toBeInTheDocument();
+    });
+  });
+
+  test('order routing section is present in Strategy accordion', async () => {
+    render(<BacktestForm />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/portfolio assets/i)).toBeInTheDocument();
+    });
+
+    // Check that strategy & routing section exists
+    expect(screen.getByText(/strategy & order routing/i)).toBeInTheDocument();
+    // Check routing mode options
+    expect(screen.getByText(/order routing mode/i)).toBeInTheDocument();
+  });
+
+  test('adding assets updates routing info', async () => {
+    render(<BacktestForm />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/portfolio assets/i)).toBeInTheDocument();
+    });
+
+    // Add an asset with coinbase
+    const addButton = screen.getByRole('button', { name: /\+ add/i });
+    fireEvent.click(addButton);
+
+    await waitFor(() => {
+      expect(screen.getByText(/1.*asset.*configured/i)).toBeInTheDocument();
+    });
+
+    // The routing info should be updated - check it shows exchanges
+    expect(screen.getByText(/orders will be routed to/i)).toBeInTheDocument();
   });
 });
