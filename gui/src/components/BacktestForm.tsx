@@ -9,6 +9,76 @@ const FITNESS_PRESETS = {
   highWinRate: { sharpe: 10, sortino: 10, profit_factor: 15, win_rate: 35, net_profit: 20, calmar: 10 },
 };
 
+// Accordion Section Component
+interface AccordionSectionProps {
+  title: string;
+  icon: string;
+  isExpanded: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+  badge?: string;
+  badgeColor?: string;
+}
+
+const AccordionSection: React.FC<AccordionSectionProps> = ({ 
+  title, icon, isExpanded, onToggle, children, badge, badgeColor = '#007bff' 
+}) => (
+  <div style={{ 
+    marginBottom: '12px',
+    border: '1px solid #e0e0e0',
+    borderRadius: '8px',
+    overflow: 'hidden',
+    backgroundColor: 'white'
+  }}>
+    <button
+      type="button"
+      onClick={onToggle}
+      style={{
+        width: '100%',
+        padding: '14px 16px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: isExpanded ? '#f8f9fa' : 'white',
+        border: 'none',
+        cursor: 'pointer',
+        textAlign: 'left',
+        transition: 'background-color 0.2s'
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <span style={{ fontSize: '18px' }}>{icon}</span>
+        <span style={{ fontSize: '15px', fontWeight: 600, color: '#333' }}>{title}</span>
+        {badge && (
+          <span style={{ 
+            fontSize: '11px', 
+            backgroundColor: badgeColor, 
+            color: 'white', 
+            padding: '2px 8px', 
+            borderRadius: '10px',
+            fontWeight: 500
+          }}>
+            {badge}
+          </span>
+        )}
+      </div>
+      <span style={{ 
+        fontSize: '12px', 
+        color: '#666',
+        transform: isExpanded ? 'rotate(180deg)' : 'rotate(0)',
+        transition: 'transform 0.2s'
+      }}>
+        ▼
+      </span>
+    </button>
+    {isExpanded && (
+      <div style={{ padding: '16px', borderTop: '1px solid #e0e0e0' }}>
+        {children}
+      </div>
+    )}
+  </div>
+);
+
 interface FitnessWeights {
   sharpe: number;
   sortino: number;
@@ -92,20 +162,33 @@ interface BacktestFormProps {
 }
 
 export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
+  // Accordion state - which sections are expanded
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    assets: true,      // Always start with assets expanded
+    strategy: true,    // Strategy & routing visible by default
+    capital: false,
+    optimization: false,
+    analysis: false,
+  });
+
+  const toggleSection = (section: string) => {
+    setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
+  };
+
   const [formData, setFormData] = useState<BacktestFormData>({
     symbol: '',
     exchange: '',
     strategy_type: 'market_making',
     initial_capital: 10000,
-    initial_inventory_pct: 0.5,   // Default 50% base asset
-    initial_30d_volume: 0,        // Default 0 = use exchange default fee tier
+    initial_inventory_pct: 0.5,
+    initial_30d_volume: 0,
     optimization_method: 'genetic',
-    // Portfolio mode defaults
-    portfolio_mode: false,
-    portfolio_assets: [],         // Symbol+exchange pairs with weights
-    additional_symbols: [],       // Legacy
-    symbol_exchanges: {},         // Legacy
-    allocation_weights: [],       // Legacy
+    // Portfolio mode is always on - even single asset is a portfolio
+    portfolio_mode: true,
+    portfolio_assets: [],
+    additional_symbols: [],
+    symbol_exchanges: {},
+    allocation_weights: [],
     // Genetic algorithm defaults
     population_size: 50,
     generations: 20,
@@ -141,10 +224,10 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     inventory_penalty_factor: 0.3,
     trend_sensitivity: 0.2,
     flow_sensitivity: -0.1,
-    // Smart Order Routing defaults
-    routing_enabled: false,
-    routing_mode: 'best_venue',
-    routing_exchanges: [],
+    // Smart Order Routing - ENABLED BY DEFAULT, routes to all portfolio exchanges
+    routing_enabled: true,
+    routing_mode: 'multi_venue',
+    routing_exchanges: [],  // Will be auto-populated from portfolio_assets
     max_venues_per_order: 3,
     min_venue_allocation: 0.1,
     execution_style: 'balanced',
@@ -308,1344 +391,905 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
   };
 
   return (
-    <div className="backtest-form-container" style={{ maxWidth: '600px', margin: '0 auto', padding: '20px' }}>
-      <h2>Create New Backtest</h2>
-      
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-        {/* Symbol and Exchange */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-          <div>
-            <label htmlFor="symbol" style={{ display: 'block', marginBottom: '5px' }}>
-              Symbol
-            </label>
-            <select
-              id="symbol"
-              name="symbol"
-              value={formData.symbol}
-              onChange={handleChange}
-              required
-              disabled={loadingMetadata}
-              style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-            >
-              {loadingMetadata ? (
-                <option>Loading...</option>
-              ) : (
-                <>
-                  {symbols.length === 0 && <option value="">No symbols available</option>}
-                  {symbols.map(symbol => (
-                    <option key={symbol} value={symbol}>{symbol}</option>
-                  ))}
-                </>
-              )}
-            </select>
-          </div>
-          
-          <div>
-            <label htmlFor="exchange" style={{ display: 'block', marginBottom: '5px' }}>
-              Exchange
-            </label>
-            <select
-              id="exchange"
-              name="exchange"
-              value={formData.exchange}
-              onChange={handleChange}
-              required
-              disabled={loadingMetadata}
-              style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-            >
-              {loadingMetadata ? (
-                <option>Loading...</option>
-              ) : (
-                <>
-                  {exchanges.length === 0 && <option value="">No exchanges available</option>}
-                  {exchanges.map(exchange => (
-                    <option key={exchange} value={exchange}>{exchange}</option>
-                  ))}
-                </>
-              )}
-            </select>
-          </div>
+    <div className="backtest-form-container" style={{ maxWidth: '700px', margin: '0 auto', padding: '20px' }}>
+      <div style={{ 
+        display: 'flex', 
+        justifyContent: 'space-between', 
+        alignItems: 'center',
+        marginBottom: '20px'
+      }}>
+        <h2 style={{ margin: 0 }}>Create Backtest</h2>
+        <div style={{ fontSize: '12px', color: '#666' }}>
+          {formData.portfolio_assets.length} asset{formData.portfolio_assets.length !== 1 ? 's' : ''} configured
         </div>
-
-        {/* Portfolio Mode Toggle */}
-        <div style={{ padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '8px', border: '1px solid #e9ecef' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
-            <input
-              type="checkbox"
-              id="portfolio_mode"
-              checked={formData.portfolio_mode}
-              onChange={(e) => setFormData(prev => ({ 
-                ...prev, 
-                portfolio_mode: e.target.checked,
-                // Reset portfolio assets when disabling
-                portfolio_assets: e.target.checked ? prev.portfolio_assets : [],
-              }))}
-              style={{ width: '18px', height: '18px' }}
-            />
-            <label htmlFor="portfolio_mode" style={{ fontWeight: 'bold', cursor: 'pointer' }}>
-              Portfolio Mode (Multi-Symbol / Multi-Exchange Backtesting)
-            </label>
-          </div>
+      </div>
+      
+      <form onSubmit={handleSubmit}>
+        {/* ==================== SECTION 1: PORTFOLIO ASSETS ==================== */}
+        <AccordionSection
+          title="Portfolio Assets"
+          icon="📊"
+          isExpanded={expandedSections.assets ?? true}
+          onToggle={() => toggleSection('assets')}
+          badge={formData.portfolio_assets.length > 0 ? `${formData.portfolio_assets.length} assets` : undefined}
+          badgeColor="#28a745"
+        >
+          <p style={{ fontSize: '13px', color: '#666', margin: '0 0 15px 0' }}>
+            Add the symbols and exchanges you want to backtest. Each asset can be on a different exchange.
+          </p>
           
-          {formData.portfolio_mode && (
-            <div style={{ marginTop: '15px' }}>
-              <p style={{ fontSize: '0.9em', color: '#666', marginBottom: '15px' }}>
-                Add symbol+exchange pairs to your portfolio. You can add the same symbol from different exchanges 
-                (e.g., BTC-USD on Kraken AND Coinbase) to compare performance.
-              </p>
-              
-              {/* Add New Asset Row */}
+          {/* Add New Asset Row */}
+          <div style={{ 
+            display: 'grid', 
+            gridTemplateColumns: '1fr 1fr 90px auto',
+            gap: '10px',
+            marginBottom: '15px',
+            padding: '12px',
+            backgroundColor: '#f0f7ff',
+            borderRadius: '8px',
+            border: '1px solid #cce0ff'
+          }}>
+            <div>
+              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '4px' }}>Symbol</label>
+              <select
+                id="new_asset_symbol"
+                style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
+                disabled={loadingMetadata}
+              >
+                {loadingMetadata ? (
+                  <option>Loading...</option>
+                ) : (
+                  symbols.map(s => <option key={s} value={s}>{s}</option>)
+                )}
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '4px' }}>Exchange</label>
+              <select
+                id="new_asset_exchange"
+                style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
+                disabled={loadingMetadata}
+              >
+                {loadingMetadata ? (
+                  <option>Loading...</option>
+                ) : (
+                  exchanges.map(e => <option key={e} value={e}>{e}</option>)
+                )}
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize: '11px', color: '#666', display: 'block', marginBottom: '4px' }}>Weight</label>
+              <input
+                id="new_asset_weight"
+                type="number"
+                min="0"
+                max="1"
+                step="0.01"
+                placeholder="Auto"
+                style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  const symEl = document.getElementById('new_asset_symbol') as HTMLSelectElement;
+                  const exchEl = document.getElementById('new_asset_exchange') as HTMLSelectElement;
+                  const weightEl = document.getElementById('new_asset_weight') as HTMLInputElement;
+                  
+                  const symbol = symEl?.value || symbols[0];
+                  const exchange = exchEl?.value || exchanges[0];
+                  const weight = parseFloat(weightEl?.value) || 0;
+                  
+                  const exists = formData.portfolio_assets.some(
+                    a => a.symbol === symbol && a.exchange === exchange
+                  );
+                  
+                  if (!exists && symbol && exchange) {
+                    setFormData(prev => ({
+                      ...prev,
+                      portfolio_assets: [...prev.portfolio_assets, { symbol, exchange, weight }],
+                      // Auto-update routing exchanges
+                      routing_exchanges: [...new Set([...prev.routing_exchanges, exchange])]
+                    }));
+                    if (weightEl) weightEl.value = '';
+                  }
+                }}
+                style={{
+                  padding: '8px 16px',
+                  backgroundColor: '#0066cc',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  fontSize: '14px'
+                }}
+              >
+                + Add
+              </button>
+            </div>
+          </div>
+
+          {/* Portfolio Assets List */}
+          {formData.portfolio_assets.length > 0 ? (
+            <div>
               <div style={{ 
                 display: 'grid', 
-                gridTemplateColumns: '1fr 1fr 80px auto',
-                gap: '10px',
-                marginBottom: '15px',
-                padding: '10px',
-                backgroundColor: '#e7f3ff',
-                borderRadius: '6px'
+                gridTemplateColumns: '1fr 1fr 90px 36px',
+                gap: '8px',
+                fontSize: '13px'
               }}>
-                <select
-                  id="new_asset_symbol"
-                  style={{ padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-                  disabled={loadingMetadata}
-                >
-                  {symbols.map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
-                <select
-                  id="new_asset_exchange"
-                  style={{ padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-                  disabled={loadingMetadata}
-                >
-                  {exchanges.map(e => <option key={e} value={e}>{e}</option>)}
-                </select>
-                <input
-                  id="new_asset_weight"
-                  type="number"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  placeholder="Weight"
-                  defaultValue=""
-                  style={{ padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    const symEl = document.getElementById('new_asset_symbol') as HTMLSelectElement;
-                    const exchEl = document.getElementById('new_asset_exchange') as HTMLSelectElement;
-                    const weightEl = document.getElementById('new_asset_weight') as HTMLInputElement;
-                    
-                    const symbol = symEl?.value || symbols[0];
-                    const exchange = exchEl?.value || exchanges[0];
-                    const weight = parseFloat(weightEl?.value) || 0;
-                    
-                    // Check if this exact pair already exists
-                    const exists = formData.portfolio_assets.some(
-                      a => a.symbol === symbol && a.exchange === exchange
-                    );
-                    
-                    if (!exists && symbol && exchange) {
-                      setFormData(prev => ({
-                        ...prev,
-                        portfolio_assets: [...prev.portfolio_assets, { symbol, exchange, weight }]
-                      }));
-                      if (weightEl) weightEl.value = '';
-                    }
-                  }}
-                  style={{
-                    padding: '8px 16px',
-                    backgroundColor: '#0066cc',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontWeight: 500
-                  }}
-                >
-                  + Add
-                </button>
-              </div>
-
-              {/* Portfolio Assets List */}
-              {formData.portfolio_assets.length > 0 && (
-                <div style={{ marginBottom: '15px' }}>
-                  <label style={{ display: 'block', marginBottom: '10px', fontWeight: 500 }}>
-                    Portfolio Assets ({formData.portfolio_assets.length} pairs)
-                  </label>
-                  <div style={{ 
-                    display: 'grid', 
-                    gridTemplateColumns: '1fr 1fr 80px 40px',
-                    gap: '5px',
-                    fontSize: '0.9em'
-                  }}>
-                    {/* Header row */}
-                    <div style={{ fontWeight: 500, padding: '5px', color: '#666' }}>Symbol</div>
-                    <div style={{ fontWeight: 500, padding: '5px', color: '#666' }}>Exchange</div>
-                    <div style={{ fontWeight: 500, padding: '5px', color: '#666' }}>Weight</div>
-                    <div></div>
-                    
-                    {formData.portfolio_assets.map((asset, idx) => (
-                      <React.Fragment key={`${asset.symbol}@${asset.exchange}`}>
-                        <span style={{ 
-                          padding: '8px 10px', 
-                          backgroundColor: '#f0f0f0',
-                          borderRadius: '4px',
-                          fontWeight: 500
-                        }}>
-                          {asset.symbol}
-                        </span>
-                        <span style={{ 
-                          padding: '8px 10px', 
-                          backgroundColor: '#f8f8f8',
-                          borderRadius: '4px',
-                          color: '#666'
-                        }}>
-                          {asset.exchange}
-                        </span>
-                        <input
-                          type="number"
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          value={asset.weight || ''}
-                          onChange={(e) => {
-                            const newAssets = [...formData.portfolio_assets];
-                            const currentAsset = newAssets[idx];
-                            if (currentAsset) {
-                              newAssets[idx] = { 
-                                symbol: currentAsset.symbol, 
-                                exchange: currentAsset.exchange, 
-                                weight: parseFloat(e.target.value) || 0 
-                              };
-                              setFormData(prev => ({ ...prev, portfolio_assets: newAssets }));
-                            }
-                          }}
-                          style={{ 
-                            padding: '5px', 
-                            border: '1px solid #ccc', 
-                            borderRadius: '4px',
-                            width: '100%'
-                          }}
-                          placeholder="Auto"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setFormData(prev => ({
-                              ...prev,
-                              portfolio_assets: prev.portfolio_assets.filter((_, i) => i !== idx)
-                            }));
-                          }}
-                          style={{
-                            padding: '5px 10px',
-                            backgroundColor: '#dc3545',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '4px',
-                            cursor: 'pointer'
-                          }}
-                          title="Remove asset"
-                        >
-                          ✕
-                        </button>
-                      </React.Fragment>
-                    ))}
-                  </div>
-                  
-                  {/* Weight summary */}
-                  <div style={{ marginTop: '10px', fontSize: '0.85em', color: '#666' }}>
-                    {(() => {
-                      const totalWeight = formData.portfolio_assets.reduce((sum, a) => sum + (a.weight || 0), 0);
-                      const assetsWithWeight = formData.portfolio_assets.filter(a => a.weight > 0).length;
-                      const assetsWithoutWeight = formData.portfolio_assets.length - assetsWithWeight;
-                      
-                      if (assetsWithoutWeight === formData.portfolio_assets.length) {
-                        return <span>⚖️ Equal weight will be applied: {(100 / formData.portfolio_assets.length).toFixed(1)}% each</span>;
-                      } else if (Math.abs(totalWeight - 1) > 0.01) {
-                        return <span style={{ color: '#cc0000' }}>⚠️ Weights sum to {(totalWeight * 100).toFixed(1)}% (should equal 100%)</span>;
-                      } else {
-                        return <span style={{ color: '#28a745' }}>✓ Weights sum to 100%</span>;
-                      }
-                    })()}
-                  </div>
-                  
-                  {/* Quick actions */}
-                  <div style={{ marginTop: '10px', display: 'flex', gap: '10px' }}>
+                {/* Header */}
+                <div style={{ fontWeight: 600, color: '#666', padding: '6px 0' }}>Symbol</div>
+                <div style={{ fontWeight: 600, color: '#666', padding: '6px 0' }}>Exchange</div>
+                <div style={{ fontWeight: 600, color: '#666', padding: '6px 0' }}>Weight</div>
+                <div></div>
+                
+                {formData.portfolio_assets.map((asset, idx) => (
+                  <React.Fragment key={`${asset.symbol}@${asset.exchange}`}>
+                    <div style={{ 
+                      padding: '10px 12px', 
+                      backgroundColor: '#f8f9fa',
+                      borderRadius: '6px',
+                      fontWeight: 600,
+                      display: 'flex',
+                      alignItems: 'center'
+                    }}>
+                      {asset.symbol}
+                    </div>
+                    <div style={{ 
+                      padding: '10px 12px', 
+                      backgroundColor: '#f8f9fa',
+                      borderRadius: '6px',
+                      color: '#555',
+                      display: 'flex',
+                      alignItems: 'center'
+                    }}>
+                      {asset.exchange}
+                    </div>
+                    <input
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={asset.weight || ''}
+                      onChange={(e) => {
+                        const newAssets = [...formData.portfolio_assets];
+                        const currentAsset = newAssets[idx];
+                        if (currentAsset) {
+                          newAssets[idx] = { 
+                            symbol: currentAsset.symbol, 
+                            exchange: currentAsset.exchange, 
+                            weight: parseFloat(e.target.value) || 0 
+                          };
+                          setFormData(prev => ({ ...prev, portfolio_assets: newAssets }));
+                        }
+                      }}
+                      style={{ 
+                        padding: '8px', 
+                        border: '1px solid #ddd', 
+                        borderRadius: '6px',
+                        textAlign: 'center'
+                      }}
+                      placeholder="Auto"
+                    />
                     <button
                       type="button"
                       onClick={() => {
-                        const equalWeight = 1 / formData.portfolio_assets.length;
+                        const removedExchange = formData.portfolio_assets[idx]?.exchange;
+                        const newAssets = formData.portfolio_assets.filter((_, i) => i !== idx);
+                        // Check if any remaining asset uses this exchange
+                        const exchangeStillUsed = newAssets.some(a => a.exchange === removedExchange);
                         setFormData(prev => ({
                           ...prev,
-                          portfolio_assets: prev.portfolio_assets.map(a => ({ ...a, weight: equalWeight }))
+                          portfolio_assets: newAssets,
+                          // Remove exchange from routing if no longer used
+                          routing_exchanges: exchangeStillUsed 
+                            ? prev.routing_exchanges 
+                            : prev.routing_exchanges.filter(e => e !== removedExchange)
                         }));
                       }}
                       style={{
-                        padding: '5px 12px',
-                        backgroundColor: '#6c757d',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
+                        padding: '8px',
+                        backgroundColor: '#fee',
+                        color: '#c00',
+                        border: '1px solid #fcc',
+                        borderRadius: '6px',
                         cursor: 'pointer',
-                        fontSize: '0.85em'
+                        fontSize: '14px'
                       }}
+                      title="Remove"
                     >
-                      ⚖️ Equal Weight
+                      ✕
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFormData(prev => ({ ...prev, portfolio_assets: [] }));
-                      }}
-                      style={{
-                        padding: '5px 12px',
-                        backgroundColor: '#dc3545',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontSize: '0.85em'
-                      }}
-                    >
-                      🗑️ Clear All
-                    </button>
-                  </div>
-                </div>
-              )}
+                  </React.Fragment>
+                ))}
+              </div>
               
-              {formData.portfolio_assets.length === 0 && (
-                <div style={{ 
-                  padding: '20px', 
-                  textAlign: 'center', 
-                  backgroundColor: '#fff',
-                  borderRadius: '6px',
-                  border: '1px dashed #ccc',
-                  color: '#999'
-                }}>
-                  No assets added yet. Use the form above to add symbol+exchange pairs.
-                </div>
-              )}
+              {/* Weight Summary */}
+              <div style={{ 
+                marginTop: '12px', 
+                padding: '10px 12px', 
+                backgroundColor: '#f8f9fa', 
+                borderRadius: '6px',
+                fontSize: '12px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}>
+                {(() => {
+                  const totalWeight = formData.portfolio_assets.reduce((sum, a) => sum + (a.weight || 0), 0);
+                  const assetsWithWeight = formData.portfolio_assets.filter(a => a.weight > 0).length;
+                  
+                  if (assetsWithWeight === 0) {
+                    return <span style={{ color: '#666' }}>⚖️ Equal weight: {(100 / formData.portfolio_assets.length).toFixed(1)}% each</span>;
+                  } else if (Math.abs(totalWeight - 1) > 0.01) {
+                    return <span style={{ color: '#cc0000' }}>⚠️ Weights sum to {(totalWeight * 100).toFixed(1)}% (should = 100%)</span>;
+                  } else {
+                    return <span style={{ color: '#28a745' }}>✓ Weights sum to 100%</span>;
+                  }
+                })()}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const equalWeight = 1 / formData.portfolio_assets.length;
+                    setFormData(prev => ({
+                      ...prev,
+                      portfolio_assets: prev.portfolio_assets.map(a => ({ ...a, weight: equalWeight }))
+                    }));
+                  }}
+                  style={{
+                    padding: '4px 10px',
+                    backgroundColor: '#e9ecef',
+                    border: '1px solid #ced4da',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '11px'
+                  }}
+                >
+                  ⚖️ Equal Weight
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ 
+              padding: '30px', 
+              textAlign: 'center', 
+              backgroundColor: '#f8f9fa',
+              borderRadius: '8px',
+              border: '2px dashed #dee2e6',
+              color: '#666'
+            }}>
+              <div style={{ fontSize: '24px', marginBottom: '8px' }}>📈</div>
+              <div>No assets added yet. Add at least one symbol+exchange pair above.</div>
             </div>
           )}
-        </div>
+        </AccordionSection>
 
-        {/* Smart Order Routing Configuration */}
-        <div style={{ 
-          padding: '15px', 
-          backgroundColor: '#f5f0ff', 
-          borderRadius: '8px',
-          border: '1px solid #d0c4e8'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', marginBottom: '15px' }}>
-            <input
-              type="checkbox"
-              id="routing_enabled"
-              name="routing_enabled"
-              checked={formData.routing_enabled}
-              onChange={(e) => setFormData(prev => ({ ...prev, routing_enabled: e.target.checked }))}
-              style={{ marginRight: '10px' }}
-            />
-            <label htmlFor="routing_enabled" style={{ fontWeight: 'bold', cursor: 'pointer' }}>
-              🔀 Enable Smart Order Routing
-            </label>
-          </div>
-
-          {formData.routing_enabled && (
-            <div style={{ display: 'grid', gap: '15px' }}>
-              {/* Routing Mode */}
-              <div>
-                <label htmlFor="routing_mode" style={{ display: 'block', marginBottom: '5px' }}>
-                  Routing Mode
-                </label>
-                <select
-                  id="routing_mode"
-                  name="routing_mode"
-                  value={formData.routing_mode}
-                  onChange={handleChange}
-                  style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-                >
-                  <option value="best_venue">Best Venue - Route to single best venue</option>
-                  <option value="multi_venue">Multi-Venue - Split across venues</option>
-                  <option value="arbitrage">Arbitrage - Exploit price differences</option>
-                </select>
+        {/* ==================== SECTION 2: STRATEGY & ROUTING ==================== */}
+        <AccordionSection
+          title="Strategy & Order Routing"
+          icon="🔀"
+          isExpanded={expandedSections.strategy ?? true}
+          onToggle={() => toggleSection('strategy')}
+          badge={formData.routing_mode === 'arbitrage' ? 'Arbitrage' : formData.routing_mode === 'multi_venue' ? 'Multi-Venue' : 'Best Venue'}
+          badgeColor={formData.routing_mode === 'arbitrage' ? '#6f42c1' : '#17a2b8'}
+        >
+          <div style={{ display: 'grid', gap: '16px' }}>
+            {/* Strategy Type */}
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>Strategy Type</label>
+              <select
+                name="strategy_type"
+                value={formData.strategy_type}
+                onChange={handleChange}
+                style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '6px', fontSize: '14px' }}
+              >
+                <option value="market_making">Market Making (Avellaneda-Stoikov)</option>
+              </select>
+              <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
+                The strategy determines how quotes are generated and orders are managed.
               </div>
+            </div>
 
-              {/* Execution Style */}
-              <div>
-                <label htmlFor="execution_style" style={{ display: 'block', marginBottom: '5px' }}>
-                  Execution Style
-                </label>
-                <select
-                  id="execution_style"
-                  name="execution_style"
-                  value={formData.execution_style}
-                  onChange={handleChange}
-                  style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-                >
-                  <option value="aggressive">Aggressive - Take liquidity immediately</option>
-                  <option value="passive">Passive - Provide liquidity (maker)</option>
-                  <option value="balanced">Balanced - Mix of aggressive and passive</option>
-                  <option value="twap">TWAP - Time-weighted execution</option>
-                  <option value="vwap">VWAP - Volume-weighted execution</option>
-                </select>
-              </div>
-
-              {/* Multi-venue settings */}
-              {formData.routing_mode === 'multi_venue' && (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                  <div>
-                    <label htmlFor="max_venues_per_order" style={{ display: 'block', marginBottom: '5px' }}>
-                      Max Venues Per Order
-                    </label>
+            {/* Routing Mode */}
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>Order Routing Mode</label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+                {[
+                  { value: 'multi_venue', label: 'Multi-Venue', desc: 'Split orders across exchanges', icon: '🔀' },
+                  { value: 'best_venue', label: 'Best Venue', desc: 'Route to best price', icon: '🎯' },
+                  { value: 'arbitrage', label: 'Arbitrage', desc: 'Exploit price differences', icon: '💹' },
+                ].map(mode => (
+                  <label
+                    key={mode.value}
+                    style={{
+                      padding: '12px',
+                      border: formData.routing_mode === mode.value ? '2px solid #0066cc' : '1px solid #ddd',
+                      borderRadius: '8px',
+                      cursor: 'pointer',
+                      backgroundColor: formData.routing_mode === mode.value ? '#f0f7ff' : 'white',
+                      textAlign: 'center'
+                    }}
+                  >
                     <input
-                      type="number"
-                      id="max_venues_per_order"
-                      name="max_venues_per_order"
-                      value={formData.max_venues_per_order}
+                      type="radio"
+                      name="routing_mode"
+                      value={mode.value}
+                      checked={formData.routing_mode === mode.value}
                       onChange={handleChange}
-                      min="1"
-                      max="10"
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
+                      style={{ display: 'none' }}
                     />
-                  </div>
-                  <div>
-                    <label htmlFor="min_venue_allocation" style={{ display: 'block', marginBottom: '5px' }}>
-                      Min Venue Allocation (%)
-                    </label>
-                    <input
-                      type="number"
-                      id="min_venue_allocation"
-                      name="min_venue_allocation"
-                      value={formData.min_venue_allocation * 100}
-                      onChange={(e) => setFormData(prev => ({ 
-                        ...prev, 
-                        min_venue_allocation: parseFloat(e.target.value) / 100 
-                      }))}
-                      min="1"
-                      max="50"
-                      step="1"
-                      style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* TWAP/VWAP duration */}
-              {(formData.execution_style === 'twap' || formData.execution_style === 'vwap') && (
-                <div>
-                  <label htmlFor="execution_duration_ms" style={{ display: 'block', marginBottom: '5px' }}>
-                    Execution Duration (seconds)
+                    <div style={{ fontSize: '20px', marginBottom: '4px' }}>{mode.icon}</div>
+                    <div style={{ fontWeight: 600, fontSize: '13px' }}>{mode.label}</div>
+                    <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>{mode.desc}</div>
                   </label>
-                  <input
-                    type="number"
-                    id="execution_duration_ms"
-                    name="execution_duration_ms"
-                    value={formData.execution_duration_ms / 1000}
-                    onChange={(e) => setFormData(prev => ({ 
-                      ...prev, 
-                      execution_duration_ms: parseFloat(e.target.value) * 1000 
-                    }))}
-                    min="1"
-                    max="3600"
-                    step="1"
-                    style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-                  />
-                </div>
-              )}
+                ))}
+              </div>
+            </div>
 
-              {/* Arbitrage settings */}
-              {formData.routing_mode === 'arbitrage' && (
-                <div>
-                  <label htmlFor="min_arb_profit_bps" style={{ display: 'block', marginBottom: '5px' }}>
-                    Min Arbitrage Profit (basis points)
-                  </label>
-                  <input
-                    type="number"
-                    id="min_arb_profit_bps"
-                    name="min_arb_profit_bps"
-                    value={formData.min_arb_profit_bps}
-                    onChange={handleChange}
-                    min="1"
-                    max="100"
-                    step="1"
-                    style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-                  />
-                  <small style={{ color: '#666', fontSize: '12px' }}>
-                    10 bps = 0.1% profit threshold
-                  </small>
-                </div>
-              )}
+            {/* Execution Style */}
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>Execution Style</label>
+              <select
+                name="execution_style"
+                value={formData.execution_style}
+                onChange={handleChange}
+                style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '6px', fontSize: '14px' }}
+              >
+                <option value="balanced">Balanced - Mix of aggressive and passive</option>
+                <option value="aggressive">Aggressive - Take liquidity immediately</option>
+                <option value="passive">Passive - Provide liquidity (maker)</option>
+                <option value="twap">TWAP - Time-weighted execution</option>
+                <option value="vwap">VWAP - Volume-weighted execution</option>
+              </select>
+            </div>
 
-              {/* Routing Exchanges */}
-              <div>
-                <label style={{ display: 'block', marginBottom: '5px' }}>
-                  Routing Exchanges
-                </label>
-                <div style={{ 
-                  display: 'grid', 
-                  gridTemplateColumns: 'repeat(3, 1fr)', 
-                  gap: '8px',
-                  padding: '10px',
-                  backgroundColor: '#fff',
-                  borderRadius: '4px',
-                  border: '1px solid #ccc'
-                }}>
-                  {['binance', 'coinbase', 'kraken', 'kucoin', 'okx', 'bybit'].map(exchange => (
-                    <label key={exchange} style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-                      <input
-                        type="checkbox"
-                        checked={formData.routing_exchanges.includes(exchange)}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setFormData(prev => ({ 
-                              ...prev, 
-                              routing_exchanges: [...prev.routing_exchanges, exchange] 
-                            }));
-                          } else {
-                            setFormData(prev => ({ 
-                              ...prev, 
-                              routing_exchanges: prev.routing_exchanges.filter(ex => ex !== exchange) 
-                            }));
-                          }
-                        }}
-                        style={{ marginRight: '6px' }}
-                      />
-                      {exchange.charAt(0).toUpperCase() + exchange.slice(1)}
-                    </label>
+            {/* Routing Exchanges (auto-populated from portfolio) */}
+            <div style={{ 
+              padding: '12px', 
+              backgroundColor: '#f8f9fa', 
+              borderRadius: '6px',
+              border: '1px solid #e9ecef'
+            }}>
+              <div style={{ fontWeight: 500, marginBottom: '8px', fontSize: '13px' }}>
+                Orders will be routed to:
+              </div>
+              {formData.portfolio_assets.length > 0 ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                  {[...new Set(formData.portfolio_assets.map(a => a.exchange))].map(exchange => (
+                    <span key={exchange} style={{
+                      padding: '4px 10px',
+                      backgroundColor: '#007bff',
+                      color: 'white',
+                      borderRadius: '12px',
+                      fontSize: '12px',
+                      fontWeight: 500
+                    }}>
+                      {exchange}
+                    </span>
                   ))}
                 </div>
-                <small style={{ color: '#666', fontSize: '12px' }}>
-                  Select venues for order routing. Leave empty to use all available venues.
-                </small>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Strategy Type */}
-        <div>
-          <label htmlFor="strategy_type" style={{ display: 'block', marginBottom: '5px' }}>
-            Strategy Type
-          </label>
-          <select
-            id="strategy_type"
-            name="strategy_type"
-            value={formData.strategy_type}
-            onChange={handleChange}
-            required
-            style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-          >
-            <option value="market_making">Market Making</option>
-          </select>
-        </div>
-
-        {/* Initial Capital */}
-        <div>
-          <label htmlFor="initial_capital" style={{ display: 'block', marginBottom: '5px' }}>
-            Initial Capital ($)
-          </label>
-          <input
-            type="number"
-            id="initial_capital"
-            name="initial_capital"
-            value={formData.initial_capital}
-            onChange={handleChange}
-            step="1000"
-            min="1000"
-            required
-            style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
-          />
-        </div>
-
-        {/* Portfolio Allocation */}
-        <div style={{ 
-          padding: '15px', 
-          backgroundColor: '#f0f8ff', 
-          borderRadius: '4px', 
-          border: '1px solid #b8d4e8',
-          marginTop: '10px'
-        }}>
-          <label style={{ display: 'block', marginBottom: '10px', fontWeight: 'bold' }}>
-            💰 Portfolio Allocation
-          </label>
-          
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-            <div>
-              <label htmlFor="initial_inventory_pct" style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
-                Base Asset Allocation (%)
-              </label>
-              <input
-                type="number"
-                id="initial_inventory_pct"
-                name="initial_inventory_pct"
-                value={formData.initial_inventory_pct * 100}
-                onChange={(e) => setFormData(prev => ({ ...prev, initial_inventory_pct: parseFloat(e.target.value) / 100 }))}
-                step="5"
-                min="0"
-                max="100"
-                style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px' }}
-              />
-              <div style={{ fontSize: '11px', color: '#6c757d', marginTop: '2px' }}>
-                % of capital as base asset (e.g., BTC). Rest is quote (USD). Default: 50%
-              </div>
+              ) : (
+                <div style={{ color: '#999', fontSize: '12px' }}>Add assets above to configure routing exchanges</div>
+              )}
             </div>
 
-            <div>
-              <label htmlFor="initial_30d_volume" style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
-                30-Day Volume ($)
-              </label>
-              <input
-                type="number"
-                id="initial_30d_volume"
-                name="initial_30d_volume"
-                value={formData.initial_30d_volume}
-                onChange={handleChange}
-                step="100000"
-                min="0"
-                style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px' }}
-              />
-              <div style={{ fontSize: '11px', color: '#6c757d', marginTop: '2px' }}>
-                Starting 30-day volume for fee tier. 0 = default fees.
-              </div>
-            </div>
-          </div>
-          
-          <div style={{ 
-            marginTop: '10px', 
-            padding: '8px', 
-            backgroundColor: '#e8f4f8', 
-            borderRadius: '4px',
-            fontSize: '12px',
-            color: '#495057'
-          }}>
-            <strong>Current allocation:</strong>{' '}
-            ${((formData.initial_capital * formData.initial_inventory_pct)).toLocaleString()} in base asset,{' '}
-            ${((formData.initial_capital * (1 - formData.initial_inventory_pct))).toLocaleString()} in quote
-          </div>
-        </div>
-
-        {/* Optimization Method */}
-        <div style={{ 
-          padding: '15px', 
-          backgroundColor: '#f8f9fa', 
-          borderRadius: '4px', 
-          border: '1px solid #dee2e6' 
-        }}>
-          <label style={{ display: 'block', marginBottom: '10px', fontWeight: 'bold' }}>
-            Optimization Method
-          </label>
-          
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-              <input
-                type="radio"
-                name="optimization_method"
-                value="genetic"
-                checked={formData.optimization_method === 'genetic'}
-                onChange={handleChange}
-                style={{ marginRight: '8px' }}
-              />
+            {/* Arbitrage-specific settings */}
+            {formData.routing_mode === 'arbitrage' && (
               <div>
-                <strong>Genetic Algorithm (Recommended)</strong>
-                <div style={{ fontSize: '12px', color: '#6c757d', marginTop: '2px' }}>
-                  Automatically finds optimal parameters. Takes longer but maximizes performance.
-                </div>
-              </div>
-            </label>
-
-            <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-              <input
-                type="radio"
-                name="optimization_method"
-                value="manual"
-                checked={formData.optimization_method === 'manual'}
-                onChange={handleChange}
-                style={{ marginRight: '8px' }}
-              />
-              <div>
-                <strong>Manual Parameters (Advanced)</strong>
-                <div style={{ fontSize: '12px', color: '#6c757d', marginTop: '2px' }}>
-                  Specify exact parameter values. Faster but requires expertise.
-                </div>
-              </div>
-            </label>
-          </div>
-
-          {/* Genetic Algorithm Options */}
-          {formData.optimization_method === 'genetic' && (
-            <div style={{ 
-              marginTop: '15px', 
-              paddingTop: '15px', 
-              borderTop: '1px solid #dee2e6',
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: '10px'
-            }}>
-              <div>
-                <label htmlFor="population_size" style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
-                  Population Size
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>
+                  Min Arbitrage Profit (basis points)
                 </label>
                 <input
                   type="number"
-                  id="population_size"
-                  name="population_size"
-                  value={formData.population_size}
+                  name="min_arb_profit_bps"
+                  value={formData.min_arb_profit_bps}
                   onChange={handleChange}
-                  min="5"
+                  min="1"
                   max="100"
-                  step="5"
-                  style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px' }}
+                  style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '6px' }}
                 />
-                <div style={{ fontSize: '11px', color: '#6c757d', marginTop: '2px' }}>
-                  Default: 50
+                <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
+                  10 bps = 0.1% profit threshold before executing arbitrage
                 </div>
               </div>
+            )}
 
+            {/* TWAP/VWAP duration */}
+            {(formData.execution_style === 'twap' || formData.execution_style === 'vwap') && (
               <div>
-                <label htmlFor="generations" style={{ display: 'block', marginBottom: '5px', fontSize: '14px' }}>
-                  Generations
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>
+                  Execution Duration (seconds)
                 </label>
                 <input
                   type="number"
-                  id="generations"
-                  name="generations"
-                  value={formData.generations}
-                  onChange={handleChange}
-                  min="3"
-                  max="50"
-                  step="1"
-                  style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px' }}
+                  value={formData.execution_duration_ms / 1000}
+                  onChange={(e) => setFormData(prev => ({ 
+                    ...prev, 
+                    execution_duration_ms: parseFloat(e.target.value) * 1000 
+                  }))}
+                  min="1"
+                  max="3600"
+                  style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '6px' }}
                 />
-                <div style={{ fontSize: '11px', color: '#6c757d', marginTop: '2px' }}>
-                  Default: 20
+              </div>
+            )}
+          </div>
+        </AccordionSection>
+
+        {/* ==================== SECTION 3: CAPITAL & ALLOCATION ==================== */}
+        <AccordionSection
+          title="Capital & Allocation"
+          icon="💰"
+          isExpanded={expandedSections.capital ?? false}
+          onToggle={() => toggleSection('capital')}
+          badge={`$${formData.initial_capital.toLocaleString()}`}
+          badgeColor="#28a745"
+        >
+          <div style={{ display: 'grid', gap: '16px' }}>
+            {/* Initial Capital */}
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>Initial Capital ($)</label>
+              <input
+                type="number"
+                name="initial_capital"
+                value={formData.initial_capital}
+                onChange={handleChange}
+                step="1000"
+                min="1000"
+                style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '6px', fontSize: '14px' }}
+              />
+            </div>
+
+            {/* Base Asset Allocation */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>Base Asset Allocation (%)</label>
+                <input
+                  type="number"
+                  value={formData.initial_inventory_pct * 100}
+                  onChange={(e) => setFormData(prev => ({ ...prev, initial_inventory_pct: parseFloat(e.target.value) / 100 }))}
+                  step="5"
+                  min="0"
+                  max="100"
+                  style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '6px' }}
+                />
+                <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
+                  % as base asset (e.g., BTC). Rest is quote (USD).
+                </div>
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>30-Day Volume ($)</label>
+                <input
+                  type="number"
+                  name="initial_30d_volume"
+                  value={formData.initial_30d_volume}
+                  onChange={handleChange}
+                  step="100000"
+                  min="0"
+                  style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '6px' }}
+                />
+                <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
+                  For fee tier calculation. 0 = default fees.
                 </div>
               </div>
             </div>
-          )}
 
-          {/* Advanced Analysis Settings */}
-          <div style={{ 
-            marginTop: '15px', 
-            paddingTop: '15px', 
-            borderTop: '1px solid #dee2e6'
-          }}>
-            <h4 style={{ margin: '0 0 10px 0', fontSize: '14px' }}>🔬 Advanced Analysis</h4>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-              {/* Monte Carlo Settings */}
-              <div style={{ 
-                padding: '10px', 
-                backgroundColor: '#f8f9fa', 
-                borderRadius: '4px',
-                border: '1px solid #dee2e6'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', marginBottom: '8px' }}>
+            {/* Allocation Preview */}
+            <div style={{ 
+              padding: '12px', 
+              backgroundColor: '#e8f5e9', 
+              borderRadius: '6px',
+              fontSize: '13px'
+            }}>
+              <strong>Allocation:</strong>{' '}
+              ${((formData.initial_capital * formData.initial_inventory_pct)).toLocaleString()} base asset +{' '}
+              ${((formData.initial_capital * (1 - formData.initial_inventory_pct))).toLocaleString()} quote
+            </div>
+          </div>
+        </AccordionSection>
+
+        {/* ==================== SECTION 4: OPTIMIZATION ==================== */}
+        <AccordionSection
+          title="Optimization Method"
+          icon="🧬"
+          isExpanded={expandedSections.optimization ?? false}
+          onToggle={() => toggleSection('optimization')}
+          badge={formData.optimization_method === 'genetic' ? 'Genetic Algorithm' : 'Manual'}
+          badgeColor={formData.optimization_method === 'genetic' ? '#6f42c1' : '#6c757d'}
+        >
+          <div style={{ display: 'grid', gap: '16px' }}>
+            {/* Method Selection */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              {[
+                { value: 'genetic', label: 'Genetic Algorithm', desc: 'Auto-find optimal parameters', icon: '🧬', recommended: true },
+                { value: 'manual', label: 'Manual Parameters', desc: 'Set exact values', icon: '⚙️', recommended: false },
+              ].map(method => (
+                <label
+                  key={method.value}
+                  style={{
+                    padding: '16px',
+                    border: formData.optimization_method === method.value ? '2px solid #6f42c1' : '1px solid #ddd',
+                    borderRadius: '8px',
+                    cursor: 'pointer',
+                    backgroundColor: formData.optimization_method === method.value ? '#f8f4ff' : 'white',
+                    position: 'relative'
+                  }}
+                >
                   <input
-                    type="checkbox"
-                    id="monte_carlo_enabled"
-                    name="monte_carlo_enabled"
-                    checked={formData.monte_carlo_enabled}
-                    onChange={(e) => setFormData({...formData, monte_carlo_enabled: e.target.checked})}
-                    style={{ marginRight: '8px' }}
+                    type="radio"
+                    name="optimization_method"
+                    value={method.value}
+                    checked={formData.optimization_method === method.value}
+                    onChange={handleChange}
+                    style={{ display: 'none' }}
                   />
-                  <label htmlFor="monte_carlo_enabled" style={{ fontSize: '13px', fontWeight: 500 }}>
-                    🎲 Monte Carlo Simulation
-                  </label>
-                </div>
-                {formData.monte_carlo_enabled && (
+                  {method.recommended && (
+                    <span style={{
+                      position: 'absolute',
+                      top: '-8px',
+                      right: '10px',
+                      backgroundColor: '#28a745',
+                      color: 'white',
+                      fontSize: '10px',
+                      padding: '2px 6px',
+                      borderRadius: '8px'
+                    }}>Recommended</span>
+                  )}
+                  <div style={{ fontSize: '24px', marginBottom: '8px' }}>{method.icon}</div>
+                  <div style={{ fontWeight: 600, marginBottom: '4px' }}>{method.label}</div>
+                  <div style={{ fontSize: '12px', color: '#666' }}>{method.desc}</div>
+                </label>
+              ))}
+            </div>
+
+            {/* Genetic Algorithm Settings */}
+            {formData.optimization_method === 'genetic' && (
+              <div style={{ 
+                padding: '16px', 
+                backgroundColor: '#f8f4ff', 
+                borderRadius: '8px',
+                border: '1px solid #e0d4f0'
+              }}>
+                <div style={{ fontWeight: 600, marginBottom: '12px', color: '#6f42c1' }}>Genetic Algorithm Settings</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                   <div>
-                    <label htmlFor="monte_carlo_runs" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
-                      Number of Runs
-                    </label>
+                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: 500 }}>Population Size</label>
                     <input
                       type="number"
-                      id="monte_carlo_runs"
+                      name="population_size"
+                      value={formData.population_size}
+                      onChange={handleChange}
+                      min="10"
+                      max="200"
+                      style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
+                    />
+                    <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>Default: 50</div>
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: 500 }}>Generations</label>
+                    <input
+                      type="number"
+                      name="generations"
+                      value={formData.generations}
+                      onChange={handleChange}
+                      min="5"
+                      max="100"
+                      style={{ width: '100%', padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
+                    />
+                    <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>Default: 20</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Manual Parameters */}
+            {formData.optimization_method === 'manual' && (
+              <div style={{ 
+                padding: '16px', 
+                backgroundColor: '#f8f9fa', 
+                borderRadius: '8px',
+                border: '1px solid #e0e0e0'
+              }}>
+                <div style={{ fontWeight: 600, marginBottom: '12px' }}>Core Parameters</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '11px' }}>Risk Aversion (γ)</label>
+                    <input type="number" name="risk_aversion" value={formData.risk_aversion} onChange={handleChange} step="0.1" min="0.1" max="10" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '11px' }}>Inventory Target (q*)</label>
+                    <input type="number" name="inventory_target" value={formData.inventory_target} onChange={handleChange} step="0.1" min="-1" max="1" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '11px' }}>Order Size</label>
+                    <input type="number" name="order_size" value={formData.order_size} onChange={handleChange} step="0.001" min="0.001" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }} />
+                  </div>
+                </div>
+
+                <div style={{ fontWeight: 600, marginBottom: '12px' }}>Timing & Risk</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '16px' }}>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '11px' }}>Window (ms)</label>
+                    <input type="number" name="window_ms" value={formData.window_ms} onChange={handleChange} step="100" min="100" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '11px' }}>Min Quote Life (ms)</label>
+                    <input type="number" name="min_quote_lifetime_ms" value={formData.min_quote_lifetime_ms} onChange={handleChange} step="10" min="10" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '11px' }}>Fee Rate</label>
+                    <input type="number" name="fee_rate" value={formData.fee_rate} onChange={handleChange} step="0.0001" min="0" max="0.01" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '11px' }}>Volatility Cap</label>
+                    <input type="number" name="volatility_cap" value={formData.volatility_cap} onChange={handleChange} step="0.01" min="0" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '11px' }}>Time Horizon (min)</label>
+                    <input type="number" name="time_horizon_minutes" value={formData.time_horizon_minutes} onChange={handleChange} step="1" min="1" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '11px' }}>Market Depth (k)</label>
+                    <input type="number" name="market_depth_k" value={formData.market_depth_k} onChange={handleChange} step="0.1" min="0.1" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }} />
+                  </div>
+                </div>
+
+                <div style={{ fontWeight: 600, marginBottom: '12px', color: '#666' }}>Phase 2 Adjustments</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '11px' }}>Volatility Adjustment</label>
+                    <input type="number" name="volatility_adjustment_factor" value={formData.volatility_adjustment_factor} onChange={handleChange} step="0.1" min="0" max="1" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '11px' }}>Inventory Penalty</label>
+                    <input type="number" name="inventory_penalty_factor" value={formData.inventory_penalty_factor} onChange={handleChange} step="0.1" min="0" max="0.8" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '11px' }}>Trend Sensitivity</label>
+                    <input type="number" name="trend_sensitivity" value={formData.trend_sensitivity} onChange={handleChange} step="0.1" min="-0.5" max="0.5" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '4px', fontSize: '11px' }}>Flow Sensitivity</label>
+                    <input type="number" name="flow_sensitivity" value={formData.flow_sensitivity} onChange={handleChange} step="0.1" min="-0.3" max="0.3" style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }} />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </AccordionSection>
+
+        {/* ==================== SECTION 5: ANALYSIS & VALIDATION ==================== */}
+        <AccordionSection
+          title="Analysis & Validation"
+          icon="🔬"
+          isExpanded={expandedSections.analysis ?? false}
+          onToggle={() => toggleSection('analysis')}
+          badge={[
+            formData.monte_carlo_enabled ? 'MC' : '',
+            formData.walk_forward_enabled ? 'WF' : '',
+            formData.auto_save_profitable ? 'Auto-Save' : ''
+          ].filter(Boolean).join(' + ') || 'Configure'}
+          badgeColor="#17a2b8"
+        >
+          <div style={{ display: 'grid', gap: '16px' }}>
+            {/* Monte Carlo & Walk-Forward */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div style={{ 
+                padding: '14px', 
+                backgroundColor: formData.monte_carlo_enabled ? '#e3f2fd' : '#f8f9fa', 
+                borderRadius: '8px',
+                border: formData.monte_carlo_enabled ? '1px solid #90caf9' : '1px solid #e0e0e0'
+              }}>
+                <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', marginBottom: '10px' }}>
+                  <input
+                    type="checkbox"
+                    checked={formData.monte_carlo_enabled}
+                    onChange={(e) => setFormData(prev => ({ ...prev, monte_carlo_enabled: e.target.checked }))}
+                    style={{ marginRight: '8px' }}
+                  />
+                  <span style={{ fontWeight: 600 }}>🎲 Monte Carlo</span>
+                </label>
+                {formData.monte_carlo_enabled && (
+                  <div>
+                    <label style={{ fontSize: '11px', display: 'block', marginBottom: '4px' }}>Runs</label>
+                    <input
+                      type="number"
                       name="monte_carlo_runs"
                       value={formData.monte_carlo_runs}
                       onChange={handleChange}
                       min="100"
                       max="5000"
                       step="100"
-                      style={{ width: '100%', padding: '4px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }}
+                      style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '12px' }}
                     />
-                    <div style={{ fontSize: '10px', color: '#6c757d', marginTop: '2px' }}>
-                      Validates strategy robustness (default: 500)
-                    </div>
                   </div>
                 )}
               </div>
-
-              {/* Walk-Forward Settings */}
               <div style={{ 
-                padding: '10px', 
-                backgroundColor: '#f8f9fa', 
-                borderRadius: '4px',
-                border: '1px solid #dee2e6'
+                padding: '14px', 
+                backgroundColor: formData.walk_forward_enabled ? '#e8f5e9' : '#f8f9fa', 
+                borderRadius: '8px',
+                border: formData.walk_forward_enabled ? '1px solid #a5d6a7' : '1px solid #e0e0e0'
               }}>
-                <div style={{ display: 'flex', alignItems: 'center' }}>
+                <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
                   <input
                     type="checkbox"
-                    id="walk_forward_enabled"
-                    name="walk_forward_enabled"
                     checked={formData.walk_forward_enabled}
-                    onChange={(e) => setFormData({...formData, walk_forward_enabled: e.target.checked})}
+                    onChange={(e) => setFormData(prev => ({ ...prev, walk_forward_enabled: e.target.checked }))}
                     style={{ marginRight: '8px' }}
                   />
-                  <label htmlFor="walk_forward_enabled" style={{ fontSize: '13px', fontWeight: 500 }}>
-                    🔄 Walk-Forward Analysis
-                  </label>
-                </div>
-                <div style={{ fontSize: '10px', color: '#6c757d', marginTop: '5px' }}>
-                  Tests out-of-sample performance over rolling windows
+                  <span style={{ fontWeight: 600 }}>🔄 Walk-Forward</span>
+                </label>
+                <div style={{ fontSize: '11px', color: '#666', marginTop: '6px' }}>
+                  Tests out-of-sample performance
                 </div>
               </div>
             </div>
-          </div>
 
-          {/* Fitness Function Weights Section */}
-          {formData.optimization_method === 'genetic' && (
+            {/* Custom Fitness Weights (for Genetic) */}
+            {formData.optimization_method === 'genetic' && (
+              <div style={{ 
+                padding: '14px', 
+                backgroundColor: formData.custom_fitness_weights ? '#fff8e1' : '#f8f9fa', 
+                borderRadius: '8px',
+                border: formData.custom_fitness_weights ? '1px solid #ffcc80' : '1px solid #e0e0e0'
+              }}>
+                <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', marginBottom: formData.custom_fitness_weights ? '12px' : '0' }}>
+                  <input
+                    type="checkbox"
+                    checked={formData.custom_fitness_weights}
+                    onChange={(e) => setFormData(prev => ({ ...prev, custom_fitness_weights: e.target.checked }))}
+                    style={{ marginRight: '8px' }}
+                  />
+                  <span style={{ fontWeight: 600 }}>⚖️ Custom Fitness Weights</span>
+                </label>
+                {formData.custom_fitness_weights && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                    {(['sharpe', 'sortino', 'profit_factor', 'win_rate', 'net_profit', 'calmar'] as const).map(key => (
+                      <div key={key}>
+                        <label style={{ fontSize: '10px', display: 'block', marginBottom: '2px', textTransform: 'capitalize' }}>
+                          {key.replace('_', ' ')} ({formData.fitness_weights[key]}%)
+                        </label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="50"
+                          value={formData.fitness_weights[key]}
+                          onChange={(e) => setFormData(prev => ({
+                            ...prev,
+                            fitness_weights: { ...prev.fitness_weights, [key]: parseInt(e.target.value) }
+                          }))}
+                          style={{ width: '100%' }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Auto-Save Profitable Strategies */}
             <div style={{ 
-              marginTop: '15px', 
-              padding: '15px', 
-              backgroundColor: '#fff8e1', 
-              borderRadius: '6px',
-              border: '1px solid #ffb300'
+              padding: '14px', 
+              backgroundColor: formData.auto_save_profitable ? '#e8f5e9' : '#f8f9fa', 
+              borderRadius: '8px',
+              border: formData.auto_save_profitable ? '1px solid #a5d6a7' : '1px solid #e0e0e0'
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', marginBottom: formData.auto_save_profitable ? '12px' : '0' }}>
                 <input
                   type="checkbox"
-                  id="custom_fitness_weights"
-                  name="custom_fitness_weights"
-                  checked={formData.custom_fitness_weights}
-                  onChange={(e) => setFormData({...formData, custom_fitness_weights: e.target.checked})}
+                  checked={formData.auto_save_profitable}
+                  onChange={(e) => setFormData(prev => ({ ...prev, auto_save_profitable: e.target.checked }))}
                   style={{ marginRight: '8px' }}
                 />
-                <label htmlFor="custom_fitness_weights" style={{ fontSize: '14px', fontWeight: 600, color: '#e65100' }}>
-                  ⚖️ Custom Fitness Weights
-                </label>
-              </div>
-              
-              {formData.custom_fitness_weights && (
-                <>
-                  <div style={{ fontSize: '11px', color: '#bf360c', marginBottom: '12px' }}>
-                    Adjust how the GA evaluates strategies. Weights are normalized automatically. Total: {
-                      Object.values(formData.fitness_weights).reduce((a, b) => a + b, 0)
-                    }%
+                <span style={{ fontWeight: 600 }}>💾 Auto-Save Profitable Strategies</span>
+              </label>
+              {formData.auto_save_profitable && (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                  <div>
+                    <label style={{ fontSize: '10px', display: 'block', marginBottom: '2px' }}>Min Sharpe</label>
+                    <input type="number" name="min_sharpe_ratio" value={formData.min_sharpe_ratio} onChange={handleChange} step="0.1" min="0" style={{ width: '100%', padding: '4px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '11px' }} />
                   </div>
-                  
-                  {/* Preset Buttons */}
-                  <div style={{ marginBottom: '15px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                    <button
-                      type="button"
-                      onClick={() => setFormData({...formData, fitness_weights: {...FITNESS_PRESETS.balanced}})}
-                      style={{ padding: '4px 10px', fontSize: '11px', borderRadius: '4px', border: '1px solid #ccc', cursor: 'pointer', backgroundColor: '#fff' }}
-                    >
-                      📊 Balanced
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormData({...formData, fitness_weights: {...FITNESS_PRESETS.maxSharpe}})}
-                      style={{ padding: '4px 10px', fontSize: '11px', borderRadius: '4px', border: '1px solid #ccc', cursor: 'pointer', backgroundColor: '#fff' }}
-                    >
-                      📈 Max Sharpe
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormData({...formData, fitness_weights: {...FITNESS_PRESETS.maxProfit}})}
-                      style={{ padding: '4px 10px', fontSize: '11px', borderRadius: '4px', border: '1px solid #ccc', cursor: 'pointer', backgroundColor: '#fff' }}
-                    >
-                      💰 Max Profit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormData({...formData, fitness_weights: {...FITNESS_PRESETS.lowDrawdown}})}
-                      style={{ padding: '4px 10px', fontSize: '11px', borderRadius: '4px', border: '1px solid #ccc', cursor: 'pointer', backgroundColor: '#fff' }}
-                    >
-                      🛡️ Low Drawdown
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormData({...formData, fitness_weights: {...FITNESS_PRESETS.highWinRate}})}
-                      style={{ padding: '4px 10px', fontSize: '11px', borderRadius: '4px', border: '1px solid #ccc', cursor: 'pointer', backgroundColor: '#fff' }}
-                    >
-                      🎯 High Win Rate
-                    </button>
+                  <div>
+                    <label style={{ fontSize: '10px', display: 'block', marginBottom: '2px' }}>Min Profit Factor</label>
+                    <input type="number" name="min_profit_factor" value={formData.min_profit_factor} onChange={handleChange} step="0.1" min="1" style={{ width: '100%', padding: '4px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '11px' }} />
                   </div>
-                  
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
-                    <div>
-                      <label style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
-                        Sharpe Ratio ({formData.fitness_weights.sharpe}%)
-                      </label>
-                      <input
-                        type="range"
-                        min="0"
-                        max="50"
-                        value={formData.fitness_weights.sharpe}
-                        onChange={(e) => setFormData({...formData, fitness_weights: {...formData.fitness_weights, sharpe: parseInt(e.target.value)}})}
-                        style={{ width: '100%' }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
-                        Sortino Ratio ({formData.fitness_weights.sortino}%)
-                      </label>
-                      <input
-                        type="range"
-                        min="0"
-                        max="50"
-                        value={formData.fitness_weights.sortino}
-                        onChange={(e) => setFormData({...formData, fitness_weights: {...formData.fitness_weights, sortino: parseInt(e.target.value)}})}
-                        style={{ width: '100%' }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
-                        Profit Factor ({formData.fitness_weights.profit_factor}%)
-                      </label>
-                      <input
-                        type="range"
-                        min="0"
-                        max="50"
-                        value={formData.fitness_weights.profit_factor}
-                        onChange={(e) => setFormData({...formData, fitness_weights: {...formData.fitness_weights, profit_factor: parseInt(e.target.value)}})}
-                        style={{ width: '100%' }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
-                        Win Rate ({formData.fitness_weights.win_rate}%)
-                      </label>
-                      <input
-                        type="range"
-                        min="0"
-                        max="50"
-                        value={formData.fitness_weights.win_rate}
-                        onChange={(e) => setFormData({...formData, fitness_weights: {...formData.fitness_weights, win_rate: parseInt(e.target.value)}})}
-                        style={{ width: '100%' }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
-                        Net Profit ({formData.fitness_weights.net_profit}%)
-                      </label>
-                      <input
-                        type="range"
-                        min="0"
-                        max="60"
-                        value={formData.fitness_weights.net_profit}
-                        onChange={(e) => setFormData({...formData, fitness_weights: {...formData.fitness_weights, net_profit: parseInt(e.target.value)}})}
-                        style={{ width: '100%' }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
-                        Calmar Ratio ({formData.fitness_weights.calmar}%)
-                      </label>
-                      <input
-                        type="range"
-                        min="0"
-                        max="50"
-                        value={formData.fitness_weights.calmar}
-                        onChange={(e) => setFormData({...formData, fitness_weights: {...formData.fitness_weights, calmar: parseInt(e.target.value)}})}
-                        style={{ width: '100%' }}
-                      />
-                    </div>
+                  <div>
+                    <label style={{ fontSize: '10px', display: 'block', marginBottom: '2px' }}>Max Drawdown (%)</label>
+                    <input type="number" value={formData.max_drawdown * 100} onChange={(e) => setFormData(prev => ({ ...prev, max_drawdown: parseFloat(e.target.value) / 100 }))} step="1" min="5" max="50" style={{ width: '100%', padding: '4px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '11px' }} />
                   </div>
-                </>
+                  <div>
+                    <label style={{ fontSize: '10px', display: 'block', marginBottom: '2px' }}>Min Win Rate (%)</label>
+                    <input type="number" value={formData.min_win_rate * 100} onChange={(e) => setFormData(prev => ({ ...prev, min_win_rate: parseFloat(e.target.value) / 100 }))} step="1" min="30" max="80" style={{ width: '100%', padding: '4px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '11px' }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '10px', display: 'block', marginBottom: '2px' }}>Min Trades</label>
+                    <input type="number" name="min_trades" value={formData.min_trades} onChange={handleChange} step="10" min="10" style={{ width: '100%', padding: '4px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '11px' }} />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '10px', display: 'block', marginBottom: '2px' }}>Min PnL ($)</label>
+                    <input type="number" value={formData.min_total_pnl ?? 0} onChange={(e) => setFormData(prev => ({ ...prev, min_total_pnl: parseFloat(e.target.value) || null }))} step="100" style={{ width: '100%', padding: '4px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '11px' }} />
+                  </div>
+                </div>
               )}
             </div>
-          )}
-
-          {/* Profitability Criteria Section */}
-          <div style={{ 
-            marginTop: '15px', 
-            padding: '15px', 
-            backgroundColor: '#f0fff4', 
-            borderRadius: '6px',
-            border: '1px solid #38a169'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', marginBottom: '12px' }}>
-              <input
-                type="checkbox"
-                id="auto_save_profitable"
-                name="auto_save_profitable"
-                checked={formData.auto_save_profitable}
-                onChange={(e) => setFormData({...formData, auto_save_profitable: e.target.checked})}
-                style={{ marginRight: '8px' }}
-              />
-              <label htmlFor="auto_save_profitable" style={{ fontSize: '14px', fontWeight: 600, color: '#276749' }}>
-                💾 Auto-Save Profitable Strategies
-              </label>
-            </div>
-            
-            {formData.auto_save_profitable && (
-              <>
-                <div style={{ fontSize: '11px', color: '#2f855a', marginBottom: '12px' }}>
-                  Strategies meeting these criteria will be automatically saved to the database for future use
-                </div>
-                
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
-                  <div>
-                    <label htmlFor="min_sharpe_ratio" style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
-                      Min Sharpe Ratio
-                    </label>
-                    <input
-                      type="number"
-                      id="min_sharpe_ratio"
-                      name="min_sharpe_ratio"
-                      value={formData.min_sharpe_ratio}
-                      onChange={handleChange}
-                      step="0.1"
-                      min="0"
-                      max="5"
-                      style={{ width: '100%', padding: '5px', border: '1px solid #9ae6b4', borderRadius: '4px', fontSize: '12px' }}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="min_profit_factor" style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
-                      Min Profit Factor
-                    </label>
-                    <input
-                      type="number"
-                      id="min_profit_factor"
-                      name="min_profit_factor"
-                      value={formData.min_profit_factor}
-                      onChange={handleChange}
-                      step="0.1"
-                      min="1"
-                      max="10"
-                      style={{ width: '100%', padding: '5px', border: '1px solid #9ae6b4', borderRadius: '4px', fontSize: '12px' }}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="max_drawdown" style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
-                      Max Drawdown (%)
-                    </label>
-                    <input
-                      type="number"
-                      id="max_drawdown"
-                      name="max_drawdown"
-                      value={formData.max_drawdown * 100}
-                      onChange={(e) => setFormData({...formData, max_drawdown: parseFloat(e.target.value) / 100})}
-                      step="1"
-                      min="5"
-                      max="50"
-                      style={{ width: '100%', padding: '5px', border: '1px solid #9ae6b4', borderRadius: '4px', fontSize: '12px' }}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="min_win_rate" style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
-                      Min Win Rate (%)
-                    </label>
-                    <input
-                      type="number"
-                      id="min_win_rate"
-                      name="min_win_rate"
-                      value={formData.min_win_rate * 100}
-                      onChange={(e) => setFormData({...formData, min_win_rate: parseFloat(e.target.value) / 100})}
-                      step="1"
-                      min="30"
-                      max="80"
-                      style={{ width: '100%', padding: '5px', border: '1px solid #9ae6b4', borderRadius: '4px', fontSize: '12px' }}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="min_trades" style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
-                      Min Trades
-                    </label>
-                    <input
-                      type="number"
-                      id="min_trades"
-                      name="min_trades"
-                      value={formData.min_trades}
-                      onChange={handleChange}
-                      step="10"
-                      min="10"
-                      max="500"
-                      style={{ width: '100%', padding: '5px', border: '1px solid #9ae6b4', borderRadius: '4px', fontSize: '12px' }}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="min_total_pnl" style={{ display: 'block', marginBottom: '3px', fontSize: '11px', fontWeight: 500 }}>
-                      Min PnL ($)
-                    </label>
-                    <input
-                      type="number"
-                      id="min_total_pnl"
-                      name="min_total_pnl"
-                      value={formData.min_total_pnl ?? 0}
-                      onChange={(e) => setFormData({...formData, min_total_pnl: parseFloat(e.target.value) || null})}
-                      step="100"
-                      style={{ width: '100%', padding: '5px', border: '1px solid #9ae6b4', borderRadius: '4px', fontSize: '12px' }}
-                    />
-                  </div>
-                </div>
-              </>
-            )}
           </div>
+        </AccordionSection>
 
-          {/* Manual Parameters */}
-          {formData.optimization_method === 'manual' && (
+        {/* ==================== SUBMIT SECTION ==================== */}
+        <div style={{ 
+          marginTop: '8px',
+          padding: '20px',
+          backgroundColor: '#f8f9fa',
+          borderRadius: '8px',
+          border: '1px solid #e0e0e0'
+        }}>
+          {/* Validation Check */}
+          {formData.portfolio_assets.length === 0 && (
             <div style={{ 
-              marginTop: '15px', 
-              paddingTop: '15px', 
-              borderTop: '1px solid #dee2e6'
+              marginBottom: '16px',
+              padding: '12px',
+              backgroundColor: '#fff3cd',
+              border: '1px solid #ffc107',
+              borderRadius: '6px',
+              color: '#856404',
+              fontSize: '13px'
             }}>
-              <div style={{ marginBottom: '15px' }}>
-                <h4 style={{ margin: '0 0 10px 0', fontSize: '14px' }}>Core Parameters</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
-                  <div>
-                    <label htmlFor="risk_aversion" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
-                      Risk Aversion (γ)
-                    </label>
-                    <input
-                      type="number"
-                      id="risk_aversion"
-                      name="risk_aversion"
-                      value={formData.risk_aversion}
-                      onChange={handleChange}
-                      step="0.1"
-                      min="0.1"
-                      max="10"
-                      style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="inventory_target" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
-                      Inventory Target (q*)
-                    </label>
-                    <input
-                      type="number"
-                      id="inventory_target"
-                      name="inventory_target"
-                      value={formData.inventory_target}
-                      onChange={handleChange}
-                      step="0.1"
-                      min="-1"
-                      max="1"
-                      style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="order_size" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
-                      Order Size
-                    </label>
-                    <input
-                      type="number"
-                      id="order_size"
-                      name="order_size"
-                      value={formData.order_size}
-                      onChange={handleChange}
-                      step="0.001"
-                      min="0.001"
-                      style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ marginBottom: '15px' }}>
-                <h4 style={{ margin: '0 0 10px 0', fontSize: '14px' }}>Timing & Risk Parameters</h4>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
-                  <div>
-                    <label htmlFor="window_ms" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
-                      Window (ms)
-                    </label>
-                    <input
-                      type="number"
-                      id="window_ms"
-                      name="window_ms"
-                      value={formData.window_ms}
-                      onChange={handleChange}
-                      step="100"
-                      min="100"
-                      style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="min_quote_lifetime_ms" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
-                      Min Quote Life (ms)
-                    </label>
-                    <input
-                      type="number"
-                      id="min_quote_lifetime_ms"
-                      name="min_quote_lifetime_ms"
-                      value={formData.min_quote_lifetime_ms}
-                      onChange={handleChange}
-                      step="10"
-                      min="10"
-                      style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="fee_rate" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
-                      Fee Rate
-                    </label>
-                    <input
-                      type="number"
-                      id="fee_rate"
-                      name="fee_rate"
-                      value={formData.fee_rate}
-                      onChange={handleChange}
-                      step="0.0001"
-                      min="0"
-                      max="0.01"
-                      style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ marginBottom: '15px' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
-                  <div>
-                    <label htmlFor="volatility_cap" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
-                      Volatility Cap
-                    </label>
-                    <input
-                      type="number"
-                      id="volatility_cap"
-                      name="volatility_cap"
-                      value={formData.volatility_cap}
-                      onChange={handleChange}
-                      step="0.01"
-                      min="0"
-                      style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="time_horizon_minutes" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
-                      Time Horizon (min)
-                    </label>
-                    <input
-                      type="number"
-                      id="time_horizon_minutes"
-                      name="time_horizon_minutes"
-                      value={formData.time_horizon_minutes}
-                      onChange={handleChange}
-                      step="1"
-                      min="1"
-                      style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="market_depth_k" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
-                      Market Depth (k)
-                    </label>
-                    <input
-                      type="number"
-                      id="market_depth_k"
-                      name="market_depth_k"
-                      value={formData.market_depth_k}
-                      onChange={handleChange}
-                      step="0.1"
-                      min="0.1"
-                      style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#6c757d' }}>
-                  Phase 2 Adjustment Factors (Advanced)
-                </h4>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                  <div>
-                    <label htmlFor="volatility_adjustment_factor" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
-                      Volatility Adjustment
-                    </label>
-                    <input
-                      type="number"
-                      id="volatility_adjustment_factor"
-                      name="volatility_adjustment_factor"
-                      value={formData.volatility_adjustment_factor}
-                      onChange={handleChange}
-                      step="0.1"
-                      min="0"
-                      max="1"
-                      style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="inventory_penalty_factor" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
-                      Inventory Penalty
-                    </label>
-                    <input
-                      type="number"
-                      id="inventory_penalty_factor"
-                      name="inventory_penalty_factor"
-                      value={formData.inventory_penalty_factor}
-                      onChange={handleChange}
-                      step="0.1"
-                      min="0"
-                      max="0.8"
-                      style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="trend_sensitivity" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
-                      Trend Sensitivity
-                    </label>
-                    <input
-                      type="number"
-                      id="trend_sensitivity"
-                      name="trend_sensitivity"
-                      value={formData.trend_sensitivity}
-                      onChange={handleChange}
-                      step="0.1"
-                      min="-0.5"
-                      max="0.5"
-                      style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="flow_sensitivity" style={{ display: 'block', marginBottom: '3px', fontSize: '12px' }}>
-                      Flow Sensitivity
-                    </label>
-                    <input
-                      type="number"
-                      id="flow_sensitivity"
-                      name="flow_sensitivity"
-                      value={formData.flow_sensitivity}
-                      onChange={handleChange}
-                      step="0.1"
-                      min="-0.3"
-                      max="0.3"
-                      style={{ width: '100%', padding: '6px', border: '1px solid #ccc', borderRadius: '4px', fontSize: '13px' }}
-                    />
-                  </div>
-                </div>
-              </div>
+              ⚠️ Add at least one asset to your portfolio before submitting.
             </div>
           )}
-        </div>
 
-        {/* Submit Button */}
-        <button
-          type="submit"
-          disabled={loading}
-          style={{
-            padding: '12px',
-            backgroundColor: loading ? '#ccc' : '#007bff',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: loading ? 'not-allowed' : 'pointer',
-            fontSize: '16px',
-            fontWeight: 'bold',
-          }}
-        >
-          {loading ? 'Submitting...' : 'Submit Backtest'}
-        </button>
+          <button
+            type="submit"
+            disabled={loading || formData.portfolio_assets.length === 0}
+            style={{
+              width: '100%',
+              padding: '14px 24px',
+              backgroundColor: loading || formData.portfolio_assets.length === 0 ? '#ccc' : '#007bff',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: loading || formData.portfolio_assets.length === 0 ? 'not-allowed' : 'pointer',
+              fontSize: '16px',
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px'
+            }}
+          >
+            {loading ? (
+              <>⏳ Submitting...</>
+            ) : (
+              <>🚀 Run Backtest</>
+            )}
+          </button>
+
+          {/* Summary */}
+          <div style={{ 
+            marginTop: '12px', 
+            fontSize: '12px', 
+            color: '#666',
+            textAlign: 'center'
+          }}>
+            {formData.portfolio_assets.length} asset{formData.portfolio_assets.length !== 1 ? 's' : ''} • 
+            ${formData.initial_capital.toLocaleString()} capital • 
+            {formData.optimization_method === 'genetic' ? 'GA optimization' : 'Manual params'} • 
+            {formData.routing_mode} routing
+          </div>
+        </div>
 
         {/* Error Message */}
         {error && (
           <div style={{
-            padding: '10px',
+            marginTop: '12px',
+            padding: '12px 16px',
             backgroundColor: '#f8d7da',
             border: '1px solid #f5c6cb',
-            borderRadius: '4px',
+            borderRadius: '8px',
             color: '#721c24',
           }}>
             <strong>Error:</strong> {error}
@@ -1655,13 +1299,14 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
         {/* Success Message */}
         {jobId && (
           <div style={{
-            padding: '10px',
+            marginTop: '12px',
+            padding: '12px 16px',
             backgroundColor: '#d4edda',
             border: '1px solid #c3e6cb',
-            borderRadius: '4px',
+            borderRadius: '8px',
             color: '#155724',
           }}>
-            <strong>Success!</strong> Backtest submitted with Job ID: <code>{jobId}</code>
+            <strong>✓ Success!</strong> Backtest submitted with Job ID: <code style={{ backgroundColor: '#c3e6cb', padding: '2px 6px', borderRadius: '4px' }}>{jobId}</code>
           </div>
         )}
       </form>

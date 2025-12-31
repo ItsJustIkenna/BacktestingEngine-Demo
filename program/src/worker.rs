@@ -1193,6 +1193,108 @@ impl Worker {
             diversification_ratio: None, // TODO: Calculate based on individual vs portfolio volatility
         };
         
+        // Calculate additional metrics from portfolio equity curve and trade returns
+        let equity_curve = &portfolio_result.equity_curve;
+        
+        // Calculate annualized return from equity curve
+        let annualized_return = if equity_curve.len() >= 2 {
+            let initial = equity_curve.first().copied().unwrap_or(1.0);
+            let final_val = equity_curve.last().copied().unwrap_or(1.0);
+            if initial > 0.0 {
+                let total_return = (final_val - initial) / initial;
+                // Assuming each equity point is ~1 minute, calculate trading days
+                let minutes = equity_curve.len() as f64;
+                let trading_days = minutes / (6.5 * 60.0); // ~6.5 hours of trading per day
+                if trading_days > 0.0 {
+                    Some((1.0 + total_return).powf(252.0 / trading_days) - 1.0)
+                } else {
+                    Some(total_return)
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        
+        // Calculate volatility from equity curve returns
+        let volatility = if equity_curve.len() >= 2 {
+            let mut returns = Vec::with_capacity(equity_curve.len() - 1);
+            for i in 1..equity_curve.len() {
+                if equity_curve[i - 1] > 0.0 {
+                    returns.push((equity_curve[i] - equity_curve[i - 1]) / equity_curve[i - 1]);
+                }
+            }
+            if !returns.is_empty() {
+                let mean: f64 = returns.iter().sum::<f64>() / returns.len() as f64;
+                let variance: f64 = returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / returns.len() as f64;
+                let std = variance.sqrt();
+                // Annualize: assume ~1 minute per sample, 252 trading days * 6.5 hours * 60 min
+                let samples_per_year: f64 = 252.0 * 6.5 * 60.0;
+                Some(std * samples_per_year.sqrt())
+            } else {
+                Some(0.0)
+            }
+        } else {
+            Some(0.0)
+        };
+        
+        // Calculate Sortino ratio (only penalizes downside volatility)
+        let sortino_ratio = if equity_curve.len() >= 2 {
+            let mut returns = Vec::with_capacity(equity_curve.len() - 1);
+            for i in 1..equity_curve.len() {
+                if equity_curve[i - 1] > 0.0 {
+                    returns.push((equity_curve[i] - equity_curve[i - 1]) / equity_curve[i - 1]);
+                }
+            }
+            if !returns.is_empty() {
+                let mean: f64 = returns.iter().sum::<f64>() / returns.len() as f64;
+                let downside_returns: Vec<f64> = returns.iter().filter(|&&r| r < 0.0).cloned().collect();
+                if downside_returns.is_empty() {
+                    if mean > 0.0 { Some(10.0) } else { Some(0.0) } // All positive returns
+                } else {
+                    let downside_variance: f64 = downside_returns.iter().map(|r| r.powi(2)).sum::<f64>() / returns.len() as f64;
+                    let downside_std = downside_variance.sqrt();
+                    if downside_std > 1e-10 {
+                        let samples_per_year: f64 = 252.0 * 6.5 * 60.0;
+                        Some((mean / downside_std) * samples_per_year.sqrt())
+                    } else {
+                        Some(0.0)
+                    }
+                }
+            } else {
+                Some(0.0)
+            }
+        } else {
+            Some(0.0)
+        };
+        
+        // Calculate Calmar ratio (annualized return / max drawdown)
+        let calmar_ratio = match (annualized_return, portfolio_result.portfolio_max_drawdown) {
+            (Some(ret), dd) if dd > 0.001 => Some(ret / dd),
+            (Some(ret), _) if ret > 0.0 => Some(10.0), // No drawdown, positive return
+            _ => Some(0.0),
+        };
+        
+        // Get best and worst trade from trade returns
+        let best_trade = portfolio_result.trade_returns.iter().cloned().fold(None, |max: Option<f64>, r| {
+            Some(max.map_or(r, |m| m.max(r)))
+        });
+        let worst_trade = portfolio_result.trade_returns.iter().cloned().fold(None, |min: Option<f64>, r| {
+            Some(min.map_or(r, |m| m.min(r)))
+        });
+        
+        // Calculate average trade return
+        let avg_trade_return = if !portfolio_result.trade_returns.is_empty() {
+            Some(portfolio_result.trade_returns.iter().sum::<f64>() / portfolio_result.trade_returns.len() as f64)
+        } else {
+            None
+        };
+        
+        // VaR and ES from portfolio risk metrics if available
+        let value_at_risk_95 = portfolio_result.risk_metrics.as_ref().map(|rm| rm.portfolio_var_95);
+        let expected_shortfall_95 = portfolio_result.risk_metrics.as_ref().map(|rm| rm.portfolio_es_95);
+        
         // Convert PortfolioSimResult to job_queue::BacktestResult
         let backtest_result = BacktestResult {
             job_id: job.id.clone(),
@@ -1209,7 +1311,23 @@ impl Worker {
             open_positions: None,
             realized_pnl: Some(portfolio_result.total_pnl),
             unrealized_pnl: Some(0.0),
+            // Additional calculated metrics
+            annualized_return,
+            volatility,
+            sortino_ratio,
+            calmar_ratio,
+            avg_trade_return,
+            best_trade,
+            worst_trade,
+            avg_time_in_trade: None, // Not tracked in portfolio mode yet
+            value_at_risk_95,
+            expected_shortfall_95,
+            // Execution metrics
+            total_orders: Some(portfolio_result.total_trades as i32),
+            filled_orders: Some(portfolio_result.total_trades as i32),
+            cancelled_orders: Some(0),
             total_commission_paid: Some(portfolio_result.total_fees),
+            // Portfolio specific
             is_portfolio: true,
             portfolio_metrics: Some(portfolio_metrics),
             strategy_params: Some(serde_json::json!({
@@ -1219,6 +1337,9 @@ impl Worker {
                 "initial_capital": params.initial_capital,
                 "correlation_matrix": portfolio_result.correlation_matrix,
             })),
+            // Date range
+            start_date: job.params.start_date.clone(),
+            end_date: job.params.end_date.clone(),
             ..Default::default()
         };
         

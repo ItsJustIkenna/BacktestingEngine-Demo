@@ -146,36 +146,6 @@ export const JobList: React.FC<JobListProps> = ({
     }
   }, [jobs, refreshInterval, fetchJobs]);
 
-  const getStatusBadge = (status: string) => {
-    const colors: { [key: string]: string } = {
-      queued: '#ffc107',
-      running: '#17a2b8',
-      completed: '#28a745',
-      failed: '#dc3545',
-      cancelled: '#6c757d',
-    };
-
-    return (
-      <span
-        style={{
-          padding: '4px 8px',
-          borderRadius: '4px',
-          backgroundColor: colors[status] || '#6c757d',
-          color: 'white',
-          fontSize: '12px',
-          fontWeight: 'bold',
-        }}
-      >
-        {status.toUpperCase()}
-      </span>
-    );
-  };
-
-  const formatDate = (dateStr?: string) => {
-    if (!dateStr) return '-';
-    return new Date(dateStr).toLocaleString();
-  };
-
   const formatNumber = (num?: number, decimals = 2) => {
     if (num === undefined || num === null) return '-';
     return num.toFixed(decimals);
@@ -356,85 +326,156 @@ export const JobList: React.FC<JobListProps> = ({
   };
 
   return (
-    <div className="job-list-container" style={{ padding: '20px' }}>
-      <h2>Backtest Jobs</h2>
-
-      {/* Filters */}
+    <div className="job-list-container" style={{ padding: '20px', maxWidth: '1400px', margin: '0 auto' }}>
+      {/* Header */}
       <div style={{ 
         display: 'flex', 
-        gap: '10px', 
-        marginBottom: '20px',
-        flexWrap: 'wrap',
+        justifyContent: 'space-between', 
+        alignItems: 'center',
+        marginBottom: '24px'
       }}>
         <div>
-          <label htmlFor="status-filter" style={{ marginRight: '5px' }}>Status:</label>
-          <select
-            id="status-filter"
-            value={statusFilter}
-            onChange={(e) => { setStatusFilter(e.target.value); setOffset(0); }}
-            style={{ padding: '6px', borderRadius: '4px', border: '1px solid #ccc' }}
-          >
-            <option value="">All</option>
-            <option value="queued">Queued</option>
-            <option value="running">Running</option>
-            <option value="completed">Completed</option>
-            <option value="failed">Failed</option>
-            <option value="cancelled">Cancelled</option>
-          </select>
+          <h2 style={{ margin: '0 0 4px 0' }}>Backtest Jobs</h2>
+          <div style={{ fontSize: '13px', color: '#666' }}>
+            {total} total job{total !== 1 ? 's' : ''} • 
+            {jobs.filter(j => j.status === 'running').length} running • 
+            {jobs.filter(j => j.status === 'queued').length} queued
+          </div>
         </div>
-
-        <div>
-          <label htmlFor="symbol-filter" style={{ marginRight: '5px' }}>Symbol:</label>
-          <select
-            id="symbol-filter"
-            value={symbolFilter}
-            onChange={(e) => { setSymbolFilter(e.target.value); setOffset(0); }}
-            style={{ padding: '6px', borderRadius: '4px', border: '1px solid #ccc', minWidth: '120px' }}
-          >
-            <option value="">All Symbols</option>
-            {symbols.map(symbol => (
-              <option key={symbol} value={symbol}>{symbol}</option>
-            ))}
-          </select>
-        </div>
-
-        <div>
-          <label htmlFor="exchange-filter" style={{ marginRight: '5px' }}>Exchange:</label>
-          <select
-            id="exchange-filter"
-            value={exchangeFilter}
-            onChange={(e) => { setExchangeFilter(e.target.value); setOffset(0); }}
-            style={{ padding: '6px', borderRadius: '4px', border: '1px solid #ccc', minWidth: '120px' }}
-          >
-            <option value="">All Exchanges</option>
-            {exchanges.map(exchange => (
-              <option key={exchange} value={exchange}>{exchange}</option>
-            ))}
-          </select>
-        </div>
-
         <button
           onClick={fetchJobs}
+          disabled={loading}
           style={{
-            padding: '6px 12px',
-            backgroundColor: '#007bff',
+            padding: '10px 20px',
+            backgroundColor: loading ? '#ccc' : '#007bff',
             color: 'white',
             border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
+            borderRadius: '6px',
+            cursor: loading ? 'not-allowed' : 'pointer',
+            fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px'
           }}
         >
-          Refresh
+          {loading ? '⏳ Loading...' : '🔄 Refresh'}
         </button>
+      </div>
+
+      {/* Status Summary Cards */}
+      <div style={{ 
+        display: 'grid', 
+        gridTemplateColumns: 'repeat(5, 1fr)', 
+        gap: '12px',
+        marginBottom: '24px'
+      }}>
+        {[
+          { status: '', label: 'All', icon: '📋', color: '#6c757d' },
+          { status: 'running', label: 'Running', icon: '▶️', color: '#17a2b8' },
+          { status: 'queued', label: 'Queued', icon: '⏳', color: '#ffc107' },
+          { status: 'completed', label: 'Completed', icon: '✅', color: '#28a745' },
+          { status: 'failed', label: 'Failed', icon: '❌', color: '#dc3545' },
+        ].map(s => {
+          const count = s.status === '' ? total : jobs.filter(j => j.status === s.status).length;
+          const isActive = statusFilter === s.status;
+          return (
+            <button
+              key={s.status}
+              onClick={() => { setStatusFilter(s.status); setOffset(0); }}
+              style={{
+                padding: '12px 16px',
+                border: isActive ? `2px solid ${s.color}` : '1px solid #e0e0e0',
+                borderRadius: '8px',
+                backgroundColor: isActive ? `${s.color}15` : 'white',
+                cursor: 'pointer',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '4px',
+                transition: 'all 0.2s'
+              }}
+            >
+              <span style={{ fontSize: '20px' }}>{s.icon}</span>
+              <span style={{ fontSize: '12px', color: '#666' }}>{s.label}</span>
+              <span style={{ fontSize: '18px', fontWeight: 700, color: s.color }}>{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Filters Row */}
+      <div style={{ 
+        display: 'flex', 
+        gap: '12px', 
+        marginBottom: '20px',
+        padding: '16px',
+        backgroundColor: '#f8f9fa',
+        borderRadius: '8px',
+        alignItems: 'center'
+      }}>
+        <span style={{ fontSize: '13px', fontWeight: 600, color: '#666' }}>Filter by:</span>
+        
+        <select
+          id="symbol-filter"
+          value={symbolFilter}
+          onChange={(e) => { setSymbolFilter(e.target.value); setOffset(0); }}
+          style={{ 
+            padding: '8px 12px', 
+            borderRadius: '6px', 
+            border: '1px solid #ccc',
+            fontSize: '13px',
+            minWidth: '140px'
+          }}
+        >
+          <option value="">All Symbols</option>
+          {symbols.map(symbol => (
+            <option key={symbol} value={symbol}>{symbol}</option>
+          ))}
+        </select>
+
+        <select
+          id="exchange-filter"
+          value={exchangeFilter}
+          onChange={(e) => { setExchangeFilter(e.target.value); setOffset(0); }}
+          style={{ 
+            padding: '8px 12px', 
+            borderRadius: '6px', 
+            border: '1px solid #ccc',
+            fontSize: '13px',
+            minWidth: '140px'
+          }}
+        >
+          <option value="">All Exchanges</option>
+          {exchanges.map(exchange => (
+            <option key={exchange} value={exchange}>{exchange}</option>
+          ))}
+        </select>
+
+        {(symbolFilter || exchangeFilter || statusFilter) && (
+          <button
+            onClick={() => { setSymbolFilter(''); setExchangeFilter(''); setStatusFilter(''); setOffset(0); }}
+            style={{
+              padding: '8px 12px',
+              backgroundColor: '#e9ecef',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              color: '#666'
+            }}
+          >
+            ✕ Clear Filters
+          </button>
+        )}
       </div>
 
       {/* Error Display */}
       {error && (
         <div style={{
-          padding: '10px',
+          padding: '14px 18px',
           backgroundColor: '#f8d7da',
           border: '1px solid #f5c6cb',
-          borderRadius: '4px',
+          borderRadius: '8px',
           color: '#721c24',
           marginBottom: '20px',
         }}>
@@ -442,160 +483,261 @@ export const JobList: React.FC<JobListProps> = ({
         </div>
       )}
 
-      {/* Loading Indicator */}
-      {loading && <div style={{ marginBottom: '10px', color: '#666' }}>Loading...</div>}
-
-      {/* Jobs Table */}
-      <div style={{ overflowX: 'auto' }}>
-        <table style={{
-          width: '100%',
-          borderCollapse: 'collapse',
-          backgroundColor: 'white',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-        }}>
-          <thead>
-            <tr style={{ backgroundColor: '#f8f9fa', borderBottom: '2px solid #dee2e6' }}>
-              <th style={{ padding: '12px', textAlign: 'left' }}>Job ID</th>
-              <th style={{ padding: '12px', textAlign: 'left' }}>Symbol</th>
-              <th style={{ padding: '12px', textAlign: 'left' }}>Exchange</th>
-              <th style={{ padding: '12px', textAlign: 'left' }}>Status</th>
-              <th style={{ padding: '12px', textAlign: 'left' }}>Progress</th>
-              <th style={{ padding: '12px', textAlign: 'left' }}>Sharpe</th>
-              <th style={{ padding: '12px', textAlign: 'left' }}>Max DD</th>
-              <th style={{ padding: '12px', textAlign: 'left' }}>Total P&L</th>
-              <th style={{ padding: '12px', textAlign: 'left' }}>Win Rate</th>
-              <th style={{ padding: '12px', textAlign: 'left' }}>Created</th>
-              <th style={{ padding: '12px', textAlign: 'left' }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {jobs.length === 0 ? (
-              <tr>
-                <td colSpan={11} style={{ padding: '20px', textAlign: 'center', color: '#666' }}>
-                  No backtests found
-                </td>
-              </tr>
-            ) : (
-              jobs.map((job) => (
-                <tr
-                  key={job.job_id}
-                  onClick={() => onJobClick && onJobClick(job.job_id)}
-                  style={{
-                    borderBottom: '1px solid #dee2e6',
-                    cursor: onJobClick ? 'pointer' : 'default',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (onJobClick) e.currentTarget.style.backgroundColor = '#f8f9fa';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'white';
-                  }}
-                >
-                  <td style={{ padding: '12px' }}>
-                    <code style={{ fontSize: '12px' }}>{job.job_id.substring(0, 8)}...</code>
-                  </td>
-                  <td style={{ padding: '12px' }}>{job.symbol}</td>
-                  <td style={{ padding: '12px' }}>{job.exchange}</td>
-                  <td style={{ padding: '12px' }}>{getStatusBadge(job.status)}</td>
-                  <td style={{ padding: '12px' }}>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <div style={{
-                          flex: 1,
-                          height: '8px',
-                          backgroundColor: '#e9ecef',
-                          borderRadius: '4px',
-                          overflow: 'hidden',
-                        }}>
-                          <div style={{
-                            width: `${job.progress}%`,
-                            height: '100%',
-                            backgroundColor: job.status === 'completed' ? '#28a745' : '#17a2b8',
-                            transition: 'width 0.3s',
-                          }} />
-                        </div>
-                        <span style={{ fontSize: '12px', minWidth: '35px' }}>
-                          {job.progress.toFixed(0)}%
-                        </span>
-                      </div>
-                      {/* Phase and stage description */}
-                      {(job.status === 'running' || job.status === 'queued') && (
-                        <div style={{ fontSize: '11px', color: '#17a2b8', fontWeight: 500 }}>
-                          {getProgressStage(job)}
-                        </div>
-                      )}
-                      {/* Detailed phase info (generation, chromosomes, best fitness) */}
-                      {(job.status === 'running' || job.status === 'queued') && getPhaseDetails(job) && (
-                        <div style={{ fontSize: '11px', color: '#6c757d' }}>
-                          {getPhaseDetails(job)}
-                        </div>
-                      )}
-                      {/* Elapsed time and ETA */}
-                      {job.started_at && job.status === 'running' && (
-                        <div style={{ fontSize: '11px', color: '#6c757d' }}>
-                          {formatElapsedTime(job.started_at)}
-                          {job.progress > 5 && ` • ${estimateTimeRemaining(job.started_at, job.progress)}`}
-                        </div>
-                      )}
-                      {/* Error message preview */}
-                      {job.status === 'failed' && job.error_message && (
-                        <div style={{ fontSize: '11px', color: '#dc3545', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={job.error_message}>
-                          {job.error_message}
-                        </div>
-                      )}
+      {/* Jobs List - Card Based */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {jobs.length === 0 ? (
+          <div style={{ 
+            padding: '60px 20px', 
+            textAlign: 'center', 
+            color: '#666',
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            border: '2px dashed #e0e0e0'
+          }}>
+            <div style={{ fontSize: '48px', marginBottom: '16px' }}>📭</div>
+            <div style={{ fontSize: '18px', fontWeight: 600, marginBottom: '8px' }}>No backtests found</div>
+            <div style={{ fontSize: '14px' }}>Create a new backtest to get started</div>
+          </div>
+        ) : (
+          jobs.map((job) => {
+            const statusColors: { [key: string]: { bg: string; border: string; text: string } } = {
+              queued: { bg: '#fff8e1', border: '#ffc107', text: '#856404' },
+              running: { bg: '#e3f2fd', border: '#17a2b8', text: '#0c5460' },
+              completed: { bg: '#e8f5e9', border: '#28a745', text: '#155724' },
+              failed: { bg: '#ffebee', border: '#dc3545', text: '#721c24' },
+              cancelled: { bg: '#f5f5f5', border: '#6c757d', text: '#495057' },
+            };
+            const colors = statusColors[job.status] ?? statusColors.cancelled ?? { bg: '#f5f5f5', border: '#6c757d', text: '#495057' };
+            
+            return (
+              <div
+                key={job.job_id}
+                onClick={() => onJobClick && onJobClick(job.job_id)}
+                style={{
+                  backgroundColor: 'white',
+                  borderRadius: '12px',
+                  border: `1px solid #e0e0e0`,
+                  borderLeft: `4px solid ${colors.border}`,
+                  cursor: onJobClick ? 'pointer' : 'default',
+                  transition: 'box-shadow 0.2s, transform 0.1s',
+                  overflow: 'hidden'
+                }}
+                onMouseEnter={(e) => {
+                  if (onJobClick) {
+                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
+                    e.currentTarget.style.transform = 'translateY(-1px)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.boxShadow = 'none';
+                  e.currentTarget.style.transform = 'none';
+                }}
+              >
+                {/* Card Header */}
+                <div style={{ 
+                  padding: '16px 20px',
+                  borderBottom: '1px solid #f0f0f0',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                    {/* Status Badge */}
+                    <div style={{
+                      padding: '6px 12px',
+                      borderRadius: '6px',
+                      backgroundColor: colors.bg,
+                      color: colors.text,
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.5px'
+                    }}>
+                      {job.status}
                     </div>
-                  </td>
-                  <td style={{ padding: '12px' }}>{formatNumber(job.sharpe_ratio)}</td>
-                  <td style={{ padding: '12px' }}>{formatNumber((job.max_drawdown ?? 0) * 100)}%</td>
-                  <td style={{ padding: '12px', color: (job.total_pnl || 0) >= 0 ? '#28a745' : '#dc3545' }}>
-                    {formatNumber(job.total_pnl, 2)}
-                  </td>
-                  <td style={{ padding: '12px' }}>{formatNumber((job.win_rate ?? 0) * 100)}%</td>
-                  <td style={{ padding: '12px', fontSize: '12px' }}>{formatDate(job.created_at)}</td>
-                  <td style={{ padding: '12px' }}>
+                    
+                    {/* Symbol & Exchange */}
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: '16px', color: '#333' }}>
+                        {job.symbol}
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#666' }}>
+                        {job.exchange}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    {/* Job ID */}
+                    <code style={{ 
+                      fontSize: '11px', 
+                      color: '#999',
+                      backgroundColor: '#f5f5f5',
+                      padding: '4px 8px',
+                      borderRadius: '4px'
+                    }}>
+                      {job.job_id.substring(0, 8)}...
+                    </code>
+                    
+                    {/* Action Button */}
                     {isJobCancellable(job.status) ? (
                       <button
                         onClick={(e) => handleCancelClick(e, job.job_id)}
                         disabled={cancelling === job.job_id}
                         style={{
-                          padding: '4px 8px',
-                          backgroundColor: '#ffc107',
-                          color: '#212529',
-                          border: 'none',
-                          borderRadius: '4px',
+                          padding: '6px 14px',
+                          backgroundColor: '#fff3cd',
+                          color: '#856404',
+                          border: '1px solid #ffc107',
+                          borderRadius: '6px',
                           cursor: cancelling === job.job_id ? 'not-allowed' : 'pointer',
                           fontSize: '12px',
+                          fontWeight: 500,
                           opacity: cancelling === job.job_id ? 0.6 : 1,
                         }}
                       >
-                        {cancelling === job.job_id ? 'Cancelling...' : 'Cancel'}
+                        {cancelling === job.job_id ? '⏳' : '⏹️'} Cancel
                       </button>
                     ) : isJobDeletable(job.status) ? (
                       <button
                         onClick={(e) => handleDeleteClick(e, job.job_id)}
                         disabled={deleting === job.job_id}
                         style={{
-                          padding: '4px 8px',
-                          backgroundColor: '#dc3545',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '4px',
+                          padding: '6px 14px',
+                          backgroundColor: '#ffebee',
+                          color: '#c62828',
+                          border: '1px solid #ef9a9a',
+                          borderRadius: '6px',
                           cursor: deleting === job.job_id ? 'not-allowed' : 'pointer',
                           fontSize: '12px',
+                          fontWeight: 500,
                           opacity: deleting === job.job_id ? 0.6 : 1,
                         }}
                       >
-                        {deleting === job.job_id ? 'Deleting...' : 'Delete'}
+                        {deleting === job.job_id ? '⏳' : '🗑️'} Delete
                       </button>
-                    ) : (
-                      <span style={{ fontSize: '12px', color: '#6c757d' }}>-</span>
-                    )}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+                    ) : null}
+                  </div>
+                </div>
+
+                {/* Card Body */}
+                <div style={{ padding: '16px 20px' }}>
+                  {/* Progress Section (for running/queued) */}
+                  {(job.status === 'running' || job.status === 'queued') && (
+                    <div style={{ marginBottom: '16px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '13px', fontWeight: 600, color: '#17a2b8' }}>
+                          {getProgressStage(job)}
+                        </span>
+                        <span style={{ fontSize: '13px', fontWeight: 600 }}>
+                          {job.progress.toFixed(0)}%
+                        </span>
+                      </div>
+                      <div style={{
+                        height: '10px',
+                        backgroundColor: '#e9ecef',
+                        borderRadius: '5px',
+                        overflow: 'hidden',
+                      }}>
+                        <div style={{
+                          width: `${job.progress}%`,
+                          height: '100%',
+                          backgroundColor: '#17a2b8',
+                          transition: 'width 0.3s',
+                          borderRadius: '5px',
+                        }} />
+                      </div>
+                      {/* Phase details */}
+                      {getPhaseDetails(job) && (
+                        <div style={{ fontSize: '12px', color: '#666', marginTop: '8px' }}>
+                          {getPhaseDetails(job)}
+                        </div>
+                      )}
+                      {/* Elapsed & ETA */}
+                      {job.started_at && (
+                        <div style={{ fontSize: '12px', color: '#888', marginTop: '4px' }}>
+                          {formatElapsedTime(job.started_at)}
+                          {job.progress > 5 && ` • ${estimateTimeRemaining(job.started_at, job.progress)}`}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Error Message (for failed) */}
+                  {job.status === 'failed' && job.error_message && (
+                    <div style={{ 
+                      marginBottom: '16px',
+                      padding: '12px',
+                      backgroundColor: '#ffebee',
+                      borderRadius: '6px',
+                      fontSize: '13px',
+                      color: '#c62828'
+                    }}>
+                      <strong>Error:</strong> {job.error_message}
+                    </div>
+                  )}
+
+                  {/* Metrics Grid */}
+                  <div style={{ 
+                    display: 'grid', 
+                    gridTemplateColumns: 'repeat(5, 1fr)', 
+                    gap: '16px' 
+                  }}>
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '2px' }}>Sharpe Ratio</div>
+                      <div style={{ 
+                        fontSize: '18px', 
+                        fontWeight: 700,
+                        color: (job.sharpe_ratio ?? 0) > 1.5 ? '#28a745' : (job.sharpe_ratio ?? 0) > 0 ? '#333' : '#dc3545'
+                      }}>
+                        {job.sharpe_ratio !== undefined ? formatNumber(job.sharpe_ratio) : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '2px' }}>Max Drawdown</div>
+                      <div style={{ 
+                        fontSize: '18px', 
+                        fontWeight: 700,
+                        color: (job.max_drawdown ?? 0) > 0.2 ? '#dc3545' : '#28a745'
+                      }}>
+                        {job.max_drawdown !== undefined ? `${formatNumber(job.max_drawdown * 100)}%` : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '2px' }}>Total P&L</div>
+                      <div style={{ 
+                        fontSize: '18px', 
+                        fontWeight: 700,
+                        color: (job.total_pnl ?? 0) >= 0 ? '#28a745' : '#dc3545'
+                      }}>
+                        {job.total_pnl !== undefined ? `$${formatNumber(job.total_pnl, 0)}` : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '2px' }}>Win Rate</div>
+                      <div style={{ 
+                        fontSize: '18px', 
+                        fontWeight: 700,
+                        color: (job.win_rate ?? 0) > 0.5 ? '#28a745' : '#333'
+                      }}>
+                        {job.win_rate !== undefined ? `${formatNumber(job.win_rate * 100)}%` : '—'}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '11px', color: '#888', marginBottom: '2px' }}>Created</div>
+                      <div style={{ fontSize: '13px', fontWeight: 500, color: '#333' }}>
+                        {new Date(job.created_at).toLocaleDateString()}
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#888' }}>
+                        {new Date(job.created_at).toLocaleTimeString()}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        )}
       </div>
 
       {/* Cancel Confirmation Modal */}

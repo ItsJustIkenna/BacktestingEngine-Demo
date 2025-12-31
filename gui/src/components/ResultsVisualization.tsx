@@ -76,32 +76,43 @@ interface ExecutionSummary {
 }
 
 // Smart Order Routing Metrics
-interface VenueBreakdown {
+interface VenueRoutingSummary {
   venue: string;
   orders_routed: number;
   volume_routed: number;
-  avg_fill_rate: number;
-  avg_slippage_bps: number;
+  avg_fill_price: number;
   total_fees: number;
+  avg_slippage_bps: number;
+  fill_rate: number;
+}
+
+interface ArbitrageMetricsSummary {
+  opportunities_detected: number;
+  opportunities_executed: number;
+  opportunities_missed: number;
+  total_arb_pnl: number;
+  avg_profit_bps: number;
+  win_rate: number;
+  avg_execution_latency_ms: number;
 }
 
 interface RoutingMetrics {
-  routing_mode: string;
-  execution_style: string;
-  total_parent_orders: number;
-  total_child_orders: number;
-  venue_breakdown: VenueBreakdown[];
+  total_orders_routed: number;
+  total_volume_routed: number;
+  total_fees_paid: number;
+  avg_slippage_bps: number;
+  max_slippage_bps: number;
+  implementation_shortfall_bps: number;
+  multi_venue_orders: number;
+  single_venue_orders: number;
   avg_venues_per_order: number;
-  routing_efficiency: number;  // 0-1, how well orders were split
-  price_improvement_bps: number;  // vs single venue
-  // Arbitrage-specific
-  arbitrage_opportunities_detected?: number;
-  arbitrage_opportunities_executed?: number;
-  arbitrage_pnl?: number;
-  avg_arb_spread_captured_bps?: number;
-  // TWAP/VWAP-specific
-  execution_time_avg_ms?: number;
-  execution_slices_avg?: number;
+  quality_excellent_pct: number;
+  quality_good_pct: number;
+  quality_average_pct: number;
+  quality_poor_pct: number;
+  venue_breakdown: VenueRoutingSummary[];
+  routing_savings: number;
+  arbitrage_metrics?: ArbitrageMetricsSummary;
 }
 
 // Portfolio-specific interfaces
@@ -143,7 +154,6 @@ interface BacktestResult {
   win_rate?: number;
   profit_factor?: number;
   total_trades?: number;
-  avg_trade_duration?: number;
   equity_curve?: Array<number | { timestamp?: string; value?: number }>;
   strategy_metrics?: any;
   monte_carlo?: MonteCarloSummary;
@@ -582,7 +592,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
       const headers = [
         // Results
         'Job ID', 'Symbol', 'Exchange', 'Sharpe Ratio', 'Max Drawdown (%)',
-        'Total P&L', 'Win Rate (%)', 'Profit Factor', 'Total Trades', 'Avg Trade Duration (s)',
+        'Total P&L', 'Win Rate (%)', 'Profit Factor', 'Total Trades', 'Avg Time in Trade (h)',
         // Configuration
         'Strategy', 'Initial Capital', 'Optimization Method', 'Population Size', 'Generations',
         'Initial Inventory %', 'Initial 30d Volume ($)', 'Monte Carlo Enabled', 'Monte Carlo Runs',
@@ -608,7 +618,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         safeToFixed((result.win_rate ?? 0) * 100, 2),
         safeToFixed(result.profit_factor, 2),
         (result.total_trades ?? 0).toString(),
-        safeToFixed(result.avg_trade_duration, 2),
+        safeToFixed(result.avg_time_in_trade, 2),
         // Configuration
         jobDetails?.strategy ?? 'N/A',
         jobDetails?.initial_capital?.toString() ?? 'N/A',
@@ -1327,141 +1337,394 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         />
       </div>
 
-      {/* Portfolio Results Section */}
-      {result.is_portfolio && result.portfolio_metrics && (
-        <div style={{
-          backgroundColor: 'white',
-          padding: '20px',
-          borderRadius: '8px',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-          marginBottom: '20px',
-        }}>
-          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>
-            📊 Portfolio Analysis ({result.portfolio_metrics.total_symbols} Symbols)
-          </h3>
-          
-          {/* Portfolio Summary */}
+      {/* Portfolio Results Section - Check both portfolio_metrics AND strategy_params fallback */}
+      {(() => {
+        // Detect portfolio mode from multiple sources
+        const isPortfolioMode = result.is_portfolio || 
+          result.strategy_params?.portfolio_mode === true ||
+          (result.strategy_params?.symbol_results && result.strategy_params.symbol_results.length > 0);
+        
+        // Get symbol results from portfolio_metrics or fallback to strategy_params
+        const symbolResults = result.portfolio_metrics?.symbol_results || 
+          result.strategy_params?.symbol_results?.map((sr: any) => ({
+            symbol: sr.symbol,
+            exchange: sr.symbol?.split('@')[1] || result.exchange,
+            sharpe_ratio: sr.sharpe_ratio ?? sr.sharpe,
+            max_drawdown: sr.max_drawdown,
+            total_pnl: sr.total_pnl,
+            win_rate: sr.win_rate,
+            profit_factor: sr.profit_factor ?? 0,
+            total_trades: sr.total_trades ?? sr.num_trades,
+            allocation_weight: sr.allocation_weight
+          })) || [];
+        
+        // Get correlation matrix from portfolio_metrics or fallback to strategy_params
+        const correlationMatrix = result.portfolio_metrics?.correlation_matrix ||
+          result.strategy_params?.correlation_matrix?.map((cp: any) => ({
+            symbol_a: cp.symbol_a ?? cp.symbol1,
+            symbol_b: cp.symbol_b ?? cp.symbol2,
+            correlation: cp.correlation
+          })) || [];
+        
+        // Calculate portfolio-level metrics if not provided
+        const totalSymbols = result.portfolio_metrics?.total_symbols || symbolResults.length;
+        const portfolioSharpe = result.portfolio_metrics?.portfolio_sharpe ?? 
+          (symbolResults.length > 0 ? symbolResults.reduce((sum: number, sr: any) => sum + (sr.sharpe_ratio || 0), 0) / symbolResults.length : 0);
+        const portfolioMaxDD = result.portfolio_metrics?.portfolio_max_drawdown ?? result.max_drawdown ?? 0;
+        
+        // Calculate totals for portfolio
+        const totalPnL = symbolResults.reduce((sum: number, sr: any) => sum + (sr.total_pnl || 0), 0);
+        const totalTrades = symbolResults.reduce((sum: number, sr: any) => sum + (sr.total_trades || 0), 0);
+        const avgWinRate = symbolResults.length > 0 
+          ? symbolResults.reduce((sum: number, sr: any) => sum + (sr.win_rate || 0), 0) / symbolResults.length 
+          : 0;
+        
+        if (!isPortfolioMode || symbolResults.length === 0) return null;
+        
+        return (
+        <>
+          {/* ==================== PORTFOLIO OVERVIEW ==================== */}
           <div style={{
-            backgroundColor: '#f0f8ff',
-            border: '1px solid #0066cc',
-            borderRadius: '8px',
-            padding: '15px',
-            marginBottom: '20px',
+            backgroundColor: '#f0f7ff',
+            border: '2px solid #0066cc',
+            borderRadius: '12px',
+            padding: '24px',
+            marginBottom: '24px',
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-around', flexWrap: 'wrap', gap: '15px' }}>
-              <div style={{ textAlign: 'center' }}>
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center',
+              marginBottom: '20px'
+            }}>
+              <h2 style={{ margin: 0, color: '#0066cc', fontSize: '20px' }}>
+                📊 Portfolio Overview
+              </h2>
+              <span style={{ 
+                backgroundColor: '#0066cc', 
+                color: 'white', 
+                padding: '4px 12px', 
+                borderRadius: '16px',
+                fontSize: '14px',
+                fontWeight: 500
+              }}>
+                {totalSymbols} Assets
+              </span>
+            </div>
+            
+            {/* Portfolio Summary Cards */}
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+              gap: '16px',
+              marginBottom: '20px'
+            }}>
+              <div style={{ 
+                backgroundColor: 'white', 
+                padding: '16px', 
+                borderRadius: '8px',
+                textAlign: 'center',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
                 <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Portfolio Sharpe</div>
-                <div style={{ fontSize: '20px', fontWeight: 600, color: result.portfolio_metrics.portfolio_sharpe > 1.5 ? '#28a745' : '#0066cc' }}>
-                  {safeToFixed(result.portfolio_metrics.portfolio_sharpe, 2)}
+                <div style={{ fontSize: '28px', fontWeight: 700, color: portfolioSharpe > 1.5 ? '#28a745' : portfolioSharpe > 0 ? '#ffc107' : '#dc3545' }}>
+                  {safeToFixed(portfolioSharpe, 2)}
                 </div>
               </div>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Portfolio Max DD</div>
-                <div style={{ fontSize: '20px', fontWeight: 600, color: result.portfolio_metrics.portfolio_max_drawdown > 0.2 ? '#dc3545' : '#28a745' }}>
-                  {safeToFixed(result.portfolio_metrics.portfolio_max_drawdown * 100, 1)}%
+              <div style={{ 
+                backgroundColor: 'white', 
+                padding: '16px', 
+                borderRadius: '8px',
+                textAlign: 'center',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Max Drawdown</div>
+                <div style={{ fontSize: '28px', fontWeight: 700, color: portfolioMaxDD > 0.2 ? '#dc3545' : portfolioMaxDD > 0.1 ? '#ffc107' : '#28a745' }}>
+                  {safeToFixed(portfolioMaxDD * 100, 1)}%
                 </div>
               </div>
-              {result.portfolio_metrics.diversification_ratio !== undefined && (
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Diversification Ratio</div>
-                  <div style={{ fontSize: '20px', fontWeight: 600, color: '#6f42c1' }}>
+              <div style={{ 
+                backgroundColor: 'white', 
+                padding: '16px', 
+                borderRadius: '8px',
+                textAlign: 'center',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Total P&L</div>
+                <div style={{ fontSize: '28px', fontWeight: 700, color: totalPnL >= 0 ? '#28a745' : '#dc3545' }}>
+                  ${formatLargeNumber(totalPnL)}
+                </div>
+              </div>
+              <div style={{ 
+                backgroundColor: 'white', 
+                padding: '16px', 
+                borderRadius: '8px',
+                textAlign: 'center',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Avg Win Rate</div>
+                <div style={{ fontSize: '28px', fontWeight: 700, color: avgWinRate > 0.5 ? '#28a745' : '#ffc107' }}>
+                  {safeToFixed(avgWinRate * 100, 1)}%
+                </div>
+              </div>
+              <div style={{ 
+                backgroundColor: 'white', 
+                padding: '16px', 
+                borderRadius: '8px',
+                textAlign: 'center',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+              }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Total Trades</div>
+                <div style={{ fontSize: '28px', fontWeight: 700, color: '#007bff' }}>
+                  {totalTrades.toLocaleString()}
+                </div>
+              </div>
+              {(result.portfolio_metrics?.diversification_ratio !== undefined) && (
+                <div style={{ 
+                  backgroundColor: 'white', 
+                  padding: '16px', 
+                  borderRadius: '8px',
+                  textAlign: 'center',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
+                }}>
+                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Diversification</div>
+                  <div style={{ fontSize: '28px', fontWeight: 700, color: '#6f42c1' }}>
                     {safeToFixed(result.portfolio_metrics.diversification_ratio, 2)}x
                   </div>
                 </div>
               )}
             </div>
+
+            {/* Allocation Pie Chart (simplified bar representation) */}
+            <div style={{ marginBottom: '10px' }}>
+              <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px' }}>Portfolio Allocation</div>
+              <div style={{ display: 'flex', borderRadius: '8px', overflow: 'hidden', height: '32px' }}>
+                {symbolResults.map((sr: any, idx: number) => {
+                  const colors = ['#007bff', '#28a745', '#ffc107', '#dc3545', '#6f42c1', '#17a2b8', '#fd7e14', '#6c757d'];
+                  const color = colors[idx % colors.length];
+                  const width = (sr.allocation_weight || 0) * 100;
+                  return (
+                    <div 
+                      key={sr.symbol}
+                      style={{ 
+                        width: `${width}%`, 
+                        backgroundColor: color,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: 'white',
+                        fontSize: '11px',
+                        fontWeight: 500,
+                        minWidth: width > 10 ? 'auto' : '0',
+                        overflow: 'hidden'
+                      }}
+                      title={`${sr.symbol}: ${safeToFixed(width, 1)}%`}
+                    >
+                      {width > 15 ? sr.symbol.replace(/-.*|\/.*/, '') : ''}
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', marginTop: '8px' }}>
+                {symbolResults.map((sr: any, idx: number) => {
+                  const colors = ['#007bff', '#28a745', '#ffc107', '#dc3545', '#6f42c1', '#17a2b8', '#fd7e14', '#6c757d'];
+                  const color = colors[idx % colors.length];
+                  return (
+                    <div key={sr.symbol} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
+                      <div style={{ width: '12px', height: '12px', borderRadius: '3px', backgroundColor: color }}></div>
+                      <span>{sr.symbol.replace(/-.*|\/.*/, '')}: {safeToFixed((sr.allocation_weight || 0) * 100, 1)}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
 
-          {/* Per-Symbol Breakdown */}
-          <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Per-Symbol Performance</h4>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ 
-              width: '100%', 
-              borderCollapse: 'collapse', 
-              fontSize: '14px',
-              marginBottom: '20px'
+          {/* ==================== INDIVIDUAL ASSET RESULTS ==================== */}
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            padding: '24px',
+            marginBottom: '24px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.08)'
+          }}>
+            <h3 style={{ margin: '0 0 20px 0', color: '#333', fontSize: '18px' }}>
+              📈 Individual Asset Performance
+            </h3>
+            
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px' }}>
+              {symbolResults.map((sr: any, idx: number) => {
+                const colors = ['#007bff', '#28a745', '#ffc107', '#dc3545', '#6f42c1', '#17a2b8', '#fd7e14', '#6c757d'];
+                const accentColor = colors[idx % colors.length];
+                const isProfitable = sr.total_pnl > 0;
+                
+                return (
+                  <div 
+                    key={sr.symbol}
+                    style={{ 
+                      border: `2px solid ${accentColor}20`,
+                      borderRadius: '10px',
+                      overflow: 'hidden',
+                      backgroundColor: '#fafbfc'
+                    }}
+                  >
+                    {/* Asset Header */}
+                    <div style={{ 
+                      backgroundColor: accentColor,
+                      color: 'white',
+                      padding: '12px 16px',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center'
+                    }}>
+                      <div>
+                        <div style={{ fontSize: '16px', fontWeight: 600 }}>{sr.symbol}</div>
+                        <div style={{ fontSize: '12px', opacity: 0.9 }}>{sr.exchange || result.exchange || '-'}</div>
+                      </div>
+                      <div style={{ 
+                        backgroundColor: 'rgba(255,255,255,0.2)',
+                        padding: '4px 10px',
+                        borderRadius: '12px',
+                        fontSize: '12px',
+                        fontWeight: 500
+                      }}>
+                        {safeToFixed((sr.allocation_weight || 0) * 100, 1)}% weight
+                      </div>
+                    </div>
+                    
+                    {/* Asset Metrics */}
+                    <div style={{ padding: '16px' }}>
+                      {/* P&L Highlight */}
+                      <div style={{ 
+                        textAlign: 'center', 
+                        marginBottom: '16px',
+                        padding: '12px',
+                        backgroundColor: isProfitable ? '#d4edda' : '#f8d7da',
+                        borderRadius: '8px'
+                      }}>
+                        <div style={{ fontSize: '12px', color: '#666' }}>P&L</div>
+                        <div style={{ 
+                          fontSize: '24px', 
+                          fontWeight: 700, 
+                          color: isProfitable ? '#28a745' : '#dc3545' 
+                        }}>
+                          {isProfitable ? '+' : ''}${formatLargeNumber(sr.total_pnl)}
+                        </div>
+                      </div>
+                      
+                      {/* Metrics Grid */}
+                      <div style={{ 
+                        display: 'grid', 
+                        gridTemplateColumns: '1fr 1fr', 
+                        gap: '12px',
+                        fontSize: '13px'
+                      }}>
+                        <div style={{ 
+                          padding: '10px', 
+                          backgroundColor: 'white', 
+                          borderRadius: '6px',
+                          textAlign: 'center'
+                        }}>
+                          <div style={{ color: '#666', marginBottom: '4px' }}>Sharpe</div>
+                          <div style={{ 
+                            fontWeight: 600, 
+                            color: sr.sharpe_ratio > 1.5 ? '#28a745' : sr.sharpe_ratio > 0 ? '#ffc107' : '#dc3545'
+                          }}>
+                            {safeToFixed(sr.sharpe_ratio, 2)}
+                          </div>
+                        </div>
+                        <div style={{ 
+                          padding: '10px', 
+                          backgroundColor: 'white', 
+                          borderRadius: '6px',
+                          textAlign: 'center'
+                        }}>
+                          <div style={{ color: '#666', marginBottom: '4px' }}>Max DD</div>
+                          <div style={{ 
+                            fontWeight: 600, 
+                            color: sr.max_drawdown > 0.2 ? '#dc3545' : '#28a745'
+                          }}>
+                            {safeToFixed((sr.max_drawdown || 0) * 100, 1)}%
+                          </div>
+                        </div>
+                        <div style={{ 
+                          padding: '10px', 
+                          backgroundColor: 'white', 
+                          borderRadius: '6px',
+                          textAlign: 'center'
+                        }}>
+                          <div style={{ color: '#666', marginBottom: '4px' }}>Win Rate</div>
+                          <div style={{ 
+                            fontWeight: 600, 
+                            color: sr.win_rate > 0.5 ? '#28a745' : '#ffc107'
+                          }}>
+                            {safeToFixed((sr.win_rate || 0) * 100, 1)}%
+                          </div>
+                        </div>
+                        <div style={{ 
+                          padding: '10px', 
+                          backgroundColor: 'white', 
+                          borderRadius: '6px',
+                          textAlign: 'center'
+                        }}>
+                          <div style={{ color: '#666', marginBottom: '4px' }}>Profit Factor</div>
+                          <div style={{ 
+                            fontWeight: 600, 
+                            color: sr.profit_factor > 1.5 ? '#28a745' : sr.profit_factor > 1 ? '#ffc107' : '#dc3545'
+                          }}>
+                            {safeToFixed(sr.profit_factor || 0, 2)}
+                          </div>
+                        </div>
+                      </div>
+                      
+                      {/* Trades */}
+                      <div style={{ 
+                        marginTop: '12px', 
+                        textAlign: 'center', 
+                        color: '#666',
+                        fontSize: '13px'
+                      }}>
+                        <strong>{sr.total_trades?.toLocaleString() || 0}</strong> trades executed
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* ==================== CORRELATION MATRIX ==================== */}
+          {correlationMatrix.length > 0 && (
+            <div style={{
+              backgroundColor: 'white',
+              borderRadius: '12px',
+              padding: '24px',
+              marginBottom: '24px',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.08)'
             }}>
-              <thead>
-                <tr style={{ backgroundColor: '#f8f9fa', borderBottom: '2px solid #dee2e6' }}>
-                  <th style={{ padding: '10px', textAlign: 'left' }}>Symbol</th>
-                  <th style={{ padding: '10px', textAlign: 'left' }}>Exchange</th>
-                  <th style={{ padding: '10px', textAlign: 'right' }}>Weight</th>
-                  <th style={{ padding: '10px', textAlign: 'right' }}>Sharpe</th>
-                  <th style={{ padding: '10px', textAlign: 'right' }}>Max DD</th>
-                  <th style={{ padding: '10px', textAlign: 'right' }}>P&L</th>
-                  <th style={{ padding: '10px', textAlign: 'right' }}>Win Rate</th>
-                  <th style={{ padding: '10px', textAlign: 'right' }}>PF</th>
-                  <th style={{ padding: '10px', textAlign: 'right' }}>Trades</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.portfolio_metrics.symbol_results.map((sr, idx) => (
-                  <tr key={sr.symbol} style={{ 
-                    backgroundColor: idx % 2 === 0 ? '#fff' : '#f8f9fa',
-                    borderBottom: '1px solid #dee2e6'
-                  }}>
-                    <td style={{ padding: '10px', fontWeight: 500 }}>{sr.symbol}</td>
-                    <td style={{ padding: '10px', color: '#666' }}>{sr.exchange || result.exchange || '-'}</td>
-                    <td style={{ padding: '10px', textAlign: 'right' }}>{safeToFixed(sr.allocation_weight * 100, 1)}%</td>
-                    <td style={{ 
-                      padding: '10px', 
-                      textAlign: 'right',
-                      color: sr.sharpe_ratio > 1.5 ? '#28a745' : sr.sharpe_ratio > 0 ? '#ffc107' : '#dc3545'
-                    }}>
-                      {safeToFixed(sr.sharpe_ratio, 2)}
-                    </td>
-                    <td style={{ 
-                      padding: '10px', 
-                      textAlign: 'right',
-                      color: sr.max_drawdown > 0.2 ? '#dc3545' : '#28a745'
-                    }}>
-                      {safeToFixed(sr.max_drawdown * 100, 1)}%
-                    </td>
-                    <td style={{ 
-                      padding: '10px', 
-                      textAlign: 'right',
-                      color: sr.total_pnl > 0 ? '#28a745' : '#dc3545'
-                    }}>
-                      ${formatLargeNumber(sr.total_pnl)}
-                    </td>
-                    <td style={{ padding: '10px', textAlign: 'right' }}>{safeToFixed(sr.win_rate * 100, 1)}%</td>
-                    <td style={{ 
-                      padding: '10px', 
-                      textAlign: 'right',
-                      color: sr.profit_factor > 1.5 ? '#28a745' : sr.profit_factor > 1 ? '#ffc107' : '#dc3545'
-                    }}>
-                      {safeToFixed(sr.profit_factor, 2)}
-                    </td>
-                    <td style={{ padding: '10px', textAlign: 'right' }}>{sr.total_trades}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Correlation Matrix */}
-          {result.portfolio_metrics.correlation_matrix.length > 0 && (
-            <>
-              <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Correlation Matrix</h4>
+              <h3 style={{ margin: '0 0 20px 0', color: '#333', fontSize: '18px' }}>
+                🔗 Asset Correlations
+              </h3>
+              
               <div style={{ 
                 display: 'grid',
-                gridTemplateColumns: `repeat(${result.portfolio_metrics.total_symbols}, 1fr)`,
-                gap: '2px',
-                maxWidth: '500px',
-                marginBottom: '15px'
+                gridTemplateColumns: `repeat(${totalSymbols + 1}, 1fr)`,
+                gap: '4px',
+                maxWidth: '600px',
+                marginBottom: '20px'
               }}>
                 {/* Build unique symbol list from correlation pairs */}
                 {(() => {
                   const symbolsSet = new Set<string>();
-                  result.portfolio_metrics!.correlation_matrix.forEach(pair => {
+                  correlationMatrix.forEach((pair: any) => {
                     symbolsSet.add(pair.symbol_a);
                     symbolsSet.add(pair.symbol_b);
                   });
-                  const uniqueSymbols = Array.from(symbolsSet);
+                  const uniqueSymbols = Array.from(symbolsSet) as string[];
                   
                   // Create matrix map for O(1) lookup
                   const corrMap = new Map<string, number>();
-                  result.portfolio_metrics!.correlation_matrix.forEach(pair => {
+                  correlationMatrix.forEach((pair: any) => {
                     corrMap.set(`${pair.symbol_a}-${pair.symbol_b}`, pair.correlation);
                     corrMap.set(`${pair.symbol_b}-${pair.symbol_a}`, pair.correlation);
                   });
@@ -1469,10 +1732,17 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                   // Render header row
                   const headerRow = (
                     <React.Fragment key="header">
-                      <div style={{ padding: '5px', fontSize: '12px', textAlign: 'center' }}></div>
+                      <div style={{ padding: '8px', fontSize: '12px', textAlign: 'center', fontWeight: 600 }}></div>
                       {uniqueSymbols.map(s => (
-                        <div key={s} style={{ padding: '5px', fontSize: '11px', textAlign: 'center', fontWeight: 500 }}>
-                          {s.replace(/-.*/, '')}
+                        <div key={s} style={{ 
+                          padding: '8px', 
+                          fontSize: '11px', 
+                          textAlign: 'center', 
+                          fontWeight: 600,
+                          backgroundColor: '#f8f9fa',
+                          borderRadius: '4px'
+                        }}>
+                          {s.replace(/-.*|\/.*/, '')}
                         </div>
                       ))}
                     </React.Fragment>
@@ -1481,27 +1751,41 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                   // Render data rows
                   const rows = uniqueSymbols.map(rowSym => (
                     <React.Fragment key={rowSym}>
-                      <div style={{ padding: '5px', fontSize: '11px', fontWeight: 500 }}>{rowSym.replace(/-.*/, '')}</div>
+                      <div style={{ 
+                        padding: '8px', 
+                        fontSize: '11px', 
+                        fontWeight: 600,
+                        backgroundColor: '#f8f9fa',
+                        borderRadius: '4px',
+                        display: 'flex',
+                        alignItems: 'center'
+                      }}>
+                        {rowSym.replace(/-.*|\/.*/, '')}
+                      </div>
                       {uniqueSymbols.map(colSym => {
                         const corr = rowSym === colSym ? 1.0 : (corrMap.get(`${rowSym}-${colSym}`) ?? 0);
                         const bgColor = rowSym === colSym 
-                          ? '#e7e7e7' 
+                          ? '#e9ecef' 
                           : corr > 0.7 
-                            ? `rgba(220, 53, 69, ${Math.abs(corr)})` 
+                            ? `rgba(220, 53, 69, ${0.2 + Math.abs(corr) * 0.6})` 
                             : corr < -0.3 
-                              ? `rgba(40, 167, 69, ${Math.abs(corr)})` 
-                              : `rgba(0, 123, 255, ${Math.abs(corr) * 0.5})`;
+                              ? `rgba(40, 167, 69, ${0.2 + Math.abs(corr) * 0.6})` 
+                              : `rgba(0, 123, 255, ${0.1 + Math.abs(corr) * 0.3})`;
+                        const textColor = rowSym === colSym ? '#666' : 
+                          (corr > 0.7 || corr < -0.3) ? 'white' : '#333';
                         return (
                           <div 
                             key={colSym} 
                             style={{ 
-                              padding: '5px', 
-                              fontSize: '11px', 
+                              padding: '8px', 
+                              fontSize: '12px', 
                               textAlign: 'center',
                               backgroundColor: bgColor,
-                              borderRadius: '3px'
+                              borderRadius: '4px',
+                              fontWeight: 500,
+                              color: textColor
                             }}
-                            title={`${rowSym} ↔ ${colSym}: ${safeToFixed(corr, 3)}`}
+                            title={`${rowSym.replace(/-.*|\/.*/, '')} ↔ ${colSym.replace(/-.*|\/.*/, '')}: ${safeToFixed(corr, 3)}`}
                           >
                             {safeToFixed(corr, 2)}
                           </div>
@@ -1513,15 +1797,159 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                   return [headerRow, ...rows];
                 })()}
               </div>
-              <div style={{ fontSize: '12px', color: '#666' }}>
-                <span style={{ marginRight: '15px' }}>🔴 High correlation (&gt;0.7)</span>
-                <span style={{ marginRight: '15px' }}>🟢 Negative correlation (&lt;-0.3)</span>
-                <span>🔵 Low correlation</span>
+              
+              {/* Legend */}
+              <div style={{ 
+                display: 'flex', 
+                gap: '20px', 
+                fontSize: '12px', 
+                color: '#666',
+                flexWrap: 'wrap'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ width: '16px', height: '16px', borderRadius: '4px', backgroundColor: 'rgba(220, 53, 69, 0.7)' }}></div>
+                  <span>High correlation (&gt;0.7) - less diversification</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ width: '16px', height: '16px', borderRadius: '4px', backgroundColor: 'rgba(40, 167, 69, 0.7)' }}></div>
+                  <span>Negative correlation (&lt;-0.3) - hedging benefit</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ width: '16px', height: '16px', borderRadius: '4px', backgroundColor: 'rgba(0, 123, 255, 0.3)' }}></div>
+                  <span>Low correlation - diversification benefit</span>
+                </div>
               </div>
-            </>
+            </div>
           )}
-        </div>
-      )}
+
+          {/* ==================== PERFORMANCE COMPARISON TABLE ==================== */}
+          <div style={{
+            backgroundColor: 'white',
+            borderRadius: '12px',
+            padding: '24px',
+            marginBottom: '24px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.08)'
+          }}>
+            <h3 style={{ margin: '0 0 20px 0', color: '#333', fontSize: '18px' }}>
+              📋 Performance Comparison
+            </h3>
+            
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ 
+                width: '100%', 
+                borderCollapse: 'collapse', 
+                fontSize: '14px'
+              }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#f8f9fa' }}>
+                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>Asset</th>
+                    <th style={{ padding: '12px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>Exchange</th>
+                    <th style={{ padding: '12px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>Weight</th>
+                    <th style={{ padding: '12px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>Sharpe</th>
+                    <th style={{ padding: '12px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>Max DD</th>
+                    <th style={{ padding: '12px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>P&L</th>
+                    <th style={{ padding: '12px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>Win Rate</th>
+                    <th style={{ padding: '12px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>PF</th>
+                    <th style={{ padding: '12px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>Trades</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {symbolResults.map((sr: any, idx: number) => (
+                    <tr key={sr.symbol} style={{ 
+                      backgroundColor: idx % 2 === 0 ? '#fff' : '#f8f9fa',
+                      borderBottom: '1px solid #e9ecef'
+                    }}>
+                      <td style={{ padding: '12px', fontWeight: 600 }}>{sr.symbol}</td>
+                      <td style={{ padding: '12px', color: '#666' }}>{sr.exchange || result.exchange || '-'}</td>
+                      <td style={{ padding: '12px', textAlign: 'right' }}>
+                        <span style={{ 
+                          backgroundColor: '#e7f1ff', 
+                          padding: '2px 8px', 
+                          borderRadius: '12px',
+                          fontSize: '12px'
+                        }}>
+                          {safeToFixed((sr.allocation_weight || 0) * 100, 1)}%
+                        </span>
+                      </td>
+                      <td style={{ 
+                        padding: '12px', 
+                        textAlign: 'right',
+                        fontWeight: 600,
+                        color: sr.sharpe_ratio > 1.5 ? '#28a745' : sr.sharpe_ratio > 0 ? '#856404' : '#dc3545'
+                      }}>
+                        {safeToFixed(sr.sharpe_ratio, 2)}
+                      </td>
+                      <td style={{ 
+                        padding: '12px', 
+                        textAlign: 'right',
+                        color: sr.max_drawdown > 0.2 ? '#dc3545' : '#28a745'
+                      }}>
+                        {safeToFixed((sr.max_drawdown || 0) * 100, 1)}%
+                      </td>
+                      <td style={{ 
+                        padding: '12px', 
+                        textAlign: 'right',
+                        fontWeight: 600,
+                        color: sr.total_pnl > 0 ? '#28a745' : '#dc3545'
+                      }}>
+                        {sr.total_pnl > 0 ? '+' : ''}${formatLargeNumber(sr.total_pnl)}
+                      </td>
+                      <td style={{ padding: '12px', textAlign: 'right' }}>
+                        {safeToFixed((sr.win_rate || 0) * 100, 1)}%
+                      </td>
+                      <td style={{ 
+                        padding: '12px', 
+                        textAlign: 'right',
+                        color: sr.profit_factor > 1.5 ? '#28a745' : sr.profit_factor > 1 ? '#856404' : '#dc3545'
+                      }}>
+                        {safeToFixed(sr.profit_factor || 0, 2)}
+                      </td>
+                      <td style={{ padding: '12px', textAlign: 'right' }}>{(sr.total_trades || 0).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                  {/* Totals Row */}
+                  <tr style={{ 
+                    backgroundColor: '#e7f1ff',
+                    fontWeight: 600,
+                    borderTop: '2px solid #0066cc'
+                  }}>
+                    <td style={{ padding: '12px' }}>PORTFOLIO</td>
+                    <td style={{ padding: '12px', color: '#666' }}>Combined</td>
+                    <td style={{ padding: '12px', textAlign: 'right' }}>100%</td>
+                    <td style={{ 
+                      padding: '12px', 
+                      textAlign: 'right',
+                      color: portfolioSharpe > 1.5 ? '#28a745' : '#0066cc'
+                    }}>
+                      {safeToFixed(portfolioSharpe, 2)}
+                    </td>
+                    <td style={{ 
+                      padding: '12px', 
+                      textAlign: 'right',
+                      color: portfolioMaxDD > 0.2 ? '#dc3545' : '#28a745'
+                    }}>
+                      {safeToFixed(portfolioMaxDD * 100, 1)}%
+                    </td>
+                    <td style={{ 
+                      padding: '12px', 
+                      textAlign: 'right',
+                      color: totalPnL > 0 ? '#28a745' : '#dc3545'
+                    }}>
+                      {totalPnL > 0 ? '+' : ''}${formatLargeNumber(totalPnL)}
+                    </td>
+                    <td style={{ padding: '12px', textAlign: 'right' }}>
+                      {safeToFixed(avgWinRate * 100, 1)}%
+                    </td>
+                    <td style={{ padding: '12px', textAlign: 'right' }}>-</td>
+                    <td style={{ padding: '12px', textAlign: 'right' }}>{totalTrades.toLocaleString()}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+        );
+      })()}
 
       {/* Smart Order Routing Analysis */}
       {result.routing_metrics && (
@@ -1546,27 +1974,15 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-around', flexWrap: 'wrap', gap: '15px' }}>
               <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Routing Mode</div>
-                <div style={{ fontSize: '16px', fontWeight: 600, color: '#6f42c1', textTransform: 'capitalize' }}>
-                  {result.routing_metrics.routing_mode.replace('_', ' ')}
-                </div>
-              </div>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Execution Style</div>
-                <div style={{ fontSize: '16px', fontWeight: 600, color: '#6f42c1', textTransform: 'capitalize' }}>
-                  {result.routing_metrics.execution_style}
-                </div>
-              </div>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Parent Orders</div>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Orders Routed</div>
                 <div style={{ fontSize: '20px', fontWeight: 600, color: '#0066cc' }}>
-                  {result.routing_metrics.total_parent_orders.toLocaleString()}
+                  {result.routing_metrics.total_orders_routed.toLocaleString()}
                 </div>
               </div>
               <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Child Orders</div>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Volume Routed</div>
                 <div style={{ fontSize: '20px', fontWeight: 600, color: '#0066cc' }}>
-                  {result.routing_metrics.total_child_orders.toLocaleString()}
+                  ${result.routing_metrics.total_volume_routed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </div>
               </div>
               <div style={{ textAlign: 'center' }}>
@@ -1576,14 +1992,53 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 </div>
               </div>
               <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Price Improvement</div>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Avg Slippage</div>
                 <div style={{ 
                   fontSize: '20px', 
                   fontWeight: 600, 
-                  color: result.routing_metrics.price_improvement_bps >= 0 ? '#28a745' : '#dc3545' 
+                  color: result.routing_metrics.avg_slippage_bps <= 2 ? '#28a745' : result.routing_metrics.avg_slippage_bps <= 5 ? '#ffc107' : '#dc3545' 
                 }}>
-                  {result.routing_metrics.price_improvement_bps >= 0 ? '+' : ''}{safeToFixed(result.routing_metrics.price_improvement_bps, 1)} bps
+                  {safeToFixed(result.routing_metrics.avg_slippage_bps, 2)} bps
                 </div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Routing Savings</div>
+                <div style={{ 
+                  fontSize: '20px', 
+                  fontWeight: 600, 
+                  color: result.routing_metrics.routing_savings >= 0 ? '#28a745' : '#dc3545' 
+                }}>
+                  ${safeToFixed(result.routing_metrics.routing_savings, 2)}
+                </div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Total Fees</div>
+                <div style={{ fontSize: '20px', fontWeight: 600, color: '#dc3545' }}>
+                  ${safeToFixed(result.routing_metrics.total_fees_paid, 2)}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Execution Quality Breakdown */}
+          <div style={{ marginBottom: '20px' }}>
+            <h4 style={{ marginBottom: '10px', color: '#333' }}>📊 Execution Quality</h4>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <div style={{ flex: 1, minWidth: '120px', padding: '10px', backgroundColor: '#d4edda', borderRadius: '6px', textAlign: 'center' }}>
+                <div style={{ fontSize: '24px', fontWeight: 600, color: '#155724' }}>{safeToFixed(result.routing_metrics.quality_excellent_pct, 1)}%</div>
+                <div style={{ fontSize: '12px', color: '#155724' }}>Excellent</div>
+              </div>
+              <div style={{ flex: 1, minWidth: '120px', padding: '10px', backgroundColor: '#cce5ff', borderRadius: '6px', textAlign: 'center' }}>
+                <div style={{ fontSize: '24px', fontWeight: 600, color: '#004085' }}>{safeToFixed(result.routing_metrics.quality_good_pct, 1)}%</div>
+                <div style={{ fontSize: '12px', color: '#004085' }}>Good</div>
+              </div>
+              <div style={{ flex: 1, minWidth: '120px', padding: '10px', backgroundColor: '#fff3cd', borderRadius: '6px', textAlign: 'center' }}>
+                <div style={{ fontSize: '24px', fontWeight: 600, color: '#856404' }}>{safeToFixed(result.routing_metrics.quality_average_pct, 1)}%</div>
+                <div style={{ fontSize: '12px', color: '#856404' }}>Average</div>
+              </div>
+              <div style={{ flex: 1, minWidth: '120px', padding: '10px', backgroundColor: '#f8d7da', borderRadius: '6px', textAlign: 'center' }}>
+                <div style={{ fontSize: '24px', fontWeight: 600, color: '#721c24' }}>{safeToFixed(result.routing_metrics.quality_poor_pct, 1)}%</div>
+                <div style={{ fontSize: '12px', color: '#721c24' }}>Poor</div>
               </div>
             </div>
           </div>
@@ -1597,11 +2052,12 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                   <thead>
                     <tr style={{ backgroundColor: '#f8f9fa' }}>
                       <th style={{ padding: '10px', textAlign: 'left', borderBottom: '2px solid #dee2e6' }}>Venue</th>
-                      <th style={{ padding: '10px', textAlign: 'right', borderBottom: '2px solid #dee2e6' }}>Orders Routed</th>
+                      <th style={{ padding: '10px', textAlign: 'right', borderBottom: '2px solid #dee2e6' }}>Orders</th>
                       <th style={{ padding: '10px', textAlign: 'right', borderBottom: '2px solid #dee2e6' }}>Volume</th>
+                      <th style={{ padding: '10px', textAlign: 'right', borderBottom: '2px solid #dee2e6' }}>Avg Fill Price</th>
                       <th style={{ padding: '10px', textAlign: 'right', borderBottom: '2px solid #dee2e6' }}>Fill Rate</th>
-                      <th style={{ padding: '10px', textAlign: 'right', borderBottom: '2px solid #dee2e6' }}>Avg Slippage</th>
-                      <th style={{ padding: '10px', textAlign: 'right', borderBottom: '2px solid #dee2e6' }}>Total Fees</th>
+                      <th style={{ padding: '10px', textAlign: 'right', borderBottom: '2px solid #dee2e6' }}>Slippage</th>
+                      <th style={{ padding: '10px', textAlign: 'right', borderBottom: '2px solid #dee2e6' }}>Fees</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1616,12 +2072,15 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                         <td style={{ padding: '10px', textAlign: 'right' }}>
                           ${venue.volume_routed.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                         </td>
+                        <td style={{ padding: '10px', textAlign: 'right' }}>
+                          ${safeToFixed(venue.avg_fill_price, 4)}
+                        </td>
                         <td style={{ 
                           padding: '10px', 
                           textAlign: 'right',
-                          color: venue.avg_fill_rate >= 0.9 ? '#28a745' : venue.avg_fill_rate >= 0.7 ? '#ffc107' : '#dc3545'
+                          color: venue.fill_rate >= 0.9 ? '#28a745' : venue.fill_rate >= 0.7 ? '#ffc107' : '#dc3545'
                         }}>
-                          {safeToFixed(venue.avg_fill_rate * 100, 1)}%
+                          {safeToFixed(venue.fill_rate * 100, 1)}%
                         </td>
                         <td style={{ 
                           padding: '10px', 
@@ -1641,8 +2100,8 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
             </>
           )}
 
-          {/* Arbitrage Performance (if in arbitrage mode) */}
-          {result.routing_metrics.routing_mode === 'arbitrage' && (
+          {/* Arbitrage Performance (if arbitrage metrics exist) */}
+          {result.routing_metrics.arbitrage_metrics && (
             <>
               <h4 style={{ marginBottom: '10px', color: '#333' }}>💹 Arbitrage Performance</h4>
               <div style={{
@@ -1658,78 +2117,41 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 <div style={{ textAlign: 'center' }}>
                   <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Opportunities Detected</div>
                   <div style={{ fontSize: '20px', fontWeight: 600, color: '#17a2b8' }}>
-                    {(result.routing_metrics.arbitrage_opportunities_detected || 0).toLocaleString()}
+                    {result.routing_metrics.arbitrage_metrics.opportunities_detected.toLocaleString()}
                   </div>
                 </div>
                 <div style={{ textAlign: 'center' }}>
                   <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Opportunities Executed</div>
                   <div style={{ fontSize: '20px', fontWeight: 600, color: '#28a745' }}>
-                    {(result.routing_metrics.arbitrage_opportunities_executed || 0).toLocaleString()}
+                    {result.routing_metrics.arbitrage_metrics.opportunities_executed.toLocaleString()}
                   </div>
                 </div>
                 <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Execution Rate</div>
+                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Win Rate</div>
                   <div style={{ fontSize: '20px', fontWeight: 600, color: '#6f42c1' }}>
-                    {result.routing_metrics.arbitrage_opportunities_detected 
-                      ? safeToFixed((result.routing_metrics.arbitrage_opportunities_executed || 0) / result.routing_metrics.arbitrage_opportunities_detected * 100, 1) 
-                      : '0'}%
+                    {safeToFixed(result.routing_metrics.arbitrage_metrics.win_rate * 100, 1)}%
                   </div>
                 </div>
                 <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Arbitrage PnL</div>
+                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Total Arb PnL</div>
                   <div style={{ 
                     fontSize: '20px', 
                     fontWeight: 600, 
-                    color: (result.routing_metrics.arbitrage_pnl || 0) >= 0 ? '#28a745' : '#dc3545' 
+                    color: result.routing_metrics.arbitrage_metrics.total_arb_pnl >= 0 ? '#28a745' : '#dc3545' 
                   }}>
-                    ${(result.routing_metrics.arbitrage_pnl || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    ${result.routing_metrics.arbitrage_metrics.total_arb_pnl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </div>
                 </div>
                 <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Avg Spread Captured</div>
+                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Avg Profit</div>
                   <div style={{ fontSize: '20px', fontWeight: 600, color: '#28a745' }}>
-                    {safeToFixed(result.routing_metrics.avg_arb_spread_captured_bps || 0, 1)} bps
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-
-          {/* TWAP/VWAP Execution Stats */}
-          {(result.routing_metrics.execution_style === 'twap' || result.routing_metrics.execution_style === 'vwap') && (
-            <>
-              <h4 style={{ marginBottom: '10px', color: '#333' }}>
-                ⏱️ {result.routing_metrics.execution_style.toUpperCase()} Execution Stats
-              </h4>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-                gap: '15px',
-                backgroundColor: '#fff3cd',
-                border: '1px solid #ffc107',
-                borderRadius: '8px',
-                padding: '15px',
-              }}>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Avg Execution Time</div>
-                  <div style={{ fontSize: '20px', fontWeight: 600, color: '#856404' }}>
-                    {safeToFixed((result.routing_metrics.execution_time_avg_ms || 0) / 1000, 1)}s
+                    {safeToFixed(result.routing_metrics.arbitrage_metrics.avg_profit_bps, 1)} bps
                   </div>
                 </div>
                 <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Avg Execution Slices</div>
-                  <div style={{ fontSize: '20px', fontWeight: 600, color: '#856404' }}>
-                    {safeToFixed(result.routing_metrics.execution_slices_avg || 0, 1)}
-                  </div>
-                </div>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Routing Efficiency</div>
-                  <div style={{ 
-                    fontSize: '20px', 
-                    fontWeight: 600, 
-                    color: result.routing_metrics.routing_efficiency >= 0.9 ? '#28a745' : '#856404'
-                  }}>
-                    {safeToFixed(result.routing_metrics.routing_efficiency * 100, 1)}%
+                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Avg Latency</div>
+                  <div style={{ fontSize: '20px', fontWeight: 600, color: '#6c757d' }}>
+                    {safeToFixed(result.routing_metrics.arbitrage_metrics.avg_execution_latency_ms, 1)} ms
                   </div>
                 </div>
               </div>
@@ -1963,7 +2385,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
       )}
 
       {/* Trade Analysis */}
-      {(result.avg_trade_return !== undefined || result.best_trade !== undefined || result.avg_time_in_trade !== undefined) && (
+      {(result.avg_trade_return !== undefined || result.best_trade !== undefined || result.avg_time_in_trade !== undefined || result.volatility !== undefined || result.sortino_ratio !== undefined || result.calmar_ratio !== undefined || result.annualized_return !== undefined) && (
         <div style={{
           backgroundColor: 'white',
           padding: '20px',
@@ -1977,6 +2399,14 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
             gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
             gap: '15px',
           }}>
+            {result.annualized_return !== undefined && (
+              <MetricCard
+                title="Annualized Return"
+                value={`${safeToFixed((result.annualized_return ?? 0) * 100, 2)}%`}
+                color={(result.annualized_return ?? 0) > 0 ? '#28a745' : '#dc3545'}
+                tooltip="Expected yearly return if performance continues. Extrapolated from backtest period to 1 year."
+              />
+            )}
             {result.avg_trade_return !== undefined && (
               <MetricCard
                 title="Avg Trade Return"
@@ -2038,7 +2468,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
       )}
 
       {/* Risk Metrics */}
-      {(result.value_at_risk_95 !== undefined || result.current_drawdown !== undefined || result.max_drawdown_duration_days !== undefined) && (
+      {(result.value_at_risk_95 !== undefined || result.expected_shortfall_95 !== undefined || result.current_drawdown !== undefined || result.avg_drawdown !== undefined || result.max_drawdown_duration_days !== undefined) && (
         <div style={{
           backgroundColor: 'white',
           padding: '20px',
@@ -2097,7 +2527,7 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
       )}
 
       {/* Execution Metrics */}
-      {(result.total_orders !== undefined || result.avg_slippage !== undefined || result.total_commission_paid !== undefined) && (
+      {(result.total_orders !== undefined || result.filled_orders !== undefined || result.cancelled_orders !== undefined || result.avg_slippage !== undefined || result.total_commission_paid !== undefined) && (
         <div style={{
           backgroundColor: 'white',
           padding: '20px',

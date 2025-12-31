@@ -633,6 +633,65 @@ impl JobQueue for PostgresQueue {
                     "realized_pnl": result.realized_pnl,
                     "unrealized_pnl": result.unrealized_pnl
                 },
+                // Portfolio mode data
+                "is_portfolio": result.is_portfolio,
+                "portfolio_metrics": result.portfolio_metrics.as_ref().map(|pm| serde_json::json!({
+                    "total_symbols": pm.total_symbols,
+                    "portfolio_sharpe": pm.portfolio_sharpe,
+                    "portfolio_max_drawdown": pm.portfolio_max_drawdown,
+                    "diversification_ratio": pm.diversification_ratio,
+                    "symbol_results": pm.symbol_results.iter().map(|sr| serde_json::json!({
+                        "symbol": sr.symbol,
+                        "exchange": sr.exchange,
+                        "sharpe_ratio": sr.sharpe_ratio,
+                        "max_drawdown": sr.max_drawdown,
+                        "total_pnl": sr.total_pnl,
+                        "win_rate": sr.win_rate,
+                        "profit_factor": sr.profit_factor,
+                        "total_trades": sr.total_trades,
+                        "allocation_weight": sr.allocation_weight
+                    })).collect::<Vec<_>>(),
+                    "correlation_matrix": pm.correlation_matrix.iter().map(|cp| serde_json::json!({
+                        "symbol_a": cp.symbol_a,
+                        "symbol_b": cp.symbol_b,
+                        "correlation": cp.correlation
+                    })).collect::<Vec<_>>()
+                })),
+                // Routing metrics
+                "routing_metrics": result.routing_metrics.as_ref().map(|rm| serde_json::json!({
+                    "total_orders_routed": rm.total_orders_routed,
+                    "total_volume_routed": rm.total_volume_routed,
+                    "total_fees_paid": rm.total_fees_paid,
+                    "avg_slippage_bps": rm.avg_slippage_bps,
+                    "max_slippage_bps": rm.max_slippage_bps,
+                    "implementation_shortfall_bps": rm.implementation_shortfall_bps,
+                    "multi_venue_orders": rm.multi_venue_orders,
+                    "single_venue_orders": rm.single_venue_orders,
+                    "avg_venues_per_order": rm.avg_venues_per_order,
+                    "quality_excellent_pct": rm.quality_excellent_pct,
+                    "quality_good_pct": rm.quality_good_pct,
+                    "quality_average_pct": rm.quality_average_pct,
+                    "quality_poor_pct": rm.quality_poor_pct,
+                    "venue_breakdown": rm.venue_breakdown.iter().map(|vb| serde_json::json!({
+                        "venue": vb.venue,
+                        "orders_routed": vb.orders_routed,
+                        "volume_routed": vb.volume_routed,
+                        "avg_fill_price": vb.avg_fill_price,
+                        "total_fees": vb.total_fees,
+                        "avg_slippage_bps": vb.avg_slippage_bps,
+                        "fill_rate": vb.fill_rate
+                    })).collect::<Vec<_>>(),
+                    "routing_savings": rm.routing_savings,
+                    "arbitrage_metrics": rm.arbitrage_metrics.as_ref().map(|am| serde_json::json!({
+                        "opportunities_detected": am.opportunities_detected,
+                        "opportunities_executed": am.opportunities_executed,
+                        "opportunities_missed": am.opportunities_missed,
+                        "total_arb_pnl": am.total_arb_pnl,
+                        "avg_profit_bps": am.avg_profit_bps,
+                        "win_rate": am.win_rate,
+                        "avg_execution_latency_ms": am.avg_execution_latency_ms
+                    }))
+                })),
                 "equity_curve": equity_curve_downsampled,
                 "monte_carlo": result.monte_carlo.as_ref().map(|mc| serde_json::json!({
                     "num_runs": mc.num_runs,
@@ -841,7 +900,7 @@ impl JobQueue for PostgresQueue {
                   result_start_date, result_end_date)) => {
                 
                 // Extract equity curve and advanced analysis from strategy_metrics JSON
-                let (equity_curve, monte_carlo, walk_forward, strategy_params, trade_breakdown, inventory_metrics, execution_metrics, metrics_profile) = if let Some(ref metrics) = strategy_metrics {
+                let (equity_curve, monte_carlo, walk_forward, strategy_params, trade_breakdown, inventory_metrics, execution_metrics, metrics_profile, is_portfolio_mode, portfolio_metrics_extracted, routing_metrics_extracted) = if let Some(ref metrics) = strategy_metrics {
                     let equity = metrics.get("equity_curve")
                         .and_then(|v| serde_json::from_value(v.clone()).ok())
                         .unwrap_or_else(Vec::new);
@@ -956,9 +1015,99 @@ impl JobQueue for PostgresQueue {
                     // Extract metrics profile
                     let mp = metrics.get("metrics_profile").cloned();
                     
-                    (equity, mc, wf, params, tb.cloned(), inv, exec, mp)
+                    // Extract portfolio mode data
+                    let is_port = metrics.get("is_portfolio")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    
+                    let port_metrics = metrics.get("portfolio_metrics")
+                        .and_then(|v| {
+                            if v.is_null() { return None; }
+                            Some(PortfolioMetrics {
+                                total_symbols: v.get("total_symbols")?.as_u64()? as usize,
+                                portfolio_sharpe: v.get("portfolio_sharpe")?.as_f64()?,
+                                portfolio_max_drawdown: v.get("portfolio_max_drawdown")?.as_f64()?,
+                                diversification_ratio: v.get("diversification_ratio").and_then(|x| x.as_f64()),
+                                symbol_results: v.get("symbol_results")
+                                    .and_then(|arr| arr.as_array())
+                                    .map(|arr| arr.iter().filter_map(|sr| {
+                                        Some(SymbolResult {
+                                            symbol: sr.get("symbol")?.as_str()?.to_string(),
+                                            exchange: sr.get("exchange").and_then(|x| x.as_str()).map(|s| s.to_string()),
+                                            sharpe_ratio: sr.get("sharpe_ratio")?.as_f64()?,
+                                            max_drawdown: sr.get("max_drawdown")?.as_f64()?,
+                                            total_pnl: sr.get("total_pnl")?.as_f64()?,
+                                            win_rate: sr.get("win_rate")?.as_f64()?,
+                                            profit_factor: sr.get("profit_factor").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                            total_trades: sr.get("total_trades")?.as_u64()? as usize,
+                                            allocation_weight: sr.get("allocation_weight")?.as_f64()?,
+                                        })
+                                    }).collect())
+                                    .unwrap_or_default(),
+                                correlation_matrix: v.get("correlation_matrix")
+                                    .and_then(|arr| arr.as_array())
+                                    .map(|arr| arr.iter().filter_map(|cp| {
+                                        Some(CorrelationPair {
+                                            symbol_a: cp.get("symbol_a")?.as_str()?.to_string(),
+                                            symbol_b: cp.get("symbol_b")?.as_str()?.to_string(),
+                                            correlation: cp.get("correlation")?.as_f64()?,
+                                        })
+                                    }).collect())
+                                    .unwrap_or_default(),
+                            })
+                        });
+                    
+                    // Extract routing metrics
+                    let route_metrics = metrics.get("routing_metrics")
+                        .and_then(|v| {
+                            if v.is_null() { return None; }
+                            Some(RoutingMetricsSummary {
+                                total_orders_routed: v.get("total_orders_routed").and_then(|x| x.as_u64()).unwrap_or(0),
+                                total_volume_routed: v.get("total_volume_routed").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                total_fees_paid: v.get("total_fees_paid").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                avg_slippage_bps: v.get("avg_slippage_bps").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                max_slippage_bps: v.get("max_slippage_bps").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                implementation_shortfall_bps: v.get("implementation_shortfall_bps").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                multi_venue_orders: v.get("multi_venue_orders").and_then(|x| x.as_u64()).unwrap_or(0),
+                                single_venue_orders: v.get("single_venue_orders").and_then(|x| x.as_u64()).unwrap_or(0),
+                                avg_venues_per_order: v.get("avg_venues_per_order").and_then(|x| x.as_f64()).unwrap_or(1.0),
+                                quality_excellent_pct: v.get("quality_excellent_pct").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                quality_good_pct: v.get("quality_good_pct").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                quality_average_pct: v.get("quality_average_pct").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                quality_poor_pct: v.get("quality_poor_pct").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                venue_breakdown: v.get("venue_breakdown")
+                                    .and_then(|arr| arr.as_array())
+                                    .map(|arr| arr.iter().filter_map(|vb| {
+                                        Some(VenueRoutingSummary {
+                                            venue: vb.get("venue")?.as_str()?.to_string(),
+                                            orders_routed: vb.get("orders_routed").and_then(|x| x.as_u64()).unwrap_or(0),
+                                            volume_routed: vb.get("volume_routed").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                            avg_fill_price: vb.get("avg_fill_price").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                            total_fees: vb.get("total_fees").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                            avg_slippage_bps: vb.get("avg_slippage_bps").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                            fill_rate: vb.get("fill_rate").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                        })
+                                    }).collect())
+                                    .unwrap_or_default(),
+                                routing_savings: v.get("routing_savings").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                arbitrage_metrics: v.get("arbitrage_metrics").and_then(|am| {
+                                    if am.is_null() { return None; }
+                                    Some(ArbitrageMetricsSummary {
+                                        opportunities_detected: am.get("opportunities_detected").and_then(|x| x.as_u64()).unwrap_or(0),
+                                        opportunities_executed: am.get("opportunities_executed").and_then(|x| x.as_u64()).unwrap_or(0),
+                                        opportunities_missed: am.get("opportunities_missed").and_then(|x| x.as_u64()).unwrap_or(0),
+                                        total_arb_pnl: am.get("total_arb_pnl").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                        avg_profit_bps: am.get("avg_profit_bps").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                        win_rate: am.get("win_rate").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                        avg_execution_latency_ms: am.get("avg_execution_latency_ms").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                    })
+                                }),
+                            })
+                        });
+                    
+                    (equity, mc, wf, params, tb.cloned(), inv, exec, mp, is_port, port_metrics, route_metrics)
                 } else {
-                    (Vec::new(), None, None, None, None, None, None, None)
+                    (Vec::new(), None, None, None, None, None, None, None, false, None, None)
                 };
                 
                 // Helper to convert BigDecimal to f64
@@ -1022,9 +1171,9 @@ impl JobQueue for PostgresQueue {
                     inventory_metrics,
                     execution_metrics,
                     metrics_profile,
-                    is_portfolio: false, // Legacy results are single-symbol
-                    portfolio_metrics: None,
-                    routing_metrics: None, // Not stored in legacy DB schema
+                    is_portfolio: is_portfolio_mode,
+                    portfolio_metrics: portfolio_metrics_extracted,
+                    routing_metrics: routing_metrics_extracted,
                 }))
             }
             None => Ok(None),
