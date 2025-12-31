@@ -875,12 +875,34 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
                 <strong>Phase:</strong>
                 <span style={{ color: '#007bff', fontWeight: 'bold' }}>
-                  {jobStatus.current_phase === 'genetic_optimization' && '🧬 Genetic Optimization'}
-                  {jobStatus.current_phase === 'monte_carlo' && '🎲 Monte Carlo Simulation'}
-                  {jobStatus.current_phase === 'walk_forward' && '🔄 Walk-Forward Analysis'}
-                  {jobStatus.current_phase === 'final_analysis' && '📊 Final Analysis'}
-                  {jobStatus.current_phase === 'completed' && '✅ Completed'}
-                  {jobStatus.current_phase === 'failed' && '❌ Failed'}
+                  {(() => {
+                    const phaseLabels: { [key: string]: string } = {
+                      'data_loading': '📂 Loading Data',
+                      'loading_data': '📂 Loading Data',
+                      'data_ready': '✅ Data Ready',
+                      'preparing': '⚙️ Preparing',
+                      'running_backtest': '▶️ Running Backtest',
+                      'processing_results': '📊 Processing Results',
+                      'genetic_optimization': '🧬 Genetic Optimization',
+                      'optimizing': '🧬 Optimizing',
+                      'post_optimization': '🎯 Post-Optimization',
+                      'monte_carlo': '🎲 Monte Carlo Simulation',
+                      'walk_forward': '🔄 Walk-Forward Analysis',
+                      'final_analysis': '📊 Final Analysis',
+                      'final_evaluation': '🎯 Final Evaluation',
+                      'calculating_metrics': '📊 Calculating Metrics',
+                      'portfolio_loading': '📂 Portfolio Loading',
+                      'portfolio_simulation': '📈 Portfolio Simulation',
+                      'portfolio_ga_loading': '📂 Portfolio GA Loading',
+                      'portfolio_ga_symbol_optimization': '🧬 Symbol Optimization',
+                      'portfolio_ga_weight_optimization': '⚖️ Weight Optimization',
+                      'portfolio_final_simulation': '📊 Final Portfolio Simulation',
+                      'completed': '✅ Completed',
+                      'failed': '❌ Failed',
+                    };
+                    return phaseLabels[jobStatus.current_phase] || 
+                      `🔄 ${jobStatus.current_phase.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}`;
+                  })()}
                 </span>
               </div>
             )}

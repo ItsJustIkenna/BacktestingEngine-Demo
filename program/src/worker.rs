@@ -527,6 +527,14 @@ impl Worker {
         }
         
         // Check if this is a portfolio (multi-symbol) backtest
+        // DEBUG: Log portfolio detection to diagnose routing issue
+        eprintln!("🔍 [worker] job_id={} is_portfolio={} portfolio_assets={:?} all_symbols={:?}",
+            job.id,
+            job.params.is_portfolio(),
+            job.params.portfolio_assets.as_ref().map(|a| a.len()),
+            job.params.all_symbols()
+        );
+        
         let result = if job.params.is_portfolio() {
             log_info_structured!(BACKTEST_LOGGER, "PORTFOLIO_BACKTEST_START",
                 "event" => "PORTFOLIO_BACKTEST_START",

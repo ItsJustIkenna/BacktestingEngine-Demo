@@ -163,7 +163,14 @@ impl PostgresQueue {
         };
         
         // Deserialize params from JSON - no fallback to hardcoded values
-        let mut params: BacktestJobParams = serde_json::from_value(record.params_json)?;
+        let mut params: BacktestJobParams = serde_json::from_value(record.params_json.clone())?;
+        
+        // DEBUG: Log portfolio_assets to diagnose portfolio detection issue
+        eprintln!("🔍 [record_to_job] job_id={} portfolio_assets={:?} is_portfolio={}", 
+            record.job_id,
+            params.portfolio_assets.as_ref().map(|a| a.len()),
+            params.is_portfolio()
+        );
         
         // Override params dates with database column values if params dates are missing
         // This handles cases where get_date_range_for_symbol failed during job submission
