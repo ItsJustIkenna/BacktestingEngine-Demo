@@ -40,6 +40,7 @@ signal = { path = "../signal" }
 metrics = { path = "../metrics" }
 genetic = { path = "../genetic" }
 walkforward = { path = "../walkforward" }
+smartrouter = { path = "../smartrouter" }
 databaseschema = { path = "../../databaseschema", optional = true }
 
 # Logging

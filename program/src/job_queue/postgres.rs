@@ -1022,6 +1022,9 @@ impl JobQueue for PostgresQueue {
                     inventory_metrics,
                     execution_metrics,
                     metrics_profile,
+                    is_portfolio: false, // Legacy results are single-symbol
+                    portfolio_metrics: None,
+                    routing_metrics: None, // Not stored in legacy DB schema
                 }))
             }
             None => Ok(None),

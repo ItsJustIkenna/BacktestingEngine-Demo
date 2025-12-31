@@ -526,35 +526,49 @@ impl Worker {
             }
         }
         
-        let result = match job.params.optimization_method.as_str() {
-            "genetic" => {
-                log_info_structured!(GENETIC_LOGGER, "GENETIC_OPTIMIZATION_START",
-                    "event" => "GENETIC_OPTIMIZATION_START",
-                    "job_id" => &job.id,
-                    "population_size" => job.params.population_size,
-                    "generations" => job.params.generations
-                );
-                self.execute_genetic_optimization(&job).await
-            },
-            "walkforward" => {
-                log_info_structured!(WALKFORWARD_LOGGER, "WALKFORWARD_ANALYSIS_START",
-                    "event" => "WALKFORWARD_ANALYSIS_START",
-                    "job_id" => &job.id,
-                    "opt_days" => format!("{:?}", job.params.walkforward_optimization_days),
-                    "test_days" => format!("{:?}", job.params.walkforward_test_days)
-                );
-                log_debug!(MAIN_LOGGER, "🔄 Starting walk-forward analysis for job {}", job.id);
-                self.execute_walkforward_analysis(&job).await
-            },
-            _ => {
-                log_info_structured!(BACKTEST_LOGGER, "BACKTEST_START",
-                    "event" => "BACKTEST_START",
-                    "job_id" => &job.id,
-                    "risk_aversion" => job.params.risk_aversion,
-                    "order_size" => job.params.order_size
-                );
-                self.execute_backtest(&job).await
-            },
+        // Check if this is a portfolio (multi-symbol) backtest
+        let result = if job.params.is_portfolio() {
+            log_info_structured!(BACKTEST_LOGGER, "PORTFOLIO_BACKTEST_START",
+                "event" => "PORTFOLIO_BACKTEST_START",
+                "job_id" => &job.id,
+                "symbols" => format!("{:?}", job.params.all_symbols()),
+                "num_symbols" => job.params.all_symbols().len()
+            );
+            log_info!(MAIN_LOGGER, "🏦 Starting portfolio backtest for job {} with {} symbols", 
+                job.id, job.params.all_symbols().len());
+            self.execute_portfolio_backtest(&job).await
+        } else {
+            // Single-symbol backtest - use existing logic
+            match job.params.optimization_method.as_str() {
+                "genetic" => {
+                    log_info_structured!(GENETIC_LOGGER, "GENETIC_OPTIMIZATION_START",
+                        "event" => "GENETIC_OPTIMIZATION_START",
+                        "job_id" => &job.id,
+                        "population_size" => job.params.population_size,
+                        "generations" => job.params.generations
+                    );
+                    self.execute_genetic_optimization(&job).await
+                },
+                "walkforward" => {
+                    log_info_structured!(WALKFORWARD_LOGGER, "WALKFORWARD_ANALYSIS_START",
+                        "event" => "WALKFORWARD_ANALYSIS_START",
+                        "job_id" => &job.id,
+                        "opt_days" => format!("{:?}", job.params.walkforward_optimization_days),
+                        "test_days" => format!("{:?}", job.params.walkforward_test_days)
+                    );
+                    log_debug!(MAIN_LOGGER, "🔄 Starting walk-forward analysis for job {}", job.id);
+                    self.execute_walkforward_analysis(&job).await
+                },
+                _ => {
+                    log_info_structured!(BACKTEST_LOGGER, "BACKTEST_START",
+                        "event" => "BACKTEST_START",
+                        "job_id" => &job.id,
+                        "risk_aversion" => job.params.risk_aversion,
+                        "order_size" => job.params.order_size
+                    );
+                    self.execute_backtest(&job).await
+                },
+            }
         };
         
         let result = match result {
@@ -969,6 +983,9 @@ impl Worker {
             }),
             risk_halt_reason: None,
             metrics_profile: Some(Self::build_metrics_profile(&job.params.strategy_type)),
+            is_portfolio: false,
+            portfolio_metrics: None,
+            routing_metrics: None,
         };
         
         log_info_structured!(BACKTEST_LOGGER, "BACKTEST_COMPLETE",
@@ -986,6 +1003,224 @@ impl Worker {
             "sharpe_ratio": backtest_result.sharpe_ratio,
             "total_trades": backtest_result.total_trades,
         })).await;
+        
+        Ok(backtest_result)
+    }
+    
+    /// Execute portfolio/multi-symbol backtest
+    /// 
+    /// Runs simulation across multiple symbols with portfolio-level aggregation.
+    /// Each symbol gets allocated capital based on weights (equal if not specified).
+    #[allow(dead_code)]
+    async fn execute_portfolio_backtest(
+        &self,
+        job: &BacktestJob,
+    ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
+        use backtest::portfolio_simulation::PortfolioSimulator;
+        use backtest::realistic_simulation::RealisticASParams;
+        
+        let params = &job.params;
+        let all_symbols = params.all_symbols();
+        
+        log_info!(BACKTEST_LOGGER, "Job {} starting portfolio backtest for {} symbols: {:?}", 
+            job.id, all_symbols.len(), all_symbols);
+        
+        // Update phase
+        let _ = self.job_queue.update_phase(&job.id, "portfolio_loading", serde_json::json!({
+            "symbols": all_symbols,
+            "exchange": params.exchange,
+        })).await;
+        
+        // Load market data for all assets (symbol+exchange pairs)
+        // Use asset_key (symbol@exchange) to allow same symbol on different exchanges
+        let mut symbol_events = std::collections::HashMap::new();
+        let mut asset_exchanges = std::collections::HashMap::new(); // Track exchange per asset key
+        let symbol_exchange_pairs = params.all_symbol_exchange_pairs();
+        
+        for (idx, (symbol, exchange, weight)) in symbol_exchange_pairs.iter().enumerate() {
+            let _ = self.job_queue.update_progress(&job.id, 5.0 + (idx as f64 * 10.0 / symbol_exchange_pairs.len() as f64)).await;
+            
+            // Use asset key to support same symbol on multiple exchanges
+            let asset_key = crate::job_queue::BacktestJobParams::asset_key(symbol, exchange);
+            
+            log_debug!(BACKTEST_LOGGER, "Job {} loading data for asset {}/{}: {} (weight: {:.2}%)", 
+                job.id, idx + 1, symbol_exchange_pairs.len(), asset_key, weight * 100.0);
+            
+            match self.load_market_data_for_strategy(symbol, exchange, &params.strategy_type).await {
+                Ok(data) => {
+                    if data.is_empty() {
+                        log_warn!(BACKTEST_LOGGER, "Job {} no data for {}, skipping", job.id, asset_key);
+                        continue;
+                    }
+                    
+                    // Convert MarketData to OrderBookEvents
+                    let events = backtest::ticks_to_trade_events(&data);
+                    log_info!(BACKTEST_LOGGER, "Job {} loaded {} events for {}", job.id, events.len(), asset_key);
+                    symbol_events.insert(asset_key.clone(), events);
+                    asset_exchanges.insert(asset_key, exchange.clone());
+                }
+                Err(e) => {
+                    log_error!(BACKTEST_LOGGER, "Job {} failed to load data for {}: {}", job.id, asset_key, e);
+                    // Continue with other assets
+                }
+            }
+        }
+        
+        if symbol_events.is_empty() {
+            return Err("No market data available for any asset".into());
+        }
+        
+        // Update phase
+        let _ = self.job_queue.update_phase(&job.id, "portfolio_simulation", serde_json::json!({
+            "assets_loaded": symbol_events.len(),
+            "total_assets": symbol_exchange_pairs.len(),
+        })).await;
+        let _ = self.job_queue.update_progress(&job.id, 30.0).await;
+        
+        // Get exchange fee config for fee rates
+        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&params.exchange);
+        
+        // Build simulation params from job params
+        let sim_params = RealisticASParams {
+            risk_aversion: params.risk_aversion,
+            inventory_target: params.inventory_target,
+            order_size_pct: params.order_size_pct,
+            initial_inventory_pct: params.initial_inventory_pct,
+            volatility_cap: params.volatility_cap,
+            time_horizon_minutes: params.time_horizon_minutes as f64,
+            min_spread_bps: params.min_spread_bps,
+            max_inventory_multiple: 1.0,
+            maker_fee_rate: exchange_fee_config.maker_fee,
+            taker_fee_rate: exchange_fee_config.taker_fee,
+            fee_spread_multiplier: params.fee_spread_multiplier,
+            adverse_selection_sensitivity: params.adverse_selection_sensitivity,
+            take_profit_pct: params.take_profit_pct,
+            stop_loss_pct: params.stop_loss_pct,
+            max_trades_per_minute: params.max_trades_per_minute,
+            max_orders_per_second: 10.0,
+            rate_limit_cooldown_ms: 1000,
+            window_ms: params.window_ms as i64,
+            min_quote_lifetime_ms: params.min_quote_lifetime_ms as i64,
+            fill_model: backtest::FillModelType::from_str(&params.fill_model),
+            ..Default::default()
+        };
+        
+        // Create portfolio simulator
+        let simulator = PortfolioSimulator::new(params.initial_capital, exchange_fee_config);
+        
+        // Run portfolio simulation
+        let portfolio_result = simulator.run(
+            &symbol_events,
+            &sim_params,
+            params.allocation_weights.as_ref(),
+        );
+        
+        log_info!(BACKTEST_LOGGER, "Job {} portfolio simulation complete: {} symbols, total_pnl=${:.2}, sharpe={:.3}", 
+            job.id, portfolio_result.symbol_results.len(), portfolio_result.total_pnl, portfolio_result.portfolio_sharpe);
+        
+        // Log per-symbol breakdown
+        for sym_result in &portfolio_result.symbol_results {
+            log_info!(BACKTEST_LOGGER, "  {} | PnL: ${:.2} | Sharpe: {:.3} | Trades: {} | Alloc: {:.1}%",
+                sym_result.symbol, sym_result.total_pnl, sym_result.sharpe_ratio, 
+                sym_result.num_trades, sym_result.allocation_weight * 100.0);
+        }
+        
+        // Update progress
+        let _ = self.job_queue.update_progress(&job.id, 100.0).await;
+        let _ = self.job_queue.update_phase(&job.id, "completed", serde_json::json!({
+            "symbols_traded": portfolio_result.symbol_results.len(),
+            "total_pnl": portfolio_result.total_pnl,
+            "portfolio_sharpe": portfolio_result.portfolio_sharpe,
+            "total_trades": portfolio_result.total_trades,
+        })).await;
+        
+        // Build per-symbol breakdown for inventory metrics
+        let symbol_breakdown: Vec<serde_json::Value> = portfolio_result.symbol_results.iter()
+            .map(|r| serde_json::json!({
+                "symbol": r.symbol,
+                "allocation_weight": r.allocation_weight,
+                "allocated_capital": r.allocated_capital,
+                "total_pnl": r.total_pnl,
+                "sharpe_ratio": r.sharpe_ratio,
+                "max_drawdown": r.max_drawdown,
+                "num_trades": r.num_trades,
+                "win_rate": r.win_rate,
+                "ending_inventory": r.ending_inventory,
+                "ending_inventory_value": r.ending_inventory_value,
+                "ending_capital": r.ending_capital,
+                "final_equity": r.final_equity,
+            }))
+            .collect();
+        
+        // Build PortfolioMetrics for the result
+        // The symbol field in results is the asset_key (symbol@exchange)
+        let portfolio_metrics = crate::job_queue::PortfolioMetrics {
+            total_symbols: portfolio_result.symbol_results.len(),
+            symbol_results: portfolio_result.symbol_results.iter().map(|r| {
+                // Parse exchange from asset_key if it contains @
+                let (symbol, exchange) = if r.symbol.contains('@') {
+                    let parts: Vec<&str> = r.symbol.splitn(2, '@').collect();
+                    (parts[0].to_string(), Some(parts[1].to_string()))
+                } else {
+                    // Legacy: look up exchange
+                    let exch = params.get_exchange_for_symbol(&r.symbol).to_string();
+                    (r.symbol.clone(), Some(exch))
+                };
+                
+                crate::job_queue::SymbolResult {
+                    symbol,
+                    exchange,
+                    sharpe_ratio: r.sharpe_ratio,
+                    max_drawdown: r.max_drawdown,
+                    total_pnl: r.total_pnl,
+                    win_rate: r.win_rate,
+                    profit_factor: r.profit_factor,
+                    total_trades: r.num_trades,
+                    allocation_weight: r.allocation_weight,
+                }
+            }).collect(),
+            correlation_matrix: portfolio_result.correlation_matrix.as_ref().map(|corrs| {
+                corrs.iter().map(|c| {
+                    crate::job_queue::CorrelationPair {
+                        symbol_a: c.symbol1.clone(),
+                        symbol_b: c.symbol2.clone(),
+                        correlation: c.correlation,
+                    }
+                }).collect()
+            }).unwrap_or_default(),
+            portfolio_sharpe: portfolio_result.portfolio_sharpe,
+            portfolio_max_drawdown: portfolio_result.portfolio_max_drawdown,
+            diversification_ratio: None, // TODO: Calculate based on individual vs portfolio volatility
+        };
+        
+        // Convert PortfolioSimResult to job_queue::BacktestResult
+        let backtest_result = BacktestResult {
+            job_id: job.id.clone(),
+            strategy_type: Some("portfolio".to_string()),
+            total_pnl: portfolio_result.total_pnl,
+            sharpe_ratio: portfolio_result.portfolio_sharpe,
+            max_drawdown: portfolio_result.portfolio_max_drawdown,
+            win_rate: portfolio_result.portfolio_win_rate,
+            total_trades: portfolio_result.total_trades,
+            profit_factor: portfolio_result.portfolio_profit_factor,
+            equity_curve: portfolio_result.equity_curve,
+            completed_at: Utc::now(),
+            closed_trades: Some(portfolio_result.total_trades),
+            open_positions: None,
+            realized_pnl: Some(portfolio_result.total_pnl),
+            unrealized_pnl: Some(0.0),
+            total_commission_paid: Some(portfolio_result.total_fees),
+            is_portfolio: true,
+            portfolio_metrics: Some(portfolio_metrics),
+            strategy_params: Some(serde_json::json!({
+                "portfolio_mode": true,
+                "symbols": all_symbols,
+                "symbol_results": symbol_breakdown,
+                "initial_capital": params.initial_capital,
+                "correlation_matrix": portfolio_result.correlation_matrix,
+            })),
+            ..Default::default()
+        };
         
         Ok(backtest_result)
     }
@@ -2227,6 +2462,9 @@ impl Worker {
             execution_metrics: None, // Not tracked for WF windows
             risk_halt_reason: None,
             metrics_profile: Some(Self::build_metrics_profile(&job.params.strategy_type)),
+            is_portfolio: false,
+            portfolio_metrics: None,
+            routing_metrics: None,
         })
     }
     
@@ -3256,6 +3494,9 @@ impl Worker {
             execution_metrics: None, // Not tracked for chromosome eval
             risk_halt_reason: None,
             metrics_profile: Some(Self::build_metrics_profile("market_making")),
+            is_portfolio: false,
+            portfolio_metrics: None,
+            routing_metrics: None,
         })
     }
     

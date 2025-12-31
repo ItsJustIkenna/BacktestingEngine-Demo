@@ -5,6 +5,7 @@ members = [
     # Core Engine Components
     "backtest",          # Main backtesting engine with simulation
     "metrics",           # Performance metrics calculation
+    "smartrouter",       # Smart order routing across venues
     
     # Strategy & Optimization
     "strategy",          # Trading strategy implementations

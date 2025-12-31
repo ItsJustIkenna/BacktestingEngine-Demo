@@ -18,6 +18,13 @@ interface FitnessWeights {
   calmar: number;
 }
 
+// Portfolio asset: symbol + exchange pair with weight
+interface PortfolioAsset {
+  symbol: string;
+  exchange: string;
+  weight: number;
+}
+
 interface BacktestFormData {
   symbol: string;
   exchange: string;
@@ -26,6 +33,13 @@ interface BacktestFormData {
   initial_inventory_pct: number;  // Percentage of capital as base asset (e.g., 0.5 = 50% BTC, 50% USD)
   initial_30d_volume: number;     // Starting 30-day volume for fee tier calculation
   optimization_method: 'genetic' | 'manual';
+  // Portfolio mode - multi-symbol/multi-exchange backtesting
+  portfolio_mode: boolean;
+  portfolio_assets: PortfolioAsset[];  // Symbol+exchange pairs with weights
+  // Legacy fields (deprecated)
+  additional_symbols: string[];
+  symbol_exchanges: { [symbol: string]: string };
+  allocation_weights: number[];
   // Genetic algorithm parameters
   population_size: number;
   generations: number;
@@ -77,6 +91,12 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     initial_inventory_pct: 0.5,   // Default 50% base asset
     initial_30d_volume: 0,        // Default 0 = use exchange default fee tier
     optimization_method: 'genetic',
+    // Portfolio mode defaults
+    portfolio_mode: false,
+    portfolio_assets: [],         // Symbol+exchange pairs with weights
+    additional_symbols: [],       // Legacy
+    symbol_exchanges: {},         // Legacy
+    allocation_weights: [],       // Legacy
     // Genetic algorithm defaults
     population_size: 50,
     generations: 20,
@@ -199,6 +219,16 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
         min_total_pnl: formData.min_total_pnl,
       };
 
+      // Add portfolio mode parameters if enabled
+      if (formData.portfolio_mode && formData.portfolio_assets.length > 0) {
+        // Use new portfolio_assets format for symbol+exchange pairs
+        params.portfolio_assets = formData.portfolio_assets.map(asset => ({
+          symbol: asset.symbol,
+          exchange: asset.exchange,
+          weight: asset.weight > 0 ? asset.weight : null,  // null weight = equal distribution
+        }));
+      }
+
       if (formData.optimization_method === 'genetic') {
         params.population_size = formData.population_size;
         params.generations = formData.generations;
@@ -317,6 +347,261 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
               )}
             </select>
           </div>
+        </div>
+
+        {/* Portfolio Mode Toggle */}
+        <div style={{ padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '8px', border: '1px solid #e9ecef' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '10px' }}>
+            <input
+              type="checkbox"
+              id="portfolio_mode"
+              checked={formData.portfolio_mode}
+              onChange={(e) => setFormData(prev => ({ 
+                ...prev, 
+                portfolio_mode: e.target.checked,
+                // Reset portfolio assets when disabling
+                portfolio_assets: e.target.checked ? prev.portfolio_assets : [],
+              }))}
+              style={{ width: '18px', height: '18px' }}
+            />
+            <label htmlFor="portfolio_mode" style={{ fontWeight: 'bold', cursor: 'pointer' }}>
+              Portfolio Mode (Multi-Symbol / Multi-Exchange Backtesting)
+            </label>
+          </div>
+          
+          {formData.portfolio_mode && (
+            <div style={{ marginTop: '15px' }}>
+              <p style={{ fontSize: '0.9em', color: '#666', marginBottom: '15px' }}>
+                Add symbol+exchange pairs to your portfolio. You can add the same symbol from different exchanges 
+                (e.g., BTC-USD on Kraken AND Coinbase) to compare performance.
+              </p>
+              
+              {/* Add New Asset Row */}
+              <div style={{ 
+                display: 'grid', 
+                gridTemplateColumns: '1fr 1fr 80px auto',
+                gap: '10px',
+                marginBottom: '15px',
+                padding: '10px',
+                backgroundColor: '#e7f3ff',
+                borderRadius: '6px'
+              }}>
+                <select
+                  id="new_asset_symbol"
+                  style={{ padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
+                  disabled={loadingMetadata}
+                >
+                  {symbols.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+                <select
+                  id="new_asset_exchange"
+                  style={{ padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
+                  disabled={loadingMetadata}
+                >
+                  {exchanges.map(e => <option key={e} value={e}>{e}</option>)}
+                </select>
+                <input
+                  id="new_asset_weight"
+                  type="number"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  placeholder="Weight"
+                  defaultValue=""
+                  style={{ padding: '8px', border: '1px solid #ccc', borderRadius: '4px' }}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const symEl = document.getElementById('new_asset_symbol') as HTMLSelectElement;
+                    const exchEl = document.getElementById('new_asset_exchange') as HTMLSelectElement;
+                    const weightEl = document.getElementById('new_asset_weight') as HTMLInputElement;
+                    
+                    const symbol = symEl?.value || symbols[0];
+                    const exchange = exchEl?.value || exchanges[0];
+                    const weight = parseFloat(weightEl?.value) || 0;
+                    
+                    // Check if this exact pair already exists
+                    const exists = formData.portfolio_assets.some(
+                      a => a.symbol === symbol && a.exchange === exchange
+                    );
+                    
+                    if (!exists && symbol && exchange) {
+                      setFormData(prev => ({
+                        ...prev,
+                        portfolio_assets: [...prev.portfolio_assets, { symbol, exchange, weight }]
+                      }));
+                      if (weightEl) weightEl.value = '';
+                    }
+                  }}
+                  style={{
+                    padding: '8px 16px',
+                    backgroundColor: '#0066cc',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontWeight: 500
+                  }}
+                >
+                  + Add
+                </button>
+              </div>
+
+              {/* Portfolio Assets List */}
+              {formData.portfolio_assets.length > 0 && (
+                <div style={{ marginBottom: '15px' }}>
+                  <label style={{ display: 'block', marginBottom: '10px', fontWeight: 500 }}>
+                    Portfolio Assets ({formData.portfolio_assets.length} pairs)
+                  </label>
+                  <div style={{ 
+                    display: 'grid', 
+                    gridTemplateColumns: '1fr 1fr 80px 40px',
+                    gap: '5px',
+                    fontSize: '0.9em'
+                  }}>
+                    {/* Header row */}
+                    <div style={{ fontWeight: 500, padding: '5px', color: '#666' }}>Symbol</div>
+                    <div style={{ fontWeight: 500, padding: '5px', color: '#666' }}>Exchange</div>
+                    <div style={{ fontWeight: 500, padding: '5px', color: '#666' }}>Weight</div>
+                    <div></div>
+                    
+                    {formData.portfolio_assets.map((asset, idx) => (
+                      <React.Fragment key={`${asset.symbol}@${asset.exchange}`}>
+                        <span style={{ 
+                          padding: '8px 10px', 
+                          backgroundColor: '#f0f0f0',
+                          borderRadius: '4px',
+                          fontWeight: 500
+                        }}>
+                          {asset.symbol}
+                        </span>
+                        <span style={{ 
+                          padding: '8px 10px', 
+                          backgroundColor: '#f8f8f8',
+                          borderRadius: '4px',
+                          color: '#666'
+                        }}>
+                          {asset.exchange}
+                        </span>
+                        <input
+                          type="number"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value={asset.weight || ''}
+                          onChange={(e) => {
+                            const newAssets = [...formData.portfolio_assets];
+                            newAssets[idx] = { ...newAssets[idx], weight: parseFloat(e.target.value) || 0 };
+                            setFormData(prev => ({ ...prev, portfolio_assets: newAssets }));
+                          }}
+                          style={{ 
+                            padding: '5px', 
+                            border: '1px solid #ccc', 
+                            borderRadius: '4px',
+                            width: '100%'
+                          }}
+                          placeholder="Auto"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setFormData(prev => ({
+                              ...prev,
+                              portfolio_assets: prev.portfolio_assets.filter((_, i) => i !== idx)
+                            }));
+                          }}
+                          style={{
+                            padding: '5px 10px',
+                            backgroundColor: '#dc3545',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer'
+                          }}
+                          title="Remove asset"
+                        >
+                          ✕
+                        </button>
+                      </React.Fragment>
+                    ))}
+                  </div>
+                  
+                  {/* Weight summary */}
+                  <div style={{ marginTop: '10px', fontSize: '0.85em', color: '#666' }}>
+                    {(() => {
+                      const totalWeight = formData.portfolio_assets.reduce((sum, a) => sum + (a.weight || 0), 0);
+                      const assetsWithWeight = formData.portfolio_assets.filter(a => a.weight > 0).length;
+                      const assetsWithoutWeight = formData.portfolio_assets.length - assetsWithWeight;
+                      
+                      if (assetsWithoutWeight === formData.portfolio_assets.length) {
+                        return <span>⚖️ Equal weight will be applied: {(100 / formData.portfolio_assets.length).toFixed(1)}% each</span>;
+                      } else if (Math.abs(totalWeight - 1) > 0.01) {
+                        return <span style={{ color: '#cc0000' }}>⚠️ Weights sum to {(totalWeight * 100).toFixed(1)}% (should equal 100%)</span>;
+                      } else {
+                        return <span style={{ color: '#28a745' }}>✓ Weights sum to 100%</span>;
+                      }
+                    })()}
+                  </div>
+                  
+                  {/* Quick actions */}
+                  <div style={{ marginTop: '10px', display: 'flex', gap: '10px' }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const equalWeight = 1 / formData.portfolio_assets.length;
+                        setFormData(prev => ({
+                          ...prev,
+                          portfolio_assets: prev.portfolio_assets.map(a => ({ ...a, weight: equalWeight }))
+                        }));
+                      }}
+                      style={{
+                        padding: '5px 12px',
+                        backgroundColor: '#6c757d',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '0.85em'
+                      }}
+                    >
+                      ⚖️ Equal Weight
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormData(prev => ({ ...prev, portfolio_assets: [] }));
+                      }}
+                      style={{
+                        padding: '5px 12px',
+                        backgroundColor: '#dc3545',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '0.85em'
+                      }}
+                    >
+                      🗑️ Clear All
+                    </button>
+                  </div>
+                </div>
+              )}
+              
+              {formData.portfolio_assets.length === 0 && (
+                <div style={{ 
+                  padding: '20px', 
+                  textAlign: 'center', 
+                  backgroundColor: '#fff',
+                  borderRadius: '6px',
+                  border: '1px dashed #ccc',
+                  color: '#999'
+                }}>
+                  No assets added yet. Use the form above to add symbol+exchange pairs.
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Strategy Type */}

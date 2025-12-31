@@ -775,6 +775,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                             } else { None },
                                                             risk_halt_reason: None,
                                                             metrics_profile: None,
+                                                            is_portfolio: false,
+                                                            portfolio_metrics: None,
+                                                            routing_metrics: None,
                                                         }
                                                     }
                                                     Err(e) => {
@@ -861,6 +864,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                             execution_metrics: None,
                                                             risk_halt_reason: None,
                                                             metrics_profile: None,
+                                                            is_portfolio: false,
+                                                            portfolio_metrics: None,
+                                                            routing_metrics: None,
                                                         }
                                                     }
                                                 };

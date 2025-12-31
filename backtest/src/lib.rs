@@ -31,6 +31,7 @@ pub mod lightweight_sim;
 pub mod realistic_simulation;
 pub mod statistical_significance;
 pub mod portfolio_risk;
+pub mod portfolio_simulation;
 pub mod accuracy_validation;
 
 // Re-export main types for easy access
@@ -56,6 +57,9 @@ pub use statistical_significance::{
 pub use portfolio_risk::{
     PortfolioRiskManager, PortfolioRiskMetrics, AssetPosition, 
     CorrelationEntry, AssetReturns
+};
+pub use portfolio_simulation::{
+    PortfolioSimulator, PortfolioSimResult, SymbolResult, CorrelationPair
 };
 pub use accuracy_validation::{
     AccuracyValidator, AccuracyMetrics, ExecutionComparison

@@ -67,13 +67,42 @@ impl FitnessWeights {
     }
 }
 
+/// A single asset in a portfolio (symbol + exchange pair)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortfolioAsset {
+    pub symbol: String,
+    pub exchange: String,
+    /// Capital allocation weight (0.0 to 1.0)
+    #[serde(default)]
+    pub weight: Option<f64>,
+}
+
 /// Backtest job parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BacktestJobParams {
+    /// Primary symbol (for single-symbol backtests)
     pub symbol: String,
     pub exchange: String,
+    
+    /// Portfolio assets for multi-symbol/multi-exchange backtests
+    /// Each asset is a symbol+exchange pair with optional weight
+    /// Allows same symbol on different exchanges (e.g., BTC on Kraken AND Coinbase)
+    #[serde(default)]
+    pub portfolio_assets: Option<Vec<PortfolioAsset>>,
+    
     pub strategy_type: String,
     pub initial_capital: f64,
+    
+    // Legacy fields (deprecated, use portfolio_assets instead)
+    /// Additional symbols for portfolio/multi-symbol backtests
+    #[serde(default)]
+    pub symbols: Option<Vec<String>>,
+    /// Per-symbol exchange mapping for portfolio mode
+    #[serde(default)]
+    pub symbol_exchanges: Option<Vec<String>>,
+    // Portfolio allocation weights (legacy - use portfolio_assets.weight instead)
+    #[serde(default)]
+    pub allocation_weights: Option<Vec<f64>>,
     
     // Initial inventory configuration
     /// Percentage of initial_capital to hold as base asset (e.g., 0.5 = 50% in BTC, 50% in USD)
@@ -199,6 +228,29 @@ pub struct BacktestJobParams {
     #[serde(default)]
     pub min_total_pnl: Option<f64>,
     
+    // Smart Order Routing configuration
+    /// Routing mode: "single", "best_venue", "multi_venue", "arbitrage"
+    #[serde(default)]
+    pub routing_mode: Option<String>,
+    /// List of exchanges to route orders to (for multi-venue routing)
+    #[serde(default)]
+    pub routing_exchanges: Option<Vec<String>>,
+    /// Maximum venues per order (for multi-venue mode)
+    #[serde(default)]
+    pub max_venues_per_order: Option<usize>,
+    /// Minimum allocation fraction per venue (e.g., 0.1 = 10%)
+    #[serde(default)]
+    pub min_venue_allocation: Option<f64>,
+    /// Execution style: "aggressive", "passive", "balanced", "twap", "vwap"
+    #[serde(default)]
+    pub execution_style: Option<String>,
+    /// TWAP/VWAP duration in milliseconds
+    #[serde(default)]
+    pub execution_duration_ms: Option<u64>,
+    /// Minimum arbitrage profit in basis points (for arbitrage mode)
+    #[serde(default)]
+    pub min_arb_profit_bps: Option<f64>,
+    
     // Fill model configuration for realistic backtesting
     /// Fill model realism level: "optimistic", "standard", "realistic", "pessimistic"
     /// Default is "realistic" for conservative estimates
@@ -258,6 +310,10 @@ impl Default for BacktestJobParams {
         Self {
             symbol: String::new(),
             exchange: String::new(),
+            portfolio_assets: None,
+            symbols: None,
+            symbol_exchanges: None,
+            allocation_weights: None,
             strategy_type: "market_making".to_string(),
             initial_capital: 10000.0,
             initial_inventory_pct: default_initial_inventory_pct(),
@@ -300,6 +356,14 @@ impl Default for BacktestJobParams {
             min_sortino_ratio: None,
             min_calmar_ratio: None,
             min_total_pnl: None,
+            // Smart order routing (defaults to disabled)
+            routing_mode: None,
+            routing_exchanges: None,
+            max_venues_per_order: None,
+            min_venue_allocation: None,
+            execution_style: None,
+            execution_duration_ms: None,
+            min_arb_profit_bps: None,
             take_profit_pct: default_take_profit_pct(),
             stop_loss_pct: default_stop_loss_pct(),
             min_spread_bps: default_min_spread_bps(),
@@ -309,6 +373,141 @@ impl Default for BacktestJobParams {
             start_date: None,
             end_date: None,
         }
+    }
+}
+
+impl BacktestJobParams {
+    /// Get all portfolio assets (symbol+exchange pairs with weights)
+    /// Uses new portfolio_assets field, with fallback to legacy symbols/symbol_exchanges
+    pub fn get_portfolio_assets(&self) -> Vec<PortfolioAsset> {
+        // Prefer new portfolio_assets field
+        if let Some(ref assets) = self.portfolio_assets {
+            if !assets.is_empty() {
+                return assets.clone();
+            }
+        }
+        
+        // Fallback to legacy: convert symbols + symbol_exchanges + allocation_weights
+        let mut assets = vec![PortfolioAsset {
+            symbol: self.symbol.clone(),
+            exchange: self.exchange.clone(),
+            weight: None,
+        }];
+        
+        if let Some(ref additional) = self.symbols {
+            for (idx, sym) in additional.iter().enumerate() {
+                let exchange = self.get_exchange_for_symbol_legacy(sym).to_string();
+                let weight = self.allocation_weights.as_ref()
+                    .and_then(|w| w.get(idx + 1).copied());
+                assets.push(PortfolioAsset {
+                    symbol: sym.clone(),
+                    exchange,
+                    weight,
+                });
+            }
+        }
+        
+        // Set primary weight if available
+        if let Some(ref weights) = self.allocation_weights {
+            if !weights.is_empty() {
+                assets[0].weight = Some(weights[0]);
+            }
+        }
+        
+        assets
+    }
+    
+    /// Get all symbols for this job (primary + additional) - LEGACY
+    pub fn all_symbols(&self) -> Vec<String> {
+        self.get_portfolio_assets().iter().map(|a| a.symbol.clone()).collect()
+    }
+    
+    /// Check if this is a multi-symbol (portfolio) backtest
+    pub fn is_portfolio(&self) -> bool {
+        // New field takes precedence
+        if let Some(ref assets) = self.portfolio_assets {
+            return !assets.is_empty();
+        }
+        // Legacy check
+        self.symbols.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
+    }
+    
+    /// Get allocation weight for a specific asset (by unique key: symbol@exchange)
+    pub fn get_allocation_weight_for_asset(&self, symbol: &str, exchange: &str) -> f64 {
+        let assets = self.get_portfolio_assets();
+        let num_assets = assets.len();
+        
+        // Find matching asset
+        for asset in &assets {
+            if asset.symbol == symbol && asset.exchange == exchange {
+                if let Some(w) = asset.weight {
+                    return w;
+                }
+            }
+        }
+        
+        // Default to equal weight
+        1.0 / num_assets.max(1) as f64
+    }
+    
+    /// Get allocation weight for a specific symbol - LEGACY (use get_allocation_weight_for_asset)
+    pub fn get_allocation_weight(&self, symbol: &str) -> f64 {
+        let all_syms = self.all_symbols();
+        let num_symbols = all_syms.len();
+        
+        if let Some(ref weights) = self.allocation_weights {
+            if let Some(idx) = all_syms.iter().position(|s| s == symbol) {
+                if idx < weights.len() {
+                    return weights[idx];
+                }
+            }
+        }
+        1.0 / num_symbols as f64
+    }
+    
+    /// Get exchange for a specific symbol - LEGACY helper
+    fn get_exchange_for_symbol_legacy(&self, symbol: &str) -> &str {
+        if let Some(ref symbol_exchanges) = self.symbol_exchanges {
+            for entry in symbol_exchanges {
+                if let Some((sym, exch)) = entry.split_once(':') {
+                    if sym == symbol {
+                        return Box::leak(exch.to_string().into_boxed_str());
+                    }
+                }
+            }
+        }
+        &self.exchange
+    }
+    
+    /// Get exchange for a specific symbol
+    pub fn get_exchange_for_symbol(&self, symbol: &str) -> &str {
+        // Check portfolio_assets first
+        if let Some(ref assets) = self.portfolio_assets {
+            for asset in assets {
+                if asset.symbol == symbol {
+                    return Box::leak(asset.exchange.clone().into_boxed_str());
+                }
+            }
+        }
+        self.get_exchange_for_symbol_legacy(symbol)
+    }
+    
+    /// Get all symbol-exchange pairs for portfolio mode
+    /// Returns Vec<(symbol, exchange, weight)> - unique by symbol@exchange
+    pub fn all_symbol_exchange_pairs(&self) -> Vec<(String, String, f64)> {
+        let assets = self.get_portfolio_assets();
+        let num_assets = assets.len();
+        let default_weight = 1.0 / num_assets.max(1) as f64;
+        
+        assets.iter().map(|asset| {
+            let weight = asset.weight.unwrap_or(default_weight);
+            (asset.symbol.clone(), asset.exchange.clone(), weight)
+        }).collect()
+    }
+    
+    /// Create a unique key for a symbol+exchange pair
+    pub fn asset_key(symbol: &str, exchange: &str) -> String {
+        format!("{}@{}", symbol, exchange)
     }
 }
 
@@ -458,20 +657,125 @@ pub struct ExecutionSummary {
     pub avg_pnl_per_round_trip: Option<f64>,
 }
 
-/// Backtest results
+/// Smart order routing metrics summary
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RoutingMetricsSummary {
+    /// Total orders routed through smart router
+    pub total_orders_routed: u64,
+    /// Total notional volume routed
+    pub total_volume_routed: f64,
+    /// Total fees paid across all venues
+    pub total_fees_paid: f64,
+    /// Average slippage in basis points
+    pub avg_slippage_bps: f64,
+    /// Maximum slippage observed
+    pub max_slippage_bps: f64,
+    /// Implementation shortfall vs benchmark (bps)
+    pub implementation_shortfall_bps: f64,
+    /// Orders split across multiple venues
+    pub multi_venue_orders: u64,
+    /// Orders sent to single venue
+    pub single_venue_orders: u64,
+    /// Average venues used per order
+    pub avg_venues_per_order: f64,
+    /// Execution quality breakdown
+    pub quality_excellent_pct: f64,
+    pub quality_good_pct: f64,
+    pub quality_average_pct: f64,
+    pub quality_poor_pct: f64,
+    /// Per-venue breakdown
+    #[serde(default)]
+    pub venue_breakdown: Vec<VenueRoutingSummary>,
+    /// Estimated savings from smart routing (vs worst venue)
+    pub routing_savings: f64,
+    /// Arbitrage-specific metrics (if arbitrage mode)
+    #[serde(default)]
+    pub arbitrage_metrics: Option<ArbitrageMetricsSummary>,
+}
+
+/// Per-venue routing summary
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VenueRoutingSummary {
+    pub venue: String,
+    pub orders_routed: u64,
+    pub volume_routed: f64,
+    pub avg_fill_price: f64,
+    pub total_fees: f64,
+    pub avg_slippage_bps: f64,
+    pub fill_rate: f64,
+}
+
+/// Arbitrage-specific metrics
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ArbitrageMetricsSummary {
+    pub opportunities_detected: u64,
+    pub opportunities_executed: u64,
+    pub opportunities_missed: u64,
+    pub total_arb_pnl: f64,
+    pub avg_profit_bps: f64,
+    pub win_rate: f64,
+    pub avg_execution_latency_ms: f64,
+}
+
+/// Per-symbol breakdown in portfolio results
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SymbolResult {
+    pub symbol: String,
+    /// Exchange for this symbol (optional - falls back to primary exchange)
+    #[serde(default)]
+    pub exchange: Option<String>,
+    pub sharpe_ratio: f64,
+    pub max_drawdown: f64,
+    pub total_pnl: f64,
+    pub win_rate: f64,
+    pub profit_factor: f64,
+    pub total_trades: usize,
+    pub allocation_weight: f64,
+}
+
+/// Correlation pair for portfolio analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorrelationPair {
+    pub symbol_a: String,
+    pub symbol_b: String,
+    pub correlation: f64,
+}
+
+/// Portfolio-level metrics for multi-symbol backtests
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PortfolioMetrics {
+    pub total_symbols: usize,
+    pub symbol_results: Vec<SymbolResult>,
+    pub correlation_matrix: Vec<CorrelationPair>,
+    pub portfolio_sharpe: f64,
+    pub portfolio_max_drawdown: f64,
+    #[serde(default)]
+    pub diversification_ratio: Option<f64>,
+}
+
+/// Backtest results
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct BacktestResult {
+    #[serde(default)]
     pub job_id: String,
     /// Strategy type: "market_making", "mean_reversion", "momentum", "arbitrage"
     #[serde(default)]
     pub strategy_type: Option<String>,
+    #[serde(default)]
     pub total_pnl: f64,
+    #[serde(default)]
     pub sharpe_ratio: f64,
+    #[serde(default)]
     pub max_drawdown: f64,
+    #[serde(default)]
     pub win_rate: f64,
+    #[serde(default)]
     pub total_trades: usize,
+    #[serde(default)]
     pub profit_factor: f64,
+    #[serde(default)]
     pub equity_curve: Vec<f64>,
+    #[serde(default = "chrono::Utc::now")]
     pub completed_at: DateTime<Utc>,
     
     // Trade breakdown - helps explain PnL vs win_rate discrepancies
@@ -552,6 +856,16 @@ pub struct BacktestResult {
     pub inventory_metrics: Option<InventorySummary>,
     #[serde(default)]
     pub execution_metrics: Option<ExecutionSummary>,
+    
+    // Portfolio mode results
+    #[serde(default)]
+    pub is_portfolio: bool,
+    #[serde(default)]
+    pub portfolio_metrics: Option<PortfolioMetrics>,
+    
+    // Smart order routing metrics
+    #[serde(default)]
+    pub routing_metrics: Option<RoutingMetricsSummary>,
     
     // Warning/halt reason (e.g., "NOT_VIABLE: Commission costs exceeded 80%")
     #[serde(default)]

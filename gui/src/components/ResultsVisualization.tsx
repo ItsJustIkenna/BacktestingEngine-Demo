@@ -75,6 +75,34 @@ interface ExecutionSummary {
   avg_pnl_per_round_trip?: number;
 }
 
+// Portfolio-specific interfaces
+interface SymbolResult {
+  symbol: string;
+  exchange?: string;  // Per-symbol exchange (optional, falls back to primary)
+  sharpe_ratio: number;
+  max_drawdown: number;
+  total_pnl: number;
+  win_rate: number;
+  profit_factor: number;
+  total_trades: number;
+  allocation_weight: number;
+}
+
+interface CorrelationPair {
+  symbol_a: string;
+  symbol_b: string;
+  correlation: number;
+}
+
+interface PortfolioMetrics {
+  total_symbols: number;
+  symbol_results: SymbolResult[];
+  correlation_matrix: CorrelationPair[];
+  portfolio_sharpe: number;
+  portfolio_max_drawdown: number;
+  diversification_ratio?: number;
+}
+
 interface BacktestResult {
   job_id?: string;
   strategy_type?: string;  // "market_making", "mean_reversion", "momentum", "arbitrage"
@@ -93,6 +121,10 @@ interface BacktestResult {
   walk_forward?: WalkForwardSummary;
   inventory_metrics?: InventorySummary;
   execution_metrics?: ExecutionSummary;
+  
+  // Portfolio mode results
+  portfolio_metrics?: PortfolioMetrics;
+  is_portfolio?: boolean;
   
   // Trade breakdown
   closed_trades?: number;
@@ -1262,6 +1294,202 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
           tooltip="Number of completed round-trip trades. More trades = more statistical significance. Low trade count may indicate overfitting risk."
         />
       </div>
+
+      {/* Portfolio Results Section */}
+      {result.is_portfolio && result.portfolio_metrics && (
+        <div style={{
+          backgroundColor: 'white',
+          padding: '20px',
+          borderRadius: '8px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+          marginBottom: '20px',
+        }}>
+          <h3 style={{ marginTop: 0, marginBottom: '15px' }}>
+            📊 Portfolio Analysis ({result.portfolio_metrics.total_symbols} Symbols)
+          </h3>
+          
+          {/* Portfolio Summary */}
+          <div style={{
+            backgroundColor: '#f0f8ff',
+            border: '1px solid #0066cc',
+            borderRadius: '8px',
+            padding: '15px',
+            marginBottom: '20px',
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-around', flexWrap: 'wrap', gap: '15px' }}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Portfolio Sharpe</div>
+                <div style={{ fontSize: '20px', fontWeight: 600, color: result.portfolio_metrics.portfolio_sharpe > 1.5 ? '#28a745' : '#0066cc' }}>
+                  {safeToFixed(result.portfolio_metrics.portfolio_sharpe, 2)}
+                </div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Portfolio Max DD</div>
+                <div style={{ fontSize: '20px', fontWeight: 600, color: result.portfolio_metrics.portfolio_max_drawdown > 0.2 ? '#dc3545' : '#28a745' }}>
+                  {safeToFixed(result.portfolio_metrics.portfolio_max_drawdown * 100, 1)}%
+                </div>
+              </div>
+              {result.portfolio_metrics.diversification_ratio !== undefined && (
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '12px', color: '#666', marginBottom: '4px' }}>Diversification Ratio</div>
+                  <div style={{ fontSize: '20px', fontWeight: 600, color: '#6f42c1' }}>
+                    {safeToFixed(result.portfolio_metrics.diversification_ratio, 2)}x
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Per-Symbol Breakdown */}
+          <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Per-Symbol Performance</h4>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ 
+              width: '100%', 
+              borderCollapse: 'collapse', 
+              fontSize: '14px',
+              marginBottom: '20px'
+            }}>
+              <thead>
+                <tr style={{ backgroundColor: '#f8f9fa', borderBottom: '2px solid #dee2e6' }}>
+                  <th style={{ padding: '10px', textAlign: 'left' }}>Symbol</th>
+                  <th style={{ padding: '10px', textAlign: 'left' }}>Exchange</th>
+                  <th style={{ padding: '10px', textAlign: 'right' }}>Weight</th>
+                  <th style={{ padding: '10px', textAlign: 'right' }}>Sharpe</th>
+                  <th style={{ padding: '10px', textAlign: 'right' }}>Max DD</th>
+                  <th style={{ padding: '10px', textAlign: 'right' }}>P&L</th>
+                  <th style={{ padding: '10px', textAlign: 'right' }}>Win Rate</th>
+                  <th style={{ padding: '10px', textAlign: 'right' }}>PF</th>
+                  <th style={{ padding: '10px', textAlign: 'right' }}>Trades</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.portfolio_metrics.symbol_results.map((sr, idx) => (
+                  <tr key={sr.symbol} style={{ 
+                    backgroundColor: idx % 2 === 0 ? '#fff' : '#f8f9fa',
+                    borderBottom: '1px solid #dee2e6'
+                  }}>
+                    <td style={{ padding: '10px', fontWeight: 500 }}>{sr.symbol}</td>
+                    <td style={{ padding: '10px', color: '#666' }}>{sr.exchange || result.exchange || '-'}</td>
+                    <td style={{ padding: '10px', textAlign: 'right' }}>{safeToFixed(sr.allocation_weight * 100, 1)}%</td>
+                    <td style={{ 
+                      padding: '10px', 
+                      textAlign: 'right',
+                      color: sr.sharpe_ratio > 1.5 ? '#28a745' : sr.sharpe_ratio > 0 ? '#ffc107' : '#dc3545'
+                    }}>
+                      {safeToFixed(sr.sharpe_ratio, 2)}
+                    </td>
+                    <td style={{ 
+                      padding: '10px', 
+                      textAlign: 'right',
+                      color: sr.max_drawdown > 0.2 ? '#dc3545' : '#28a745'
+                    }}>
+                      {safeToFixed(sr.max_drawdown * 100, 1)}%
+                    </td>
+                    <td style={{ 
+                      padding: '10px', 
+                      textAlign: 'right',
+                      color: sr.total_pnl > 0 ? '#28a745' : '#dc3545'
+                    }}>
+                      ${formatLargeNumber(sr.total_pnl)}
+                    </td>
+                    <td style={{ padding: '10px', textAlign: 'right' }}>{safeToFixed(sr.win_rate * 100, 1)}%</td>
+                    <td style={{ 
+                      padding: '10px', 
+                      textAlign: 'right',
+                      color: sr.profit_factor > 1.5 ? '#28a745' : sr.profit_factor > 1 ? '#ffc107' : '#dc3545'
+                    }}>
+                      {safeToFixed(sr.profit_factor, 2)}
+                    </td>
+                    <td style={{ padding: '10px', textAlign: 'right' }}>{sr.total_trades}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Correlation Matrix */}
+          {result.portfolio_metrics.correlation_matrix.length > 0 && (
+            <>
+              <h4 style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>Correlation Matrix</h4>
+              <div style={{ 
+                display: 'grid',
+                gridTemplateColumns: `repeat(${result.portfolio_metrics.total_symbols}, 1fr)`,
+                gap: '2px',
+                maxWidth: '500px',
+                marginBottom: '15px'
+              }}>
+                {/* Build unique symbol list from correlation pairs */}
+                {(() => {
+                  const symbolsSet = new Set<string>();
+                  result.portfolio_metrics!.correlation_matrix.forEach(pair => {
+                    symbolsSet.add(pair.symbol_a);
+                    symbolsSet.add(pair.symbol_b);
+                  });
+                  const uniqueSymbols = Array.from(symbolsSet);
+                  
+                  // Create matrix map for O(1) lookup
+                  const corrMap = new Map<string, number>();
+                  result.portfolio_metrics!.correlation_matrix.forEach(pair => {
+                    corrMap.set(`${pair.symbol_a}-${pair.symbol_b}`, pair.correlation);
+                    corrMap.set(`${pair.symbol_b}-${pair.symbol_a}`, pair.correlation);
+                  });
+                  
+                  // Render header row
+                  const headerRow = (
+                    <React.Fragment key="header">
+                      <div style={{ padding: '5px', fontSize: '12px', textAlign: 'center' }}></div>
+                      {uniqueSymbols.map(s => (
+                        <div key={s} style={{ padding: '5px', fontSize: '11px', textAlign: 'center', fontWeight: 500 }}>
+                          {s.replace(/-.*/, '')}
+                        </div>
+                      ))}
+                    </React.Fragment>
+                  );
+                  
+                  // Render data rows
+                  const rows = uniqueSymbols.map(rowSym => (
+                    <React.Fragment key={rowSym}>
+                      <div style={{ padding: '5px', fontSize: '11px', fontWeight: 500 }}>{rowSym.replace(/-.*/, '')}</div>
+                      {uniqueSymbols.map(colSym => {
+                        const corr = rowSym === colSym ? 1.0 : (corrMap.get(`${rowSym}-${colSym}`) ?? 0);
+                        const bgColor = rowSym === colSym 
+                          ? '#e7e7e7' 
+                          : corr > 0.7 
+                            ? `rgba(220, 53, 69, ${Math.abs(corr)})` 
+                            : corr < -0.3 
+                              ? `rgba(40, 167, 69, ${Math.abs(corr)})` 
+                              : `rgba(0, 123, 255, ${Math.abs(corr) * 0.5})`;
+                        return (
+                          <div 
+                            key={colSym} 
+                            style={{ 
+                              padding: '5px', 
+                              fontSize: '11px', 
+                              textAlign: 'center',
+                              backgroundColor: bgColor,
+                              borderRadius: '3px'
+                            }}
+                            title={`${rowSym} ↔ ${colSym}: ${safeToFixed(corr, 3)}`}
+                          >
+                            {safeToFixed(corr, 2)}
+                          </div>
+                        );
+                      })}
+                    </React.Fragment>
+                  ));
+                  
+                  return [headerRow, ...rows];
+                })()}
+              </div>
+              <div style={{ fontSize: '12px', color: '#666' }}>
+                <span style={{ marginRight: '15px' }}>🔴 High correlation (&gt;0.7)</span>
+                <span style={{ marginRight: '15px' }}>🟢 Negative correlation (&lt;-0.3)</span>
+                <span>🔵 Low correlation</span>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Monte Carlo Analysis Results */}
       {result.monte_carlo && (
