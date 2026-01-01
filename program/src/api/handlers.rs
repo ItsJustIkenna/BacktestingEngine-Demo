@@ -110,7 +110,19 @@ pub async fn submit_backtest(
     State(state): State<ApiState>,
     Json(mut params): Json<BacktestJobParams>,
 ) -> Result<Json<JobSubmitResponse>, AppError> {
-    // log_info!(...)
+    // === COMPREHENSIVE JOB SUBMISSION LOGGING ===
+    eprintln!("\n{'='*60}");
+    eprintln!("📥 [API] JOB_SUBMISSION_RECEIVED");
+    eprintln!("   symbol: {}", params.symbol);
+    eprintln!("   exchange: {}", params.exchange);
+    eprintln!("   strategy_type: {}", params.strategy_type);
+    eprintln!("   optimization_method: {}", params.optimization_method);
+    eprintln!("   portfolio_assets: {:?}", params.portfolio_assets.as_ref().map(|a| a.iter().map(|x| format!("{}@{}", x.symbol, x.exchange)).collect::<Vec<_>>()));
+    eprintln!("   portfolio_assets_count: {}", params.portfolio_assets.as_ref().map(|a| a.len()).unwrap_or(0));
+    eprintln!("   is_portfolio_mode: {}", params.is_portfolio());
+    eprintln!("   population_size: {}", params.population_size);
+    eprintln!("   generations: {}", params.generations);
+    eprintln!("{'='*60}\n");
     
     // Validate order_size_pct - must be between 0.001 (0.1%) and 0.25 (25%) of capital per trade
     // This is the preferred way to specify order size - as a percentage of available capital
@@ -225,14 +237,18 @@ pub async fn submit_backtest(
     
     let job_id = state
         .job_queue
-        .submit_job(params)
+        .submit_job(params.clone())
         .await
         .map_err(|e| {
-            // log_error!(...)
+            eprintln!("❌ [API] JOB_SUBMISSION_FAILED: {}", e);
             AppError::Internal(format!("Failed to submit job: {}", e))
         })?;
     
-    // log_info!(...)
+    eprintln!("✅ [API] JOB_SUBMITTED job_id={} portfolio_mode={} assets={:?}", 
+        job_id, 
+        params.is_portfolio(),
+        params.portfolio_assets.as_ref().map(|a| a.len())
+    );
     
     Ok(Json(JobSubmitResponse {
         job_id: job_id.clone(),

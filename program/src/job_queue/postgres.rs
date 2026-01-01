@@ -213,10 +213,22 @@ impl JobQueue for PostgresQueue {
         
         let job_id = Uuid::new_v4().to_string();
         
+        // === DB SUBMISSION LOGGING ===
+        eprintln!("📝 [DB] SUBMIT_JOB job_id={}", job_id);
+        eprintln!("   portfolio_assets_before_serialize: {:?}", params.portfolio_assets.as_ref().map(|a| a.len()));
+        eprintln!("   is_portfolio: {}", params.is_portfolio());
+        
         let mut conn = self.get_conn_with_timeout().await?;
         
         // Serialize all params to JSON for full persistence
         let params_json = serde_json::to_value(&params)?;
+        
+        // Log the serialized JSON to verify portfolio_assets is included
+        if let Some(pa) = params_json.get("portfolio_assets") {
+            eprintln!("   params_json.portfolio_assets: {}", pa);
+        } else {
+            eprintln!("   ⚠️ params_json.portfolio_assets: MISSING!");
+        }
         
         let new_job = NewBacktestJob {
             job_id: job_id.clone(),
@@ -241,10 +253,12 @@ impl JobQueue for PostgresQueue {
             .execute(&mut conn)
             .await?;
         
+        eprintln!("✅ [DB] JOB_STORED job_id={}", job_id);
         Ok(job_id)
     }
     
     async fn get_next_job(&self) -> Result<Option<BacktestJob>, Box<dyn std::error::Error + Send + Sync>> {
+        eprintln!("🔍 [DB] GET_NEXT_JOB polling for work...");
         let mut conn = self.get_conn_with_timeout().await?;
         
         // Use FOR UPDATE SKIP LOCKED for atomic job claiming
@@ -478,6 +492,14 @@ impl JobQueue for PostgresQueue {
     async fn store_result(&self, result: &BacktestResult) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use bigdecimal::BigDecimal;
         use std::str::FromStr;
+        
+        // === RESULT STORAGE LOGGING ===
+        eprintln!("\n💾 [DB] STORE_RESULT job_id={}", result.job_id);
+        eprintln!("   is_portfolio: {}", result.is_portfolio);
+        eprintln!("   portfolio_metrics: {:?}", result.portfolio_metrics.as_ref().map(|pm| pm.total_symbols));
+        eprintln!("   total_pnl: {:.4}", result.total_pnl);
+        eprintln!("   sharpe_ratio: {:.4}", result.sharpe_ratio);
+        eprintln!("   total_trades: {}", result.total_trades);
         
         let start = std::time::Instant::now();
         
@@ -834,6 +856,8 @@ impl JobQueue for PostgresQueue {
     }
     
     async fn get_result(&self, job_id: &str) -> Result<Option<BacktestResult>, Box<dyn std::error::Error + Send + Sync>> {
+        eprintln!("📖 [DB] GET_RESULT job_id={}", job_id);
+        
         let mut conn = self.get_conn_with_timeout().await?;
         
         // Parse job_id as UUID
@@ -1040,6 +1064,10 @@ impl JobQueue for PostgresQueue {
                     let is_port = metrics.get("is_portfolio")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
+                    
+                    // Log portfolio mode extraction for debugging
+                    eprintln!("   [GET_RESULT] is_portfolio from strategy_metrics: {}", is_port);
+                    eprintln!("   [GET_RESULT] portfolio_metrics present: {}", metrics.get("portfolio_metrics").map(|v| !v.is_null()).unwrap_or(false));
                     
                     let port_metrics = metrics.get("portfolio_metrics")
                         .and_then(|v| {
