@@ -81,10 +81,10 @@ ui:
 resources:
   limits:
     cpu: "4000m"      # 4 CPU cores for parallel processing
-    memory: "16Gi"    # 16GB for portfolio GA with multiple symbols
+    memory: "32Gi"    # 32GB for portfolio GA with multiple symbols
   requests:
     cpu: "500m"       # 0.5 core guaranteed (lower request = easier to schedule)
-    memory: "8Gi"     # 8GB baseline for portfolio data loading
+    memory: "16Gi"    # 16GB baseline for portfolio data loading
 
 # Node selection
 nodeSelector: {}
