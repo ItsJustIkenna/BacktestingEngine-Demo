@@ -102,6 +102,9 @@ interface BacktestFormData {
   initial_inventory_pct: number;  // Percentage of capital as base asset (e.g., 0.5 = 50% BTC, 50% USD)
   initial_30d_volume: number;     // Starting 30-day volume for fee tier calculation
   optimization_method: 'genetic' | 'manual';
+  // Infrastructure configuration
+  is_colocated: boolean;  // Co-located with exchange (e.g., Beeks Group) for sub-ms latency
+  fill_model: 'optimistic' | 'colocated' | 'standard' | 'realistic' | 'pessimistic';
   // Portfolio mode - multi-symbol/multi-exchange backtesting
   portfolio_assets: PortfolioAsset[];  // Symbol+exchange pairs (weights optimized by GA)
   // Genetic algorithm parameters
@@ -168,6 +171,9 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     initial_inventory_pct: 0.0,
     initial_30d_volume: 0,
     optimization_method: 'genetic',
+    // Infrastructure configuration
+    is_colocated: false,
+    fill_model: 'realistic',
     // Portfolio assets (always used, single asset is a 1-item portfolio)
     portfolio_assets: [],
     // Genetic algorithm defaults
@@ -267,15 +273,26 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     setJobId(null);
 
     try {
+      // Determine effective exchange name (append _colocated if enabled)
+      const effectiveExchange = formData.is_colocated 
+        ? `${formData.exchange}_colocated` 
+        : formData.exchange;
+      
+      // Determine effective fill model (use colocated if infrastructure is co-located)
+      const effectiveFillModel = formData.is_colocated 
+        ? 'colocated' 
+        : formData.fill_model;
+
       // Build parameters object based on optimization method
       const params: any = {
         symbol: formData.symbol,
-        exchange: formData.exchange,
+        exchange: effectiveExchange,
         strategy_type: formData.strategy_type,
         initial_capital: formData.initial_capital,
         initial_inventory_pct: formData.initial_inventory_pct,
         initial_30d_volume: formData.initial_30d_volume,
         optimization_method: formData.optimization_method,
+        fill_model: effectiveFillModel,
         // Monte Carlo and Walk-Forward settings
         monte_carlo_enabled: formData.monte_carlo_enabled,
         monte_carlo_runs: formData.monte_carlo_runs,
@@ -296,16 +313,17 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
       // Always send portfolio_assets - if empty, use the primary symbol/exchange
       if (formData.portfolio_assets.length > 0) {
         // Use explicitly added portfolio assets (weight = null so GA optimizes)
+        // Apply co-located suffix to all exchanges if enabled
         params.portfolio_assets = formData.portfolio_assets.map(asset => ({
           symbol: asset.symbol,
-          exchange: asset.exchange,
+          exchange: formData.is_colocated ? `${asset.exchange}_colocated` : asset.exchange,
           weight: null,  // null weight = GA will optimize
         }));
       } else if (formData.symbol && formData.exchange) {
         // Fallback: use primary symbol/exchange as single-asset portfolio
         params.portfolio_assets = [{
           symbol: formData.symbol,
-          exchange: formData.exchange,
+          exchange: effectiveExchange,
           weight: null,
         }];
       }
@@ -667,6 +685,49 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
               <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
                 Your existing 30-day trading volume for fee tier calculation. 0 = default/highest fees.
               </div>
+            </div>
+
+            {/* Co-Located Infrastructure Toggle */}
+            <div style={{ 
+              padding: '16px', 
+              border: formData.is_colocated ? '2px solid #28a745' : '1px solid #ddd',
+              borderRadius: '8px',
+              backgroundColor: formData.is_colocated ? '#f0fff4' : 'white'
+            }}>
+              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', gap: '12px' }}>
+                <input
+                  type="checkbox"
+                  name="is_colocated"
+                  checked={formData.is_colocated}
+                  onChange={(e) => setFormData(prev => ({ ...prev, is_colocated: e.target.checked }))}
+                  style={{ width: '18px', height: '18px' }}
+                />
+                <div>
+                  <div style={{ fontWeight: 600, fontSize: '14px' }}>
+                    🏢 Co-Located Infrastructure
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#666', marginTop: '2px' }}>
+                    Bot runs on Beeks Group or similar co-located hosting with sub-millisecond latency to exchange
+                  </div>
+                </div>
+              </label>
+              {formData.is_colocated && (
+                <div style={{ 
+                  marginTop: '12px', 
+                  padding: '10px', 
+                  backgroundColor: '#e8f5e9', 
+                  borderRadius: '6px',
+                  fontSize: '12px'
+                }}>
+                  <strong>Co-Located Advantages:</strong>
+                  <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
+                    <li>~0.5ms latency (vs 15ms for retail)</li>
+                    <li>Front of queue position (15% vs 70% back)</li>
+                    <li>85% base fill probability (vs 30%)</li>
+                    <li>Minimal adverse selection (1.3x vs 2.5x)</li>
+                  </ul>
+                </div>
+              )}
             </div>
           </div>
         </AccordionSection>

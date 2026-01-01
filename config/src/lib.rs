@@ -305,6 +305,29 @@ impl ExchangeFeeConfig {
         config
     }
     
+    /// Create Kraken configuration for co-located infrastructure (e.g., Beeks Group)
+    /// Sub-millisecond latency to Kraken's matching engine
+    /// Use this with FillModelType::CoLocated for accurate simulation
+    pub fn kraken_colocated() -> Self {
+        let mut config = Self::kraken();
+        // Co-located latency: ~0.5ms mean with minimal jitter
+        config.latency_mean_ms = 0.5;
+        config.latency_std_ms = 0.1;
+        // Co-located can handle higher order rates
+        config.max_orders_per_second = 50.0;
+        config
+    }
+    
+    /// Create Kraken configuration for co-located AND established market maker
+    /// Best case: low fees + low latency
+    pub fn kraken_colocated_established() -> Self {
+        let mut config = Self::kraken_colocated();
+        config.starting_30d_volume = 5_000_000.0;  // $5M 30-day volume
+        config.maker_fee = 0.0002;  // 0.02% at $5M tier
+        config.taker_fee = 0.0012;  // 0.12% at $5M tier
+        config
+    }
+    
     /// Create Binance exchange configuration
     pub fn binance() -> Self {
         Self {
@@ -411,9 +434,13 @@ impl ExchangeFeeConfig {
     }
     
     /// Create configuration for a specific exchange by name
+    /// Supports variants: "kraken", "kraken_colocated", "kraken_established", "kraken_colocated_established"
     pub fn for_exchange(exchange: &str) -> Self {
         match exchange.to_lowercase().as_str() {
             "kraken" => Self::kraken(),
+            "kraken_colocated" | "kraken-colocated" => Self::kraken_colocated(),
+            "kraken_established" | "kraken-established" => Self::kraken_established(),
+            "kraken_colocated_established" | "kraken-colocated-established" => Self::kraken_colocated_established(),
             "binance" => Self::binance(),
             "coinbase" => Self::coinbase(),
             "deepbook" | "sui" => Self::deepbook(),

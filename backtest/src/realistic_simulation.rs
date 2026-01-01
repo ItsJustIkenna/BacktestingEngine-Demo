@@ -130,6 +130,11 @@ pub enum FillModelType {
     /// Assumes you're first in queue - UNREALISTIC for live trading
     Optimistic,
     
+    /// CoLocated: Models co-located infrastructure (e.g., Beeks Group with Kraken)
+    /// Sub-millisecond latency, front of queue position, can cancel before adverse fills
+    /// Use this if your bot runs on the same infrastructure as the exchange
+    CoLocated,
+    
     /// Standard: Queue-based fills with probabilistic model
     /// Assumes average queue position - moderately optimistic
     #[default]
@@ -149,6 +154,7 @@ impl FillModelType {
     pub fn queue_position_percentile(&self) -> f64 {
         match self {
             FillModelType::Optimistic => 0.1,   // Front 10% of queue
+            FillModelType::CoLocated => 0.15,   // Front 15% - co-located with exchange
             FillModelType::Standard => 0.5,     // Middle of queue
             FillModelType::Realistic => 0.7,    // Back 70% of queue
             FillModelType::Pessimistic => 0.9,  // Back 90% of queue
@@ -159,8 +165,9 @@ impl FillModelType {
     pub fn require_trade_through(&self) -> bool {
         match self {
             FillModelType::Optimistic => false,
+            FillModelType::CoLocated => false,  // Front of queue, touch is enough
             FillModelType::Standard => false,
-            FillModelType::Realistic => true,  // Must trade through, not touch
+            FillModelType::Realistic => true,   // Must trade through, not touch
             FillModelType::Pessimistic => true,
         }
     }
@@ -169,6 +176,7 @@ impl FillModelType {
     pub fn base_fill_probability(&self) -> f64 {
         match self {
             FillModelType::Optimistic => 0.95,
+            FillModelType::CoLocated => 0.85,   // High prob, but not unrealistic
             FillModelType::Standard => 0.70,
             FillModelType::Realistic => 0.30,
             FillModelType::Pessimistic => 0.10,
@@ -179,6 +187,7 @@ impl FillModelType {
     pub fn latency_penalty_factor(&self) -> f64 {
         match self {
             FillModelType::Optimistic => 0.0,   // No penalty
+            FillModelType::CoLocated => 0.05,   // Minimal - can cancel stale quotes fast
             FillModelType::Standard => 0.1,     // 10% reduction per 100ms
             FillModelType::Realistic => 0.3,    // 30% reduction per 100ms
             FillModelType::Pessimistic => 0.5,  // 50% reduction per 100ms
@@ -189,6 +198,7 @@ impl FillModelType {
     pub fn adverse_selection_fill_boost(&self) -> f64 {
         match self {
             FillModelType::Optimistic => 1.0,   // No boost
+            FillModelType::CoLocated => 1.3,    // Slight boost - can dodge most toxic flow
             FillModelType::Standard => 1.5,     // 1.5x more fills on adverse moves
             FillModelType::Realistic => 2.5,    // 2.5x more fills on adverse moves
             FillModelType::Pessimistic => 5.0,  // 5x more fills on adverse moves (mostly toxic)
@@ -199,6 +209,7 @@ impl FillModelType {
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "optimistic" => FillModelType::Optimistic,
+            "colocated" | "co-located" | "co_located" => FillModelType::CoLocated,
             "standard" => FillModelType::Standard,
             "realistic" => FillModelType::Realistic,
             "pessimistic" => FillModelType::Pessimistic,
