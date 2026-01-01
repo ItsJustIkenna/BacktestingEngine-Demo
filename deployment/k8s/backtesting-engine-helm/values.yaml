@@ -77,13 +77,14 @@ ui:
 # =============================================================================
 
 # Resource requests and limits
+# Portfolio backtests with 3+ symbols require significant memory during data loading
 resources:
   limits:
-    cpu: "2000m"      # 2 CPU cores - reduced for Docker Desktop compatibility
-    memory: "8Gi"     # 8GB - increased for loading large market data sets
+    cpu: "4000m"      # 4 CPU cores for parallel processing
+    memory: "16Gi"    # 16GB for portfolio GA with multiple symbols
   requests:
     cpu: "500m"       # 0.5 core guaranteed (lower request = easier to schedule)
-    memory: "4Gi"     # 4GB baseline for market data loading
+    memory: "8Gi"     # 8GB baseline for portfolio data loading
 
 # Node selection
 nodeSelector: {}
