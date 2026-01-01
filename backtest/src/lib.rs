@@ -26,7 +26,6 @@ pub mod monte_carlo;
 pub mod html_export;
 pub mod latency;
 pub mod simd_utils;
-pub mod fast_simulation;
 pub mod lightweight_sim;
 pub mod realistic_simulation;
 pub mod statistical_significance;
@@ -40,7 +39,6 @@ pub use types::{BacktestResult, BacktestEvent};
 pub use simulation::SimulationLoop;
 pub use html_export::HtmlExporter;
 pub use latency::{LatencySampler, sample_latency};
-pub use fast_simulation::{FastSimulator, MarketFeatures, FastASParams, FastSimResult};
 pub use lightweight_sim::{LightweightSim, LightweightSimConfig};
 pub use realistic_simulation::{
     RealisticSimulator, RealisticASParams, RealisticSimResult, 

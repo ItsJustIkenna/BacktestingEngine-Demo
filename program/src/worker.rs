@@ -971,9 +971,11 @@ impl Worker {
             total_commission_paid: result.core.transaction_costs.as_ref().map(|tc| tc.total_commission),
             // Comprehensive strategy params for live trading deployment
             strategy_params: Some(Self::build_strategy_params_for_live(&job.params)),
-            // Date range for equity curve x-axis
-            start_date: job.params.start_date.clone(),
-            end_date: job.params.end_date.clone(),
+            // Date range for equity curve x-axis - use actual trade timestamps
+            start_date: result.core.first_trade_timestamp.map(|ts| ts.to_rfc3339())
+                .or_else(|| job.params.start_date.clone()),
+            end_date: result.core.last_trade_timestamp.map(|ts| ts.to_rfc3339())
+                .or_else(|| job.params.end_date.clone()),
             monte_carlo,
             walk_forward,
             inventory_metrics: result.core.inventory_metrics.as_ref().map(|inv| InventorySummary {
@@ -985,6 +987,7 @@ impl Worker {
                 buy_volume: inv.buy_volume,
                 sell_volume: inv.sell_volume,
                 imbalance_ratio: inv.imbalance_ratio,
+                ..Default::default()
             }),
             execution_metrics: result.core.execution_metrics.as_ref().map(|ex| ExecutionSummary {
                 orders_placed: ex.orders_placed,
@@ -1376,9 +1379,19 @@ impl Worker {
                 "initial_capital": params.initial_capital,
                 "correlation_matrix": portfolio_result.correlation_matrix,
             })),
-            // Date range
-            start_date: job.params.start_date.clone(),
-            end_date: job.params.end_date.clone(),
+            // Date range - use actual data timestamps with fallback to job params
+            start_date: portfolio_result.first_event_timestamp_ms
+                .map(|ms| chrono::DateTime::from_timestamp_millis(ms)
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_default())
+                .filter(|s| !s.is_empty())
+                .or_else(|| job.params.start_date.clone()),
+            end_date: portfolio_result.last_event_timestamp_ms
+                .map(|ms| chrono::DateTime::from_timestamp_millis(ms)
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_default())
+                .filter(|s| !s.is_empty())
+                .or_else(|| job.params.end_date.clone()),
             ..Default::default()
         };
         
@@ -1482,7 +1495,7 @@ impl Worker {
         let fitness_config = PortfolioFitnessConfig::default();
         
         // Create portfolio optimizer
-        let portfolio_optimizer = PortfolioGAOptimizer::new(
+        let _portfolio_optimizer = PortfolioGAOptimizer::new(
             ga_config.clone(),
             fitness_config.clone(),
             job.id.clone(),
@@ -1491,7 +1504,7 @@ impl Worker {
         // Create fitness function factory for each symbol
         let symbol_data_arc = std::sync::Arc::new(symbol_data.clone());
         let initial_capital = params.initial_capital;
-        let commission_rate = params.commission_rate;
+        let _commission_rate = params.commission_rate;
         let exchange = params.exchange.clone();
         
         // Run parallel per-symbol optimization
@@ -1511,43 +1524,55 @@ impl Worker {
                     let data = symbol_data_arc.get(&asset_key)
                         .ok_or_else(|| format!("No data for {}", asset_key))?;
                     
-                    // Convert to events
+                    // Convert to events for realistic simulation
                     let events = backtest::ticks_to_trade_events(data);
                     let events_arc = std::sync::Arc::new(events);
                     
-                    // Pre-compute market features for fast simulation
-                    let market_features = std::sync::Arc::new(
-                        backtest::fast_simulation::MarketFeatures::from_market_data(data)
-                    );
+                    eprintln!("🧬 [{}] GA for {} with {} events (using RealisticSimulator)", job_id, asset_key, events_arc.len());
                     
-                    eprintln!("🧬 [{}] GA for {} with {} events", job_id, asset_key, events_arc.len());
+                    // Get exchange fee config
+                    let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&exchange);
                     
-                    // Create fitness function for this symbol
+                    // Create fitness function using RealisticSimulator (same as final evaluation)
                     let fitness_fn: AsyncFitnessFn<AvellanedaStoikovChromosome> = {
-                        let features = std::sync::Arc::clone(&market_features);
-                        let asset_key = asset_key.clone();
+                        let events = std::sync::Arc::clone(&events_arc);
+                        let fee_config = exchange_fee_config.clone();
                         
                         std::sync::Arc::new(move |chr: &AvellanedaStoikovChromosome| {
-                            let features = std::sync::Arc::clone(&features);
+                            let events = std::sync::Arc::clone(&events);
                             let chr = chr.clone();
+                            let fee_config = fee_config.clone();
                             
                             Box::pin(async move {
-                                // Use fast simulation for GA fitness
-                                let fast_params = backtest::fast_simulation::FastASParams {
+                                // Use RealisticSimulator for GA fitness (same as final evaluation)
+                                let sim_params = RealisticASParams {
                                     risk_aversion: chr.risk_aversion,
                                     inventory_target: chr.inventory_target,
                                     order_size_pct: chr.order_size_pct,
+                                    initial_inventory_pct: 0.0,
                                     volatility_cap: chr.volatility_cap,
-                                    min_spread_bps: chr.min_spread_bps,
                                     time_horizon_minutes: chr.time_horizon_minutes,
-                                    fee_rate: commission_rate,
+                                    min_spread_bps: chr.min_spread_bps,
+                                    max_inventory_multiple: 1.0,
+                                    maker_fee_rate: fee_config.maker_fee,
+                                    taker_fee_rate: fee_config.taker_fee,
+                                    fee_spread_multiplier: chr.fee_spread_multiplier,
+                                    adverse_selection_sensitivity: chr.adverse_selection_sensitivity,
+                                    take_profit_pct: chr.take_profit_pct,
+                                    stop_loss_pct: chr.stop_loss_pct,
+                                    max_trades_per_minute: chr.max_trades_per_minute,
+                                    max_orders_per_second: 10.0,
+                                    rate_limit_cooldown_ms: 1000,
+                                    window_ms: chr.window_ms as i64,
+                                    min_quote_lifetime_ms: chr.min_quote_lifetime_ms as i64,
+                                    ..Default::default()
                                 };
                                 
-                                let simulator = backtest::fast_simulation::FastSimulator::new(
-                                    &features,
+                                let simulator = backtest::RealisticSimulator::with_exchange_config(
                                     initial_capital,
+                                    fee_config,
                                 );
-                                let sim_result = simulator.evaluate(&fast_params);
+                                let sim_result = simulator.run(&events, &sim_params);
                                 
                                 // Calculate fitness
                                 let sharpe = sim_result.sharpe_ratio;
@@ -2127,6 +2152,7 @@ impl Worker {
             buy_volume: 0.0,
             sell_volume: 0.0,
             imbalance_ratio: 0.0,
+            ..Default::default()
         });
         
         // Build execution metrics summary for the portfolio
@@ -2233,8 +2259,19 @@ impl Worker {
                 "generations": params.generations,
                 "correlation_matrix": portfolio_result.correlation_matrix,
             })),
-            start_date: job.params.start_date.clone(),
-            end_date: job.params.end_date.clone(),
+            // Date range - use actual data timestamps with fallback to job params
+            start_date: portfolio_result.first_event_timestamp_ms
+                .map(|ms| chrono::DateTime::from_timestamp_millis(ms)
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_default())
+                .filter(|s| !s.is_empty())
+                .or_else(|| job.params.start_date.clone()),
+            end_date: portfolio_result.last_event_timestamp_ms
+                .map(|ms| chrono::DateTime::from_timestamp_millis(ms)
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_default())
+                .filter(|s| !s.is_empty())
+                .or_else(|| job.params.end_date.clone()),
             risk_halt_reason: None,
         };
         
@@ -2359,31 +2396,19 @@ impl Worker {
         );
         eprintln!("📊 Data wrapped in Arc (no cloning) - {} points shared across all phases", data_len);
         
-        // === FAST PATH: Pre-compute vectorized market features ONCE for entire dataset ===
-        // This is the key optimization: calculate EWMA volatility, log returns, etc. once
-        // instead of recalculating per-event during each chromosome evaluation.
-        // 
-        // With 6.9M events and 100 chromosomes per generation:
-        // - Old: 6.9M * 100 = 690M async awaits per generation
-        // - New: Pre-compute once, then pure synchronous vectorized evaluation
-        //
-        // Speedup: ~50-100x for GA fitness evaluations
-        let fast_sim_start = std::time::Instant::now();
-        eprintln!("📊 Starting MarketFeatures computation...");
-        let market_features = Arc::new(backtest::fast_simulation::MarketFeatures::from_market_data(&shared_data));
-        eprintln!("📊 MarketFeatures computed in {:.2}s", fast_sim_start.elapsed().as_secs_f64());
-        log_info!(GENETIC_LOGGER, "Pre-computed market features in {:.2}ms | {} data points | {} log returns | {} volatility values",
-            fast_sim_start.elapsed().as_millis(),
-            market_features.len(),
-            market_features.log_returns.len(),
-            market_features.volatility.len());
+        // === CONVERT TO EVENTS FOR REALISTIC SIMULATION ===
+        let events_start = std::time::Instant::now();
+        eprintln!("📊 Converting to trade events for RealisticSimulator...");
+        let events = backtest::ticks_to_trade_events(&shared_data);
+        let events_arc = std::sync::Arc::new(events);
+        eprintln!("📊 Events converted in {:.2}s ({} events)", events_start.elapsed().as_secs_f64(), events_arc.len());
+        log_info!(GENETIC_LOGGER, "Converted to trade events in {:.2}ms | {} events",
+            events_start.elapsed().as_millis(),
+            events_arc.len());
         
-        // Check if fast simulation mode is enabled (default: true for GA)
-        let use_fast_simulation = std::env::var("GA_FAST_SIMULATION")
-            .map(|v| v != "false" && v != "0")
-            .unwrap_or(true);
-        
-        eprintln!("📊 Fast simulation enabled: {}", use_fast_simulation);
+        // Get exchange fee config
+        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&params.exchange);
+
         eprintln!("📊 About to create GeneticConfig...");
         
         // Create genetic config
@@ -2399,22 +2424,22 @@ impl Worker {
         let generation_callback = progress_tracker.generation_callback();
         
         // All phases share the same Arc - no cloning needed
-        let data_arc = Arc::clone(&shared_data);
         let data_for_backtest = Arc::clone(&shared_data);
         let data_for_walkforward = Arc::clone(&shared_data);
-        let features_arc = Arc::clone(&market_features);
+        let events_for_fitness = std::sync::Arc::clone(&events_arc);
+        let fee_config_for_fitness = exchange_fee_config.clone();
         // Create separate clones for distributed mode fallback (local GA uses these too)
         let data_for_distributed = Arc::clone(&shared_data);
-        let symbol = params.symbol.clone();
+        let _symbol = params.symbol.clone();
         let exchange = params.exchange.clone();
         let symbol_for_distributed = params.symbol.clone();
         let exchange_for_distributed = params.exchange.clone();
         let exchange_for_logging = exchange.clone(); // Clone for use after the closure
         let initial_capital = params.initial_capital;
         let initial_capital_for_distributed = params.initial_capital;
-        let initial_inventory_pct = params.initial_inventory_pct;
+        let _initial_inventory_pct = params.initial_inventory_pct;
         let initial_inventory_pct_for_distributed = params.initial_inventory_pct;
-        let commission_rate = params.commission_rate;
+        let _commission_rate = params.commission_rate;
         let commission_rate_for_distributed = params.commission_rate;
         
         // Create fitness function that evaluates chromosomes and returns equity curve for robustness analysis
@@ -2423,287 +2448,77 @@ impl Worker {
         static FITNESS_EVAL_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         
         // === FITNESS FUNCTION ===
-        // Two modes:
-        // 1. FAST MODE (default): Vectorized simulation using pre-computed features
-        //    - ~50-100x faster than event-by-event simulation
-        //    - No async overhead, pure CPU-bound computation
-        //    - Suitable for exploring parameter space during GA
-        // 2. DETAILED MODE: Full event-by-event simulation with async strategy processing
-        //    - Used for final validation of best chromosome
-        //    - More accurate but much slower
+        // Uses RealisticSimulator for accurate GA optimization matching final evaluation
         
         let fitness_fn: genetic::AsyncFitnessFn<AvellanedaStoikovChromosome> = Arc::new(move |chromosome: &AvellanedaStoikovChromosome| {
-            let features = Arc::clone(&features_arc);
-            let data = Arc::clone(&data_arc);
-            let symbol = symbol.clone();
-            let exchange = exchange.clone();
+            let events = std::sync::Arc::clone(&events_for_fitness);
+            let fee_config = fee_config_for_fitness.clone();
             let chr = chromosome.clone();
             
             Box::pin(async move {
                 let eval_id = FITNESS_EVAL_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let eval_start = std::time::Instant::now();
                 
-                // === FAST PATH: Vectorized simulation (default for GA) ===
-                // This is synchronous - no .await overhead for millions of data points
-                if use_fast_simulation {
-                    // Convert chromosome to fast simulation parameters
-                    let fast_params = backtest::fast_simulation::FastASParams {
-                        risk_aversion: chr.risk_aversion,
-                        inventory_target: chr.inventory_target,
-                        order_size_pct: chr.order_size_pct,
-                        volatility_cap: chr.volatility_cap,
-                        min_spread_bps: chr.min_spread_bps,
-                        time_horizon_minutes: chr.time_horizon_minutes,
-                        fee_rate: commission_rate,
-                    };
-                    
-                    // Run vectorized simulation (synchronous, no async overhead!)
-                    let simulator = backtest::fast_simulation::FastSimulator::new(&features, initial_capital);
-                    let fast_result = simulator.evaluate(&fast_params);
-                    
-                    // Convert to standard BacktestResult and calculate fitness
-                    let backtest_result: backtest::types::BacktestResult = fast_result.clone().into();
-                    let fitness = calculate_comprehensive_fitness(&backtest_result, initial_capital);
-                    
-                    log_info_structured!(GENETIC_LOGGER, "FAST_FITNESS_EVAL",
-                        "event" => "FAST_FITNESS_EVAL",
-                        "eval_id" => eval_id,
-                        "fitness" => format!("{:.6}", fitness),
-                        "pnl" => format!("{:.2}", fast_result.total_pnl),
-                        "sharpe" => format!("{:.3}", fast_result.sharpe_ratio),
-                        "trades" => fast_result.num_trades,
-                        "elapsed_ms" => eval_start.elapsed().as_millis()
-                    );
-                    
-                    return genetic::FitnessResult::new(fitness, fast_result.equity_curve);
-                }
-                
-                // === DETAILED PATH: Full event-by-event simulation (legacy/validation) ===
-                // GA FITNESS SAMPLING: Adaptive sampling based on dataset size
-                // Target ~500K events per evaluation for consistent ~10-15 second evaluations
-                // ENV: GA_FITNESS_SAMPLE_RATE overrides adaptive calculation
-                const TARGET_EVENTS_PER_EVAL: usize = 500_000;
-                
-                let base_sample_rate: usize = std::env::var("GA_FITNESS_SAMPLE_RATE")
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0); // 0 means use adaptive
-                
-                let sample_rate = if base_sample_rate > 0 {
-                    base_sample_rate
-                } else {
-                    // Adaptive: calculate sample rate to hit ~500K events
-                    // 6.9M / 500K = 14, 2M / 500K = 4, 500K / 500K = 1
-                    (data.len() / TARGET_EVENTS_PER_EVAL).max(1)
-                };
-                
-                let sampled_data: Vec<dataloader::MarketData> = if sample_rate > 1 {
-                    data.iter().step_by(sample_rate).cloned().collect()
-                } else {
-                    data.to_vec()
-                };
-                
-                log_info_structured!(GENETIC_LOGGER, "FITNESS_EVAL_ENTER",
-                    "event" => "FITNESS_EVAL_ENTER",
-                    "eval_id" => eval_id,
-                    "original_data_len" => data.len(),
-                    "sampled_data_len" => sampled_data.len(),
-                    "sample_rate" => sample_rate,
-                    "adaptive" => base_sample_rate == 0,
-                    "risk_aversion" => format!("{:.4}", chr.risk_aversion)
-                );
-                let eval_start = std::time::Instant::now();
-                
-                // Each async block gets its own fresh state - no shared mutable state
-                let mut backtest_config = BacktestConfig::default();
-                backtest_config.trading.initial_capital = initial_capital;
-                backtest_config.trading.commission_rate = commission_rate;
-                backtest_config.analysis.skip_genetic_optimization = true;
-                backtest_config.analysis.auto_monte_carlo = false;
-                backtest_config.analysis.auto_walk_forward = false;
-                backtest_config.data.gap_detection.enabled = false;
-                
-                let engine = BacktestEngine::new(backtest_config);
-                
-                // Get initial price for inventory calculation
-                let asset_price = Self::get_reference_price(&data);
-                
-                // Initialize portfolio with BOTH quote and base assets for proper market making
-                let inventory_pct = initial_inventory_pct;
-                let quote_balance = initial_capital * (1.0 - inventory_pct);
-                let base_value = initial_capital * inventory_pct;
-                let base_quantity = if asset_price > 0.0 { base_value / asset_price } else { 0.0 };
-                let first_timestamp = Self::get_first_timestamp(&data);
-                
-                let mut portfolio = PortfolioState::with_inventory(
-                    symbol.clone(),
-                    BigDecimal::from_f64(quote_balance).unwrap_or_default(),
-                    base_quantity,
-                    BigDecimal::from_f64(asset_price).unwrap_or_default(),
-                    first_timestamp,
-                );
-                
-                let orderbook_config = OrderBookConfig::default();
-                let mut orderbook = OrderBook::new(symbol.clone(), exchange.clone(), orderbook_config);
-                let mut risk_manager = RiskManager::new();
-                
-                // Calculate order_size in asset units from percentage of capital
-                // order_size = (capital * order_size_pct) / asset_price
-                let asset_price = Self::get_reference_price(&data);
-                let order_size_units = (initial_capital * chr.order_size_pct) / asset_price;
-                let order_size_usd = order_size_units * asset_price;
-                
-                log_debug!(GENETIC_LOGGER, "Order size calc | capital=${:.0} order_size_pct={:.2}% asset_price=${:.2} => order_size={:.6} units = ${:.2}",
-                    initial_capital, chr.order_size_pct * 100.0, asset_price, order_size_units, order_size_usd);
-                
-                // Get actual exchange maker fee instead of chromosome fee_rate
-                let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&exchange);
-                let maker_fee = exchange_fee_config.maker_fee;
-                
-                // Create strategy with ALL chromosome parameters (fixing incomplete mapping)
-                let strategy_params = AvellanedaStoikovParams {
+                // Use RealisticSimulator for GA fitness (same as final evaluation)
+                let sim_params = backtest::RealisticASParams {
                     risk_aversion: chr.risk_aversion,
                     inventory_target: chr.inventory_target,
-                    order_size: order_size_units,
                     order_size_pct: chr.order_size_pct,
-                    initial_capital,
-                    initial_inventory_pct: 0.5,  // 50% of capital as base asset for market making
-                    window_ms: chr.window_ms,
-                    min_quote_lifetime_ms: chr.min_quote_lifetime_ms,
-                    fee_rate: maker_fee,  // Use actual exchange maker fee, not chromosome
-                    // latency_buffer removed - latency simulated in order matching
+                    initial_inventory_pct: 0.0,
                     volatility_cap: chr.volatility_cap,
-                    volatility_floor: 0.20, // 20% annualized floor for EWMA cold-start
                     time_horizon_minutes: chr.time_horizon_minutes,
-                    market_depth_k: chr.market_depth_k,
                     min_spread_bps: chr.min_spread_bps,
-                    max_trades_per_minute: chr.max_trades_per_minute,
+                    max_inventory_multiple: 1.0,
+                    maker_fee_rate: fee_config.maker_fee,
+                    taker_fee_rate: fee_config.taker_fee,
+                    fee_spread_multiplier: chr.fee_spread_multiplier,
+                    adverse_selection_sensitivity: chr.adverse_selection_sensitivity,
                     take_profit_pct: chr.take_profit_pct,
                     stop_loss_pct: chr.stop_loss_pct,
-                    volatility_adjustment_factor: chr.volatility_adjustment_factor,
-                    inventory_penalty_factor: chr.inventory_penalty_factor,
-                    trend_sensitivity: chr.trend_sensitivity,
-                    flow_sensitivity: chr.flow_sensitivity,
-                    
-                    // Phase 3: Dynamic k parameters (k divides liquidity term)
-                    k_volatility_sensitivity: 0.3,
-                    k_flow_sensitivity: 0.2,
-                    k_min: 1.0,   // Floor for liquid markets
-                    k_max: 50.0,  // GA can explore tight spreads
-                    
-                    // Phase 4: Dynamic time horizon parameters
-                    time_horizon_vol_sensitivity: 0.5,
-                    time_horizon_min: 0.25,
-                    time_horizon_max: 5.0,
-                    
-                    // Phase 4: Dynamic min spread parameters
-                    min_spread_vol_sensitivity: 0.3,
-                    min_spread_flow_sensitivity: 0.2,
-                    min_spread_min_bps: 3.0,
-                    min_spread_max_bps: 50.0,
-                    
-                    // Phase 4: Dynamic order size parameters
-                    size_vol_sensitivity: 0.3,
-                    size_drawdown_sensitivity: 0.5,
-                    size_win_boost: 0.1,
-                    size_min_pct: 0.005,
-                    size_max_pct: 0.05,
-                    
-                    // Phase 4: Dynamic rate limiting parameters
-                    rate_vol_sensitivity: 0.4,
-                    rate_min: 5.0,
-                    rate_max: 60.0,
-                    
-                    // Inventory risk limits
-                    max_inventory_pct: 0.15,
-                    inventory_skew_multiplier: 3.0,
-                    
-                    // Phase 5: Regime detection parameters
-                    regime_vol_threshold_high: 1.5,
-                    regime_vol_threshold_low: 0.7,
-                    regime_trend_threshold: 0.3,
-                    regime_high_vol_spread_mult: 1.5,
-                    regime_low_vol_spread_mult: 0.8,
-                    regime_trending_inv_mult: 0.5,
-                    
-                    // Phase 5: Order book microstructure parameters
-                    orderbook_imbalance_sensitivity: 0.3,
-                    orderbook_depth_levels: 5,
-                    imbalance_skew_factor: 0.5,
-                    
-                    // Phase 5: Adverse selection parameters
-                    informed_trader_prob_window_ms: 5000,
-                    adverse_selection_multiplier: 2.0,
-                    toxic_flow_threshold: 0.6,
-                    
-                    // Exchange-specific order size limits
-                    min_order_size: exchange_fee_config.min_order_size,
-                    max_order_size: exchange_fee_config.max_order_size,
+                    max_trades_per_minute: chr.max_trades_per_minute,
+                    max_orders_per_second: 10.0,
+                    rate_limit_cooldown_ms: 1000,
+                    window_ms: chr.window_ms as i64,
+                    min_quote_lifetime_ms: chr.min_quote_lifetime_ms as i64,
+                    ..Default::default()
                 };
                 
-                let mut strategy_params_map = HashMap::new();
-                strategy_params_map.insert("risk_aversion".to_string(), config::ParameterValue::Float(chr.risk_aversion));
-                strategy_params_map.insert("inventory_target".to_string(), config::ParameterValue::Float(chr.inventory_target));
-                strategy_params_map.insert("order_size".to_string(), config::ParameterValue::Float(order_size_units));
-                strategy_params_map.insert("order_size_pct".to_string(), config::ParameterValue::Float(chr.order_size_pct));
-                strategy_params_map.insert("window_ms".to_string(), config::ParameterValue::Float(chr.window_ms as f64));
-                strategy_params_map.insert("fee_rate".to_string(), config::ParameterValue::Float(maker_fee));  // Use exchange fee
-                strategy_params_map.insert("volatility_cap".to_string(), config::ParameterValue::Float(chr.volatility_cap));
+                let simulator = backtest::RealisticSimulator::with_exchange_config(
+                    initial_capital,
+                    fee_config,
+                );
+                let sim_result = simulator.run(&events, &sim_params);
                 
-                let strategy_config = StrategyConfig {
-                    id: "genetic-eval".to_string(),
-                    name: "Avellaneda-Stoikov".to_string(),
-                    strategy_type: "AvellanedaStoikov".to_string(),
-                    symbol: symbol.clone(),
-                    exchange: exchange.clone(),
-                    parameters: strategy_params_map,
-                    risk_limits: StrategyRiskLimits::default(),
-                    enabled: true,
-                };
+                // Calculate fitness directly from sim_result
+                let sharpe = sim_result.sharpe_ratio;
+                let profit_factor = sim_result.profit_factor;
+                let drawdown_penalty = if sim_result.max_drawdown > 0.25 { -0.5 } else { 0.0 };
+                let trade_penalty = if sim_result.num_trades < 30 { -0.3 } else { 0.0 };
                 
-                let strategy = AvellanedaStoikovStrategy::new(strategy_params);
-                let mut strategy_manager = StrategyManager::new();
-                if strategy_manager.register_strategy(strategy_config, strategy).is_err() {
-                    log_warn!(GENETIC_LOGGER, "FITNESS_EVAL #{} FAIL | strategy registration failed | elapsed={:.2}s", 
-                        eval_id, eval_start.elapsed().as_secs_f64());
-                    return genetic::FitnessResult::failure();
-                }
+                let fitness = sharpe * 0.4 
+                    + (sim_result.total_pnl / initial_capital) * 0.3 
+                    + (profit_factor - 1.0).min(1.0) * 0.2
+                    + (sim_result.win_rate - 0.5) * 0.1
+                    + drawdown_penalty
+                    + trade_penalty;
                 
-                log_info!(GENETIC_LOGGER, "FITNESS_EVAL #{} | strategy registered, starting simulation on {} points...", eval_id, sampled_data.len());
+                log_info_structured!(GENETIC_LOGGER, "REALISTIC_FITNESS_EVAL",
+                    "event" => "REALISTIC_FITNESS_EVAL",
+                    "eval_id" => eval_id,
+                    "fitness" => format!("{:.6}", fitness),
+                    "pnl" => format!("{:.2}", sim_result.total_pnl),
+                    "sharpe" => format!("{:.3}", sim_result.sharpe_ratio),
+                    "trades" => sim_result.num_trades,
+                    "elapsed_ms" => eval_start.elapsed().as_millis()
+                );
                 
-                // Run ONLY core simulation (no Monte Carlo, no Walk-Forward)
-                // Uses sampled data for faster fitness evaluation during GA exploration
-                match engine.run_core_simulation_direct(
-                    &mut strategy_manager,
-                    &mut orderbook,
-                    &mut portfolio,
-                    &mut risk_manager,
-                    &sampled_data,
-                ).await {
-                    Ok(result) => {
-                        // Use comprehensive fitness function that penalizes commission-heavy strategies
-                        let fitness = calculate_comprehensive_fitness(&result, initial_capital);
-                        log_info_structured!(GENETIC_LOGGER, "FITNESS_EVAL_SUCCESS",
-                            "event" => "FITNESS_EVAL_SUCCESS",
-                            "eval_id" => eval_id,
-                            "fitness" => format!("{:.6}", fitness),
-                            "pnl" => format!("{:.2}", result.total_pnl),
-                            "trade_count" => result.num_trades,
-                            "elapsed_secs" => format!("{:.2}", eval_start.elapsed().as_secs_f64())
-                        );
-                        genetic::FitnessResult::new(fitness, result.equity_curve)
-                    }
-                    Err(e) => {
-                        log_warn!(GENETIC_LOGGER, "FITNESS_EVAL #{} ERROR | {} | elapsed={:.2}s", 
-                            eval_id, e, eval_start.elapsed().as_secs_f64());
-                        genetic::FitnessResult::failure()
-                    }
-                }
+                genetic::FitnessResult::new(fitness, sim_result.equity_curve)
             })
         });
         
         // Run genetic optimization with robustness-weighted fitness
         log_info!(GENETIC_LOGGER, "Job {} creating GeneticOptimizer", job.id);
+        
         
         // Clone config before creating optimizer since it will be moved
         let config_for_distributed = config.clone();
@@ -4253,6 +4068,7 @@ impl Worker {
                 buy_volume: inv.buy_volume,
                 sell_volume: inv.sell_volume,
                 imbalance_ratio: inv.imbalance_ratio,
+                ..Default::default()
             }),
             execution_metrics: result.core.execution_metrics.as_ref().map(|ex| ExecutionSummary {
                 orders_placed: ex.orders_placed,

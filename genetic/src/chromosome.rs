@@ -88,7 +88,7 @@ impl Chromosome for AvellanedaStoikovChromosome {
             inventory_target: rng.gen_range(0.0..0.5),
             
             // Volatility cap to prevent extreme spread widening
-            // NOTE: Must be >= vol_floor (0.15) in fast_simulation.rs or all events get skipped
+            // NOTE: Must be >= vol_floor (0.15) in realistic_simulation.rs or all events get skipped
             // Range 0.20-5.0 ensures trades can execute (20% min > 15% floor)
             volatility_cap: rng.gen_range(0.20..5.0),
             

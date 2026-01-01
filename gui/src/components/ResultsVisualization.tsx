@@ -1741,114 +1741,6 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
             </div>
           </div>
 
-          {/* ==================== PER-SYMBOL POSITIONS ==================== */}
-          {symbolResults.some((sr: SymbolResult) => sr.starting_capital !== undefined || sr.ending_capital !== undefined) && (
-            <div style={{
-              backgroundColor: 'white',
-              borderRadius: '12px',
-              padding: '24px',
-              marginBottom: '24px',
-              boxShadow: '0 2px 8px rgba(0,0,0,0.08)'
-            }}>
-              <h3 style={{ margin: '0 0 20px 0', color: '#333', fontSize: '18px' }}>
-                💰 Per-Symbol Position Tracking
-              </h3>
-              
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ 
-                  width: '100%', 
-                  borderCollapse: 'collapse',
-                  fontSize: '13px'
-                }}>
-                  <thead>
-                    <tr style={{ backgroundColor: '#f8f9fa' }}>
-                      <th style={{ padding: '12px 8px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>Symbol</th>
-                      <th style={{ padding: '12px 8px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>Start Cash</th>
-                      <th style={{ padding: '12px 8px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>Start Inv</th>
-                      <th style={{ padding: '12px 8px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>Start Inv Value</th>
-                      <th style={{ padding: '12px 8px', textAlign: 'center', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>→</th>
-                      <th style={{ padding: '12px 8px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>End Cash</th>
-                      <th style={{ padding: '12px 8px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>End Inv</th>
-                      <th style={{ padding: '12px 8px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>End Inv Value</th>
-                      <th style={{ padding: '12px 8px', textAlign: 'right', borderBottom: '2px solid #dee2e6', fontWeight: 600 }}>P&L</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {symbolResults.map((sr: SymbolResult, idx: number) => {
-                      const baseAsset = sr.symbol?.split('/')[0] ?? 'Asset';
-                      const isProfitable = (sr.total_pnl ?? 0) >= 0;
-                      return (
-                        <tr key={sr.symbol} style={{ backgroundColor: idx % 2 === 0 ? 'white' : '#f8f9fa' }}>
-                          <td style={{ padding: '10px 8px', borderBottom: '1px solid #dee2e6', fontWeight: 600 }}>
-                            {sr.symbol}
-                            {sr.exchange && <span style={{ color: '#6c757d', fontSize: '11px', marginLeft: '4px' }}>@{sr.exchange}</span>}
-                          </td>
-                          <td style={{ padding: '10px 8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>
-                            ${formatCurrency(sr.starting_capital ?? 0)}
-                          </td>
-                          <td style={{ padding: '10px 8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>
-                            {safeToFixed(sr.starting_inventory ?? 0, 6)} {baseAsset}
-                          </td>
-                          <td style={{ padding: '10px 8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>
-                            ${formatCurrency(sr.starting_inventory_value ?? 0)}
-                          </td>
-                          <td style={{ padding: '10px 8px', textAlign: 'center', borderBottom: '1px solid #dee2e6', color: '#6c757d' }}>
-                            →
-                          </td>
-                          <td style={{ padding: '10px 8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>
-                            ${formatCurrency(sr.ending_capital ?? 0)}
-                          </td>
-                          <td style={{ padding: '10px 8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>
-                            {safeToFixed(sr.ending_inventory ?? 0, 6)} {baseAsset}
-                          </td>
-                          <td style={{ padding: '10px 8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>
-                            ${formatCurrency(sr.ending_inventory_value ?? 0)}
-                          </td>
-                          <td style={{ 
-                            padding: '10px 8px', 
-                            textAlign: 'right', 
-                            borderBottom: '1px solid #dee2e6',
-                            fontWeight: 600,
-                            color: isProfitable ? '#28a745' : '#dc3545'
-                          }}>
-                            {isProfitable ? '+' : ''}${formatCurrency(sr.total_pnl ?? 0)}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {/* Totals Row */}
-                    <tr style={{ backgroundColor: '#e9ecef', fontWeight: 600 }}>
-                      <td style={{ padding: '12px 8px', borderTop: '2px solid #dee2e6' }}>TOTAL</td>
-                      <td style={{ padding: '12px 8px', textAlign: 'right', borderTop: '2px solid #dee2e6' }}>
-                        ${formatCurrency(symbolResults.reduce((sum: number, sr: SymbolResult) => sum + (sr.starting_capital ?? 0), 0))}
-                      </td>
-                      <td style={{ padding: '12px 8px', textAlign: 'right', borderTop: '2px solid #dee2e6', color: '#6c757d' }}>—</td>
-                      <td style={{ padding: '12px 8px', textAlign: 'right', borderTop: '2px solid #dee2e6' }}>
-                        ${formatCurrency(symbolResults.reduce((sum: number, sr: SymbolResult) => sum + (sr.starting_inventory_value ?? 0), 0))}
-                      </td>
-                      <td style={{ padding: '12px 8px', textAlign: 'center', borderTop: '2px solid #dee2e6' }}>→</td>
-                      <td style={{ padding: '12px 8px', textAlign: 'right', borderTop: '2px solid #dee2e6' }}>
-                        ${formatCurrency(symbolResults.reduce((sum: number, sr: SymbolResult) => sum + (sr.ending_capital ?? 0), 0))}
-                      </td>
-                      <td style={{ padding: '12px 8px', textAlign: 'right', borderTop: '2px solid #dee2e6', color: '#6c757d' }}>—</td>
-                      <td style={{ padding: '12px 8px', textAlign: 'right', borderTop: '2px solid #dee2e6' }}>
-                        ${formatCurrency(symbolResults.reduce((sum: number, sr: SymbolResult) => sum + (sr.ending_inventory_value ?? 0), 0))}
-                      </td>
-                      <td style={{ 
-                        padding: '12px 8px', 
-                        textAlign: 'right', 
-                        borderTop: '2px solid #dee2e6',
-                        color: totalPnL >= 0 ? '#28a745' : '#dc3545'
-                      }}>
-                        {totalPnL >= 0 ? '+' : ''}${formatCurrency(totalPnL)}
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
           {/* ==================== CORRELATION MATRIX ==================== */}
           {correlationMatrix.length > 0 && (
             <div style={{
@@ -3766,33 +3658,238 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
         boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
         marginBottom: '30px',
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '15px' }}>
           <h3 style={{ margin: 0 }}>Equity Curve</h3>
-          <div style={{ display: 'flex', gap: '20px', fontSize: '14px' }}>
-            <div>
-              <span style={{ color: '#666' }}>Starting Capital: </span>
-              <span style={{ fontWeight: 600, color: '#007bff' }}>
-                ${formatLargeNumber(jobDetails?.initial_capital ?? 10000)}
-              </span>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
+            {/* Capital Summary */}
+            <div style={{ display: 'flex', gap: '20px', fontSize: '14px' }}>
+              <div>
+                <span style={{ color: '#666' }}>Starting Capital: </span>
+                <span style={{ fontWeight: 600, color: '#007bff' }}>
+                  ${formatLargeNumber(
+                    (() => {
+                      const firstPoint = result.equity_curve?.[0];
+                      if (typeof firstPoint === 'number') return firstPoint;
+                      if (firstPoint && typeof firstPoint === 'object' && 'value' in firstPoint) return firstPoint.value ?? 0;
+                      return jobDetails?.initial_capital ?? 10000;
+                    })()
+                  )}
+                </span>
+              </div>
+              <div>
+                <span style={{ color: '#666' }}>Ending Capital: </span>
+                <span style={{ fontWeight: 600, color: (result.total_pnl ?? 0) >= 0 ? '#28a745' : '#dc3545' }}>
+                  ${formatLargeNumber(
+                    (() => {
+                      const lastPoint = result.equity_curve?.[result.equity_curve?.length - 1];
+                      if (typeof lastPoint === 'number') return lastPoint;
+                      if (lastPoint && typeof lastPoint === 'object' && 'value' in lastPoint) return lastPoint.value ?? 0;
+                      return (jobDetails?.initial_capital ?? 10000) + (result.total_pnl ?? 0);
+                    })()
+                  )}
+                </span>
+              </div>
+              <div>
+                <span style={{ color: '#666' }}>Return: </span>
+                <span style={{ fontWeight: 600, color: (result.total_pnl ?? 0) >= 0 ? '#28a745' : '#dc3545' }}>
+                  {safeToFixed(
+                    (() => {
+                      const firstPoint = result.equity_curve?.[0];
+                      const startCap = typeof firstPoint === 'number' ? firstPoint : 
+                        (firstPoint && typeof firstPoint === 'object' && 'value' in firstPoint ? firstPoint.value : null) ?? 
+                        jobDetails?.initial_capital ?? 10000;
+                      return ((result.total_pnl ?? 0) / startCap) * 100;
+                    })(), 2
+                  )}%
+                </span>
+              </div>
             </div>
-            <div>
-              <span style={{ color: '#666' }}>Ending Capital: </span>
-              <span style={{ fontWeight: 600, color: (result.total_pnl ?? 0) >= 0 ? '#28a745' : '#dc3545' }}>
-                ${formatLargeNumber((jobDetails?.initial_capital ?? 10000) + (result.total_pnl ?? 0))}
-              </span>
-            </div>
-            <div>
-              <span style={{ color: '#666' }}>Return: </span>
-              <span style={{ fontWeight: 600, color: (result.total_pnl ?? 0) >= 0 ? '#28a745' : '#dc3545' }}>
-                {safeToFixed(((result.total_pnl ?? 0) / (jobDetails?.initial_capital ?? 10000)) * 100, 2)}%
-              </span>
+            {/* Date Range */}
+            <div style={{ display: 'flex', gap: '16px', fontSize: '13px', color: '#666' }}>
+              <div>
+                <span>From: </span>
+                <span style={{ fontWeight: 500, color: '#333' }}>
+                  {result.start_date ? new Date(result.start_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 
+                   jobDetails?.start_date ? new Date(jobDetails.start_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Auto'}
+                </span>
+              </div>
+              <div>
+                <span>To: </span>
+                <span style={{ fontWeight: 500, color: '#333' }}>
+                  {result.end_date ? new Date(result.end_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 
+                   jobDetails?.end_date ? new Date(jobDetails.end_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Auto'}
+                </span>
+              </div>
             </div>
           </div>
         </div>
+        
+        {/* Position Summary for single-symbol mode */}
+        {result.inventory_metrics && !result.is_portfolio && (
+          <div style={{ 
+            display: 'grid', 
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', 
+            gap: '12px', 
+            marginBottom: '16px',
+            padding: '12px',
+            backgroundColor: '#f8f9fa',
+            borderRadius: '8px'
+          }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>Start Cash</div>
+              <div style={{ fontSize: '14px', fontWeight: 600 }}>
+                ${formatCurrency(result.inventory_metrics.starting_capital ?? 0)}
+              </div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>Start Inventory</div>
+              <div style={{ fontSize: '14px', fontWeight: 600 }}>
+                {safeToFixed(result.inventory_metrics.starting_inventory ?? 0, 4)}
+              </div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>Start Inv Value</div>
+              <div style={{ fontSize: '14px', fontWeight: 600 }}>
+                ${formatCurrency(result.inventory_metrics.starting_inventory_value ?? 0)}
+              </div>
+            </div>
+            <div style={{ textAlign: 'center', color: '#6c757d' }}>→</div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>End Cash</div>
+              <div style={{ fontSize: '14px', fontWeight: 600 }}>
+                ${formatCurrency(result.inventory_metrics.ending_capital ?? 0)}
+              </div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>End Inventory</div>
+              <div style={{ fontSize: '14px', fontWeight: 600 }}>
+                {safeToFixed(result.inventory_metrics.ending_inventory ?? 0, 4)}
+              </div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>End Inv Value</div>
+              <div style={{ fontSize: '14px', fontWeight: 600 }}>
+                ${formatCurrency(result.inventory_metrics.ending_inventory_value ?? 0)}
+              </div>
+            </div>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: '11px', color: '#666', marginBottom: '4px' }}>Final Equity</div>
+              <div style={{ fontSize: '14px', fontWeight: 600, color: (result.inventory_metrics.final_equity ?? 0) > (result.inventory_metrics.starting_capital ?? 0) ? '#28a745' : '#dc3545' }}>
+                ${formatCurrency(result.inventory_metrics.final_equity ?? 0)}
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {/* Per-Symbol Position Summary for portfolio mode */}
+        {result.is_portfolio && result.strategy_params?.symbol_results && result.strategy_params.symbol_results.length > 0 && (
+          <div style={{ 
+            marginBottom: '16px',
+            padding: '12px',
+            backgroundColor: '#f8f9fa',
+            borderRadius: '8px'
+          }}>
+            <div style={{ fontSize: '12px', fontWeight: 600, color: '#333', marginBottom: '10px' }}>
+              💰 Per-Symbol Position Tracking
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ 
+                width: '100%', 
+                borderCollapse: 'collapse',
+                fontSize: '12px'
+              }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#e9ecef' }}>
+                    <th style={{ padding: '8px 6px', textAlign: 'left', borderBottom: '1px solid #dee2e6', fontWeight: 600 }}>Symbol</th>
+                    <th style={{ padding: '8px 6px', textAlign: 'right', borderBottom: '1px solid #dee2e6', fontWeight: 600 }}>Start Cash</th>
+                    <th style={{ padding: '8px 6px', textAlign: 'right', borderBottom: '1px solid #dee2e6', fontWeight: 600 }}>Start Inv</th>
+                    <th style={{ padding: '8px 6px', textAlign: 'right', borderBottom: '1px solid #dee2e6', fontWeight: 600 }}>Start Inv $</th>
+                    <th style={{ padding: '8px 6px', textAlign: 'center', borderBottom: '1px solid #dee2e6', fontWeight: 600 }}>→</th>
+                    <th style={{ padding: '8px 6px', textAlign: 'right', borderBottom: '1px solid #dee2e6', fontWeight: 600 }}>End Cash</th>
+                    <th style={{ padding: '8px 6px', textAlign: 'right', borderBottom: '1px solid #dee2e6', fontWeight: 600 }}>End Inv</th>
+                    <th style={{ padding: '8px 6px', textAlign: 'right', borderBottom: '1px solid #dee2e6', fontWeight: 600 }}>End Inv $</th>
+                    <th style={{ padding: '8px 6px', textAlign: 'right', borderBottom: '1px solid #dee2e6', fontWeight: 600 }}>P&L</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {result.strategy_params.symbol_results.map((sr: any, idx: number) => {
+                    const baseAsset = sr.symbol?.split('/')[0] ?? 'Asset';
+                    const isProfitable = (sr.total_pnl ?? 0) >= 0;
+                    return (
+                      <tr key={sr.symbol} style={{ backgroundColor: idx % 2 === 0 ? 'white' : '#f8f9fa' }}>
+                        <td style={{ padding: '6px', borderBottom: '1px solid #eee', fontWeight: 500 }}>
+                          {sr.symbol}
+                        </td>
+                        <td style={{ padding: '6px', textAlign: 'right', borderBottom: '1px solid #eee' }}>
+                          ${formatCurrency(sr.starting_capital ?? 0)}
+                        </td>
+                        <td style={{ padding: '6px', textAlign: 'right', borderBottom: '1px solid #eee' }}>
+                          {safeToFixed(sr.starting_inventory ?? 0, 4)} {baseAsset}
+                        </td>
+                        <td style={{ padding: '6px', textAlign: 'right', borderBottom: '1px solid #eee' }}>
+                          ${formatCurrency(sr.starting_inventory_value ?? 0)}
+                        </td>
+                        <td style={{ padding: '6px', textAlign: 'center', borderBottom: '1px solid #eee', color: '#6c757d' }}>
+                          →
+                        </td>
+                        <td style={{ padding: '6px', textAlign: 'right', borderBottom: '1px solid #eee' }}>
+                          ${formatCurrency(sr.ending_capital ?? 0)}
+                        </td>
+                        <td style={{ padding: '6px', textAlign: 'right', borderBottom: '1px solid #eee' }}>
+                          {safeToFixed(sr.ending_inventory ?? 0, 4)} {baseAsset}
+                        </td>
+                        <td style={{ padding: '6px', textAlign: 'right', borderBottom: '1px solid #eee' }}>
+                          ${formatCurrency(sr.ending_inventory_value ?? 0)}
+                        </td>
+                        <td style={{ 
+                          padding: '6px', 
+                          textAlign: 'right', 
+                          borderBottom: '1px solid #eee',
+                          fontWeight: 600,
+                          color: isProfitable ? '#28a745' : '#dc3545'
+                        }}>
+                          {isProfitable ? '+' : ''}${formatCurrency(sr.total_pnl ?? 0)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {/* Totals Row */}
+                  <tr style={{ backgroundColor: '#e9ecef', fontWeight: 600 }}>
+                    <td style={{ padding: '8px 6px', borderTop: '2px solid #dee2e6' }}>TOTAL</td>
+                    <td style={{ padding: '8px 6px', textAlign: 'right', borderTop: '2px solid #dee2e6' }}>
+                      ${formatCurrency(result.strategy_params.symbol_results.reduce((sum: number, sr: any) => sum + (sr.starting_capital ?? 0), 0))}
+                    </td>
+                    <td style={{ padding: '8px 6px', textAlign: 'right', borderTop: '2px solid #dee2e6', color: '#6c757d' }}>—</td>
+                    <td style={{ padding: '8px 6px', textAlign: 'right', borderTop: '2px solid #dee2e6' }}>
+                      ${formatCurrency(result.strategy_params.symbol_results.reduce((sum: number, sr: any) => sum + (sr.starting_inventory_value ?? 0), 0))}
+                    </td>
+                    <td style={{ padding: '8px 6px', textAlign: 'center', borderTop: '2px solid #dee2e6' }}>→</td>
+                    <td style={{ padding: '8px 6px', textAlign: 'right', borderTop: '2px solid #dee2e6' }}>
+                      ${formatCurrency(result.strategy_params.symbol_results.reduce((sum: number, sr: any) => sum + (sr.ending_capital ?? 0), 0))}
+                    </td>
+                    <td style={{ padding: '8px 6px', textAlign: 'right', borderTop: '2px solid #dee2e6', color: '#6c757d' }}>—</td>
+                    <td style={{ padding: '8px 6px', textAlign: 'right', borderTop: '2px solid #dee2e6' }}>
+                      ${formatCurrency(result.strategy_params.symbol_results.reduce((sum: number, sr: any) => sum + (sr.ending_inventory_value ?? 0), 0))}
+                    </td>
+                    <td style={{ 
+                      padding: '8px 6px', 
+                      textAlign: 'right', 
+                      borderTop: '2px solid #dee2e6',
+                      color: (result.total_pnl ?? 0) >= 0 ? '#28a745' : '#dc3545'
+                    }}>
+                      {(result.total_pnl ?? 0) >= 0 ? '+' : ''}${formatCurrency(result.total_pnl ?? 0)}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+        
         <EquityCurveChart 
           data={result.equity_curve ?? []} 
-          startDate={result.start_date}
-          endDate={result.end_date}
+          startDate={result.start_date || jobDetails?.start_date}
+          endDate={result.end_date || jobDetails?.end_date}
         />
       </div>
 

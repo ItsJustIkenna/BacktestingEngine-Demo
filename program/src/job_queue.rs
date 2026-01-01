@@ -595,6 +595,35 @@ pub struct InventorySummary {
     pub sell_volume: f64,
     /// Inventory imbalance ratio (buy_volume - sell_volume) / total_volume
     pub imbalance_ratio: f64,
+    
+    // === Position Tracking Fields ===
+    /// Starting inventory quantity (always 0 for fresh backtest)
+    #[serde(default)]
+    pub starting_inventory: Option<f64>,
+    /// Starting inventory value in USD
+    #[serde(default)]
+    pub starting_inventory_value: Option<f64>,
+    /// Starting mark price used for valuation
+    #[serde(default)]
+    pub starting_mark_price: Option<f64>,
+    /// Ending inventory quantity (base asset units)
+    #[serde(default)]
+    pub ending_inventory: Option<f64>,
+    /// Ending inventory value in USD
+    #[serde(default)]
+    pub ending_inventory_value: Option<f64>,
+    /// Ending mark price used for valuation
+    #[serde(default)]
+    pub ending_mark_price: Option<f64>,
+    /// Starting capital (USD cash)
+    #[serde(default)]
+    pub starting_capital: Option<f64>,
+    /// Ending capital (USD cash after all trades)
+    #[serde(default)]
+    pub ending_capital: Option<f64>,
+    /// Final equity (ending_capital + ending_inventory_value)
+    #[serde(default)]
+    pub final_equity: Option<f64>,
 }
 
 /// Order lifecycle and execution quality metrics for API

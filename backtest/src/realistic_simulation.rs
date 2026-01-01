@@ -810,10 +810,18 @@ pub struct RealisticSimResult {
     pub inventory_metrics: InventoryMetrics,
     /// Execution quality metrics
     pub execution_metrics: ExecutionMetrics,
+    
+    // === Timestamp Tracking ===
+    /// Timestamp of first event in simulation (milliseconds since epoch)
+    pub first_event_timestamp_ms: Option<i64>,
+    /// Timestamp of last event in simulation (milliseconds since epoch)
+    pub last_event_timestamp_ms: Option<i64>,
 }
 
 impl From<RealisticSimResult> for crate::types::BacktestResult {
     fn from(result: RealisticSimResult) -> Self {
+        use chrono::{TimeZone, Utc};
+        
         crate::types::BacktestResult {
             total_pnl: BigDecimal::try_from(result.total_pnl).unwrap_or_default(),
             max_drawdown: BigDecimal::try_from(result.max_drawdown).unwrap_or_default(),
@@ -823,6 +831,9 @@ impl From<RealisticSimResult> for crate::types::BacktestResult {
             win_rate: Some(result.win_rate),
             equity_curve: result.equity_curve,
             closed_trades: result.num_trades,
+            // Timestamp tracking - convert from milliseconds to DateTime<Utc>
+            first_trade_timestamp: result.first_event_timestamp_ms.map(|ms| Utc.timestamp_millis_opt(ms).unwrap()),
+            last_trade_timestamp: result.last_event_timestamp_ms.map(|ms| Utc.timestamp_millis_opt(ms).unwrap()),
             // Transaction costs from realistic simulation
             transaction_costs: Some(crate::types::TransactionCostAnalysis {
                 total_commission: result.total_fees,
@@ -2176,6 +2187,9 @@ impl RealisticSimulator {
             avg_time_in_trade_ms,
             inventory_metrics: final_inventory_metrics,
             execution_metrics: final_execution_metrics,
+            // Timestamp tracking from event data
+            first_event_timestamp_ms: events.first().map(|e| e.timestamp_ms),
+            last_event_timestamp_ms: events.last().map(|e| e.timestamp_ms),
         }
     }
 }

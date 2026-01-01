@@ -601,7 +601,7 @@ impl JobQueue for PostgresQueue {
         // If result.annualized_return is provided, use it; otherwise compute from equity curve
         let total_return_bd = cap_value(capped_pnl);
         let computed_annualized_return = if let Some(ann_ret) = result.annualized_return {
-            // Already computed (e.g., from FastSimulator)
+            // Already computed (e.g., from RealisticSimulator)
             cap_value(ann_ret * 100.0) // Convert to percentage (e.g., 0.25 -> 25%)
         } else {
             // Fallback: estimate from equity curve
@@ -1056,6 +1056,16 @@ impl JobQueue for PostgresQueue {
                                 buy_volume: v.get("buy_volume")?.as_f64()?,
                                 sell_volume: v.get("sell_volume")?.as_f64()?,
                                 imbalance_ratio: v.get("imbalance_ratio")?.as_f64()?,
+                                // Position tracking fields
+                                starting_inventory: v.get("starting_inventory").and_then(|x| x.as_f64()),
+                                starting_inventory_value: v.get("starting_inventory_value").and_then(|x| x.as_f64()),
+                                starting_mark_price: v.get("starting_mark_price").and_then(|x| x.as_f64()),
+                                ending_inventory: v.get("ending_inventory").and_then(|x| x.as_f64()),
+                                ending_inventory_value: v.get("ending_inventory_value").and_then(|x| x.as_f64()),
+                                ending_mark_price: v.get("ending_mark_price").and_then(|x| x.as_f64()),
+                                starting_capital: v.get("starting_capital").and_then(|x| x.as_f64()),
+                                ending_capital: v.get("ending_capital").and_then(|x| x.as_f64()),
+                                final_equity: v.get("final_equity").and_then(|x| x.as_f64()),
                             })
                         });
                     

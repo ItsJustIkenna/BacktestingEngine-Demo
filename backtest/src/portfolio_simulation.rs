@@ -83,6 +83,11 @@ pub struct PortfolioSimResult {
     pub total_orders_filled: usize,
     pub avg_fill_rate: f64,
     pub avg_time_in_trade_ms: f64,
+    
+    /// Timestamp of first event across all symbols (milliseconds since epoch)
+    pub first_event_timestamp_ms: Option<i64>,
+    /// Timestamp of last event across all symbols (milliseconds since epoch)
+    pub last_event_timestamp_ms: Option<i64>,
 }
 
 /// Correlation between two symbols
@@ -140,6 +145,10 @@ impl PortfolioSimulator {
         let mut all_equity_curves: Vec<Vec<f64>> = Vec::new();
         let mut all_trade_returns: Vec<f64> = Vec::new();
         
+        // Track min/max timestamps across all symbols
+        let mut min_first_timestamp_ms: Option<i64> = None;
+        let mut max_last_timestamp_ms: Option<i64> = None;
+        
         for (i, symbol) in symbols.iter().enumerate() {
             let weight = weights.get(i).copied().unwrap_or(1.0 / num_symbols as f64);
             let allocated_capital = self.initial_capital * weight;
@@ -153,6 +162,14 @@ impl PortfolioSimulator {
             // Run simulation for this symbol
             if let Some(events) = symbol_events.get(symbol) {
                 let result = simulator.run(events, params);
+                
+                // Track min/max timestamps across symbols
+                if let Some(first_ts) = result.first_event_timestamp_ms {
+                    min_first_timestamp_ms = Some(min_first_timestamp_ms.map_or(first_ts, |min| min.min(first_ts)));
+                }
+                if let Some(last_ts) = result.last_event_timestamp_ms {
+                    max_last_timestamp_ms = Some(max_last_timestamp_ms.map_or(last_ts, |max| max.max(last_ts)));
+                }
                 
                 // Collect trade returns for aggregate Monte Carlo
                 all_trade_returns.extend(result.trade_returns.iter().cloned());
@@ -280,6 +297,8 @@ impl PortfolioSimulator {
             total_orders_filled,
             avg_fill_rate,
             avg_time_in_trade_ms,
+            first_event_timestamp_ms: min_first_timestamp_ms,
+            last_event_timestamp_ms: max_last_timestamp_ms,
         }
     }
     
@@ -458,6 +477,8 @@ impl PortfolioSimulator {
             total_orders_filled: 0,
             avg_fill_rate: 0.0,
             avg_time_in_trade_ms: 0.0,
+            first_event_timestamp_ms: None,
+            last_event_timestamp_ms: None,
         }
     }
 }
@@ -466,6 +487,7 @@ impl PortfolioSimulator {
 impl From<PortfolioSimResult> for crate::types::BacktestResult {
     fn from(result: PortfolioSimResult) -> Self {
         use bigdecimal::BigDecimal;
+        use chrono::{TimeZone, Utc};
         
         crate::types::BacktestResult {
             total_pnl: BigDecimal::try_from(result.total_pnl).unwrap_or_default(),
@@ -478,6 +500,9 @@ impl From<PortfolioSimResult> for crate::types::BacktestResult {
             closed_trades: result.total_trades,
             trade_returns: result.trade_returns,
             initial_capital: result.initial_capital,
+            // Timestamp tracking - convert from milliseconds to DateTime<Utc>
+            first_trade_timestamp: result.first_event_timestamp_ms.map(|ms| Utc.timestamp_millis_opt(ms).unwrap()),
+            last_trade_timestamp: result.last_event_timestamp_ms.map(|ms| Utc.timestamp_millis_opt(ms).unwrap()),
             transaction_costs: Some(crate::types::TransactionCostAnalysis {
                 total_commission: result.total_fees,
                 total_slippage: 0.0,

@@ -745,6 +745,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                                     buy_volume: eval_result.total_volume / 2.0, // Approximate
                                                                     sell_volume: eval_result.total_volume / 2.0, // Approximate
                                                                     imbalance_ratio: 0.0, // Not tracked
+                                                                    ..Default::default()
                                                                 })
                                                             } else { None },
                                                             execution_metrics: if eval_result.avg_fill_rate > 0.0 {

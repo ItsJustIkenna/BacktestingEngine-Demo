@@ -165,7 +165,7 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     exchange: '',
     strategy_type: 'market_making',
     initial_capital: 10000,
-    initial_inventory_pct: 0.5,
+    initial_inventory_pct: 0.0,
     initial_30d_volume: 0,
     optimization_method: 'genetic',
     // Portfolio assets (always used, single asset is a 1-item portfolio)
@@ -652,50 +652,21 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
               />
             </div>
 
-            {/* Base Asset Allocation */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <div>
-                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>Base Asset Allocation (%)</label>
-                <input
-                  type="number"
-                  value={formData.initial_inventory_pct * 100}
-                  onChange={(e) => setFormData(prev => ({ ...prev, initial_inventory_pct: parseFloat(e.target.value) / 100 }))}
-                  step="5"
-                  min="0"
-                  max="100"
-                  style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '6px' }}
-                />
-                <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
-                  % as base asset (e.g., BTC). Rest is quote (USD).
-                </div>
+            {/* 30-Day Volume for Fee Tier */}
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>30-Day Trading Volume ($)</label>
+              <input
+                type="number"
+                name="initial_30d_volume"
+                value={formData.initial_30d_volume}
+                onChange={handleChange}
+                step="100000"
+                min="0"
+                style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '6px' }}
+              />
+              <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
+                Your existing 30-day trading volume for fee tier calculation. 0 = default/highest fees.
               </div>
-              <div>
-                <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500 }}>30-Day Volume ($)</label>
-                <input
-                  type="number"
-                  name="initial_30d_volume"
-                  value={formData.initial_30d_volume}
-                  onChange={handleChange}
-                  step="100000"
-                  min="0"
-                  style={{ width: '100%', padding: '10px', border: '1px solid #ccc', borderRadius: '6px' }}
-                />
-                <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
-                  For fee tier calculation. 0 = default fees.
-                </div>
-              </div>
-            </div>
-
-            {/* Allocation Preview */}
-            <div style={{ 
-              padding: '12px', 
-              backgroundColor: '#e8f5e9', 
-              borderRadius: '6px',
-              fontSize: '13px'
-            }}>
-              <strong>Allocation:</strong>{' '}
-              ${((formData.initial_capital * formData.initial_inventory_pct)).toLocaleString()} base asset +{' '}
-              ${((formData.initial_capital * (1 - formData.initial_inventory_pct))).toLocaleString()} quote
             </div>
           </div>
         </AccordionSection>
