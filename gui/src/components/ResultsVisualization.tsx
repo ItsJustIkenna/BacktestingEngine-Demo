@@ -711,20 +711,6 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
 
   // Show progress for running/queued jobs
   if (jobStatus && (jobStatus.status === 'running' || jobStatus.status === 'queued')) {
-    const formatTime = (ms: number) => {
-      const seconds = Math.floor(ms / 1000);
-      const minutes = Math.floor(seconds / 60);
-      const hours = Math.floor(minutes / 60);
-      
-      if (hours > 0) {
-        return `${hours}h ${minutes % 60}m`;
-      } else if (minutes > 0) {
-        return `${minutes}m ${seconds % 60}s`;
-      } else {
-        return `${seconds}s`;
-      }
-    };
-
     return (
       <div style={{ padding: '20px', maxWidth: '1000px', margin: '0 auto' }}>
         <div style={{ marginBottom: '20px' }}>
