@@ -62,6 +62,9 @@ pub struct JobDetailsResponse {
     pub generations: Option<u32>,
     pub created_at: String,
     pub started_at: Option<String>,
+    // Portfolio mode fields
+    pub is_portfolio: bool,
+    pub portfolio_assets: Option<Vec<crate::job_queue::PortfolioAsset>>,
     // All configuration parameters from BacktestJobParams
     pub initial_inventory_pct: f64,
     pub initial_30d_volume: f64,
@@ -349,6 +352,9 @@ pub async fn get_job_details(
         generations: Some(job.params.generations as u32),
         created_at: job.created_at.to_rfc3339(),
         started_at: job.started_at.map(|dt| dt.to_rfc3339()),
+        // Portfolio mode fields
+        is_portfolio: job.params.is_portfolio(),
+        portfolio_assets: job.params.portfolio_assets.clone(),
         // All configuration parameters
         initial_inventory_pct: job.params.initial_inventory_pct,
         initial_30d_volume: job.params.initial_30d_volume,

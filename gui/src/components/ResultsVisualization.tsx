@@ -252,6 +252,9 @@ interface JobDetails {
   generations?: number;
   created_at: string;
   started_at: string | null;
+  // Portfolio mode fields
+  is_portfolio: boolean;
+  portfolio_assets?: Array<{ symbol: string; exchange: string; weight?: number }>;
   // All configuration parameters
   initial_inventory_pct: number;
   initial_30d_volume: number;
@@ -341,11 +344,10 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
   const [jobDetails, setJobDetails] = useState<JobDetails | null>(null);
   const [loading, setLoading] = useState(true); // Start with loading true for initial load
   const [error, setError] = useState<string | null>(null);
-  const [estimatedTimeRemaining, setEstimatedTimeRemaining] = useState<number | null>(null);
-  const [countdown, setCountdown] = useState<number | null>(null);
   const [displayProgress, setDisplayProgress] = useState<number>(0);
   const [copied, setCopied] = useState(false);
   const [actionLoading, setActionLoading] = useState<'cancel' | 'delete' | null>(null);
+  const [elapsedTime, setElapsedTime] = useState<string>('');
   const isFirstLoad = React.useRef(true);
 
   const copyToClipboard = async (text: string) => {
@@ -403,6 +405,40 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
   // Ref to track mounted state for cleanup
   const isMountedRef = React.useRef(true);
   const pollingTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
+  const elapsedTimerRef = React.useRef<NodeJS.Timeout | null>(null);
+
+  // Format elapsed time helper
+  const formatElapsedTime = (startedAt: string): string => {
+    const startTime = new Date(startedAt).getTime();
+    const elapsed = Date.now() - startTime;
+    const seconds = Math.floor(elapsed / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    if (hours > 0) return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+    return `${seconds}s`;
+  };
+
+  // Update elapsed time every second for running jobs
+  React.useEffect(() => {
+    if (jobStatus?.status === 'running' && jobStatus?.started_at) {
+      // Update immediately
+      setElapsedTime(formatElapsedTime(jobStatus.started_at));
+      
+      // Then update every second
+      elapsedTimerRef.current = setInterval(() => {
+        if (jobStatus?.started_at) {
+          setElapsedTime(formatElapsedTime(jobStatus.started_at));
+        }
+      }, 1000);
+    }
+    
+    return () => {
+      if (elapsedTimerRef.current) {
+        clearInterval(elapsedTimerRef.current);
+      }
+    };
+  }, [jobStatus?.status, jobStatus?.started_at]);
 
   // Cleanup on unmount
   React.useEffect(() => {
@@ -411,6 +447,9 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
       isMountedRef.current = false;
       if (pollingTimeoutRef.current) {
         clearTimeout(pollingTimeoutRef.current);
+      }
+      if (elapsedTimerRef.current) {
+        clearInterval(elapsedTimerRef.current);
       }
     };
   }, []);
@@ -435,19 +474,6 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
       
       console.log(`[FetchData] Job ${jobId} status: ${statusData.status}, progress: ${statusData.progress}%`);
       setJobStatus(statusData);
-
-      // Calculate estimated time remaining for running jobs
-      if (statusData.status === 'running' && statusData.started_at && statusData.progress > 0) {
-        const startTime = new Date(statusData.started_at).getTime();
-        const now = Date.now();
-        const elapsedMs = now - startTime;
-        const progressFraction = statusData.progress / 100;
-        const estimatedTotalMs = elapsedMs / progressFraction;
-        const remainingMs = estimatedTotalMs - elapsedMs;
-        setEstimatedTimeRemaining(Math.max(0, remainingMs));
-      } else {
-        setEstimatedTimeRemaining(null);
-      }
 
       // Mark first load as complete to stop showing loading spinner on subsequent polls
       isFirstLoad.current = false;
@@ -502,24 +528,6 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
   useEffect(() => {
     fetchData();
   }, [fetchData]);
-
-  // Countdown timer that decrements every second
-  useEffect(() => {
-    if (estimatedTimeRemaining !== null && estimatedTimeRemaining > 0) {
-      setCountdown(estimatedTimeRemaining);
-      
-      const interval = setInterval(() => {
-        setCountdown((prev) => {
-          if (prev === null || prev <= 1000) {
-            return 0;
-          }
-          return prev - 1000;
-        });
-      }, 1000);
-
-      return () => clearInterval(interval);
-    }
-  }, [estimatedTimeRemaining]);
 
   // Smooth progress interpolation between API updates
   useEffect(() => {
@@ -757,15 +765,29 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
             <div style={{ marginBottom: '15px' }}>
               <h4 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#495057' }}>Basic Settings</h4>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', fontSize: '13px' }}>
-                <div><strong>Symbol:</strong> {jobDetails.symbol}</div>
-                <div><strong>Exchange:</strong> {jobDetails.exchange}</div>
+                {/* Show portfolio assets if in portfolio mode, otherwise show single symbol */}
+                {jobDetails.is_portfolio && jobDetails.portfolio_assets && jobDetails.portfolio_assets.length > 0 ? (
+                  <div style={{ gridColumn: 'span 2' }}>
+                    <strong>Portfolio ({jobDetails.portfolio_assets.length} assets):</strong>{' '}
+                    {jobDetails.portfolio_assets.map((a, i) => (
+                      <span key={i} style={{ marginRight: '8px', padding: '2px 6px', backgroundColor: '#e7f3ff', borderRadius: '4px', fontSize: '12px' }}>
+                        {a.symbol}@{a.exchange}{a.weight ? ` (${(a.weight * 100).toFixed(0)}%)` : ''}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <>
+                    <div><strong>Symbol:</strong> {jobDetails.symbol}</div>
+                    <div><strong>Exchange:</strong> {jobDetails.exchange}</div>
+                  </>
+                )}
                 <div><strong>Strategy:</strong> {jobDetails.strategy}</div>
                 <div><strong>Initial Capital:</strong> ${jobDetails.initial_capital.toLocaleString()}</div>
                 <div><strong>Initial Inventory:</strong> {safeToFixed((jobDetails.initial_inventory_pct ?? 0) * 100, 0)}%</div>
                 <div><strong>30d Volume:</strong> {(jobDetails.initial_30d_volume ?? 0) > 0 ? `$${(jobDetails.initial_30d_volume ?? 0).toLocaleString()}` : 'Default Tier'}</div>
                 <div><strong>Commission Rate:</strong> {safeToFixed((jobDetails.commission_rate ?? 0) * 100, 4)}%</div>
-                <div><strong>Start Date:</strong> {jobDetails.start_date ? new Date(jobDetails.start_date).toLocaleDateString() : 'N/A'}</div>
-                <div><strong>End Date:</strong> {jobDetails.end_date ? new Date(jobDetails.end_date).toLocaleDateString() : 'N/A'}</div>
+                <div><strong>Start Date:</strong> {jobDetails.start_date ? new Date(jobDetails.start_date).toLocaleDateString() : 'Auto (earliest data)'}</div>
+                <div><strong>End Date:</strong> {jobDetails.end_date ? new Date(jobDetails.end_date).toLocaleDateString() : 'Auto (latest data)'}</div>
               </div>
             </div>
 
@@ -936,22 +958,6 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
                 </span>
               </div>
             )}
-            {countdown !== null && countdown > 0 && jobStatus.status === 'running' && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
-                <strong>Time Remaining:</strong>
-                <span style={{ color: '#007bff', fontWeight: 'bold', fontSize: '16px' }}>
-                  ⏱️ {formatTime(countdown)}
-                </span>
-              </div>
-            )}
-            {countdown !== null && countdown <= 0 && jobStatus.status === 'running' && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
-                <strong>Time Remaining:</strong>
-                <span style={{ color: '#28a745', fontWeight: 'bold' }}>
-                  Completing soon...
-                </span>
-              </div>
-            )}
           </div>
 
           <div style={{
@@ -980,8 +986,23 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
           <div style={{ fontSize: '14px', color: '#666' }}>
             <div><strong>Created:</strong> {new Date(jobStatus.created_at).toLocaleString()}</div>
             {jobStatus.started_at && (
-              <div><strong>Started:</strong> {new Date(jobStatus.started_at).toLocaleString()}</div>
+              <>
+                <div><strong>Started:</strong> {new Date(jobStatus.started_at).toLocaleString()}</div>
+                <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#007bff' }}>
+                  <strong>⏱️ Elapsed:</strong> {elapsedTime || '0s'}
+                </div>
+              </>
             )}
+            {/* Stall detection warning */}
+            {jobStatus.started_at && jobStatus.progress < 5 && (() => {
+              const elapsed = Date.now() - new Date(jobStatus.started_at).getTime();
+              const elapsedMinutes = elapsed / (1000 * 60);
+              return elapsedMinutes > 5 && (
+                <div style={{ marginTop: '10px', padding: '10px', backgroundColor: '#fff3cd', borderRadius: '4px', color: '#856404' }}>
+                  ⚠️ <strong>Possible stall detected:</strong> Job has been running for {Math.floor(elapsedMinutes)}+ minutes with minimal progress ({safeToFixed(jobStatus.progress, 1)}%). Check worker logs if this persists.
+                </div>
+              );
+            })()}
             <div style={{ marginTop: '10px', fontStyle: 'italic' }}>
               🔄 Progress updates every 3 seconds...
             </div>

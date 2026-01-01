@@ -17,13 +17,14 @@ image:
 
 # Resource allocation for development
 # Increased for parallel Monte Carlo (Rayon) and genetic optimization
+# Portfolio backtests with 3+ symbols can use significant memory during data loading
 resources:
   limits:
     cpu: "4000m"      # 4 CPU cores for parallel processing
-    memory: "8Gi"      # 8GB for genetic optimization (50 chromosomes)
+    memory: "16Gi"    # 16GB for portfolio GA with multiple symbols
   requests:
     cpu: "2000m"      # 2 CPU cores minimum
-    memory: "4Gi"      # 4GB minimum
+    memory: "8Gi"     # 8GB minimum for portfolio data loading
 
 # =============================================================================
 # Secrets Configuration - Local Development
