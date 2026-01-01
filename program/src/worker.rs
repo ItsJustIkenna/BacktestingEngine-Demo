@@ -527,7 +527,7 @@ impl Worker {
         }
         
         // === COMPREHENSIVE PORTFOLIO ROUTING LOGGING ===
-        eprintln!("\n{'='*60}");
+        eprintln!("\n============================================================");
         eprintln!("🔀 [WORKER] JOB_ROUTING_DECISION job_id={}", job.id);
         eprintln!("   portfolio_assets: {:?}", job.params.portfolio_assets.as_ref().map(|a| 
             a.iter().map(|x| format!("{}@{}", x.symbol, x.exchange)).collect::<Vec<_>>()
@@ -536,8 +536,10 @@ impl Worker {
         eprintln!("   is_portfolio(): {}", job.params.is_portfolio());
         eprintln!("   all_symbols(): {:?}", job.params.all_symbols());
         eprintln!("   optimization_method: {}", job.params.optimization_method);
+        eprintln!("   start_date: {:?}", job.params.start_date);
+        eprintln!("   end_date: {:?}", job.params.end_date);
         eprintln!("   ROUTING TO: {}", if job.params.is_portfolio() { "PORTFOLIO_BACKTEST" } else { "SINGLE_SYMBOL_BACKTEST" });
-        eprintln!("{'='*60}\n");
+        eprintln!("============================================================\n");
         
         let result = if job.params.is_portfolio() {
             eprintln!("🏦 [WORKER] Entering PORTFOLIO path for job {}", job.id);
@@ -1402,9 +1404,9 @@ impl Worker {
         use config::GeneticConfig;
         
         // === PORTFOLIO GA EXECUTION LOGGING ===
-        eprintln!("\n{'='*60}");
+        eprintln!("\n============================================================");
         eprintln!("🧬 [PORTFOLIO_GA] STARTING job_id={}", job.id);
-        eprintln!("{'='*60}");
+        eprintln!("============================================================");
         
         let params = &job.params;
         let symbol_exchange_pairs = params.all_symbol_exchange_pairs();
@@ -2253,7 +2255,7 @@ impl Worker {
         let params = &job.params;
         
         // === SINGLE-SYMBOL GA EXECUTION LOGGING ===
-        eprintln!("\n{'='*60}");
+        eprintln!("\n============================================================");
         eprintln!("🧬 [SINGLE_GA] STARTING job_id={}", job.id);
         eprintln!("   symbol: {}", params.symbol);
         eprintln!("   exchange: {}", params.exchange);
@@ -2262,7 +2264,7 @@ impl Worker {
         eprintln!("   generations: {}", params.generations);
         eprintln!("   portfolio_assets: {:?}", params.portfolio_assets.as_ref().map(|a| a.len()));
         eprintln!("   ⚠️ NOTE: This is SINGLE-SYMBOL mode. Portfolio assets will be IGNORED!");
-        eprintln!("{'='*60}\n");
+        eprintln!("============================================================\n");
         
         // ============ TIMING: Total Job ============
         let timing_total_start = std::time::Instant::now();

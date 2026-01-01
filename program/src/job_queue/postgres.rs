@@ -186,6 +186,18 @@ impl PostgresQueue {
             }
         }
         
+        // === GENERATION VALUES LOGGING ===
+        let resolved_current_gen = record.current_generation.unwrap_or(0);
+        let resolved_total_gen = record.total_generations.or(record.generations).unwrap_or(0);
+        eprintln!("   📊 [GENERATION] job_id={} DB values: current_gen={:?}, total_gen={:?}, generations_param={:?}", 
+            record.job_id,
+            record.current_generation,
+            record.total_generations,
+            record.generations
+        );
+        eprintln!("   📊 [GENERATION] job_id={} Resolved: current={}, total={}", 
+            record.job_id, resolved_current_gen, resolved_total_gen);
+        
         Ok(BacktestJob {
             id: record.job_id,
             params,
@@ -194,10 +206,10 @@ impl PostgresQueue {
             started_at: record.started_at,
             completed_at: record.completed_at,
             progress: f64::from_str(&record.progress.to_string())?,
-            current_generation: record.current_generation.unwrap_or(0),
+            current_generation: resolved_current_gen,
             // Use total_generations if set, otherwise fall back to generations from job params
             // This ensures proper display before the first update_generation call
-            total_generations: record.total_generations.or(record.generations).unwrap_or(0),
+            total_generations: resolved_total_gen,
             current_phase: record.current_phase.unwrap_or_else(|| "initializing".to_string()),
             phase_details: record.phase_details.unwrap_or_else(|| serde_json::json!({})),
             error_message: record.error_message,
@@ -230,6 +242,17 @@ impl JobQueue for PostgresQueue {
             eprintln!("   ⚠️ params_json.portfolio_assets: MISSING!");
         }
         
+        // Set initial generation values to prevent null/null display in UI
+        // For genetic optimization, total_generations = params.generations, current = 0
+        // For other methods, both stay None
+        let (initial_current_gen, initial_total_gen) = if params.optimization_method == "genetic" && params.generations > 0 {
+            eprintln!("   📊 [GENERATION] Setting initial values: current=0, total={}", params.generations);
+            (Some(0), Some(params.generations as i32))
+        } else {
+            eprintln!("   📊 [GENERATION] Non-genetic method, skipping initial gen values");
+            (None, None)
+        };
+        
         let new_job = NewBacktestJob {
             job_id: job_id.clone(),
             symbol: params.symbol,
@@ -246,6 +269,8 @@ impl JobQueue for PostgresQueue {
             start_date: params.start_date.as_ref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc))),
             end_date: params.end_date.as_ref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc))),
             params_json,
+            current_generation: initial_current_gen,
+            total_generations: initial_total_gen,
         };
         
         diesel::insert_into(backtest_jobs::table)
@@ -409,6 +434,7 @@ impl JobQueue for PostgresQueue {
     
     /// Update generation progress for genetic optimization (monotonic - never goes backwards)
     async fn update_generation(&self, job_id: &str, current_generation: i32, total_generations: i32) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        eprintln!("📊 [GEN_UPDATE] job_id={} updating to current={}, total={}", job_id, current_generation, total_generations);
         log_info!(crate::MAIN_LOGGER, "Job {} generation {}/{}", job_id, current_generation, total_generations);
         
         let mut conn = self.get_conn_with_timeout().await?;
@@ -500,6 +526,8 @@ impl JobQueue for PostgresQueue {
         eprintln!("   total_pnl: {:.4}", result.total_pnl);
         eprintln!("   sharpe_ratio: {:.4}", result.sharpe_ratio);
         eprintln!("   total_trades: {}", result.total_trades);
+        eprintln!("   start_date: {:?}", result.start_date);
+        eprintln!("   end_date: {:?}", result.end_date);
         
         let start = std::time::Instant::now();
         
@@ -511,6 +539,10 @@ impl JobQueue for PostgresQueue {
             .select(BacktestJobRecord::as_select())
             .first(&mut conn)
             .await?;
+        
+        // Log job dates from database record
+        eprintln!("   [DB] job.start_date from DB: {:?}", job.start_date);
+        eprintln!("   [DB] job.end_date from DB: {:?}", job.end_date);
         
         // Create backtest result record
         let backtest_uuid = uuid::Uuid::parse_str(&result.job_id)?;
@@ -1333,13 +1365,29 @@ impl PostgresQueue {
                 .clone()
                 .unwrap_or_else(|| serde_json::json!({}));
             
-            // Extract generation info from phase_details if present
-            let current_generation = phase_details.get("current_generation")
+            // Extract generation info - prefer DB columns over phase_details
+            // This fixes "Gen null/null" appearing when phase_details hasn't been updated yet
+            let phase_current_gen = phase_details.get("current_generation")
                 .and_then(|v| v.as_i64())
                 .map(|v| v as i32);
-            let total_generations = phase_details.get("total_generations")
+            let phase_total_gen = phase_details.get("total_generations")
                 .and_then(|v| v.as_i64())
                 .map(|v| v as i32);
+            
+            // Priority: DB columns > phase_details > generations param
+            let current_generation = job.current_generation.or(phase_current_gen);
+            let total_generations = job.total_generations.or(phase_total_gen).or(job.generations);
+            
+            // Debug logging for generation values
+            eprintln!("📊 [JOBLIST] job_id={} generation: db_current={:?}, db_total={:?}, phase_current={:?}, phase_total={:?}, resolved_current={:?}, resolved_total={:?}",
+                job.job_id,
+                job.current_generation,
+                job.total_generations,
+                phase_current_gen,
+                phase_total_gen,
+                current_generation,
+                total_generations
+            );
             
             // Extract portfolio_assets from params_json if present
             let portfolio_assets: Option<Vec<crate::api::history::PortfolioAssetSummary>> = 

@@ -829,30 +829,32 @@ export const ResultsVisualization: React.FC<ResultsVisualizationProps> = ({
               </div>
             )}
 
-            {/* Strategy Parameters (collapsed by default for cleaner view) */}
-            <details style={{ marginBottom: '10px' }}>
-              <summary style={{ cursor: 'pointer', fontWeight: 'bold', fontSize: '14px', color: '#495057' }}>
-                ⚙️ Strategy Parameters (click to expand)
-              </summary>
-              <div style={{ marginTop: '10px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px', fontSize: '13px', padding: '10px', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
-                <div><strong>Risk Aversion:</strong> {safeToFixed(jobDetails.risk_aversion, 4)}</div>
-                <div><strong>Inventory Target:</strong> {safeToFixed(jobDetails.inventory_target, 4)}</div>
-                <div><strong>Order Size:</strong> {safeToFixed((jobDetails.order_size_pct ?? 0) * 100, 2)}%</div>
-                <div><strong>Window:</strong> {jobDetails.window_ms}ms</div>
-                <div><strong>Min Quote Life:</strong> {jobDetails.min_quote_lifetime_ms}ms</div>
-                <div><strong>Volatility Cap:</strong> {safeToFixed((jobDetails.volatility_cap ?? 0) * 100, 2)}%</div>
-                <div><strong>Time Horizon:</strong> {jobDetails.time_horizon_minutes} min</div>
-                <div><strong>Market Depth K:</strong> {safeToFixed(jobDetails.market_depth_k, 2)}</div>
-                <div><strong>Vol Adjustment:</strong> {safeToFixed(jobDetails.volatility_adjustment_factor, 2)}</div>
-                <div><strong>Inv Penalty:</strong> {safeToFixed(jobDetails.inventory_penalty_factor, 2)}</div>
-                <div><strong>Trend Sens:</strong> {safeToFixed(jobDetails.trend_sensitivity, 2)}</div>
-                <div><strong>Flow Sens:</strong> {safeToFixed(jobDetails.flow_sensitivity, 2)}</div>
-                <div><strong>Take Profit:</strong> {safeToFixed((jobDetails.take_profit_pct ?? 0) * 100, 2)}%</div>
-                <div><strong>Stop Loss:</strong> {safeToFixed((jobDetails.stop_loss_pct ?? 0) * 100, 2)}%</div>
-                <div><strong>Min Spread:</strong> {safeToFixed(jobDetails.min_spread_bps, 1)} bps</div>
-                <div><strong>Max Trades/Min:</strong> {safeToFixed(jobDetails.max_trades_per_minute, 1)}</div>
-              </div>
-            </details>
+            {/* Strategy Parameters - Only show for manual mode (not GA), since GA optimizes these */}
+            {jobDetails.optimization_method !== 'genetic' && (
+              <details style={{ marginBottom: '10px' }}>
+                <summary style={{ cursor: 'pointer', fontWeight: 'bold', fontSize: '14px', color: '#495057' }}>
+                  ⚙️ Strategy Parameters (click to expand)
+                </summary>
+                <div style={{ marginTop: '10px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px', fontSize: '13px', padding: '10px', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
+                  <div><strong>Risk Aversion:</strong> {safeToFixed(jobDetails.risk_aversion, 4)}</div>
+                  <div><strong>Inventory Target:</strong> {safeToFixed(jobDetails.inventory_target, 4)}</div>
+                  <div><strong>Order Size:</strong> {safeToFixed((jobDetails.order_size_pct ?? 0) * 100, 2)}%</div>
+                  <div><strong>Window:</strong> {jobDetails.window_ms}ms</div>
+                  <div><strong>Min Quote Life:</strong> {jobDetails.min_quote_lifetime_ms}ms</div>
+                  <div><strong>Volatility Cap:</strong> {safeToFixed((jobDetails.volatility_cap ?? 0) * 100, 2)}%</div>
+                  <div><strong>Time Horizon:</strong> {jobDetails.time_horizon_minutes} min</div>
+                  <div><strong>Market Depth K:</strong> {safeToFixed(jobDetails.market_depth_k, 2)}</div>
+                  <div><strong>Vol Adjustment:</strong> {safeToFixed(jobDetails.volatility_adjustment_factor, 2)}</div>
+                  <div><strong>Inv Penalty:</strong> {safeToFixed(jobDetails.inventory_penalty_factor, 2)}</div>
+                  <div><strong>Trend Sens:</strong> {safeToFixed(jobDetails.trend_sensitivity, 2)}</div>
+                  <div><strong>Flow Sens:</strong> {safeToFixed(jobDetails.flow_sensitivity, 2)}</div>
+                  <div><strong>Take Profit:</strong> {safeToFixed((jobDetails.take_profit_pct ?? 0) * 100, 2)}%</div>
+                  <div><strong>Stop Loss:</strong> {safeToFixed((jobDetails.stop_loss_pct ?? 0) * 100, 2)}%</div>
+                  <div><strong>Min Spread:</strong> {safeToFixed(jobDetails.min_spread_bps, 1)} bps</div>
+                  <div><strong>Max Trades/Min:</strong> {safeToFixed(jobDetails.max_trades_per_minute, 1)}</div>
+                </div>
+              </details>
+            )}
           </div>
         )}
 

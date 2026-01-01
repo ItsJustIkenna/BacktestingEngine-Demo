@@ -111,7 +111,7 @@ pub async fn submit_backtest(
     Json(mut params): Json<BacktestJobParams>,
 ) -> Result<Json<JobSubmitResponse>, AppError> {
     // === COMPREHENSIVE JOB SUBMISSION LOGGING ===
-    eprintln!("\n{'='*60}");
+    eprintln!("\n============================================================");
     eprintln!("📥 [API] JOB_SUBMISSION_RECEIVED");
     eprintln!("   symbol: {}", params.symbol);
     eprintln!("   exchange: {}", params.exchange);
@@ -122,7 +122,7 @@ pub async fn submit_backtest(
     eprintln!("   is_portfolio_mode: {}", params.is_portfolio());
     eprintln!("   population_size: {}", params.population_size);
     eprintln!("   generations: {}", params.generations);
-    eprintln!("{'='*60}\n");
+    eprintln!("============================================================\n");
     
     // Validate order_size_pct - must be between 0.001 (0.1%) and 0.25 (25%) of capital per trade
     // This is the preferred way to specify order size - as a percentage of available capital
@@ -145,9 +145,12 @@ pub async fn submit_backtest(
     }
     
     // Auto-populate date range if not provided
+    eprintln!("📅 [API] Date range check: start_date={:?} end_date={:?}", params.start_date, params.end_date);
     if params.start_date.is_none() || params.end_date.is_none() {
+        eprintln!("📅 [API] Dates not provided, attempting auto-populate...");
         // For portfolio backtests, find the intersection of all asset date ranges
         if let Some(ref portfolio_assets) = params.portfolio_assets {
+            eprintln!("📅 [API] Portfolio mode with {} assets", portfolio_assets.len());
             if portfolio_assets.len() > 1 {
                 // Multi-asset portfolio: find intersection of all date ranges
                 let mut latest_start: Option<String> = None;
@@ -197,16 +200,25 @@ pub async fn submit_backtest(
             }
         } else {
             // Single-symbol backtest: use primary symbol
+            eprintln!("📅 [API] Single-symbol mode, looking up date range for {}/{}", params.symbol, params.exchange);
             match get_date_range_for_symbol(&state.job_queue, &params.symbol, &params.exchange).await {
                 Ok((start, end)) => {
+                    eprintln!("📅 [API] Date range found: {} to {}", start, end);
                     params.start_date = Some(start);
                     params.end_date = Some(end);
                 },
-                Err(_e) => {
+                Err(e) => {
+                    eprintln!("⚠️ [API] Date range lookup FAILED for {}/{}: {}", params.symbol, params.exchange, e);
                     // Date range lookup failed - will use defaults
                 }
             }
         }
+    }
+    
+    // Log final date range after all auto-populate attempts
+    eprintln!("📅 [API] FINAL date range: start_date={:?} end_date={:?}", params.start_date, params.end_date);
+    if params.start_date.is_none() || params.end_date.is_none() {
+        eprintln!("⚠️ [API] WARNING: Date range still not set! Results will show N/A");
     }
     
     // Debug: confirm handler is being called
@@ -278,11 +290,15 @@ pub async fn get_job_status(
             AppError::NotFound(format!("Job {} not found", job_id))
         })?;
     
-    // log_info!(...)
+    // === GENERATION DEBUG LOGGING ===
+    eprintln!("📊 [API] get_job_status job_id={} generation values: current={}, total={}", 
+        job_id, job.current_generation, job.total_generations);
     
     // Return generation info when total_generations > 0 (indicates a genetic optimization job)
     // This ensures UI shows "Gen 0/N" during initialization instead of "Gen null/null"
     let has_generation_info = job.total_generations > 0;
+    eprintln!("   has_generation_info={} (will include current_gen/total_gen: {})", 
+        has_generation_info, has_generation_info);
     
     Ok(Json(JobStatusResponse {
         job_id: job.id,

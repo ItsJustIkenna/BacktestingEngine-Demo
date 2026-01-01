@@ -236,29 +236,40 @@ export const JobList: React.FC<JobListProps> = ({
 
   const getPhaseDetails = (job: BacktestJob): string | null => {
     const details = job.phase_details;
-    if (!details) return null;
+    
+    // Debug logging for generation values
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[JobList] Job ${job.job_id?.substring(0, 8)} generation debug:`, {
+        'job.current_generation': job.current_generation,
+        'job.total_generations': job.total_generations,
+        'details?.current_generation': details?.current_generation,
+        'details?.total_generations': details?.total_generations,
+      });
+    }
     
     const parts: string[] = [];
     
-    // Generation progress
-    if (details.current_generation !== undefined && details.total_generations !== undefined) {
-      parts.push(`Gen ${details.current_generation}/${details.total_generations}`);
-    } else if (job.current_generation !== undefined && job.total_generations !== undefined) {
-      parts.push(`Gen ${job.current_generation}/${job.total_generations}`);
+    // Generation progress - check for both undefined AND null
+    // Priority: phase_details > job fields
+    const currentGen = details?.current_generation ?? job.current_generation;
+    const totalGen = details?.total_generations ?? job.total_generations;
+    
+    if (currentGen != null && totalGen != null && totalGen > 0) {
+      parts.push(`Gen ${currentGen}/${totalGen}`);
     }
     
     // Chromosome progress within generation
-    if (details.chromosomes_evaluated !== undefined && details.total_chromosomes !== undefined) {
+    if (details?.chromosomes_evaluated != null && details?.total_chromosomes != null) {
       parts.push(`Chromo ${details.chromosomes_evaluated}/${details.total_chromosomes}`);
     }
     
     // Best fitness so far
-    if (details.best_fitness !== undefined) {
+    if (details?.best_fitness != null) {
       parts.push(`Best: ${details.best_fitness.toFixed(2)}`);
     }
     
     // Stage within phase
-    if (details.stage) {
+    if (details?.stage) {
       parts.push(details.stage);
     }
     
