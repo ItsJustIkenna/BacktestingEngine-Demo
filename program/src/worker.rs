@@ -171,6 +171,42 @@ pub fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult,
 }
 
 // ============================================================================
+// EXCHANGE NAME UTILITIES
+// ============================================================================
+
+/// Extract the base exchange name, stripping co-location and configuration suffixes.
+/// 
+/// This is used when looking up market data in the database - the data is stored
+/// under the base exchange name (e.g., "kraken"), but the user may have configured
+/// the job with a variant like "kraken_colocated" or "kraken_established".
+/// 
+/// Examples:
+/// - "kraken" -> "kraken"
+/// - "kraken_colocated" -> "kraken"
+/// - "kraken_established" -> "kraken"
+/// - "kraken_colocated_established" -> "kraken"
+/// - "binance" -> "binance"
+fn base_exchange_name(exchange: &str) -> &str {
+    // Strip known suffixes in order (most specific first)
+    let suffixes = [
+        "_colocated_established",
+        "_colocated",
+        "_established",
+        "-colocated-established",
+        "-colocated",
+        "-established",
+    ];
+    
+    for suffix in &suffixes {
+        if exchange.ends_with(suffix) {
+            return &exchange[..exchange.len() - suffix.len()];
+        }
+    }
+    
+    exchange
+}
+
+// ============================================================================
 // EFFICIENT PROGRESS TRACKING
 // ============================================================================
 
@@ -4448,14 +4484,20 @@ impl Worker {
     /// - Market making strategies need order flow + trades (tick-level data)
     /// - Momentum strategies need OHLCV candles
     /// - Arbitrage strategies need both real-time data sources
+    /// 
+    /// Note: Exchange variants like "kraken_colocated" are normalized to the base
+    /// exchange name ("kraken") for data lookup, since data is stored under the base name.
     async fn load_market_data_for_strategy(
         &self,
         symbol: &str,
         exchange: &str,
         strategy_type: &str,
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
-        log_info!(GENETIC_LOGGER, "ENTER load_market_data_for_strategy | type='{}' sym={} ex={}", 
-            strategy_type, symbol, exchange);
+        // Normalize exchange name for data lookup (strip _colocated, _established, etc.)
+        let base_exchange = base_exchange_name(exchange);
+        
+        log_info!(GENETIC_LOGGER, "ENTER load_market_data_for_strategy | type='{}' sym={} ex={} (base={})", 
+            strategy_type, symbol, exchange, base_exchange);
         
         // Determine data requirements based on strategy type
         // This maps string types to DataRequirements for intelligent loading
@@ -4468,24 +4510,24 @@ impl Worker {
         if needs_order_flow {
             log_info!(GENETIC_LOGGER, "Strategy '{}' requires order flow data (tick-level)", strategy_type);
             // For market making, load historical orders and trades
-            self.load_order_events(symbol, exchange).await
+            self.load_order_events(symbol, base_exchange).await
         } else {
             log_info!(GENETIC_LOGGER, "Strategy '{}' requires candle data", strategy_type);
             // For momentum/trend strategies, try candles first
-            match self.load_market_data(symbol, exchange).await {
+            match self.load_market_data(symbol, base_exchange).await {
                 Ok(data) if !data.is_empty() => {
                     log_info!(GENETIC_LOGGER, "Successfully loaded {} candles", data.len());
                     Ok(data)
                 }
                 Ok(_) => {
-                    log_warn!(GENETIC_LOGGER, "No candle data found, falling back to order events for {} on {}", symbol, exchange);
+                    log_warn!(GENETIC_LOGGER, "No candle data found, falling back to order events for {} on {}", symbol, base_exchange);
                     // Fall back to order events if no candles
-                    self.load_order_events(symbol, exchange).await
+                    self.load_order_events(symbol, base_exchange).await
                 }
                 Err(e) => {
                     log_warn!(GENETIC_LOGGER, "Failed to load candles ({}), falling back to order events", e);
                     // Fall back to order events if candle query fails (e.g., view doesn't exist)
-                    self.load_order_events(symbol, exchange).await
+                    self.load_order_events(symbol, base_exchange).await
                 }
             }
         }
