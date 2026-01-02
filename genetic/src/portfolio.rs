@@ -631,7 +631,7 @@ mod tests {
         let config = PortfolioFitnessConfig::default();
         let sum = config.sharpe_weight + config.sortino_weight + config.net_profit_weight +
             config.profit_factor_weight + config.win_rate_weight + config.max_drawdown_weight +
-            config.diversification_weight + config.calmar_weight;
+            config.diversification_weight + config.calmar_weight + config.num_trades_weight;
         assert!((sum - 1.0).abs() < 0.01);
     }
 }
