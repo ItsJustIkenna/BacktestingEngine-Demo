@@ -243,8 +243,12 @@ pub struct PortfolioFitnessConfig {
     pub diversification_weight: f64,
     /// Weight for Calmar ratio
     pub calmar_weight: f64,
+    /// Weight for number of trades (penalizes low-frequency strategies)
+    pub num_trades_weight: f64,
     /// Minimum number of trades required (per symbol)
     pub min_trades_per_symbol: usize,
+    /// Target trades per day for scoring (used to normalize num_trades score)
+    pub target_trades_per_day: f64,
     /// Maximum acceptable drawdown (absolute value)
     pub max_acceptable_drawdown: f64,
 }
@@ -252,15 +256,17 @@ pub struct PortfolioFitnessConfig {
 impl Default for PortfolioFitnessConfig {
     fn default() -> Self {
         Self {
-            sharpe_weight: 0.20,
-            sortino_weight: 0.10,
+            sharpe_weight: 0.15,
+            sortino_weight: 0.05,
             net_profit_weight: 0.25,
-            profit_factor_weight: 0.15,
-            win_rate_weight: 0.05,
+            profit_factor_weight: 0.10,
+            win_rate_weight: 0.05,  // Reduced - high win_rate weight causes wide spread exploit
             max_drawdown_weight: 0.10,
             diversification_weight: 0.05,
             calmar_weight: 0.10,
-            min_trades_per_symbol: 30,
+            num_trades_weight: 0.15,  // Important for market making
+            min_trades_per_symbol: 10,  // Reduced from 30 - allow some flexibility
+            target_trades_per_day: 10.0,  // Target ~10 trades/day for scoring
             max_acceptable_drawdown: 0.25,
         }
     }
@@ -286,10 +292,12 @@ impl PortfolioFitnessConfig {
         total_trades: usize,
         num_symbols: usize,
     ) -> f64 {
-        // Check minimum trades constraint
-        let avg_trades_per_symbol = total_trades / num_symbols.max(1);
-        if avg_trades_per_symbol < self.min_trades_per_symbol {
-            return -1.0; // Penalty for insufficient trades
+        // Check minimum trades constraint - but use soft penalty instead of hard cutoff
+        let avg_trades_per_symbol = total_trades as f64 / num_symbols.max(1) as f64;
+        
+        // Hard penalty for essentially no trading
+        if total_trades < 3 {
+            return -2.0; // Severe penalty for not trading at all
         }
         
         // Check maximum drawdown constraint
@@ -307,6 +315,20 @@ impl PortfolioFitnessConfig {
         let div_score = diversification_ratio.unwrap_or(1.0).clamp(0.5, 2.0) - 1.0;
         let calmar_score = calmar.unwrap_or(0.0).clamp(-2.0, 5.0) / 5.0;
         
+        // Trade frequency score: reward strategies that trade more
+        // Score 0.0 at 0 trades/symbol/day, 1.0 at target_trades_per_day, caps at 1.5
+        // Assumes 30-day backtest period for normalization
+        let trades_per_symbol_per_day = avg_trades_per_symbol / 30.0;
+        let trade_freq_score = (trades_per_symbol_per_day / self.target_trades_per_day)
+            .clamp(0.0, 1.5);
+        
+        // Additional penalty if below minimum trades per symbol
+        let trade_penalty = if avg_trades_per_symbol < self.min_trades_per_symbol as f64 {
+            -0.2 * (1.0 - avg_trades_per_symbol / self.min_trades_per_symbol as f64)
+        } else {
+            0.0
+        };
+        
         // Weighted sum
         let fitness = 
             self.sharpe_weight * sharpe_score +
@@ -316,7 +338,9 @@ impl PortfolioFitnessConfig {
             self.win_rate_weight * wr_score +
             self.max_drawdown_weight * dd_score +
             self.diversification_weight * div_score +
-            self.calmar_weight * calmar_score;
+            self.calmar_weight * calmar_score +
+            self.num_trades_weight * trade_freq_score +
+            trade_penalty;
         
         fitness
     }

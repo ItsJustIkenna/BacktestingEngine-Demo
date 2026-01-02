@@ -36,34 +36,43 @@ pub struct FitnessWeights {
     pub net_profit: f64,
     #[serde(default = "default_calmar_weight")]
     pub calmar: f64,
+    /// Weight for number of trades (penalizes strategies that don't trade enough)
+    #[serde(default = "default_num_trades_weight")]
+    pub num_trades: f64,
 }
 
 fn default_sharpe_weight() -> f64 { 0.10 }
-fn default_sortino_weight() -> f64 { 0.15 }
-fn default_profit_factor_weight() -> f64 { 0.15 }
-fn default_win_rate_weight() -> f64 { 0.10 }
-fn default_net_profit_weight() -> f64 { 0.35 }
+fn default_sortino_weight() -> f64 { 0.10 }
+fn default_profit_factor_weight() -> f64 { 0.10 }
+fn default_win_rate_weight() -> f64 { 0.05 }  // Reduced - can cause wide spread exploit
+fn default_net_profit_weight() -> f64 { 0.30 }
 fn default_calmar_weight() -> f64 { 0.15 }
+fn default_num_trades_weight() -> f64 { 0.20 }  // Important for market making
 
 impl FitnessWeights {
-    /// Balanced preset (default)
+    /// Balanced preset (default) - good for market making
     pub fn balanced() -> Self {
-        Self { sharpe: 0.10, sortino: 0.15, profit_factor: 0.15, win_rate: 0.10, net_profit: 0.35, calmar: 0.15 }
+        Self { sharpe: 0.10, sortino: 0.10, profit_factor: 0.10, win_rate: 0.05, net_profit: 0.30, calmar: 0.15, num_trades: 0.20 }
     }
     
     /// Max Sharpe ratio focus
     pub fn max_sharpe() -> Self {
-        Self { sharpe: 0.35, sortino: 0.25, profit_factor: 0.10, win_rate: 0.05, net_profit: 0.15, calmar: 0.10 }
+        Self { sharpe: 0.30, sortino: 0.20, profit_factor: 0.10, win_rate: 0.05, net_profit: 0.15, calmar: 0.10, num_trades: 0.10 }
     }
     
     /// Max profit focus
     pub fn max_profit() -> Self {
-        Self { sharpe: 0.05, sortino: 0.10, profit_factor: 0.15, win_rate: 0.10, net_profit: 0.50, calmar: 0.10 }
+        Self { sharpe: 0.05, sortino: 0.05, profit_factor: 0.10, win_rate: 0.05, net_profit: 0.45, calmar: 0.10, num_trades: 0.20 }
     }
     
     /// Low drawdown focus
     pub fn low_drawdown() -> Self {
-        Self { sharpe: 0.15, sortino: 0.15, profit_factor: 0.15, win_rate: 0.10, net_profit: 0.15, calmar: 0.30 }
+        Self { sharpe: 0.15, sortino: 0.15, profit_factor: 0.10, win_rate: 0.05, net_profit: 0.15, calmar: 0.30, num_trades: 0.10 }
+    }
+    
+    /// High frequency market making focus (prioritizes trade count)
+    pub fn high_frequency() -> Self {
+        Self { sharpe: 0.10, sortino: 0.05, profit_factor: 0.10, win_rate: 0.05, net_profit: 0.25, calmar: 0.10, num_trades: 0.35 }
     }
 }
 
