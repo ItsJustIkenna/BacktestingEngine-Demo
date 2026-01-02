@@ -125,7 +125,7 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
         
         // Auto-select if first session
         setSessions(prev => {
-          if (prev.length === 1) {
+          if (prev.length === 1 && prev[0]) {
             setSelectedSession(prev[0].session_id);
           }
           return prev;
