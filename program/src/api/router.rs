@@ -2,11 +2,12 @@
 
 use axum::{
     middleware,
-    routing::{get, post},
+    routing::{get, post, delete},
     Router,
 };
 use tower_http::cors::CorsLayer;
 use std::sync::Arc;
+use std::path::PathBuf;
 
 use super::handlers::{self, ApiState};
 use super::websocket;
@@ -14,12 +15,19 @@ use super::history;
 use super::metadata;
 use super::security::{self, ApiKeyStore};
 use super::metrics::{self, MetricsState};
+use super::tardis_upload::{self, TardisUploadState};
 use crate::job_queue::JobQueue;
 
 /// Build the API router with security middleware
 pub fn build_router(job_queue: Arc<dyn JobQueue>) -> Router {
-    let api_state = ApiState { job_queue };
+    let api_state = ApiState { job_queue: Arc::clone(&job_queue) };
     let key_store = ApiKeyStore::new();
+    
+    // Initialize Tardis upload state
+    let upload_dir = std::env::var("TARDIS_UPLOAD_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp/tardis_uploads"));
+    let tardis_state = TardisUploadState::new(upload_dir);
     
     // Initialize Prometheus metrics
     let metrics_handle = metrics::init_metrics();
@@ -41,6 +49,18 @@ pub fn build_router(job_queue: Arc<dyn JobQueue>) -> Router {
     let metrics_routes = Router::new()
         .route("/metrics", get(metrics::metrics_handler))
         .with_state(metrics_state);
+    
+    // Tardis file upload routes (combined state for backtest submission)
+    let tardis_routes = Router::new()
+        .route("/api/tardis/upload", post(tardis_upload::upload_file))
+        .route("/api/tardis/sessions", get(tardis_upload::list_sessions))
+        .route("/api/tardis/sessions/:session_id", delete(tardis_upload::delete_session))
+        .with_state(tardis_state.clone());
+    
+    // Tardis backtest submission needs both upload state and job queue
+    let tardis_backtest_route = Router::new()
+        .route("/api/tardis/backtest", post(tardis_upload::submit_tardis_backtest))
+        .with_state((tardis_state, Arc::clone(&job_queue)));
     
     // Protected API routes with ApiState
     let api_routes = Router::new()
@@ -67,6 +87,8 @@ pub fn build_router(job_queue: Arc<dyn JobQueue>) -> Router {
         .merge(public_routes)
         .merge(readiness_route)
         .merge(metrics_routes)
+        .merge(tardis_routes)
+        .merge(tardis_backtest_route)
         .merge(api_routes)
         .layer(CorsLayer::permissive())
 }

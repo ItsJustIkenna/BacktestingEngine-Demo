@@ -4,10 +4,11 @@ import './index.css';
 import BacktestForm from './components/BacktestForm';
 import JobList from './components/JobList';
 import ResultsVisualization from './components/ResultsVisualization';
+import TardisUpload from './components/TardisUpload';
 import ErrorBoundary from './components/ErrorBoundary';
 
 const App: React.FC = () => {
-  const [currentView, setCurrentView] = useState<'form' | 'list' | 'results'>('list');
+  const [currentView, setCurrentView] = useState<'form' | 'list' | 'results' | 'tardis'>('list');
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
 
   const handleJobSubmit = (jobId: string) => {
@@ -23,6 +24,11 @@ const App: React.FC = () => {
   const handleBackToList = () => {
     setCurrentView('list');
     setSelectedJobId(null);
+  };
+
+  const handleTardisBacktestSubmitted = (jobId: string) => {
+    setSelectedJobId(jobId);
+    setCurrentView('list');
   };
 
   return (
@@ -49,6 +55,19 @@ const App: React.FC = () => {
             New Backtest
           </button>
           <button
+            onClick={() => setCurrentView('tardis')}
+            style={{
+              padding: '8px 16px',
+              backgroundColor: currentView === 'tardis' ? '#61dafb' : '#444',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+            }}
+          >
+            📁 Tardis Data
+          </button>
+          <button
             onClick={() => setCurrentView('list')}
             style={{
               padding: '8px 16px',
@@ -67,6 +86,9 @@ const App: React.FC = () => {
       <main>
         {currentView === 'form' && (
           <BacktestForm onJobSubmit={handleJobSubmit} />
+        )}
+        {currentView === 'tardis' && (
+          <TardisUpload onBacktestSubmitted={handleTardisBacktestSubmitted} />
         )}
         {currentView === 'list' && (
           <JobList onJobClick={handleJobClick} />

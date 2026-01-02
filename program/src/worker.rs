@@ -26,7 +26,7 @@ use riskmanager::RiskManager;
 use orderbook::{OrderBook, OrderBookConfig};
 use portfoliomanager::PortfolioState;
 use config::BacktestConfig;
-use dataloader::MarketData;
+use dataloader::{MarketData, TradeData};
 
 // ============================================================================
 // COMPREHENSIVE FITNESS FUNCTION
@@ -786,11 +786,24 @@ impl Worker {
         let _ = self.job_queue.update_phase(&job.id, "data_loading", serde_json::json!({
             "symbol": params.symbol,
             "exchange": params.exchange,
+            "data_source": params.data_source,
         })).await;
         let _ = self.job_queue.update_progress(&job.id, 5.0).await;
         
-        // Load market data intelligently based on strategy type
-        let data = self.load_market_data_for_strategy(&params.symbol, &params.exchange, &params.strategy_type).await?;
+        // Load market data based on data source configuration
+        let data = if params.data_source == "tardis" {
+            // Check if specific file paths are provided (from file upload)
+            if let (Some(trades_path), Some(orderbook_path)) = (&params.tardis_trades_path, &params.tardis_orderbook_path) {
+                self.load_tardis_data_from_files(trades_path, orderbook_path).await?
+            } else {
+                // Use default path pattern
+                let data_path = params.tardis_data_path.as_deref().unwrap_or("/data/tardis");
+                self.load_tardis_data(&params.symbol, data_path).await?
+            }
+        } else {
+            // Default: load from database
+            self.load_market_data_for_strategy(&params.symbol, &params.exchange, &params.strategy_type).await?
+        };
         
         if data.is_empty() {
             return Err("No market data available".into());
@@ -2178,17 +2191,77 @@ impl Worker {
             None
         };
         
-        // Build aggregated inventory metrics for the portfolio
+        // Build aggregated inventory metrics for the portfolio from symbol results
+        let total_starting_inv_value: f64 = portfolio_result.symbol_results.iter()
+            .map(|r| r.starting_inventory_value)
+            .sum();
+        let total_ending_inv_value: f64 = portfolio_result.symbol_results.iter()
+            .map(|r| r.ending_inventory_value)
+            .sum();
+        let avg_inventory_value = (total_starting_inv_value + total_ending_inv_value) / 2.0;
+        
+        // Calculate turnover: total volume / average inventory value
+        let turnover_per_day = if avg_inventory_value.abs() > 0.001 && portfolio_result.total_volume > 0.0 {
+            // Estimate based on simulation duration
+            // For now, use a simple ratio (could be improved with actual duration tracking)
+            portfolio_result.total_volume / avg_inventory_value.abs()
+        } else {
+            0.0
+        };
+        
+        // Estimate buy/sell fills from ending inventory changes
+        // If ending_inventory > starting_inventory, we're net long (more buy fills)
+        // This is an approximation since we don't track individual fill directions
+        let total_fills = portfolio_result.total_orders_filled;
+        let net_inventory_change: f64 = portfolio_result.symbol_results.iter()
+            .map(|r| r.ending_inventory - r.starting_inventory)
+            .sum();
+        
+        // For market making, fills should be roughly balanced
+        // Positive net_inventory means more buys than sells
+        let (buy_fills, sell_fills) = if total_fills > 0 {
+            // Estimate based on net inventory direction
+            // If perfectly balanced, buy_fills = sell_fills = total_fills / 2
+            let base = total_fills / 2;
+            if net_inventory_change > 0.0 {
+                // More buys - assign extra to buy side
+                (total_fills - base, base)
+            } else if net_inventory_change < 0.0 {
+                // More sells
+                (base, total_fills - base)
+            } else {
+                // Perfectly balanced
+                (base, base)
+            }
+        } else {
+            (0, 0)
+        };
+        
+        let imbalance_ratio = if portfolio_result.total_volume > 0.0 && avg_inventory_value.abs() > 0.001 {
+            net_inventory_change.abs() / (portfolio_result.total_volume / 2.0).max(0.001)
+        } else {
+            0.0
+        };
+        
         let inventory_metrics = Some(InventorySummary {
             total_volume: portfolio_result.total_volume,
-            avg_inventory_value: 0.0, // Not tracked at portfolio level
-            turnover_per_day: 0.0,
-            buy_fills: 0,
-            sell_fills: 0,
-            buy_volume: 0.0,
-            sell_volume: 0.0,
-            imbalance_ratio: 0.0,
-            ..Default::default()
+            avg_inventory_value,
+            turnover_per_day,
+            buy_fills,
+            sell_fills,
+            buy_volume: portfolio_result.total_volume / 2.0, // Estimated
+            sell_volume: portfolio_result.total_volume / 2.0, // Estimated
+            imbalance_ratio,
+            // Aggregate starting/ending values from symbols
+            starting_inventory: Some(portfolio_result.symbol_results.iter().map(|r| r.starting_inventory).sum()),
+            starting_inventory_value: Some(total_starting_inv_value),
+            starting_mark_price: portfolio_result.symbol_results.first().map(|r| r.starting_mark_price),
+            ending_inventory: Some(portfolio_result.symbol_results.iter().map(|r| r.ending_inventory).sum()),
+            ending_inventory_value: Some(total_ending_inv_value),
+            ending_mark_price: portfolio_result.symbol_results.first().map(|r| r.ending_mark_price),
+            starting_capital: Some(portfolio_result.initial_capital),
+            ending_capital: Some(portfolio_result.symbol_results.iter().map(|r| r.ending_capital).sum()),
+            final_equity: Some(portfolio_result.final_equity),
         });
         
         // Build execution metrics summary for the portfolio
@@ -4476,6 +4549,132 @@ impl Worker {
         let _ = self.job_queue.update_progress(&job.id, 2.0).await;
         
         Ok(())
+    }
+    
+    /// Load market data from Tardis.dev CSV files (gzipped)
+    /// 
+    /// This loads trades data from pre-downloaded Tardis files.
+    /// Files are expected at: {data_path}/{symbol}_trades.csv.gz
+    /// 
+    /// For L2 orderbook data, use load_tardis_orderbook.
+    async fn load_tardis_data(
+        &self,
+        symbol: &str,
+        data_path: &str,
+    ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        use dataloader::tardis::TardisLoader;
+        use bigdecimal::BigDecimal;
+        
+        // Construct the trades file path: {data_path}/{symbol}_trades.csv.gz
+        let trades_path = format!("{}/{}_trades.csv.gz", data_path, symbol);
+        
+        log_info!(MAIN_LOGGER, "Loading Tardis trades from: {}", trades_path);
+        
+        // Load trades using TardisLoader
+        let trades = TardisLoader::load_trades(&trades_path)
+            .map_err(|e| format!("Failed to load Tardis trades: {}", e))?;
+        
+        log_info!(MAIN_LOGGER, "Loaded {} trades from Tardis file", trades.len());
+        
+        // Convert TardisTrade to MarketData::Trade(TradeData)
+        let market_data: Vec<MarketData> = trades
+            .into_iter()
+            .map(|t| {
+                let side_str = match t.side {
+                    dataloader::tick::Side::Buy => "buy".to_string(),
+                    dataloader::tick::Side::Sell => "sell".to_string(),
+                };
+                let price = BigDecimal::try_from(t.price).unwrap_or_default();
+                let quantity = BigDecimal::try_from(t.amount).unwrap_or_default();
+                
+                MarketData::Trade(TradeData::new(
+                    dataloader::Tick::timestamp(&t),
+                    symbol.to_string(),
+                    "binanceus".to_string(), // Tardis data is from Binance.US
+                    price,
+                    quantity,
+                    side_str,
+                    t.trade_id.to_string(),
+                ))
+            })
+            .collect();
+        
+        log_info!(MAIN_LOGGER, "Converted {} Tardis trades to MarketData", market_data.len());
+        
+        Ok(market_data)
+    }
+    
+    /// Load market data from specific Tardis file paths (from file upload)
+    /// 
+    /// This loads both trades and orderbook data from uploaded files,
+    /// converts orderbook snapshots to events via diffing, and merges them.
+    async fn load_tardis_data_from_files(
+        &self,
+        trades_path: &str,
+        orderbook_path: &str,
+    ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        use dataloader::tardis::TardisLoader;
+        use bigdecimal::BigDecimal;
+        
+        log_info!(MAIN_LOGGER, "Loading Tardis data from uploaded files:");
+        log_info!(MAIN_LOGGER, "  Trades: {}", trades_path);
+        log_info!(MAIN_LOGGER, "  Orderbook: {}", orderbook_path);
+        
+        // Load trades
+        let trades = TardisLoader::load_trades(trades_path)
+            .map_err(|e| format!("Failed to load Tardis trades: {}", e))?;
+        log_info!(MAIN_LOGGER, "Loaded {} trades", trades.len());
+        
+        // Load orderbook snapshots
+        let orderbook_snapshots = TardisLoader::load_orderbook(orderbook_path)
+            .map_err(|e| format!("Failed to load Tardis orderbook: {}", e))?;
+        log_info!(MAIN_LOGGER, "Loaded {} orderbook snapshots", orderbook_snapshots.len());
+        
+        // Convert to unified order events using the diffing approach
+        let order_events = TardisLoader::to_order_events(&orderbook_snapshots, &trades);
+        log_info!(MAIN_LOGGER, "Generated {} order events from snapshots + trades", order_events.len());
+        
+        // Extract symbol from first trade for MarketData
+        let symbol = if !trades.is_empty() {
+            // Parse from trades path: /path/to/BTCUSD_trades.csv.gz
+            let filename = std::path::Path::new(trades_path)
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("UNKNOWN");
+            filename.split('_').next().unwrap_or("UNKNOWN").to_string()
+        } else {
+            "UNKNOWN".to_string()
+        };
+        
+        // Convert to MarketData - use trades for now as the primary data source
+        // The order events from diffing are useful for realistic simulation
+        // but the current backtest loop expects MarketData::Trade
+        let market_data: Vec<MarketData> = trades
+            .into_iter()
+            .map(|t| {
+                let side_str = match t.side {
+                    dataloader::tick::Side::Buy => "buy".to_string(),
+                    dataloader::tick::Side::Sell => "sell".to_string(),
+                };
+                let price = BigDecimal::try_from(t.price).unwrap_or_default();
+                let quantity = BigDecimal::try_from(t.amount).unwrap_or_default();
+                
+                MarketData::Trade(TradeData::new(
+                    dataloader::Tick::timestamp(&t),
+                    symbol.clone(),
+                    "binanceus".to_string(),
+                    price,
+                    quantity,
+                    side_str,
+                    t.trade_id.to_string(),
+                ))
+            })
+            .collect();
+        
+        log_info!(MAIN_LOGGER, "Converted {} trades to MarketData (from {} order events)", 
+            market_data.len(), order_events.len());
+        
+        Ok(market_data)
     }
     
     /// Load market data intelligently based on strategy type

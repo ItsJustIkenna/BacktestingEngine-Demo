@@ -685,6 +685,89 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
               <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
                 Your existing 30-day trading volume for fee tier calculation. 0 = default/highest fees.
               </div>
+              
+              {/* Fee Tier Presets */}
+              <div style={{ marginTop: '10px' }}>
+                <div style={{ fontSize: '12px', fontWeight: 500, marginBottom: '6px', color: '#495057' }}>Quick Select Fee Tier:</div>
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                  {[
+                    { vol: 0, label: 'New', maker: '0.25%', color: '#dc3545' },
+                    { vol: 100000, label: '$100K', maker: '0.12%', color: '#fd7e14' },
+                    { vol: 1000000, label: '$1M', maker: '0.06%', color: '#ffc107' },
+                    { vol: 5000000, label: '$5M', maker: '0.02%', color: '#28a745' },
+                    { vol: 10000000, label: '$10M', maker: '0%', color: '#20c997' },
+                  ].map(tier => (
+                    <button
+                      key={tier.vol}
+                      type="button"
+                      onClick={() => setFormData(prev => ({ ...prev, initial_30d_volume: tier.vol }))}
+                      style={{
+                        padding: '6px 10px',
+                        border: formData.initial_30d_volume === tier.vol ? `2px solid ${tier.color}` : '1px solid #ddd',
+                        borderRadius: '4px',
+                        backgroundColor: formData.initial_30d_volume === tier.vol ? `${tier.color}15` : 'white',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                        fontWeight: formData.initial_30d_volume === tier.vol ? 600 : 400,
+                      }}
+                    >
+                      <div>{tier.label}</div>
+                      <div style={{ color: tier.color, fontWeight: 600 }}>{tier.maker}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              
+              {/* Current Fee Display */}
+              <div style={{ 
+                marginTop: '10px', 
+                padding: '10px', 
+                backgroundColor: '#f8f9fa', 
+                borderRadius: '6px',
+                border: '1px solid #e9ecef'
+              }}>
+                <div style={{ fontSize: '12px', fontWeight: 500, marginBottom: '6px' }}>📊 Estimated Fees at Volume:</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '12px' }}>
+                  <div>
+                    <span style={{ color: '#666' }}>Maker: </span>
+                    <span style={{ fontWeight: 600, color: formData.initial_30d_volume >= 5000000 ? '#28a745' : formData.initial_30d_volume >= 100000 ? '#fd7e14' : '#dc3545' }}>
+                      {formData.initial_30d_volume >= 10000000 ? '0.00%' :
+                       formData.initial_30d_volume >= 5000000 ? '0.02%' :
+                       formData.initial_30d_volume >= 2500000 ? '0.04%' :
+                       formData.initial_30d_volume >= 1000000 ? '0.06%' :
+                       formData.initial_30d_volume >= 500000 ? '0.08%' :
+                       formData.initial_30d_volume >= 250000 ? '0.10%' :
+                       formData.initial_30d_volume >= 100000 ? '0.12%' :
+                       formData.initial_30d_volume >= 50000 ? '0.14%' :
+                       formData.initial_30d_volume >= 10000 ? '0.20%' : '0.25%'}
+                    </span>
+                  </div>
+                  <div>
+                    <span style={{ color: '#666' }}>Taker: </span>
+                    <span style={{ fontWeight: 600 }}>
+                      {formData.initial_30d_volume >= 100000000 ? '0.08%' :
+                       formData.initial_30d_volume >= 10000000 ? '0.10%' :
+                       formData.initial_30d_volume >= 5000000 ? '0.12%' :
+                       formData.initial_30d_volume >= 2500000 ? '0.14%' :
+                       formData.initial_30d_volume >= 1000000 ? '0.16%' :
+                       formData.initial_30d_volume >= 500000 ? '0.18%' :
+                       formData.initial_30d_volume >= 250000 ? '0.20%' :
+                       formData.initial_30d_volume >= 100000 ? '0.22%' :
+                       formData.initial_30d_volume >= 50000 ? '0.24%' :
+                       formData.initial_30d_volume >= 10000 ? '0.35%' : '0.40%'}
+                    </span>
+                  </div>
+                </div>
+                <div style={{ fontSize: '11px', color: '#666', marginTop: '6px' }}>
+                  Round-trip cost: {
+                    formData.initial_30d_volume >= 10000000 ? '10 bps' :
+                    formData.initial_30d_volume >= 5000000 ? '14 bps' :
+                    formData.initial_30d_volume >= 1000000 ? '22 bps' :
+                    formData.initial_30d_volume >= 100000 ? '34 bps' :
+                    formData.initial_30d_volume >= 0 ? '65 bps' : '65 bps'
+                  } (maker + taker)
+                </div>
+              </div>
             </div>
 
             {/* Co-Located Infrastructure Toggle */}

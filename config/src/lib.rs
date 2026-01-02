@@ -328,7 +328,7 @@ impl ExchangeFeeConfig {
         config
     }
     
-    /// Create Binance exchange configuration
+    /// Create Binance (global) exchange configuration
     pub fn binance() -> Self {
         Self {
             exchange: "binance".to_string(),
@@ -352,6 +352,61 @@ impl ExchangeFeeConfig {
             funding_rate_8h: 0.0001,
             funding_interval_ms: 8 * 60 * 60 * 1000,
         }
+    }
+    
+    /// Create Binance.US exchange configuration
+    /// Much lower fees than Kraken: 0.10% maker/taker flat (or 0.045% with BNB discount)
+    pub fn binance_us() -> Self {
+        Self {
+            exchange: "binance_us".to_string(),
+            maker_fee: 0.0010,  // 0.10% base
+            taker_fee: 0.0010,  // 0.10% base
+            volume_tiers: Self::binance_us_fee_tiers(),
+            starting_30d_volume: 0.0,
+            // Binance.US BTC/USD min: 0.00001 BTC
+            min_order_size: 0.00001,
+            max_order_size: 500.0,
+            // Binance.US: Low latency (~10ms from US)
+            latency_mean_ms: 10.0,
+            latency_std_ms: 3.0,
+            // Binance.US rate limits: 10 orders/sec for Spot
+            max_orders_per_second: 10.0,
+            rate_limit_cooldown_ms: 1000,
+            // Spot only - no funding
+            funding_rate_8h: 0.0,
+            funding_interval_ms: 8 * 60 * 60 * 1000,
+        }
+    }
+    
+    /// Binance.US fee tiers (as of 2025)
+    /// Much more competitive than Kraken for market makers
+    pub fn binance_us_fee_tiers() -> Vec<VolumeTier> {
+        vec![
+            // Base tier (can pay with BNB for 25% discount → 0.075%)
+            VolumeTier { min_volume_30d: 0.0,           maker_fee: 0.0010, taker_fee: 0.0010 },
+            VolumeTier { min_volume_30d: 10_000.0,      maker_fee: 0.0008, taker_fee: 0.0010 },
+            VolumeTier { min_volume_30d: 50_000.0,      maker_fee: 0.0006, taker_fee: 0.0008 },
+            VolumeTier { min_volume_30d: 100_000.0,     maker_fee: 0.0004, taker_fee: 0.0006 },
+            VolumeTier { min_volume_30d: 500_000.0,     maker_fee: 0.0002, taker_fee: 0.0004 },
+            VolumeTier { min_volume_30d: 1_000_000.0,   maker_fee: 0.0000, taker_fee: 0.0002 },
+        ]
+    }
+    
+    /// Binance.US with BNB fee discount (25% off)
+    pub fn binance_us_bnb() -> Self {
+        let mut config = Self::binance_us();
+        config.maker_fee = 0.00075;  // 0.075% with BNB
+        config.taker_fee = 0.00075;  // 0.075% with BNB
+        // Apply 25% discount to all tiers
+        config.volume_tiers = vec![
+            VolumeTier { min_volume_30d: 0.0,           maker_fee: 0.00075, taker_fee: 0.00075 },
+            VolumeTier { min_volume_30d: 10_000.0,      maker_fee: 0.0006,  taker_fee: 0.00075 },
+            VolumeTier { min_volume_30d: 50_000.0,      maker_fee: 0.00045, taker_fee: 0.0006 },
+            VolumeTier { min_volume_30d: 100_000.0,     maker_fee: 0.0003,  taker_fee: 0.00045 },
+            VolumeTier { min_volume_30d: 500_000.0,     maker_fee: 0.00015, taker_fee: 0.0003 },
+            VolumeTier { min_volume_30d: 1_000_000.0,   maker_fee: 0.0000,  taker_fee: 0.00015 },
+        ];
+        config
     }
     
     /// Create Coinbase exchange configuration
@@ -435,6 +490,7 @@ impl ExchangeFeeConfig {
     
     /// Create configuration for a specific exchange by name
     /// Supports variants: "kraken", "kraken_colocated", "kraken_established", "kraken_colocated_established"
+    /// Also: "binance", "binance_us", "binance_us_bnb" for Binance.US with BNB discount
     pub fn for_exchange(exchange: &str) -> Self {
         match exchange.to_lowercase().as_str() {
             "kraken" => Self::kraken(),
@@ -442,6 +498,8 @@ impl ExchangeFeeConfig {
             "kraken_established" | "kraken-established" => Self::kraken_established(),
             "kraken_colocated_established" | "kraken-colocated-established" => Self::kraken_colocated_established(),
             "binance" => Self::binance(),
+            "binance_us" | "binance-us" | "binanceus" => Self::binance_us(),
+            "binance_us_bnb" | "binance-us-bnb" => Self::binance_us_bnb(),
             "coinbase" => Self::coinbase(),
             "deepbook" | "sui" => Self::deepbook(),
             "cetus" => Self::cetus(),

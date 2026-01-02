@@ -257,6 +257,21 @@ pub struct BacktestJobParams {
     #[serde(default = "default_fill_model")]
     pub fill_model: String,
     
+    // Data source configuration
+    /// Data source: "database" (default), "tardis"
+    /// When "tardis", loads from /data/tardis/{symbol}_trades.csv.gz
+    #[serde(default = "default_data_source")]
+    pub data_source: String,
+    /// Custom path to Tardis data directory (default: /data/tardis)
+    #[serde(default)]
+    pub tardis_data_path: Option<String>,
+    /// Direct path to Tardis trades file (for file upload mode)
+    #[serde(default)]
+    pub tardis_trades_path: Option<String>,
+    /// Direct path to Tardis orderbook file (for file upload mode)
+    #[serde(default)]
+    pub tardis_orderbook_path: Option<String>,
+    
     // Auto-populated fields
     #[serde(default)]
     pub commission_rate: f64, // Auto-populated from exchange
@@ -278,6 +293,7 @@ fn default_order_size() -> f64 { 0.01 }
 fn default_order_size_pct() -> f64 { 0.02 }  // 2% of capital per trade
 fn default_window_ms() -> u64 { 5000 }
 fn default_min_quote_lifetime() -> u64 { 100 }
+fn default_data_source() -> String { "database".to_string() }
 fn default_volatility_cap() -> f64 { 0.05 }
 fn default_time_horizon() -> u64 { 60 }
 fn default_market_depth_k() -> f64 { 1.5 }
@@ -372,6 +388,10 @@ impl Default for BacktestJobParams {
             commission_rate: 0.0,
             start_date: None,
             end_date: None,
+            data_source: default_data_source(),
+            tardis_data_path: None,
+            tardis_trades_path: None,
+            tardis_orderbook_path: None,
         }
     }
 }

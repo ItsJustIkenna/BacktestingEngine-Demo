@@ -1546,6 +1546,10 @@ mod tests {
             execution_style: None,
             execution_duration_ms: None,
             min_arb_profit_bps: None,
+            data_source: "database".to_string(),
+            tardis_data_path: None,
+            tardis_orderbook_path: None,
+            tardis_trades_path: None,
         };
         
         let job_id = queue.submit_job(params).await.unwrap();

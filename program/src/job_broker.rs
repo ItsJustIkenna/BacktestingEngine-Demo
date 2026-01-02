@@ -329,6 +329,10 @@ mod tests {
             initial_inventory_pct: 0.5,
             initial_30d_volume: 0.0,
             optimization_method: "genetic".to_string(),
+            data_source: "database".to_string(),
+            tardis_data_path: None,
+            tardis_trades_path: None,
+            tardis_orderbook_path: None,
             population_size: 30,  // Reduced from 50 for faster optimization
             generations: 15,     // Standardized with early stopping
             risk_aversion: 0.5,
@@ -404,6 +408,10 @@ mod tests {
             initial_inventory_pct: 0.5,
             initial_30d_volume: 0.0,
             optimization_method: "genetic".to_string(),
+            data_source: "database".to_string(),
+            tardis_data_path: None,
+            tardis_trades_path: None,
+            tardis_orderbook_path: None,
             population_size: 30,
             generations: 5,
             risk_aversion: 0.5,

@@ -1,8 +1,10 @@
 pub mod cache;
 pub mod aggregation;
 pub mod query;
+pub mod tardis;
 pub mod tick;
 
+pub use tardis::{TardisLoader, TardisTrade, TardisOrderbookSnapshot, TardisTradeIterator, PriceLevel};
 pub use tick::{Tick, TickSource, Side, MarketDataSlice};
 
 #[cfg(feature = "postgres")]

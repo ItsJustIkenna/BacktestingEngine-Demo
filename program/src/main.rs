@@ -84,6 +84,44 @@ enum Commands {
         #[arg(long, default_value = "true")]
         compute_features: bool,
     },
+    /// Run backtest using Tardis CSV data (local file mode, no database needed for data)
+    BacktestTardis {
+        /// Trading symbol (e.g., "BTCUSD", "SOLUSD", "SUIUSD")
+        #[arg(long)]
+        symbol: String,
+        
+        /// Path to Tardis data directory containing {symbol}_trades.csv.gz files
+        #[arg(long, default_value = "/data/tardis")]
+        data_path: String,
+        
+        /// Initial capital in USD
+        #[arg(long, default_value = "10000")]
+        initial_capital: f64,
+        
+        /// Commission rate (e.g., 0.001 for 0.1%)
+        #[arg(long, default_value = "0.001")]
+        commission_rate: f64,
+        
+        /// Strategy type
+        #[arg(long, default_value = "avellaneda_stoikov")]
+        strategy: String,
+        
+        /// Enable genetic optimization
+        #[arg(long, default_value = "false")]
+        optimize: bool,
+        
+        /// Population size for genetic optimization
+        #[arg(long, default_value = "30")]
+        population_size: usize,
+        
+        /// Number of generations for genetic optimization
+        #[arg(long, default_value = "15")]
+        generations: usize,
+        
+        /// Output results to JSON file
+        #[arg(long)]
+        output: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -1017,6 +1055,246 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("❌ PrepareData requires the 'postgres' feature");
                 std::process::exit(1);
             }
+        }
+        
+        Commands::BacktestTardis { 
+            symbol, 
+            data_path, 
+            initial_capital, 
+            commission_rate,
+            strategy,
+            optimize,
+            population_size,
+            generations,
+            output,
+        } => {
+            use dataloader::tardis::TardisLoader;
+            use dataloader::Tick;
+            use backtest::realistic_simulation::{RealisticSimulator, RealisticASParams, OrderBookEvent, EventType, Side};
+            use config::ExchangeFeeConfig;
+            
+            println!("📊 Tardis CSV Backtester");
+            println!("   Symbol: {}", symbol);
+            println!("   Data path: {}", data_path);
+            println!("   Initial capital: ${}", initial_capital);
+            println!("   Commission rate: {:.4}%", commission_rate * 100.0);
+            println!("   Strategy: {}", strategy);
+            println!("   Optimize: {}", optimize);
+            
+            // Suppress unused variable warnings for future use
+            let _ = (population_size, generations);
+            
+            // Construct file paths
+            let trades_path = format!("{}/{}_trades.csv.gz", data_path, symbol);
+            let orderbook_path = format!("{}/{}_orderbook.csv.gz", data_path, symbol);
+            
+            println!("\n📂 Loading data files:");
+            println!("   Trades: {}", trades_path);
+            println!("   Orderbook: {}", orderbook_path);
+            
+            // Load trades data
+            let start = std::time::Instant::now();
+            let trades = match TardisLoader::load_trades(&trades_path) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("❌ Failed to load trades: {}", e);
+                    eprintln!("   Make sure the file exists: {}", trades_path);
+                    std::process::exit(1);
+                }
+            };
+            let trades_load_time = start.elapsed();
+            println!("✅ Loaded {} trades in {:.2}s", trades.len(), trades_load_time.as_secs_f64());
+            
+            // Load orderbook snapshots
+            let start = std::time::Instant::now();
+            let orderbook_snapshots = match TardisLoader::load_orderbook(&orderbook_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("❌ Failed to load orderbook: {}", e);
+                    eprintln!("   Make sure the file exists: {}", orderbook_path);
+                    std::process::exit(1);
+                }
+            };
+            let ob_load_time = start.elapsed();
+            println!("✅ Loaded {} orderbook snapshots in {:.2}s", orderbook_snapshots.len(), ob_load_time.as_secs_f64());
+            
+            if trades.is_empty() {
+                eprintln!("❌ No trades found in file");
+                std::process::exit(1);
+            }
+            
+            if orderbook_snapshots.is_empty() {
+                eprintln!("❌ No orderbook snapshots found in file");
+                std::process::exit(1);
+            }
+            
+            // Show data range
+            let first_trade = &trades[0];
+            let last_trade = &trades[trades.len() - 1];
+            let first_ob = &orderbook_snapshots[0];
+            let last_ob = &orderbook_snapshots[orderbook_snapshots.len() - 1];
+            
+            println!("\n📊 Data Summary:");
+            println!("   Trade date range: {} to {}", 
+                first_trade.timestamp(), 
+                last_trade.timestamp());
+            println!("   Orderbook date range: {} to {}", 
+                first_ob.timestamp(), 
+                last_ob.timestamp());
+            println!("   Trade price range: ${:.2} - ${:.2}",
+                trades.iter().map(|t| t.price).fold(f64::MAX, f64::min),
+                trades.iter().map(|t| t.price).fold(f64::MIN, f64::max));
+            
+            // Show orderbook quality metrics
+            let bid = first_ob.best_bid();
+            let ask = first_ob.best_ask();
+            if bid > 0.0 && ask > 0.0 {
+                println!("   First snapshot spread: {:.2} bps ({:.4} / {:.4})",
+                    first_ob.spread_bps(), bid, ask);
+            }
+            println!("   Avg snapshots per trade: {:.1}", 
+                orderbook_snapshots.len() as f64 / trades.len().max(1) as f64);
+            
+            // Convert orderbook snapshots + trades to unified OrderBookEvent stream
+            println!("\n🔄 Converting to OrderBookEvent stream (diffing {} snapshots + {} trades)...",
+                orderbook_snapshots.len(), trades.len());
+            let convert_start = std::time::Instant::now();
+            
+            let tardis_events = TardisLoader::to_order_events(&orderbook_snapshots, &trades);
+            
+            // Convert TardisOrderEvent to OrderBookEvent (used by simulator)
+            let events: Vec<OrderBookEvent> = tardis_events
+                .into_iter()
+                .map(|e| {
+                    let event_type = match e.event_type {
+                        dataloader::tardis::TardisEventType::New => EventType::New,
+                        dataloader::tardis::TardisEventType::Modify => EventType::Modify,
+                        dataloader::tardis::TardisEventType::Cancel => EventType::Cancel,
+                        dataloader::tardis::TardisEventType::Trade => EventType::Trade,
+                    };
+                    let side = match e.side {
+                        dataloader::tick::Side::Buy => Side::Buy,
+                        dataloader::tick::Side::Sell => Side::Sell,
+                    };
+                    OrderBookEvent {
+                        timestamp_ms: e.timestamp_ms,
+                        event_type,
+                        order_id: e.order_id,
+                        side,
+                        price: e.price,
+                        quantity: e.quantity,
+                    }
+                })
+                .collect();
+            
+            let convert_time = convert_start.elapsed();
+            println!("✅ Generated {} events in {:.2}s", events.len(), convert_time.as_secs_f64());
+            
+            // Show event type breakdown
+            let mut new_count = 0;
+            let mut modify_count = 0;
+            let mut cancel_count = 0;
+            let mut trade_count = 0;
+            for e in &events {
+                match e.event_type {
+                    EventType::New => new_count += 1,
+                    EventType::Modify => modify_count += 1,
+                    EventType::Cancel => cancel_count += 1,
+                    EventType::Trade => trade_count += 1,
+                }
+            }
+            println!("   NEW: {}, MODIFY: {}, CANCEL: {}, TRADE: {}",
+                new_count, modify_count, cancel_count, trade_count);
+            
+            // Set up simulation
+            println!("\n🎯 Running simulation...");
+            let mut fee_config = ExchangeFeeConfig::binance_us();
+            // Override with user-specified commission rate
+            fee_config.maker_fee = commission_rate;
+            fee_config.taker_fee = commission_rate;
+            
+            let simulator = RealisticSimulator::with_exchange_config(initial_capital, fee_config);
+            
+            // Default simulation parameters (can be optimized later)
+            let params = RealisticASParams {
+                risk_aversion: 0.5,
+                inventory_target: 0.0,
+                order_size_pct: 0.02,
+                min_spread_bps: 10.0,
+                volatility_cap: 0.05,
+                time_horizon_minutes: 60.0,
+                maker_fee_rate: commission_rate,
+                taker_fee_rate: commission_rate,
+                initial_inventory_pct: 0.0,
+                ..Default::default()
+            };
+            
+            let sim_start = std::time::Instant::now();
+            let result = simulator.run(&events, &params);
+            let sim_time = sim_start.elapsed();
+            
+            println!("\n📈 Backtest Results");
+            println!("   ─────────────────────────────────");
+            println!("   Simulation time: {:.2}s", sim_time.as_secs_f64());
+            println!("   Total PnL: ${:.2}", result.total_pnl);
+            println!("   Sharpe Ratio: {:.4}", result.sharpe_ratio);
+            println!("   Max Drawdown: {:.2}%", result.max_drawdown * 100.0);
+            println!("   Total Trades: {}", result.num_trades);
+            println!("   Win Rate: {:.1}%", result.win_rate * 100.0);
+            println!("   Profit Factor: {:.2}", result.profit_factor);
+            println!("   ─────────────────────────────────");
+            
+            // Inventory metrics
+            println!("\n📦 Inventory Metrics");
+            println!("   Starting: ${:.2}", result.inventory_metrics.starting_inventory_value);
+            println!("   Ending: ${:.2}", result.inventory_metrics.ending_inventory_value);
+            println!("   Final Equity: ${:.2}", result.inventory_metrics.final_equity);
+            
+            // Execution metrics
+            println!("\n⚡ Execution Metrics");
+            println!("   Fill Rate: {:.2}%", result.execution_metrics.fill_rate * 100.0);
+            println!("   Avg Latency: {:.2}ms", result.execution_metrics.avg_latency_ms);
+            println!("   Avg Slippage: {:.2}bps", result.execution_metrics.avg_slippage_bps);
+            
+            // Save results to file if requested
+            if let Some(output_path) = output {
+                let output_json = serde_json::json!({
+                    "symbol": symbol,
+                    "exchange": "binanceus",
+                    "data_source": "tardis",
+                    "data_path": data_path,
+                    "initial_capital": initial_capital,
+                    "commission_rate": commission_rate,
+                    "strategy": strategy,
+                    "results": {
+                        "total_pnl": result.total_pnl,
+                        "sharpe_ratio": result.sharpe_ratio,
+                        "max_drawdown": result.max_drawdown,
+                        "num_trades": result.num_trades,
+                        "win_rate": result.win_rate,
+                        "profit_factor": result.profit_factor,
+                        "final_equity": result.inventory_metrics.final_equity,
+                    },
+                    "execution_metrics": {
+                        "fill_rate": result.execution_metrics.fill_rate,
+                        "avg_latency_ms": result.execution_metrics.avg_latency_ms,
+                        "avg_slippage_bps": result.execution_metrics.avg_slippage_bps,
+                    },
+                    "equity_curve": result.equity_curve,
+                });
+                
+                match std::fs::write(&output_path, serde_json::to_string_pretty(&output_json).unwrap()) {
+                    Ok(_) => println!("\n💾 Results saved to: {}", output_path),
+                    Err(e) => eprintln!("\n⚠️ Failed to save results: {}", e),
+                }
+            }
+            
+            if optimize {
+                println!("\n⚠️ Genetic optimization for Tardis data is not yet implemented in CLI mode.");
+                println!("   Use the API with data_source='tardis' for optimization.");
+            }
+            
+            println!("\n✅ Backtest complete!");
         }
     }
 

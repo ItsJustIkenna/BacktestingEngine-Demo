@@ -27,6 +27,7 @@ tokio-retry = "0.3"
 futures = "0.3"
 fastrand = "2.0"
 tracing = "0.1"
+flate2 = "1.0"
 # Logging
 ultra-logger = { path = "../../LoggingEngine/ultra-logger" }
 once_cell = "1.0"

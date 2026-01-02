@@ -1,0 +1,42 @@
+# PersistentVolume for Tardis historical data on Docker Desktop
+# Maps Windows path C:\data\tardis to /data/tardis inside pods
+#
+# Apply with: kubectl apply -f tardis-data-pv.yaml
+#
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: tardis-data-pv
+  labels:
+    type: local
+    app: backtesting-engine
+    data-source: tardis
+spec:
+  # 1GB is enough for our ~657MB of combined data
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadOnlyMany  # Multiple pods can read simultaneously
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  # Docker Desktop maps Windows paths like this:
+  # C:\Users\Administrator\combined -> /run/desktop/mnt/host/c/Users/Administrator/combined
+  hostPath:
+    path: /run/desktop/mnt/host/c/Users/Administrator/combined
+    type: Directory
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tardis-data-pvc
+  labels:
+    app: backtesting-engine
+    data-source: tardis
+spec:
+  accessModes:
+    - ReadOnlyMany
+  storageClassName: manual
+  resources:
+    requests:
+      storage: 1Gi
+  volumeName: tardis-data-pv
