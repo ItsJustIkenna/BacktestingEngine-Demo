@@ -179,7 +179,7 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
     for (const file of csvFiles) {
       await uploadFile(file);
     }
-  }, []);
+  }, [uploadFile]);
 
   // Handle file input change
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
