@@ -290,13 +290,13 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     // Fitness weights defaults (balanced)
     custom_fitness_weights: false,
     fitness_weights: { ...FITNESS_PRESETS.balanced },
-    // Profitability criteria defaults
+    // Profitability criteria defaults (realistic for market making)
     auto_save_profitable: true,
-    min_sharpe_ratio: 1.0,
-    min_profit_factor: 1.2,
-    max_drawdown: 0.25,
-    min_win_rate: 0.40,
-    min_trades: 30,
+    min_sharpe_ratio: 1.5,       // Realistic for MM strategies
+    min_profit_factor: 1.3,     // Total wins / total losses > 1.3
+    max_drawdown: 0.15,         // Tighter risk control
+    min_win_rate: 0.55,         // Natural MM win rate floor
+    min_trades: 50,             // Ensure statistical significance
     min_sortino_ratio: null,
     min_calmar_ratio: null,
     min_total_pnl: null,

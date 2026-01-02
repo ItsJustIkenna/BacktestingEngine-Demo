@@ -94,7 +94,7 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Handle file upload
-  const uploadFile = async (file: File) => {
+  const uploadFile = useCallback(async (file: File) => {
     setUploading(true);
     setUploadError(null);
     setUploadProgress(`Uploading ${file.name}...`);
@@ -123,10 +123,13 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
           }
         });
         
-        // Auto-select if it's the first session
-        if (sessions.length === 0) {
-          setSelectedSession(result.session.session_id);
-        }
+        // Auto-select if first session
+        setSessions(prev => {
+          if (prev.length === 1) {
+            setSelectedSession(prev[0].session_id);
+          }
+          return prev;
+        });
         
         setUploadProgress(`✅ ${file.name} uploaded successfully`);
         setTimeout(() => setUploadProgress(null), 3000);
@@ -138,7 +141,7 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
     } finally {
       setUploading(false);
     }
-  };
+  }, []);
 
   // Handle drag events
   const handleDragEnter = useCallback((e: React.DragEvent) => {
