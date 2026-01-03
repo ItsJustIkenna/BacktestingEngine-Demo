@@ -492,18 +492,3 @@ podLabels: {}
 # Deployment annotations
 annotations: {}
 
-# =============================================================================
-# Tardis Data Volume (for CSV-based backtesting)
-# =============================================================================
-# Extra volumes to mount in pods (used for Tardis historical data)
-extraVolumes:
-  - name: tardis-data
-    persistentVolumeClaim:
-      claimName: tardis-data-pvc
-
-# Extra volume mounts for containers
-extraVolumeMounts:
-  - name: tardis-data
-    mountPath: /data/tardis
-    readOnly: true
-
