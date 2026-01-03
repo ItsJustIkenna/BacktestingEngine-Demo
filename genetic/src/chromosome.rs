@@ -50,12 +50,13 @@ impl AvellanedaStoikovChromosome {
         self.time_horizon_minutes = self.time_horizon_minutes.clamp(0.167, 60.0);
         self.market_depth_k = self.market_depth_k.clamp(1.0, 50.0);
         // min_spread_bps is a soft floor - the REAL floor comes from fee_spread_multiplier
-        // Range 5-150 bps allows flexibility for both low-fee and high-fee exchanges
-        self.min_spread_bps = self.min_spread_bps.clamp(5.0, 150.0);
+        // Range 5-50 bps - tighter bounds to prevent wide spreads that kill fill rates
+        self.min_spread_bps = self.min_spread_bps.clamp(5.0, 50.0);
         self.adverse_selection_sensitivity = self.adverse_selection_sensitivity.clamp(0.0, 2.0);
         // Min 2x fee multiplier is breakeven: spread >= 2 × maker_fee
-        // With 25 bps fee: 2x = 50 bps (breakeven), 3x = 75 bps (25 bps profit/RT)
-        self.fee_spread_multiplier = self.fee_spread_multiplier.clamp(2.0, 6.0);
+        // With 25 bps fee: 2x = 50 bps (breakeven), 3x = 75 bps, 3.5x = 87 bps max
+        // Tighter upper bound (3.5) prevents wide spreads that kill fill rates
+        self.fee_spread_multiplier = self.fee_spread_multiplier.clamp(2.0, 3.5);
     }
 }
 
@@ -118,8 +119,8 @@ impl Chromosome for AvellanedaStoikovChromosome {
             // Minimum spread in basis points (soft floor)
             // The REAL profitability floor comes from fee_spread_multiplier × maker_fee
             // This is a secondary constraint for market conditions (volatility, liquidity)
-            // Range 5-150 bps allows GA to find optimal for each exchange's fee structure
-            min_spread_bps: rng.gen_range(5.0..150.0),
+            // Range 5-50 bps - tighter bounds to ensure reasonable fill rates
+            min_spread_bps: rng.gen_range(5.0..50.0),
             
             // Trade frequency: 0.01 to 60 trades per minute
             // 0.01 = 1 trade per 100 minutes (swing), 60 = 1 trade per second (HFT)
@@ -130,9 +131,9 @@ impl Chromosome for AvellanedaStoikovChromosome {
             adverse_selection_sensitivity: rng.gen_range(0.0..2.0),
             
             // Fee-based spread multiplier: how many times the exchange fee to use as min spread
-            // Range 2.0-6.0: 2x = minimum breakeven, 3x = small profit margin, 6x = wide (more profit per trade)
-            // With 25 bps maker fee: 2x = 50 bps, 3x = 75 bps, 4x = 100 bps spread
-            fee_spread_multiplier: rng.gen_range(2.0..6.0),
+            // Range 2.0-3.5: 2x = breakeven, 2.5x = small profit, 3.5x = max (87 bps with 25 bps fee)
+            // Tighter range prevents wide spreads that kill fill rates
+            fee_spread_multiplier: rng.gen_range(2.0..3.5),
         }
     }
 
@@ -246,7 +247,7 @@ impl Chromosome for AvellanedaStoikovChromosome {
         // Min spread: soft floor (profitability ensured by fee_spread_multiplier)
         if rng.gen_bool(mutation_rate) {
             self.min_spread_bps *= rng.gen_range(0.5..2.0);
-            self.min_spread_bps = self.min_spread_bps.clamp(5.0, 150.0);
+            self.min_spread_bps = self.min_spread_bps.clamp(5.0, 50.0);
         }
         // Trade frequency: range 0.01-60 trades/min
         if rng.gen_bool(mutation_rate) {
@@ -258,10 +259,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.adverse_selection_sensitivity += rng.gen_range(-0.3..0.3);
             self.adverse_selection_sensitivity = self.adverse_selection_sensitivity.clamp(0.0, 2.0);
         }
-        // Fee spread multiplier: range 3.0-8.0 (ensures minimum 25 bps profit per round-trip)
+        // Fee spread multiplier: range 2.0-3.5 (tighter to improve fill rates)
         if rng.gen_bool(mutation_rate) {
-            self.fee_spread_multiplier += rng.gen_range(-0.5..0.5);
-            self.fee_spread_multiplier = self.fee_spread_multiplier.clamp(2.0, 6.0);
+            self.fee_spread_multiplier += rng.gen_range(-0.3..0.3);
+            self.fee_spread_multiplier = self.fee_spread_multiplier.clamp(2.0, 3.5);
         }
     }
     
