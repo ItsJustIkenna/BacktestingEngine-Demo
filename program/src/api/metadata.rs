@@ -25,23 +25,7 @@ pub struct MetadataResponse<T> {
     pub data: Vec<T>,
 }
 
-#[cfg(feature = "postgres")]
-#[derive(Queryable, Selectable)]
-#[diesel(table_name = securities)]
-#[allow(dead_code)]
-struct SecurityRow {
-    symbol: String,
-}
-
-#[cfg(feature = "postgres")]
-#[derive(Queryable, Selectable)]
-#[diesel(table_name = exchanges)]
-#[allow(dead_code)]
-struct ExchangeRow {
-    exchange: String,
-}
-
-/// GET /api/symbols - Get all available symbols from database
+/// GET /api/symbols - Get all symbols from securities table
 #[cfg(feature = "postgres")]
 pub async fn get_symbols(
     State(state): State<ApiState>,
@@ -55,7 +39,7 @@ pub async fn get_symbols(
         )),
     };
 
-    // Query symbols from database
+    // Query symbols from securities table
     let mut conn = pool.get().await.map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get database connection: {}", e))
     })?;
@@ -63,6 +47,7 @@ pub async fn get_symbols(
     let symbols: Vec<Symbol> = diesel_async::RunQueryDsl::load(
         securities::table
             .select(securities::symbol)
+            .distinct()
             .order(securities::symbol.asc()),
         &mut conn
     )
@@ -77,7 +62,7 @@ pub async fn get_symbols(
     Ok(Json(MetadataResponse { data: symbols }))
 }
 
-/// GET /api/exchanges - Get all available exchanges from database
+/// GET /api/exchanges - Get all exchanges from exchanges table
 #[cfg(feature = "postgres")]
 pub async fn get_exchanges(
     State(state): State<ApiState>,
@@ -91,7 +76,7 @@ pub async fn get_exchanges(
         )),
     };
 
-    // Query exchanges from database
+    // Query exchanges from exchanges table
     let mut conn = pool.get().await.map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to get database connection: {}", e))
     })?;
@@ -99,6 +84,7 @@ pub async fn get_exchanges(
     let exchanges: Vec<Exchange> = diesel_async::RunQueryDsl::load(
         exchanges::table
             .select(exchanges::exchange)
+            .distinct()
             .order(exchanges::exchange.asc()),
         &mut conn
     )

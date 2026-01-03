@@ -2,11 +2,11 @@ import React, { useState, useEffect } from 'react';
 
 // Fitness weight presets (must sum to 100)
 const FITNESS_PRESETS = {
-  balanced: { sharpe: 10, sortino: 10, profit_factor: 15, win_rate: 5, net_profit: 30, calmar: 10, num_trades: 20 },
-  maxSharpe: { sharpe: 30, sortino: 25, profit_factor: 10, win_rate: 5, net_profit: 10, calmar: 10, num_trades: 10 },
-  maxProfit: { sharpe: 5, sortino: 10, profit_factor: 15, win_rate: 5, net_profit: 40, calmar: 5, num_trades: 20 },
-  lowDrawdown: { sharpe: 15, sortino: 15, profit_factor: 15, win_rate: 5, net_profit: 15, calmar: 25, num_trades: 10 },
-  highFrequency: { sharpe: 10, sortino: 10, profit_factor: 10, win_rate: 5, net_profit: 15, calmar: 15, num_trades: 35 },
+  balanced: { sharpe: 10, sortino: 5, profit_factor: 10, win_rate: 5, net_profit: 25, calmar: 10, num_trades: 15, fill_rate: 20 },
+  maxSharpe: { sharpe: 25, sortino: 15, profit_factor: 10, win_rate: 5, net_profit: 15, calmar: 10, num_trades: 5, fill_rate: 15 },
+  maxProfit: { sharpe: 5, sortino: 5, profit_factor: 10, win_rate: 5, net_profit: 40, calmar: 5, num_trades: 15, fill_rate: 15 },
+  lowDrawdown: { sharpe: 15, sortino: 10, profit_factor: 10, win_rate: 5, net_profit: 15, calmar: 25, num_trades: 5, fill_rate: 15 },
+  highFrequency: { sharpe: 5, sortino: 5, profit_factor: 5, win_rate: 5, net_profit: 20, calmar: 5, num_trades: 25, fill_rate: 30 },
 };
 
 // Pie chart colors for each weight
@@ -18,6 +18,7 @@ const WEIGHT_COLORS: Record<string, string> = {
   net_profit: '#F44336',  // Red
   calmar: '#00BCD4',      // Cyan
   num_trades: '#795548',  // Brown
+  fill_rate: '#E91E63',   // Pink
 };
 
 const WEIGHT_LABELS: Record<string, string> = {
@@ -28,6 +29,7 @@ const WEIGHT_LABELS: Record<string, string> = {
   net_profit: 'Net Profit',
   calmar: 'Calmar',
   num_trades: 'Trade Freq',
+  fill_rate: 'Fill Rate',
 };
 
 // SVG Pie Chart Component
@@ -111,6 +113,26 @@ const FitnessPieChart: React.FC<FitnessPieChartProps> = ({ weights, size = 120 }
   );
 };
 
+// Exchange display name mapping (database code -> friendly name)
+const EXCHANGE_DISPLAY_NAMES: Record<string, string> = {
+  'BNUS': 'Binance US',
+  'binance-us': 'Binance US',
+  'binance': 'Binance',
+  'KRKN': 'Kraken',
+  'kraken': 'Kraken',
+  'CBSE': 'Coinbase',
+  'coinbase': 'Coinbase',
+  'OKX': 'OKX',
+  'okx': 'OKX',
+  'BYBT': 'Bybit',
+  'bybit': 'Bybit',
+};
+
+// Helper to get display name for exchange
+const getExchangeDisplayName = (code: string): string => {
+  return EXCHANGE_DISPLAY_NAMES[code] || code;
+};
+
 // Accordion Section Component
 interface AccordionSectionProps {
   title: string;
@@ -189,6 +211,7 @@ interface FitnessWeights {
   net_profit: number;
   calmar: number;
   num_trades: number;
+  fill_rate: number;
 }
 
 // Portfolio asset: symbol + exchange pair (weights optimized by GA)
@@ -252,6 +275,45 @@ interface BacktestFormProps {
   onJobSubmit?: (jobId: string) => void;
 }
 
+// Helper to adjust fitness weights - when one changes, adjust others proportionally to maintain 100%
+const adjustFitnessWeights = (
+  weights: FitnessWeights,
+  changedKey: keyof FitnessWeights,
+  newValue: number
+): FitnessWeights => {
+  const otherKeys = (Object.keys(weights) as Array<keyof FitnessWeights>).filter(k => k !== changedKey);
+  const currentOtherSum = otherKeys.reduce((sum, k) => sum + weights[k], 0);
+  const targetOtherSum = 100 - newValue;
+  
+  if (currentOtherSum === 0) {
+    // All others are 0, distribute evenly
+    const perKey = Math.floor(targetOtherSum / otherKeys.length);
+    const result = { ...weights, [changedKey]: newValue };
+    otherKeys.forEach((k, i) => {
+      result[k] = i === otherKeys.length - 1 ? targetOtherSum - perKey * (otherKeys.length - 1) : perKey;
+    });
+    return result;
+  }
+  
+  // Scale others proportionally
+  const scale = targetOtherSum / currentOtherSum;
+  const result: FitnessWeights = { ...weights, [changedKey]: newValue };
+  let remaining = targetOtherSum;
+  
+  otherKeys.forEach((k, i) => {
+    if (i === otherKeys.length - 1) {
+      // Last one gets the remainder to ensure exact 100%
+      result[k] = Math.max(0, remaining);
+    } else {
+      const scaled = Math.max(0, Math.round(weights[k] * scale));
+      result[k] = scaled;
+      remaining -= scaled;
+    }
+  });
+  
+  return result;
+};
+
 export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
   // Accordion state - which sections are expanded
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
@@ -274,9 +336,9 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     initial_inventory_pct: 0.0,
     initial_30d_volume: 0,
     optimization_method: 'genetic',
-    // Infrastructure configuration
-    is_colocated: false,
-    fill_model: 'realistic',
+    // Infrastructure configuration - always colocated (service runs on Beeks)
+    is_colocated: true,
+    fill_model: 'colocated',
     // Portfolio assets (always used, single asset is a 1-item portfolio)
     portfolio_assets: [],
     // Genetic algorithm defaults
@@ -555,7 +617,7 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                 {loadingMetadata ? (
                   <option>Loading...</option>
                 ) : (
-                  exchanges.map(e => <option key={e} value={e}>{e}</option>)
+                  exchanges.map(e => <option key={e} value={e}>{getExchangeDisplayName(e)}</option>)
                 )}
               </select>
             </div>
@@ -630,7 +692,7 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                       display: 'flex',
                       alignItems: 'center'
                     }}>
-                      {asset.exchange}
+                      {getExchangeDisplayName(asset.exchange)}
                     </div>
                     <button
                       type="button"
@@ -739,7 +801,7 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                       fontSize: '12px',
                       fontWeight: 500
                     }}>
-                      {exchange}
+                      {getExchangeDisplayName(exchange)}
                     </span>
                   ))}
                 </div>
@@ -873,49 +935,6 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                 </div>
               </div>
             </div>
-
-            {/* Co-Located Infrastructure Toggle */}
-            <div style={{ 
-              padding: '16px', 
-              border: formData.is_colocated ? '2px solid #28a745' : '1px solid #ddd',
-              borderRadius: '8px',
-              backgroundColor: formData.is_colocated ? '#f0fff4' : 'white'
-            }}>
-              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', gap: '12px' }}>
-                <input
-                  type="checkbox"
-                  name="is_colocated"
-                  checked={formData.is_colocated}
-                  onChange={(e) => setFormData(prev => ({ ...prev, is_colocated: e.target.checked }))}
-                  style={{ width: '18px', height: '18px' }}
-                />
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: '14px' }}>
-                    🏢 Co-Located Infrastructure
-                  </div>
-                  <div style={{ fontSize: '12px', color: '#666', marginTop: '2px' }}>
-                    Bot runs on Beeks Group or similar co-located hosting with sub-millisecond latency to exchange
-                  </div>
-                </div>
-              </label>
-              {formData.is_colocated && (
-                <div style={{ 
-                  marginTop: '12px', 
-                  padding: '10px', 
-                  backgroundColor: '#e8f5e9', 
-                  borderRadius: '6px',
-                  fontSize: '12px'
-                }}>
-                  <strong>Co-Located Advantages:</strong>
-                  <ul style={{ margin: '6px 0 0 16px', padding: 0 }}>
-                    <li>~0.5ms latency (vs 15ms for retail)</li>
-                    <li>Front of queue position (15% vs 70% back)</li>
-                    <li>85% base fill probability (vs 30%)</li>
-                    <li>Minimal adverse selection (1.3x vs 2.5x)</li>
-                  </ul>
-                </div>
-              )}
-            </div>
           </div>
         </AccordionSection>
 
@@ -982,7 +1001,7 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                 border: '1px solid #e0d4f0'
               }}>
                 <div style={{ fontWeight: 600, marginBottom: '12px', color: '#6f42c1' }}>Genetic Algorithm Settings</div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
                   <div>
                     <label style={{ display: 'block', marginBottom: '4px', fontSize: '12px', fontWeight: 500 }}>Population Size</label>
                     <input
@@ -1009,6 +1028,111 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                     />
                     <div style={{ fontSize: '10px', color: '#666', marginTop: '2px' }}>Default: 20</div>
                   </div>
+                </div>
+
+                {/* Custom Fitness Weights */}
+                <div style={{ 
+                  padding: '12px', 
+                  backgroundColor: formData.custom_fitness_weights ? '#fff8e1' : '#f5f0fa', 
+                  borderRadius: '6px',
+                  border: formData.custom_fitness_weights ? '1px solid #ffcc80' : '1px solid #e0d4f0'
+                }}>
+                  <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', marginBottom: formData.custom_fitness_weights ? '12px' : '0' }}>
+                    <input
+                      type="checkbox"
+                      checked={formData.custom_fitness_weights}
+                      onChange={(e) => setFormData(prev => ({ ...prev, custom_fitness_weights: e.target.checked }))}
+                      style={{ marginRight: '8px' }}
+                    />
+                    <span style={{ fontWeight: 600 }}>⚖️ Custom Fitness Weights</span>
+                  </label>
+                  {formData.custom_fitness_weights && (
+                    <>
+                      {/* Preset buttons */}
+                      <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
+                        {Object.entries(FITNESS_PRESETS).map(([name, weights]) => (
+                          <button
+                            key={name}
+                            type="button"
+                            onClick={() => setFormData(prev => ({ ...prev, fitness_weights: { ...weights } }))}
+                            style={{
+                              padding: '4px 10px',
+                              fontSize: '11px',
+                              border: '1px solid #ddd',
+                              borderRadius: '4px',
+                              backgroundColor: '#fff',
+                              cursor: 'pointer',
+                              textTransform: 'capitalize',
+                            }}
+                          >
+                            {name.replace(/([A-Z])/g, ' $1').trim()}
+                          </button>
+                        ))}
+                      </div>
+                      
+                      {/* Pie chart and sliders layout */}
+                      <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
+                        {/* Pie Chart */}
+                        <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                          <FitnessPieChart weights={formData.fitness_weights} size={130} />
+                          {(() => {
+                            const total = Object.values(formData.fitness_weights).reduce((a, b) => a + b, 0);
+                            const isValid = total === 100;
+                            return (
+                              <div style={{ 
+                                marginTop: '8px', 
+                                fontSize: '11px', 
+                                fontWeight: 600,
+                                color: isValid ? '#4CAF50' : '#f44336',
+                                textAlign: 'center'
+                              }}>
+                                {isValid ? '✓ Valid' : `${total}% ≠ 100%`}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                        
+                        {/* Sliders with colored labels */}
+                        <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                          {(['sharpe', 'sortino', 'profit_factor', 'win_rate', 'net_profit', 'calmar', 'num_trades', 'fill_rate'] as const).map(key => (
+                            <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <div style={{ 
+                                width: '10px', 
+                                height: '10px', 
+                                borderRadius: '2px', 
+                                backgroundColor: WEIGHT_COLORS[key],
+                                flexShrink: 0
+                              }} />
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', marginBottom: '2px' }}>
+                                  <span style={{ fontWeight: 500 }}>{WEIGHT_LABELS[key]}</span>
+                                  <span style={{ fontWeight: 600 }}>{formData.fitness_weights[key]}%</span>
+                                </div>
+                                <input
+                                  type="range"
+                                  min="0"
+                                  max="100"
+                                  value={formData.fitness_weights[key]}
+                                  onChange={(e) => {
+                                    const newValue = parseInt(e.target.value);
+                                    setFormData(prev => ({
+                                      ...prev,
+                                      fitness_weights: adjustFitnessWeights(prev.fitness_weights, key, newValue)
+                                    }));
+                                  }}
+                                  style={{ 
+                                    width: '100%', 
+                                    height: '6px',
+                                    accentColor: WEIGHT_COLORS[key]
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             )}
@@ -1156,110 +1280,6 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
                 </div>
               </div>
             </div>
-
-            {/* Custom Fitness Weights (for Genetic) */}
-            {formData.optimization_method === 'genetic' && (
-              <div style={{ 
-                padding: '14px', 
-                backgroundColor: formData.custom_fitness_weights ? '#fff8e1' : '#f8f9fa', 
-                borderRadius: '8px',
-                border: formData.custom_fitness_weights ? '1px solid #ffcc80' : '1px solid #e0e0e0'
-              }}>
-                <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', marginBottom: formData.custom_fitness_weights ? '12px' : '0' }}>
-                  <input
-                    type="checkbox"
-                    checked={formData.custom_fitness_weights}
-                    onChange={(e) => setFormData(prev => ({ ...prev, custom_fitness_weights: e.target.checked }))}
-                    style={{ marginRight: '8px' }}
-                  />
-                  <span style={{ fontWeight: 600 }}>⚖️ Custom Fitness Weights</span>
-                </label>
-                {formData.custom_fitness_weights && (
-                  <>
-                    {/* Preset buttons */}
-                    <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', flexWrap: 'wrap' }}>
-                      {Object.entries(FITNESS_PRESETS).map(([name, weights]) => (
-                        <button
-                          key={name}
-                          type="button"
-                          onClick={() => setFormData(prev => ({ ...prev, fitness_weights: { ...weights } }))}
-                          style={{
-                            padding: '4px 10px',
-                            fontSize: '11px',
-                            border: '1px solid #ddd',
-                            borderRadius: '4px',
-                            backgroundColor: '#fff',
-                            cursor: 'pointer',
-                            textTransform: 'capitalize',
-                          }}
-                        >
-                          {name.replace(/([A-Z])/g, ' $1').trim()}
-                        </button>
-                      ))}
-                    </div>
-                    
-                    {/* Pie chart and sliders layout */}
-                    <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
-                      {/* Pie Chart */}
-                      <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                        <FitnessPieChart weights={formData.fitness_weights} size={130} />
-                        {(() => {
-                          const total = Object.values(formData.fitness_weights).reduce((a, b) => a + b, 0);
-                          const isValid = total === 100;
-                          return (
-                            <div style={{ 
-                              marginTop: '8px', 
-                              fontSize: '11px', 
-                              fontWeight: 600,
-                              color: isValid ? '#4CAF50' : '#f44336',
-                              textAlign: 'center'
-                            }}>
-                              {isValid ? '✓ Valid' : `${total}% ≠ 100%`}
-                            </div>
-                          );
-                        })()}
-                      </div>
-                      
-                      {/* Sliders with colored labels */}
-                      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                        {(['sharpe', 'sortino', 'profit_factor', 'win_rate', 'net_profit', 'calmar', 'num_trades'] as const).map(key => (
-                          <div key={key} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <div style={{ 
-                              width: '10px', 
-                              height: '10px', 
-                              borderRadius: '2px', 
-                              backgroundColor: WEIGHT_COLORS[key],
-                              flexShrink: 0
-                            }} />
-                            <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', marginBottom: '2px' }}>
-                                <span style={{ fontWeight: 500 }}>{WEIGHT_LABELS[key]}</span>
-                                <span style={{ fontWeight: 600 }}>{formData.fitness_weights[key]}%</span>
-                              </div>
-                              <input
-                                type="range"
-                                min="0"
-                                max="50"
-                                value={formData.fitness_weights[key]}
-                                onChange={(e) => setFormData(prev => ({
-                                  ...prev,
-                                  fitness_weights: { ...prev.fitness_weights, [key]: parseInt(e.target.value) }
-                                }))}
-                                style={{ 
-                                  width: '100%', 
-                                  height: '6px',
-                                  accentColor: WEIGHT_COLORS[key]
-                                }}
-                              />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
 
             {/* Auto-Save Profitable Strategies */}
             <div style={{ 

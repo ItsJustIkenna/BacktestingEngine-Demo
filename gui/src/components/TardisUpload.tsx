@@ -1,5 +1,21 @@
 import React, { useState, useCallback, useRef } from 'react';
 
+// Supported exchanges from Tardis.dev
+const TARDIS_EXCHANGES = [
+  { id: 'binance-us', name: 'Binance US' },
+  { id: 'binance', name: 'Binance' },
+  { id: 'coinbase', name: 'Coinbase' },
+  { id: 'kraken', name: 'Kraken' },
+  { id: 'okx', name: 'OKX' },
+  { id: 'bybit', name: 'Bybit' },
+  { id: 'deribit', name: 'Deribit' },
+  { id: 'ftx', name: 'FTX' },
+  { id: 'huobi', name: 'Huobi' },
+  { id: 'kucoin', name: 'KuCoin' },
+  { id: 'gate', name: 'Gate.io' },
+  { id: 'bitfinex', name: 'Bitfinex' },
+];
+
 // Types for Tardis file upload
 interface UploadedFileInfo {
   file_id: string;
@@ -75,6 +91,7 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
+  const [selectedExchange, setSelectedExchange] = useState('binance-us');
   
   // Backtest form state
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
@@ -94,7 +111,7 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Handle file upload
-  const uploadFile = useCallback(async (file: File) => {
+  const uploadFile = useCallback(async (file: File, exchange: string) => {
     setUploading(true);
     setUploadError(null);
     setUploadProgress(`Uploading ${file.name}...`);
@@ -102,6 +119,7 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
     try {
       const formData = new FormData();
       formData.append('file', file);
+      formData.append('exchange', exchange);
       
       const response = await fetch('/api/tardis/upload', {
         method: 'POST',
@@ -180,9 +198,9 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
     
     // Upload files sequentially
     for (const file of csvFiles) {
-      await uploadFile(file);
+      await uploadFile(file, selectedExchange);
     }
-  }, [uploadFile]);
+  }, [uploadFile, selectedExchange]);
 
   // Handle file input change
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -190,7 +208,7 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
     if (!files) return;
     
     for (const file of Array.from(files)) {
-      await uploadFile(file);
+      await uploadFile(file, selectedExchange);
     }
     
     // Reset input
@@ -270,6 +288,39 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
         <span>Tardis Data Upload</span>
       </h2>
       
+      {/* Exchange Selector */}
+      <div style={{ 
+        marginBottom: '20px', 
+        padding: '16px', 
+        backgroundColor: '#f8f9fa', 
+        borderRadius: '8px',
+        border: '1px solid #e0e0e0'
+      }}>
+        <label style={{ display: 'block', marginBottom: '8px', fontWeight: 600, fontSize: '14px' }}>
+          📊 Data Source Exchange
+        </label>
+        <select
+          value={selectedExchange}
+          onChange={(e) => setSelectedExchange(e.target.value)}
+          style={{
+            width: '100%',
+            padding: '10px 12px',
+            fontSize: '15px',
+            border: '1px solid #ccc',
+            borderRadius: '6px',
+            backgroundColor: 'white',
+            cursor: 'pointer',
+          }}
+        >
+          {TARDIS_EXCHANGES.map(ex => (
+            <option key={ex.id} value={ex.id}>{ex.name}</option>
+          ))}
+        </select>
+        <div style={{ marginTop: '6px', fontSize: '12px', color: '#666' }}>
+          Select the exchange your Tardis.dev data was downloaded from
+        </div>
+      </div>
+      
       {/* Drop Zone */}
       <div
         onDragEnter={handleDragEnter}
@@ -302,7 +353,7 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
         </div>
         
         <div style={{ fontSize: '18px', fontWeight: 600, marginBottom: '8px' }}>
-          {uploading ? 'Uploading...' : 'Drag & Drop Tardis CSV Files'}
+          {uploading ? 'Uploading...' : `Drag & Drop ${TARDIS_EXCHANGES.find(e => e.id === selectedExchange)?.name} CSV Files`}
         </div>
         
         <div style={{ color: '#666', fontSize: '14px' }}>

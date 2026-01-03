@@ -239,6 +239,8 @@ interface FitnessWeights {
   win_rate: number;
   net_profit: number;
   calmar: number;
+  num_trades: number;
+  fill_rate: number;
 }
 
 interface JobDetails {

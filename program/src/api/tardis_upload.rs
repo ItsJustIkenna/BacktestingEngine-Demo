@@ -211,9 +211,8 @@ fn parse_csv_metadata(data: &[u8], file_type: TardisFileType) -> Result<(String,
         ));
     }
     
-    // Find column indices
-    let exchange_idx = header_fields.iter().position(|&f| f == "exchange")
-        .ok_or("Missing 'exchange' column")?;
+    // Find column indices - exchange is optional, defaults to binance-us
+    let exchange_idx = header_fields.iter().position(|&f| f == "exchange");
     let symbol_idx = header_fields.iter().position(|&f| f == "symbol")
         .ok_or("Missing 'symbol' column")?;
     let timestamp_idx = header_fields.iter().position(|&f| f == "timestamp")
@@ -229,7 +228,10 @@ fn parse_csv_metadata(data: &[u8], file_type: TardisFileType) -> Result<(String,
         return Err("First data row too short".to_string());
     }
     
-    let exchange = first_fields[exchange_idx].to_string();
+    // Get exchange from column or default to binance-us
+    let exchange = exchange_idx
+        .and_then(|idx| first_fields.get(idx).map(|s| s.to_string()))
+        .unwrap_or_else(|| "binance-us".to_string());
     let symbol = first_fields[symbol_idx].to_string();
     let first_timestamp = first_fields[timestamp_idx].parse::<i64>()
         .map_err(|_| "Invalid timestamp")?;
@@ -271,6 +273,10 @@ pub async fn upload_file(
     State(state): State<TardisUploadState>,
     mut multipart: Multipart,
 ) -> Result<Json<FileUploadResponse>, (StatusCode, Json<FileUploadResponse>)> {
+    let mut file_data: Option<(String, bytes::Bytes)> = None;
+    let mut provided_exchange: Option<String> = None;
+    
+    // Parse all fields first
     while let Some(field) = multipart.next_field().await.map_err(|e| {
         (StatusCode::BAD_REQUEST, Json(FileUploadResponse {
             success: false,
@@ -279,131 +285,149 @@ pub async fn upload_file(
             error: Some(format!("Failed to read multipart: {}", e)),
         }))
     })? {
-        let filename = field.file_name()
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "unknown.csv.gz".to_string());
+        let field_name = field.name().map(|s| s.to_string());
         
-        // Determine file type
-        let file_type = match parse_file_type(&filename) {
-            Some(ft) => ft,
-            None => {
-                return Err((StatusCode::BAD_REQUEST, Json(FileUploadResponse {
-                    success: false,
-                    file: None,
-                    session: None,
-                    error: Some(format!(
-                        "Could not determine file type from filename '{}'. \
-                        Expected filename containing 'trades' or 'orderbook'.",
-                        filename
-                    )),
-                })));
+        match field_name.as_deref() {
+            Some("exchange") => {
+                let text = field.text().await.unwrap_or_default();
+                if !text.is_empty() {
+                    provided_exchange = Some(text);
+                }
             }
-        };
-        
-        // Read file data
-        let data = field.bytes().await.map_err(|e| {
+            Some("file") | None => {
+                let filename = field.file_name()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "unknown.csv.gz".to_string());
+                let data = field.bytes().await.map_err(|e| {
+                    (StatusCode::BAD_REQUEST, Json(FileUploadResponse {
+                        success: false,
+                        file: None,
+                        session: None,
+                        error: Some(format!("Failed to read file data: {}", e)),
+                    }))
+                })?;
+                file_data = Some((filename, data));
+            }
+            _ => {}
+        }
+    }
+    
+    // Ensure we have file data
+    let (filename, data) = file_data.ok_or_else(|| {
+        (StatusCode::BAD_REQUEST, Json(FileUploadResponse {
+            success: false,
+            file: None,
+            session: None,
+            error: Some("No file provided".to_string()),
+        }))
+    })?;
+    
+    // Determine file type
+    let file_type = match parse_file_type(&filename) {
+        Some(ft) => ft,
+        None => {
+            return Err((StatusCode::BAD_REQUEST, Json(FileUploadResponse {
+                success: false,
+                file: None,
+                session: None,
+                error: Some(format!(
+                    "Could not determine file type from filename '{}'. \
+                    Expected filename containing 'trades' or 'orderbook'.",
+                    filename
+                )),
+            })));
+        }
+    };
+    
+    let file_size = data.len();
+    
+    // Parse CSV metadata (exchange is now optional in CSV)
+    let (csv_exchange, symbol, start_time, end_time, row_count) = 
+        parse_csv_metadata(&data, file_type).map_err(|e| {
             (StatusCode::BAD_REQUEST, Json(FileUploadResponse {
                 success: false,
                 file: None,
                 session: None,
-                error: Some(format!("Failed to read file data: {}", e)),
+                error: Some(format!("Failed to parse CSV: {}", e)),
             }))
         })?;
-        
-        let file_size = data.len();
-        
-        // Parse CSV metadata
-        let (exchange, symbol, start_time, end_time, row_count) = 
-            parse_csv_metadata(&data, file_type).map_err(|e| {
-                (StatusCode::BAD_REQUEST, Json(FileUploadResponse {
-                    success: false,
-                    file: None,
-                    session: None,
-                    error: Some(format!("Failed to parse CSV: {}", e)),
-                }))
-            })?;
-        
-        // Generate file ID
-        let file_id = uuid::Uuid::new_v4().to_string();
-        
-        // Store file
-        let stored_filename = format!("{}_{}.csv.gz", file_id, file_type);
-        let stored_path = state.upload_dir.join(&stored_filename);
-        
-        tokio::fs::write(&stored_path, &data).await.map_err(|e| {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(FileUploadResponse {
-                success: false,
-                file: None,
-                session: None,
-                error: Some(format!("Failed to store file: {}", e)),
-            }))
-        })?;
-        
-        let file_info = UploadedFileInfo {
-            file_id: file_id.clone(),
-            original_name: filename,
-            file_type,
+    
+    // Use provided exchange, fall back to CSV exchange
+    let exchange = provided_exchange.unwrap_or(csv_exchange);
+    
+    // Generate file ID
+    let file_id = uuid::Uuid::new_v4().to_string();
+    
+    // Store file
+    let stored_filename = format!("{}_{}.csv.gz", file_id, file_type);
+    let stored_path = state.upload_dir.join(&stored_filename);
+    
+    tokio::fs::write(&stored_path, &data).await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(FileUploadResponse {
+            success: false,
+            file: None,
+            session: None,
+            error: Some(format!("Failed to store file: {}", e)),
+        }))
+    })?;
+    
+    let file_info = UploadedFileInfo {
+        file_id: file_id.clone(),
+        original_name: filename,
+        file_type,
+        symbol: symbol.clone(),
+        exchange: exchange.clone(),
+        start_time: start_time.clone(),
+        end_time: end_time.clone(),
+        row_count,
+        file_size_bytes: file_size,
+        stored_path: stored_path.to_string_lossy().to_string(),
+    };
+    
+    // Create or update session
+    let session_id = format!("{}_{}", symbol, exchange);
+    let mut sessions = state.sessions.write().await;
+    
+    let session = sessions.entry(session_id.clone())
+        .or_insert_with(|| SymbolUploadSession {
+            session_id: session_id.clone(),
             symbol: symbol.clone(),
             exchange: exchange.clone(),
-            start_time: start_time.clone(),
-            end_time: end_time.clone(),
-            row_count,
-            file_size_bytes: file_size,
-            stored_path: stored_path.to_string_lossy().to_string(),
-        };
-        
-        // Create or update session
-        let session_id = format!("{}_{}", symbol, exchange);
-        let mut sessions = state.sessions.write().await;
-        
-        let session = sessions.entry(session_id.clone())
-            .or_insert_with(|| SymbolUploadSession {
-                session_id: session_id.clone(),
-                symbol: symbol.clone(),
-                exchange: exchange.clone(),
-                trades_file: None,
-                orderbook_file: None,
-                start_time: None,
-                end_time: None,
-                created_at: Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string(),
-            });
-        
-        // Update session with this file
-        match file_type {
-            TardisFileType::Trades => {
-                session.trades_file = Some(file_info.clone());
-            }
-            TardisFileType::Orderbook => {
-                session.orderbook_file = Some(file_info.clone());
-            }
+            trades_file: None,
+            orderbook_file: None,
+            start_time: None,
+            end_time: None,
+            created_at: Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+        });
+    
+    // Update session with this file
+    match file_type {
+        TardisFileType::Trades => {
+            session.trades_file = Some(file_info.clone());
         }
-        
-        // Update session date range (intersection of both files)
-        if let (Some(ref trades), Some(ref orderbook)) = (&session.trades_file, &session.orderbook_file) {
-            // Use the later start time and earlier end time
-            session.start_time = Some(std::cmp::max(&trades.start_time, &orderbook.start_time).clone());
-            session.end_time = Some(std::cmp::min(&trades.end_time, &orderbook.end_time).clone());
-        } else if let Some(ref file) = session.trades_file.as_ref().or(session.orderbook_file.as_ref()) {
-            session.start_time = Some(file.start_time.clone());
-            session.end_time = Some(file.end_time.clone());
+        TardisFileType::Orderbook => {
+            session.orderbook_file = Some(file_info.clone());
         }
-        
-        let session_clone = session.clone();
-        
-        return Ok(Json(FileUploadResponse {
-            success: true,
-            file: Some(file_info),
-            session: Some(session_clone),
-            error: None,
-        }));
     }
     
-    Err((StatusCode::BAD_REQUEST, Json(FileUploadResponse {
-        success: false,
-        file: None,
-        session: None,
-        error: Some("No file provided".to_string()),
-    })))
+    // Update session date range (intersection of both files)
+    if let (Some(ref trades), Some(ref orderbook)) = (&session.trades_file, &session.orderbook_file) {
+        // Use the later start time and earlier end time
+        session.start_time = Some(std::cmp::max(&trades.start_time, &orderbook.start_time).clone());
+        session.end_time = Some(std::cmp::min(&trades.end_time, &orderbook.end_time).clone());
+    } else if let Some(ref file) = session.trades_file.as_ref().or(session.orderbook_file.as_ref()) {
+        session.start_time = Some(file.start_time.clone());
+        session.end_time = Some(file.end_time.clone());
+    }
+    
+    let session_clone = session.clone();
+    
+    Ok(Json(FileUploadResponse {
+        success: true,
+        file: Some(file_info),
+        session: Some(session_clone),
+        error: None,
+    }))
 }
 
 /// List all upload sessions

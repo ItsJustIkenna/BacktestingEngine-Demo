@@ -1797,6 +1797,7 @@ impl Worker {
                         None, // calmar
                         portfolio_result.total_trades,
                         actual_num_symbols,
+                        Some(portfolio_result.avg_fill_rate),
                     );
                     
                     fitness_results.push((chr.clone(), fitness));

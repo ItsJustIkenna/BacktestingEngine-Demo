@@ -245,6 +245,8 @@ pub struct PortfolioFitnessConfig {
     pub calmar_weight: f64,
     /// Weight for number of trades (penalizes low-frequency strategies)
     pub num_trades_weight: f64,
+    /// Weight for fill rate (penalizes wide spreads that don't get filled)
+    pub fill_rate_weight: f64,
     /// Minimum number of trades required (per symbol)
     pub min_trades_per_symbol: usize,
     /// Target trades per day for scoring (used to normalize num_trades score)
@@ -256,15 +258,16 @@ pub struct PortfolioFitnessConfig {
 impl Default for PortfolioFitnessConfig {
     fn default() -> Self {
         Self {
-            sharpe_weight: 0.15,
+            sharpe_weight: 0.10,
             sortino_weight: 0.05,
-            net_profit_weight: 0.25,
+            net_profit_weight: 0.20,
             profit_factor_weight: 0.10,
             win_rate_weight: 0.05,  // Reduced - high win_rate weight causes wide spread exploit
             max_drawdown_weight: 0.10,
             diversification_weight: 0.05,
             calmar_weight: 0.10,
-            num_trades_weight: 0.15,  // Important for market making
+            num_trades_weight: 0.10,  // Important for market making
+            fill_rate_weight: 0.15,   // Critical - penalizes wide spreads
             min_trades_per_symbol: 10,  // Reduced from 30 - allow some flexibility
             target_trades_per_day: 10.0,  // Target ~10 trades/day for scoring
             max_acceptable_drawdown: 0.25,
@@ -291,6 +294,7 @@ impl PortfolioFitnessConfig {
         calmar: Option<f64>,
         total_trades: usize,
         num_symbols: usize,
+        fill_rate: Option<f64>,
     ) -> f64 {
         // Check minimum trades constraint - but use soft penalty instead of hard cutoff
         let avg_trades_per_symbol = total_trades as f64 / num_symbols.max(1) as f64;
@@ -322,6 +326,19 @@ impl PortfolioFitnessConfig {
         let trade_freq_score = (trades_per_symbol_per_day / self.target_trades_per_day)
             .clamp(0.0, 1.5);
         
+        // Fill rate score: reward strategies with higher fill rates
+        // Score 0.0 at 0% fill rate, 1.0 at 20% fill rate, caps at 1.5
+        // Market making typically has 5-30% fill rates
+        let fill_rate_val = fill_rate.unwrap_or(0.0);
+        let fill_rate_score = (fill_rate_val / 0.20).clamp(0.0, 1.5);
+        
+        // Severe penalty for extremely low fill rates (< 1%)
+        let fill_rate_penalty = if fill_rate_val < 0.01 {
+            -0.3 * (1.0 - fill_rate_val / 0.01)
+        } else {
+            0.0
+        };
+        
         // Additional penalty if below minimum trades per symbol
         let trade_penalty = if avg_trades_per_symbol < self.min_trades_per_symbol as f64 {
             -0.2 * (1.0 - avg_trades_per_symbol / self.min_trades_per_symbol as f64)
@@ -340,7 +357,9 @@ impl PortfolioFitnessConfig {
             self.diversification_weight * div_score +
             self.calmar_weight * calmar_score +
             self.num_trades_weight * trade_freq_score +
-            trade_penalty;
+            self.fill_rate_weight * fill_rate_score +
+            trade_penalty +
+            fill_rate_penalty;
         
         fitness
     }
@@ -631,7 +650,8 @@ mod tests {
         let config = PortfolioFitnessConfig::default();
         let sum = config.sharpe_weight + config.sortino_weight + config.net_profit_weight +
             config.profit_factor_weight + config.win_rate_weight + config.max_drawdown_weight +
-            config.diversification_weight + config.calmar_weight + config.num_trades_weight;
+            config.diversification_weight + config.calmar_weight + config.num_trades_weight +
+            config.fill_rate_weight;
         assert!((sum - 1.0).abs() < 0.01);
     }
 }
