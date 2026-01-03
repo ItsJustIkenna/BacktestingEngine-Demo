@@ -865,9 +865,12 @@ impl DistributedGAWorker {
                 self.worker_id, request.chromosome_id, request.total_chromosomes, request.generation);
         }
         
-        // Deserialize chromosome
+        // Deserialize chromosome and enforce bounds (handles legacy data)
         let chromosome: AvellanedaStoikovChromosome = match serde_json::from_slice(&request.chromosome_params) {
-            Ok(c) => c,
+            Ok(mut c) => {
+                c.enforce_bounds();
+                c
+            },
             Err(e) => {
                 self.send_error_result(&request, &format!("Failed to deserialize chromosome: {}", e)).await;
                 return;

@@ -60,6 +60,7 @@ pub fn build_router(job_queue: Arc<dyn JobQueue>) -> Router {
     // Tardis backtest submission needs both upload state and job queue
     let tardis_backtest_route = Router::new()
         .route("/api/tardis/backtest", post(tardis_upload::submit_tardis_backtest))
+        .route("/api/tardis/import", post(tardis_upload::import_tardis_to_database))
         .with_state((tardis_state, Arc::clone(&job_queue)));
     
     // Protected API routes with ApiState

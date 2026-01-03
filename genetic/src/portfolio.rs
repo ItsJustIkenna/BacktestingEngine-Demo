@@ -268,8 +268,8 @@ impl Default for PortfolioFitnessConfig {
             calmar_weight: 0.10,
             num_trades_weight: 0.10,  // Important for market making
             fill_rate_weight: 0.15,   // Critical - penalizes wide spreads
-            min_trades_per_symbol: 10,  // Reduced from 30 - allow some flexibility
-            target_trades_per_day: 10.0,  // Target ~10 trades/day for scoring
+            min_trades_per_symbol: 1000,  // ~33 trades/symbol/day over 30 days - prevents "do nothing" exploit
+            target_trades_per_day: 33.0,  // Target ~33 trades/day for active market making
             max_acceptable_drawdown: 0.25,
         }
     }
@@ -296,12 +296,13 @@ impl PortfolioFitnessConfig {
         num_symbols: usize,
         fill_rate: Option<f64>,
     ) -> f64 {
-        // Check minimum trades constraint - but use soft penalty instead of hard cutoff
+        // Check minimum trades constraint - HARD cutoff to prevent "do nothing" exploit
         let avg_trades_per_symbol = total_trades as f64 / num_symbols.max(1) as f64;
         
-        // Hard penalty for essentially no trading
-        if total_trades < 3 {
-            return -2.0; // Severe penalty for not trading at all
+        // Hard rejection for strategies that don't trade enough
+        // This prevents the GA from exploiting wide spreads to avoid losses
+        if total_trades < self.min_trades_per_symbol {
+            return f64::NEG_INFINITY; // Reject solutions with too few trades
         }
         
         // Check maximum drawdown constraint

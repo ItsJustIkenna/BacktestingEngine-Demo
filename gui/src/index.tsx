@@ -65,7 +65,7 @@ const App: React.FC = () => {
               cursor: 'pointer',
             }}
           >
-            📁 Tardis Data
+            📁 Upload
           </button>
           <button
             onClick={() => setCurrentView('list')}

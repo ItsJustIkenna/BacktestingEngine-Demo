@@ -128,8 +128,13 @@ impl GACheckpoint {
                 }
                 
                 match serde_json::from_str::<GACheckpoint>(&contents) {
-                    Ok(checkpoint) => {
-                        eprintln!("✅ [CHECKPOINT] Loaded checkpoint for job {} at generation {}", 
+                    Ok(mut checkpoint) => {
+                        // Enforce bounds on all loaded chromosomes to handle legacy checkpoints
+                        for chr in &mut checkpoint.population {
+                            chr.enforce_bounds();
+                        }
+                        checkpoint.best.enforce_bounds();
+                        eprintln!("✅ [CHECKPOINT] Loaded checkpoint for job {} at generation {} (bounds enforced)", 
                             checkpoint.job_id, checkpoint.generation);
                         Some(checkpoint)
                     }
