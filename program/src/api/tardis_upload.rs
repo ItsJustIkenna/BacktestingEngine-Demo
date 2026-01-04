@@ -27,12 +27,14 @@ use databaseschema::{
         security::NewSecurity,
         order_book::NewOrderBook,
         l2_orderbook_snapshot::NewL2OrderbookSnapshot,
+        historical_order::NewHistoricalOrder,
     },
     ops::{
         exchange_ops,
         securities_ops,
         order_book_ops,
         l2_orderbook_snapshot_ops,
+        historical_order_ops,
     },
 };
 #[cfg(feature = "postgres")]
@@ -60,7 +62,10 @@ pub struct UploadedFileInfo {
 #[serde(rename_all = "snake_case")]
 pub enum TardisFileType {
     Trades,
+    /// L2 orderbook snapshots (book_snapshot_5, book_snapshot_25)
     Orderbook,
+    /// L2 incremental updates (incremental_book_L2) - higher fidelity than snapshots
+    IncrementalL2,
 }
 
 impl std::fmt::Display for TardisFileType {
@@ -68,6 +73,7 @@ impl std::fmt::Display for TardisFileType {
         match self {
             TardisFileType::Trades => write!(f, "trades"),
             TardisFileType::Orderbook => write!(f, "orderbook"),
+            TardisFileType::IncrementalL2 => write!(f, "incremental_l2"),
         }
     }
 }
@@ -79,7 +85,10 @@ pub struct SymbolUploadSession {
     pub symbol: String,
     pub exchange: String,
     pub trades_file: Option<UploadedFileInfo>,
+    /// L2 snapshot orderbook file (book_snapshot_5, book_snapshot_25)
     pub orderbook_file: Option<UploadedFileInfo>,
+    /// L2 incremental updates file (incremental_book_L2) - higher fidelity than snapshots
+    pub incremental_l2_file: Option<UploadedFileInfo>,
     pub start_time: Option<String>,
     pub end_time: Option<String>,
     pub created_at: String,
@@ -175,15 +184,45 @@ fn normalize_exchange(exchange: &str) -> String {
 }
 
 /// Parse file type from filename
-fn parse_file_type(filename: &str) -> Option<TardisFileType> {
+/// Returns None if type cannot be determined from filename (will try CSV headers)
+fn parse_file_type_from_filename(filename: &str) -> Option<TardisFileType> {
     let lower = filename.to_lowercase();
     if lower.contains("trades") || lower.contains("trade") {
         Some(TardisFileType::Trades)
-    } else if lower.contains("orderbook") || lower.contains("book") || lower.contains("snapshot") {
+    } else if lower.contains("incremental_book") || lower.contains("incremental-book") {
+        Some(TardisFileType::IncrementalL2)
+    } else if lower.contains("book_snapshot") || lower.contains("book-snapshot") {
+        Some(TardisFileType::Orderbook)
+    } else if lower.contains("orderbook") || lower.contains("snapshot") {
         Some(TardisFileType::Orderbook)
     } else {
-        None
+        None // Will auto-detect from CSV headers
     }
+}
+
+/// Detect file type from CSV header columns
+fn detect_file_type_from_headers(header: &str) -> Option<TardisFileType> {
+    let lower = header.to_lowercase();
+    
+    // L2 snapshots have asks[0].price, bids[0].price columns
+    if lower.contains("asks[0].price") && lower.contains("bids[0].price") {
+        return Some(TardisFileType::Orderbook);
+    }
+    
+    // Incremental L2 has is_snapshot,side,price,amount columns
+    if lower.contains("is_snapshot") && lower.contains(",side,") && lower.contains(",price,") && lower.contains(",amount") {
+        return Some(TardisFileType::IncrementalL2);
+    }
+    
+    // Trades have id,side,price,amount (no is_snapshot)
+    if lower.contains(",id,") && lower.contains(",side,") && lower.contains(",price,") && lower.contains(",amount") {
+        // Check it's NOT incremental (no is_snapshot)
+        if !lower.contains("is_snapshot") {
+            return Some(TardisFileType::Trades);
+        }
+    }
+    
+    None
 }
 
 /// Parse symbol from filename (e.g., "BTCUSD_trades.csv.gz" -> "BTCUSD")
@@ -243,7 +282,8 @@ fn parse_exchange_from_filename(filename: &str) -> String {
 }
 
 /// Parse metadata from CSV content (first few lines)
-fn parse_csv_metadata(data: &[u8], file_type: TardisFileType) -> Result<(String, String, String, String, usize), String> {
+/// Returns: (exchange, symbol, start_time, end_time, row_count, detected_file_type)
+fn parse_csv_metadata(data: &[u8], file_type_hint: Option<TardisFileType>) -> Result<(String, String, String, String, usize, TardisFileType), String> {
     // Decompress if gzipped
     let reader: Box<dyn Read> = if data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b {
         Box::new(GzDecoder::new(std::io::Cursor::new(data)))
@@ -259,28 +299,46 @@ fn parse_csv_metadata(data: &[u8], file_type: TardisFileType) -> Result<(String,
         .ok_or("Empty file")?
         .map_err(|e| format!("Read error: {}", e))?;
     
-    // Validate header format
+    // Auto-detect file type from headers if not provided
+    let file_type = file_type_hint
+        .or_else(|| detect_file_type_from_headers(&header))
+        .ok_or_else(|| format!(
+            "Could not determine file type from headers. Expected one of:\n\
+             - trades: exchange,symbol,timestamp,local_timestamp,id,side,price,amount\n\
+             - orderbook (L2 snapshot): exchange,symbol,timestamp,...,asks[0].price,...,bids[0].price,...\n\
+             - incremental_l2: exchange,symbol,timestamp,local_timestamp,is_snapshot,side,price,amount\n\
+             Got header: {}", header
+        ))?;
+    
+    // Validate header format based on detected type
     let expected_fields = match file_type {
         TardisFileType::Trades => {
             // trades: exchange,symbol,timestamp,local_timestamp,id,side,price,amount
-            if !header.contains("exchange") || !header.contains("timestamp") {
+            if !header.contains("timestamp") {
                 return Err("Invalid trades CSV format - missing required columns".to_string());
             }
-            8 // minimum fields
+            6 // minimum fields (exchange may be optional)
         }
         TardisFileType::Orderbook => {
             // orderbook: exchange,symbol,timestamp,local_timestamp,asks[0].price,...,bids[24].amount
-            if !header.contains("exchange") || !header.contains("asks") || !header.contains("bids") {
+            if !header.contains("asks") || !header.contains("bids") {
                 return Err("Invalid orderbook CSV format - missing required columns".to_string());
             }
-            104 // 4 header + 50 asks + 50 bids
+            24 // 4 header + at least 10 asks + 10 bids (book_snapshot_5)
+        }
+        TardisFileType::IncrementalL2 => {
+            // incremental_book_L2: exchange,symbol,timestamp,local_timestamp,is_snapshot,side,price,amount
+            if !header.contains("is_snapshot") || !header.contains("side") || !header.contains("price") {
+                return Err("Invalid incremental_book_L2 CSV format - missing required columns".to_string());
+            }
+            7 // minimum fields
         }
     };
     
     let header_fields: Vec<&str> = header.split(',').collect();
     if header_fields.len() < expected_fields {
         return Err(format!(
-            "Invalid {} CSV: expected {} fields, got {}",
+            "Invalid {} CSV: expected at least {} fields, got {}",
             file_type, expected_fields, header_fields.len()
         ));
     }
@@ -338,7 +396,7 @@ fn parse_csv_metadata(data: &[u8], file_type: TardisFileType) -> Result<(String,
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| "Unknown".to_string());
     
-    Ok((exchange, symbol, start_dt, end_dt, row_count))
+    Ok((exchange, symbol, start_dt, end_dt, row_count, file_type))
 }
 
 /// Handle file upload
@@ -396,28 +454,14 @@ pub async fn upload_file(
         }))
     })?;
     
-    // Determine file type
-    let file_type = match parse_file_type(&filename) {
-        Some(ft) => ft,
-        None => {
-            return Err((StatusCode::BAD_REQUEST, Json(FileUploadResponse {
-                success: false,
-                file: None,
-                session: None,
-                error: Some(format!(
-                    "Could not determine file type from filename '{}'. \
-                    Expected filename containing 'trades' or 'orderbook'.",
-                    filename
-                )),
-            })));
-        }
-    };
+    // Try to determine file type from filename (hint for CSV parsing)
+    let file_type_hint = parse_file_type_from_filename(&filename);
     
     let file_size = data.len();
     
-    // Parse CSV metadata (exchange is now optional in CSV)
-    let (csv_exchange, symbol, start_time, end_time, row_count) = 
-        parse_csv_metadata(&data, file_type).map_err(|e| {
+    // Parse CSV metadata with auto-detection from headers if filename didn't indicate type
+    let (csv_exchange, symbol, start_time, end_time, row_count, detected_file_type) = 
+        parse_csv_metadata(&data, file_type_hint).map_err(|e| {
             (StatusCode::BAD_REQUEST, Json(FileUploadResponse {
                 success: false,
                 file: None,
@@ -425,6 +469,8 @@ pub async fn upload_file(
                 error: Some(format!("Failed to parse CSV: {}", e)),
             }))
         })?;
+    
+    let file_type = detected_file_type;
     
     // Use provided exchange, fall back to CSV exchange
     let exchange = provided_exchange.unwrap_or(csv_exchange);
@@ -444,6 +490,11 @@ pub async fn upload_file(
             error: Some(format!("Failed to store file: {}", e)),
         }))
     })?;
+    
+    tracing::info!(
+        "Uploaded {} file: {} ({} rows) - auto-detected as {:?}",
+        file_type, filename, row_count, file_type
+    );
     
     let file_info = UploadedFileInfo {
         file_id: file_id.clone(),
@@ -469,6 +520,7 @@ pub async fn upload_file(
             exchange: exchange.clone(),
             trades_file: None,
             orderbook_file: None,
+            incremental_l2_file: None,
             start_time: None,
             end_time: None,
             created_at: Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string(),
@@ -482,14 +534,24 @@ pub async fn upload_file(
         TardisFileType::Orderbook => {
             session.orderbook_file = Some(file_info.clone());
         }
+        TardisFileType::IncrementalL2 => {
+            session.incremental_l2_file = Some(file_info.clone());
+        }
     }
     
-    // Update session date range (intersection of both files)
-    if let (Some(ref trades), Some(ref orderbook)) = (&session.trades_file, &session.orderbook_file) {
+    // Update session date range (intersection of all uploaded files)
+    // Prefer incremental L2 over L2 snapshots for orderbook data
+    let orderbook_source = session.incremental_l2_file.as_ref()
+        .or(session.orderbook_file.as_ref());
+    
+    if let (Some(ref trades), Some(ref orderbook)) = (&session.trades_file, orderbook_source) {
         // Use the later start time and earlier end time
         session.start_time = Some(std::cmp::max(&trades.start_time, &orderbook.start_time).clone());
         session.end_time = Some(std::cmp::min(&trades.end_time, &orderbook.end_time).clone());
-    } else if let Some(ref file) = session.trades_file.as_ref().or(session.orderbook_file.as_ref()) {
+    } else if let Some(ref file) = session.trades_file.as_ref()
+        .or(session.incremental_l2_file.as_ref())
+        .or(session.orderbook_file.as_ref()) 
+    {
         session.start_time = Some(file.start_time.clone());
         session.end_time = Some(file.end_time.clone());
     }
@@ -532,6 +594,9 @@ pub async fn delete_session(
         }
         if let Some(ref orderbook) = session.orderbook_file {
             let _ = tokio::fs::remove_file(&orderbook.stored_path).await;
+        }
+        if let Some(ref incremental) = session.incremental_l2_file {
+            let _ = tokio::fs::remove_file(&incremental.stored_path).await;
         }
         
         Ok(Json(serde_json::json!({
@@ -596,14 +661,15 @@ pub async fn submit_tardis_backtest(
         }
     };
     
-    // Validate that we have both files
-    if session.trades_file.is_none() || session.orderbook_file.is_none() {
-        let missing = if session.trades_file.is_none() && session.orderbook_file.is_none() {
+    // Validate that we have both files (orderbook can be either orderbook_file or incremental_l2_file)
+    let has_orderbook = session.orderbook_file.is_some() || session.incremental_l2_file.is_some();
+    if session.trades_file.is_none() || !has_orderbook {
+        let missing = if session.trades_file.is_none() && !has_orderbook {
             "trades and orderbook files"
         } else if session.trades_file.is_none() {
             "trades file"
         } else {
-            "orderbook file"
+            "orderbook file (or incremental_l2 file)"
         };
         
         return Err((StatusCode::BAD_REQUEST, Json(TardisBacktestResponse {
@@ -619,7 +685,10 @@ pub async fn submit_tardis_backtest(
     }
     
     let trades_file = session.trades_file.as_ref().unwrap();
-    let orderbook_file = session.orderbook_file.as_ref().unwrap();
+    // Use incremental_l2_file if available, otherwise orderbook_file
+    let orderbook_file = session.incremental_l2_file.as_ref()
+        .or(session.orderbook_file.as_ref())
+        .unwrap();
     
     // Create job parameters using Default and overriding specific fields
     let mut job_params = crate::job_queue::BacktestJobParams::default();
@@ -761,21 +830,22 @@ pub async fn import_tardis_to_database(
         }
     };
 
-    // Need orderbook file for import
-    let orderbook_file = match &session.orderbook_file {
-        Some(f) => f,
-        None => {
-            return Err((StatusCode::BAD_REQUEST, Json(TardisImportResponse {
-                success: false,
-                message: "No orderbook file uploaded".to_string(),
-                symbol: Some(session.symbol.clone()),
-                exchange: Some(session.exchange.clone()),
-                buy_orders_inserted: 0,
-                sell_orders_inserted: 0,
-                rows_processed: 0,
-                error: Some("Upload an orderbook CSV file first".to_string()),
-            })));
-        }
+    // Need orderbook file for import - prefer incremental L2 over L2 snapshots
+    let (file_to_import, is_incremental) = if let Some(ref f) = session.incremental_l2_file {
+        (f.clone(), true)
+    } else if let Some(ref f) = session.orderbook_file {
+        (f.clone(), false)
+    } else {
+        return Err((StatusCode::BAD_REQUEST, Json(TardisImportResponse {
+            success: false,
+            message: "No orderbook file uploaded".to_string(),
+            symbol: Some(session.symbol.clone()),
+            exchange: Some(session.exchange.clone()),
+            buy_orders_inserted: 0,
+            sell_orders_inserted: 0,
+            rows_processed: 0,
+            error: Some("Upload an orderbook or incremental_book_L2 CSV file first".to_string()),
+        })));
     };
 
     // Normalize symbol and exchange
@@ -851,23 +921,36 @@ pub async fn import_tardis_to_database(
         order_book_record.order_book_id, security_id, exchange_id
     );
 
-    // Clear existing L2 snapshots if requested
+    // Clear existing data if requested
     if request.clear_existing {
-        match l2_orderbook_snapshot_ops::delete_l2_snapshots_by_symbol_exchange(
-            pool.clone(),
-            &normalized_symbol,
-            &normalized_exchange,
-        ).await {
-            Ok(count) => tracing::info!("Cleared {} L2 snapshots", count),
-            Err(e) => tracing::warn!("Failed to clear L2 snapshots: {}", e),
+        if is_incremental {
+            // Clear historical_orders for this symbol/exchange
+            match historical_order_ops::delete_historical_orders_by_symbol_exchange(
+                pool.clone(),
+                &normalized_symbol,
+                &normalized_exchange,
+            ).await {
+                Ok(count) => tracing::info!("Cleared {} historical orders", count),
+                Err(e) => tracing::warn!("Failed to clear historical orders: {}", e),
+            }
+        } else {
+            // Clear L2 snapshots
+            match l2_orderbook_snapshot_ops::delete_l2_snapshots_by_symbol_exchange(
+                pool.clone(),
+                &normalized_symbol,
+                &normalized_exchange,
+            ).await {
+                Ok(count) => tracing::info!("Cleared {} L2 snapshots", count),
+                Err(e) => tracing::warn!("Failed to clear L2 snapshots: {}", e),
+            }
         }
     }
 
-    // Parse and import orderbook data
-    let file_data = tokio::fs::read(&orderbook_file.stored_path).await.map_err(|e| {
+    // Read file data
+    let file_data = tokio::fs::read(&file_to_import.stored_path).await.map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, Json(TardisImportResponse {
             success: false,
-            message: "Failed to read orderbook file".to_string(),
+            message: "Failed to read file".to_string(),
             symbol: Some(normalized_symbol.clone()),
             exchange: Some(normalized_exchange.clone()),
             buy_orders_inserted: 0,
@@ -877,40 +960,80 @@ pub async fn import_tardis_to_database(
         }))
     })?;
 
-    // Parse CSV and insert L2 snapshots
-    let (snapshots_inserted, rows_processed) = parse_and_insert_l2_orderbook(
-        &file_data,
-        &normalized_symbol,
-        &normalized_exchange,
-        security_id,
-        exchange_id,
-        pool.clone(),
-    ).await.map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(TardisImportResponse {
-            success: false,
-            message: "Failed to parse orderbook".to_string(),
-            symbol: Some(normalized_symbol.clone()),
-            exchange: Some(normalized_exchange.clone()),
-            buy_orders_inserted: 0,
-            sell_orders_inserted: 0,
-            rows_processed: 0,
-            error: Some(e),
-        }))
-    })?;
+    // Parse and import based on file type
+    if is_incremental {
+        // Parse incremental_book_L2 and insert into historical_orders
+        tracing::info!("Importing incremental_book_L2 data to historical_orders table");
+        let (orders_inserted, rows_processed) = parse_and_insert_incremental_l2(
+            &file_data,
+            &normalized_symbol,
+            &normalized_exchange,
+            security_id,
+            exchange_id,
+            pool.clone(),
+        ).await.map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(TardisImportResponse {
+                success: false,
+                message: "Failed to parse incremental L2".to_string(),
+                symbol: Some(normalized_symbol.clone()),
+                exchange: Some(normalized_exchange.clone()),
+                buy_orders_inserted: 0,
+                sell_orders_inserted: 0,
+                rows_processed: 0,
+                error: Some(e),
+            }))
+        })?;
 
-    Ok(Json(TardisImportResponse {
-        success: true,
-        message: format!(
-            "Successfully imported {} L2 snapshots from {} rows",
-            snapshots_inserted, rows_processed
-        ),
-        symbol: Some(normalized_symbol),
-        exchange: Some(normalized_exchange),
-        buy_orders_inserted: snapshots_inserted,  // Repurpose field for snapshot count
-        sell_orders_inserted: 0,
-        rows_processed,
-        error: None,
-    }))
+        Ok(Json(TardisImportResponse {
+            success: true,
+            message: format!(
+                "Successfully imported {} order book updates from {} rows (incremental L2)",
+                orders_inserted, rows_processed
+            ),
+            symbol: Some(normalized_symbol),
+            exchange: Some(normalized_exchange),
+            buy_orders_inserted: orders_inserted,
+            sell_orders_inserted: 0,
+            rows_processed,
+            error: None,
+        }))
+    } else {
+        // Parse L2 snapshots and insert into l2_orderbook_snapshots
+        tracing::info!("Importing L2 snapshot data to l2_orderbook_snapshots table");
+        let (snapshots_inserted, rows_processed) = parse_and_insert_l2_orderbook(
+            &file_data,
+            &normalized_symbol,
+            &normalized_exchange,
+            security_id,
+            exchange_id,
+            pool.clone(),
+        ).await.map_err(|e| {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(TardisImportResponse {
+                success: false,
+                message: "Failed to parse orderbook".to_string(),
+                symbol: Some(normalized_symbol.clone()),
+                exchange: Some(normalized_exchange.clone()),
+                buy_orders_inserted: 0,
+                sell_orders_inserted: 0,
+                rows_processed: 0,
+                error: Some(e),
+            }))
+        })?;
+
+        Ok(Json(TardisImportResponse {
+            success: true,
+            message: format!(
+                "Successfully imported {} L2 snapshots from {} rows",
+                snapshots_inserted, rows_processed
+            ),
+            symbol: Some(normalized_symbol),
+            exchange: Some(normalized_exchange),
+            buy_orders_inserted: snapshots_inserted,
+            sell_orders_inserted: 0,
+            rows_processed,
+            error: None,
+        }))
+    }
 }
 
 /// Parse orderbook CSV and insert L2 snapshots into database
@@ -1108,6 +1231,179 @@ async fn parse_and_insert_l2_orderbook(
     Ok((total_snapshots, rows_processed))
 }
 
+/// Parse incremental_book_L2 CSV and insert into historical_orders table
+/// Tardis incremental_book_L2 format:
+/// exchange,symbol,timestamp,local_timestamp,is_snapshot,side,price,amount
+#[cfg(feature = "postgres")]
+async fn parse_and_insert_incremental_l2(
+    data: &[u8],
+    symbol: &str,
+    exchange: &str,
+    security_id: uuid::Uuid,
+    exchange_id: uuid::Uuid,
+    pool: Arc<deadpool::Pool<AsyncPgConnection>>,
+) -> Result<(usize, usize), String> {
+    // Decompress if gzipped
+    let reader: Box<dyn Read + Send> = if data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+        Box::new(GzDecoder::new(std::io::Cursor::new(data)))
+    } else {
+        Box::new(std::io::Cursor::new(data))
+    };
+    
+    let buf_reader = BufReader::new(reader);
+    let mut lines = buf_reader.lines();
+    
+    // Read header
+    let header = lines.next()
+        .ok_or("Empty file")?
+        .map_err(|e| format!("Read error: {}", e))?;
+    
+    let header_fields: Vec<&str> = header.split(',').collect();
+    
+    // Find column indices
+    let timestamp_idx = header_fields.iter().position(|&f| f == "timestamp")
+        .ok_or("Missing 'timestamp' column")?;
+    let is_snapshot_idx = header_fields.iter().position(|&f| f == "is_snapshot")
+        .ok_or("Missing 'is_snapshot' column")?;
+    let side_idx = header_fields.iter().position(|&f| f == "side")
+        .ok_or("Missing 'side' column")?;
+    let price_idx = header_fields.iter().position(|&f| f == "price")
+        .ok_or("Missing 'price' column")?;
+    let amount_idx = header_fields.iter().position(|&f| f == "amount")
+        .ok_or("Missing 'amount' column")?;
+    
+    tracing::info!(
+        "Parsing incremental_book_L2: timestamp={}, is_snapshot={}, side={}, price={}, amount={}",
+        timestamp_idx, is_snapshot_idx, side_idx, price_idx, amount_idx
+    );
+    
+    let mut rows_processed = 0;
+    let mut total_orders = 0;
+    let mut order_counter: u64 = 0; // Synthetic order ID counter
+    
+    // Batch for efficient inserts
+    const BATCH_SIZE: usize = 5000;
+    let mut order_batch: Vec<NewHistoricalOrder> = Vec::with_capacity(BATCH_SIZE);
+    
+    for line_result in lines {
+        let line = match line_result {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        
+        let fields: Vec<&str> = line.split(',').collect();
+        if fields.len() <= amount_idx {
+            continue;
+        }
+        
+        // Parse timestamp (microseconds)
+        let timestamp_us: i64 = match fields[timestamp_idx].parse() {
+            Ok(ts) => ts,
+            Err(_) => continue,
+        };
+        
+        let timestamp = match Utc.timestamp_micros(timestamp_us).single() {
+            Some(dt) => dt,
+            None => continue,
+        };
+        
+        // Parse is_snapshot (true = initial snapshot, false = delta update)
+        let is_snapshot: bool = fields[is_snapshot_idx].parse().unwrap_or(false);
+        
+        // Parse side (bid/ask)
+        let side_str = fields[side_idx].to_lowercase();
+        let side = if side_str == "bid" || side_str == "buy" {
+            "bid"
+        } else if side_str == "ask" || side_str == "sell" {
+            "ask"
+        } else {
+            continue;
+        };
+        
+        // Parse price
+        let price_str = fields[price_idx].trim();
+        let price = match BigDecimal::from_str(price_str) {
+            Ok(p) if p > BigDecimal::from(0) => p,
+            _ => continue,
+        };
+        
+        // Parse amount (0 = level deleted)
+        let amount_str = fields[amount_idx].trim();
+        let quantity = match BigDecimal::from_str(amount_str) {
+            Ok(q) if q >= BigDecimal::from(0) => q,
+            _ => continue,
+        };
+        
+        rows_processed += 1;
+        order_counter += 1;
+        
+        // Determine event type based on quantity
+        // quantity == 0 means the level was removed
+        // is_snapshot means initial order book state
+        // otherwise it's a modify/add
+        let event_type = if is_snapshot {
+            "snapshot"
+        } else if quantity == BigDecimal::from(0) {
+            "cancel"
+        } else {
+            "modify" // Could be add or modify - we can't distinguish without tracking state
+        };
+        
+        // Create historical order entry
+        // We use a synthetic order_id based on price level + side since Tardis L2 data
+        // doesn't have actual order IDs (it's L2 aggregated data, not L3)
+        let synthetic_order_id = format!("{}_{}_{}_{}", symbol, side, price_str, order_counter);
+        
+        order_batch.push(NewHistoricalOrder::new(
+            timestamp,
+            &synthetic_order_id,
+            event_type,
+            side,
+            &price,
+            &quantity,
+            None, // prev_price
+            None, // prev_quantity
+            if quantity == BigDecimal::from(0) { "cancelled" } else { "open" },
+            exchange,
+            symbol,
+            exchange_id,
+            security_id,
+        ));
+        
+        // Insert batch when it reaches the limit
+        if order_batch.len() >= BATCH_SIZE {
+            let batch_to_insert = std::mem::take(&mut order_batch);
+            match historical_order_ops::create_historical_orders(pool.clone(), batch_to_insert).await {
+                Ok(inserted) => total_orders += inserted.len(),
+                Err(e) => tracing::warn!("Historical order batch insert error: {}", e),
+            }
+        }
+        
+        // Log progress every 50000 rows
+        if rows_processed % 50000 == 0 {
+            tracing::info!(
+                "Progress: {} rows, {} orders inserted",
+                rows_processed, total_orders
+            );
+        }
+    }
+    
+    // Insert remaining batch
+    if !order_batch.is_empty() {
+        match historical_order_ops::create_historical_orders(pool.clone(), order_batch).await {
+            Ok(inserted) => total_orders += inserted.len(),
+            Err(e) => tracing::warn!("Final historical order batch insert error: {}", e),
+        }
+    }
+    
+    tracing::info!(
+        "Import complete: {} rows processed, {} historical orders inserted",
+        rows_processed, total_orders
+    );
+    
+    Ok((total_orders, rows_processed))
+}
+
 /// Stub implementation when postgres feature is disabled
 #[cfg(not(feature = "postgres"))]
 pub async fn import_tardis_to_database(
@@ -1273,23 +1569,46 @@ mod tests {
     // ============================================================================
 
     #[test]
-    fn test_parse_file_type_trades() {
-        assert_eq!(parse_file_type("BTCUSD_trades.csv.gz"), Some(TardisFileType::Trades));
-        assert_eq!(parse_file_type("binance-us_BTCUSD_trades_2024-10-01.csv.gz"), Some(TardisFileType::Trades));
-        assert_eq!(parse_file_type("trade_data.csv"), Some(TardisFileType::Trades));
+    fn test_parse_file_type_from_filename_trades() {
+        assert_eq!(parse_file_type_from_filename("BTCUSD_trades.csv.gz"), Some(TardisFileType::Trades));
+        assert_eq!(parse_file_type_from_filename("binance-us_BTCUSD_trades_2024-10-01.csv.gz"), Some(TardisFileType::Trades));
+        assert_eq!(parse_file_type_from_filename("trade_data.csv"), Some(TardisFileType::Trades));
     }
 
     #[test]
-    fn test_parse_file_type_orderbook() {
-        assert_eq!(parse_file_type("BTCUSD_book_snapshot_25.csv.gz"), Some(TardisFileType::Orderbook));
-        assert_eq!(parse_file_type("binance-us_BTCUSD_orderbook_2024-10-01.csv.gz"), Some(TardisFileType::Orderbook));
-        assert_eq!(parse_file_type("snapshot_data.csv"), Some(TardisFileType::Orderbook));
+    fn test_parse_file_type_from_filename_orderbook() {
+        assert_eq!(parse_file_type_from_filename("BTCUSD_book_snapshot_25.csv.gz"), Some(TardisFileType::Orderbook));
+        assert_eq!(parse_file_type_from_filename("binance-us_BTCUSD_book_snapshot_5_2024-10-01.csv.gz"), Some(TardisFileType::Orderbook));
+        assert_eq!(parse_file_type_from_filename("snapshot_data.csv"), Some(TardisFileType::Orderbook));
     }
 
     #[test]
-    fn test_parse_file_type_unknown() {
-        assert_eq!(parse_file_type("BTCUSD_data.csv"), None);
-        assert_eq!(parse_file_type("random_file.txt"), None);
+    fn test_parse_file_type_from_filename_incremental_l2() {
+        assert_eq!(parse_file_type_from_filename("BTCUSD_incremental_book_L2.csv.gz"), Some(TardisFileType::IncrementalL2));
+        assert_eq!(parse_file_type_from_filename("binance_incremental-book-l2_2024-10-01.csv.gz"), Some(TardisFileType::IncrementalL2));
+        assert_eq!(parse_file_type_from_filename("incremental_book_l2_data.csv"), Some(TardisFileType::IncrementalL2));
+    }
+
+    #[test]
+    fn test_parse_file_type_from_filename_unknown() {
+        // Unknown files should return None (will auto-detect from CSV headers)
+        assert_eq!(parse_file_type_from_filename("BTCUSD_data.csv"), None);
+        assert_eq!(parse_file_type_from_filename("random_file.txt"), None);
+    }
+
+    #[test]
+    fn test_detect_file_type_from_headers() {
+        // L2 snapshot headers
+        let l2_header = "exchange,symbol,timestamp,local_timestamp,asks[0].price,asks[0].amount,bids[0].price,bids[0].amount";
+        assert_eq!(detect_file_type_from_headers(l2_header), Some(TardisFileType::Orderbook));
+        
+        // Incremental L2 headers
+        let incremental_header = "exchange,symbol,timestamp,local_timestamp,is_snapshot,side,price,amount";
+        assert_eq!(detect_file_type_from_headers(incremental_header), Some(TardisFileType::IncrementalL2));
+        
+        // Trades headers
+        let trades_header = "exchange,symbol,timestamp,local_timestamp,id,side,price,amount";
+        assert_eq!(detect_file_type_from_headers(trades_header), Some(TardisFileType::Trades));
     }
 
     // ============================================================================

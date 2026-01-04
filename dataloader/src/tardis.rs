@@ -203,8 +203,20 @@ impl TardisLoader {
         let reader = BufReader::with_capacity(1024 * 1024, decoder); // 1MB buffer
 
         let mut trades = Vec::with_capacity(100_000);
+        let mut lines = reader.lines();
+        
+        // Skip header line
+        if let Some(header_result) = lines.next() {
+            let header = header_result?;
+            if !header.contains("timestamp") {
+                // First line doesn't look like a header, try to parse it
+                if let Ok(trade) = Self::parse_trade_line(&header) {
+                    trades.push(trade);
+                }
+            }
+        }
 
-        for (line_num, line_result) in reader.lines().enumerate() {
+        for (line_num, line_result) in lines.enumerate() {
             let line = line_result?;
             if line.is_empty() {
                 continue;
@@ -215,7 +227,7 @@ impl TardisLoader {
                 Err(msg) => {
                     // Log warning but continue - some lines might be malformed
                     if line_num < 10 {
-                        tracing::warn!("Skipping line {}: {}", line_num + 1, msg);
+                        tracing::warn!("Skipping line {}: {}", line_num + 2, msg);
                     }
                 }
             }
@@ -248,8 +260,20 @@ impl TardisLoader {
         let reader = BufReader::with_capacity(1024 * 1024, decoder);
 
         let mut snapshots = Vec::with_capacity(1_000_000);
+        let mut lines = reader.lines();
+        
+        // Skip header line
+        if let Some(header_result) = lines.next() {
+            let header = header_result?;
+            if !header.contains("timestamp") {
+                // First line doesn't look like a header, try to parse it
+                if let Ok(snapshot) = Self::parse_orderbook_line(&header) {
+                    snapshots.push(snapshot);
+                }
+            }
+        }
 
-        for (line_num, line_result) in reader.lines().enumerate() {
+        for (line_num, line_result) in lines.enumerate() {
             let line = line_result?;
             if line.is_empty() {
                 continue;
@@ -259,7 +283,7 @@ impl TardisLoader {
                 Ok(snapshot) => snapshots.push(snapshot),
                 Err(msg) => {
                     if line_num < 10 {
-                        tracing::warn!("Skipping line {}: {}", line_num + 1, msg);
+                        tracing::warn!("Skipping line {}: {}", line_num + 2, msg);
                     }
                 }
             }
@@ -314,10 +338,10 @@ impl TardisLoader {
     }
 
     /// Parse a single orderbook snapshot line
-    /// Format: exchange,symbol,timestamp,local_timestamp,asks[0].price,asks[0].amount,...(25 levels),bids[0].price,bids[0].amount,...(25 levels)
+    /// Format: exchange,symbol,timestamp,local_timestamp,asks[0].price,asks[0].amount,bids[0].price,bids[0].amount,...(interleaved 25 levels)
     fn parse_orderbook_line(line: &str) -> Result<TardisOrderbookSnapshot, String> {
         let parts: Vec<&str> = line.split(',').collect();
-        // 4 header fields + 25 ask levels * 2 + 25 bid levels * 2 = 4 + 50 + 50 = 104
+        // 4 header fields + 25 levels * 4 (ask_price, ask_amount, bid_price, bid_amount) = 4 + 100 = 104
         if parts.len() < 104 {
             return Err(format!("Expected 104 fields, got {}", parts.len()));
         }
@@ -332,18 +356,14 @@ impl TardisLoader {
         let mut asks = [PriceLevel::default(); 25];
         let mut bids = [PriceLevel::default(); 25];
 
-        // Parse 25 ask levels starting at index 4
+        // Parse 25 interleaved levels starting at index 4
+        // Each level: asks[i].price, asks[i].amount, bids[i].price, bids[i].amount
         for i in 0..25 {
-            let base = 4 + i * 2;
+            let base = 4 + i * 4;
             asks[i].price = parts[base].parse().unwrap_or(0.0);
             asks[i].amount = parts[base + 1].parse().unwrap_or(0.0);
-        }
-
-        // Parse 25 bid levels starting at index 54
-        for i in 0..25 {
-            let base = 54 + i * 2;
-            bids[i].price = parts[base].parse().unwrap_or(0.0);
-            bids[i].amount = parts[base + 1].parse().unwrap_or(0.0);
+            bids[i].price = parts[base + 2].parse().unwrap_or(0.0);
+            bids[i].amount = parts[base + 3].parse().unwrap_or(0.0);
         }
 
         Ok(TardisOrderbookSnapshot {
@@ -378,8 +398,22 @@ impl TardisLoader {
         let reader = BufReader::with_capacity(1024 * 1024, decoder);
 
         let mut trades = Vec::with_capacity(50_000);
+        let mut lines = reader.lines();
+        
+        // Skip header line
+        if let Some(header_result) = lines.next() {
+            let header = header_result?;
+            if !header.contains("timestamp") {
+                // First line doesn't look like a header, try to parse it
+                if let Ok(trade) = Self::parse_trade_line(&header) {
+                    if trade.timestamp_us >= start_us && trade.timestamp_us < end_us {
+                        trades.push(trade);
+                    }
+                }
+            }
+        }
 
-        for line_result in reader.lines() {
+        for line_result in lines {
             let line = line_result?;
             if line.is_empty() {
                 continue;
@@ -418,8 +452,22 @@ impl TardisLoader {
         let reader = BufReader::with_capacity(1024 * 1024, decoder);
 
         let mut snapshots = Vec::with_capacity(100_000);
+        let mut lines = reader.lines();
+        
+        // Skip header line
+        if let Some(header_result) = lines.next() {
+            let header = header_result?;
+            if !header.contains("timestamp") {
+                // First line doesn't look like a header, try to parse it
+                if let Ok(snapshot) = Self::parse_orderbook_line(&header) {
+                    if snapshot.timestamp_us >= start_us && snapshot.timestamp_us < end_us {
+                        snapshots.push(snapshot);
+                    }
+                }
+            }
+        }
 
-        for line_result in reader.lines() {
+        for line_result in lines {
             let line = line_result?;
             if line.is_empty() {
                 continue;
@@ -742,5 +790,62 @@ mod tests {
         // 2 levels: bids = 1.5 + 2.5 = 4.0, asks = 1.0 + 2.0 = 3.0
         let imbalance = snapshot.imbalance(2);
         assert!((imbalance - (4.0 - 3.0) / 7.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_parse_orderbook_line_interleaved() {
+        // Test the interleaved column format from Tardis book_snapshot_25
+        // Format: exchange,symbol,timestamp,local_timestamp,
+        //         asks[0].price,asks[0].amount,bids[0].price,bids[0].amount,
+        //         asks[1].price,asks[1].amount,bids[1].price,bids[1].amount, ...
+        
+        // Build a 104-column test line (4 header + 25 levels * 4 columns)
+        let mut parts = vec![
+            "binance-us",           // [0] exchange
+            "BTCUSD",               // [1] symbol  
+            "1767150962413000",     // [2] timestamp
+            "1767150962454098",     // [3] local_timestamp
+        ];
+        
+        // Add 25 interleaved levels
+        for i in 0..25 {
+            let ask_price = 100000.0 + (i as f64 * 10.0);  // asks go up: 100000, 100010, ...
+            let ask_amount = 1.0 + (i as f64 * 0.1);       // amounts: 1.0, 1.1, 1.2, ...
+            let bid_price = 99990.0 - (i as f64 * 10.0);   // bids go down: 99990, 99980, ...
+            let bid_amount = 2.0 + (i as f64 * 0.1);       // amounts: 2.0, 2.1, 2.2, ...
+            
+            parts.push(Box::leak(ask_price.to_string().into_boxed_str()));
+            parts.push(Box::leak(ask_amount.to_string().into_boxed_str()));
+            parts.push(Box::leak(bid_price.to_string().into_boxed_str()));
+            parts.push(Box::leak(bid_amount.to_string().into_boxed_str()));
+        }
+        
+        let line = parts.join(",");
+        let snapshot = TardisLoader::parse_orderbook_line(&line).unwrap();
+        
+        // Verify timestamp parsing
+        assert_eq!(snapshot.timestamp_us, 1767150962413000);
+        assert_eq!(snapshot.local_timestamp_ns, 1767150962454098);
+        
+        // Verify first level (level 0)
+        assert!((snapshot.asks[0].price - 100000.0).abs() < 0.01, "ask[0].price should be 100000");
+        assert!((snapshot.asks[0].amount - 1.0).abs() < 0.01, "ask[0].amount should be 1.0");
+        assert!((snapshot.bids[0].price - 99990.0).abs() < 0.01, "bid[0].price should be 99990");
+        assert!((snapshot.bids[0].amount - 2.0).abs() < 0.01, "bid[0].amount should be 2.0");
+        
+        // Verify mid level (level 12)
+        assert!((snapshot.asks[12].price - 100120.0).abs() < 0.01, "ask[12].price should be 100120");
+        assert!((snapshot.asks[12].amount - 2.2).abs() < 0.01, "ask[12].amount should be 2.2");
+        assert!((snapshot.bids[12].price - 99870.0).abs() < 0.01, "bid[12].price should be 99870");
+        assert!((snapshot.bids[12].amount - 3.2).abs() < 0.01, "bid[12].amount should be 3.2");
+        
+        // Verify last level (level 24)
+        assert!((snapshot.asks[24].price - 100240.0).abs() < 0.01, "ask[24].price should be 100240");
+        assert!((snapshot.asks[24].amount - 3.4).abs() < 0.01, "ask[24].amount should be 3.4");
+        assert!((snapshot.bids[24].price - 99750.0).abs() < 0.01, "bid[24].price should be 99750");
+        assert!((snapshot.bids[24].amount - 4.4).abs() < 0.01, "bid[24].amount should be 4.4");
+        
+        // Verify spread calculation
+        assert!((snapshot.spread() - 10.0).abs() < 0.01, "spread should be 10 (100000 - 99990)");
     }
 }

@@ -23,9 +23,7 @@ pub struct AvellanedaStoikovChromosome {
     pub trend_sensitivity: f64,
     pub flow_sensitivity: f64,
     
-    // Exit and trading control parameters
-    pub take_profit_pct: f64,
-    pub stop_loss_pct: f64,
+    // Trading control parameters
     pub min_spread_bps: f64,
     pub max_trades_per_minute: f64,
     
@@ -38,6 +36,11 @@ pub struct AvellanedaStoikovChromosome {
     // 4.0 = 4x fee (balanced)
     // 6.0 = 6x fee (wide, fewer trades, more profit per trade)
     pub fee_spread_multiplier: f64,
+    
+    // Maximum inventory as multiple of order size
+    // 2.0 = conservative (small positions), 10.0 = aggressive (large positions)
+    // Higher values allow more directional exposure but increase risk
+    pub max_inventory_multiple: f64,
 }
 
 impl AvellanedaStoikovChromosome {
@@ -57,6 +60,8 @@ impl AvellanedaStoikovChromosome {
         // With 25 bps fee: 2x = 50 bps (breakeven), 3x = 75 bps, 3.5x = 87 bps max
         // Tighter upper bound (3.5) prevents wide spreads that kill fill rates
         self.fee_spread_multiplier = self.fee_spread_multiplier.clamp(2.0, 3.5);
+        // Max inventory: 2x (conservative) to 10x (aggressive) order size
+        self.max_inventory_multiple = self.max_inventory_multiple.clamp(2.0, 10.0);
     }
 }
 
@@ -109,13 +114,6 @@ impl Chromosome for AvellanedaStoikovChromosome {
             trend_sensitivity: rng.gen_range(-0.5..0.5),            // Moderate trend bias allowed
             flow_sensitivity: rng.gen_range(-1.0..1.0),             // Strong fade to strong follow
             
-            // Exit and trading control parameters
-            // Take profit: 0.0 to 2.0% (0.0 = disabled for MM, up to 2% for momentum)
-            // NOTE: 0.0 is included to allow GA to learn that TP/SL hurts pure MM strategies
-            take_profit_pct: rng.gen_range(0.0..0.02),
-            // Stop loss: 0.0 to 2.0% (0.0 = disabled, use inventory limits instead)
-            stop_loss_pct: rng.gen_range(0.0..0.02),
-            
             // Minimum spread in basis points (soft floor)
             // The REAL profitability floor comes from fee_spread_multiplier × maker_fee
             // This is a secondary constraint for market conditions (volatility, liquidity)
@@ -134,6 +132,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
             // Range 2.0-3.5: 2x = breakeven, 2.5x = small profit, 3.5x = max (87 bps with 25 bps fee)
             // Tighter range prevents wide spreads that kill fill rates
             fee_spread_multiplier: rng.gen_range(2.0..3.5),
+            
+            // Max inventory: how many order sizes of inventory to allow
+            // 2x = very conservative, 5x = balanced, 10x = aggressive
+            max_inventory_multiple: rng.gen_range(2.0..10.0),
         }
     }
 
@@ -156,9 +158,7 @@ impl Chromosome for AvellanedaStoikovChromosome {
             trend_sensitivity: if rng.gen_bool(0.5) { self.trend_sensitivity } else { other.trend_sensitivity },
             flow_sensitivity: if rng.gen_bool(0.5) { self.flow_sensitivity } else { other.flow_sensitivity },
             
-            // Exit and trading control crossover
-            take_profit_pct: if rng.gen_bool(0.5) { self.take_profit_pct } else { other.take_profit_pct },
-            stop_loss_pct: if rng.gen_bool(0.5) { self.stop_loss_pct } else { other.stop_loss_pct },
+            // Trading control crossover
             min_spread_bps: if rng.gen_bool(0.5) { self.min_spread_bps } else { other.min_spread_bps },
             max_trades_per_minute: if rng.gen_bool(0.5) { self.max_trades_per_minute } else { other.max_trades_per_minute },
             
@@ -167,6 +167,9 @@ impl Chromosome for AvellanedaStoikovChromosome {
             
             // Fee spread multiplier crossover
             fee_spread_multiplier: if rng.gen_bool(0.5) { self.fee_spread_multiplier } else { other.fee_spread_multiplier },
+            
+            // Max inventory crossover
+            max_inventory_multiple: if rng.gen_bool(0.5) { self.max_inventory_multiple } else { other.max_inventory_multiple },
         };
         // Ensure bounds are enforced after crossover
         child.enforce_bounds();
@@ -235,15 +238,7 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.flow_sensitivity = self.flow_sensitivity.clamp(-1.0, 1.0);
         }
         
-        // Exit and trading control mutations
-        if rng.gen_bool(mutation_rate) {
-            self.take_profit_pct *= rng.gen_range(0.5..2.0);
-            self.take_profit_pct = self.take_profit_pct.clamp(0.0005, 0.10);
-        }
-        if rng.gen_bool(mutation_rate) {
-            self.stop_loss_pct *= rng.gen_range(0.5..2.0);
-            self.stop_loss_pct = self.stop_loss_pct.clamp(0.0005, 0.05);
-        }
+        // Trading control mutations
         // Min spread: soft floor (profitability ensured by fee_spread_multiplier)
         if rng.gen_bool(mutation_rate) {
             self.min_spread_bps *= rng.gen_range(0.5..2.0);
@@ -263,6 +258,11 @@ impl Chromosome for AvellanedaStoikovChromosome {
         if rng.gen_bool(mutation_rate) {
             self.fee_spread_multiplier += rng.gen_range(-0.3..0.3);
             self.fee_spread_multiplier = self.fee_spread_multiplier.clamp(2.0, 3.5);
+        }
+        // Max inventory multiple: range 2.0-10.0
+        if rng.gen_bool(mutation_rate) {
+            self.max_inventory_multiple += rng.gen_range(-1.0..1.0);
+            self.max_inventory_multiple = self.max_inventory_multiple.clamp(2.0, 10.0);
         }
     }
     
@@ -288,23 +288,24 @@ impl Chromosome for AvellanedaStoikovChromosome {
         let d_trend = (self.trend_sensitivity - other.trend_sensitivity).abs() / 2.0; // Range: -1.0 to 1.0
         let d_flow = (self.flow_sensitivity - other.flow_sensitivity).abs() / 2.0; // Range: -1.0 to 1.0
         
-        // Exit and trading control distances (log-scale for wide ranges)
-        let d_tp = ((self.take_profit_pct.ln() - other.take_profit_pct.ln()).abs()) / (0.10_f64.ln() - 0.0005_f64.ln()).abs();
-        let d_sl = ((self.stop_loss_pct.ln() - other.stop_loss_pct.ln()).abs()) / (0.05_f64.ln() - 0.0005_f64.ln()).abs();
-        let d_spread = ((self.min_spread_bps.ln() - other.min_spread_bps.ln()).abs()) / (200.0_f64.ln() - 1.0_f64.ln()).abs();
+        // Trading control distances (log-scale for wide ranges)
+        let d_spread = ((self.min_spread_bps.ln() - other.min_spread_bps.ln()).abs()) / (50.0_f64.ln() - 5.0_f64.ln()).abs();
         let d_trades = ((self.max_trades_per_minute.ln() - other.max_trades_per_minute.ln()).abs()) / (60.0_f64.ln() - 0.01_f64.ln()).abs();
         
         // Adverse selection distance
         let d_adverse = (self.adverse_selection_sensitivity - other.adverse_selection_sensitivity).abs() / 2.0; // Range: 0.0-2.0
         
         // Fee spread multiplier distance
-        let d_fee_mult = (self.fee_spread_multiplier - other.fee_spread_multiplier).abs() / 4.0; // Range: 2.0-6.0
+        let d_fee_mult = (self.fee_spread_multiplier - other.fee_spread_multiplier).abs() / 1.5; // Range: 2.0-3.5
         
-        // Euclidean distance in 18D normalized space
+        // Max inventory multiple distance
+        let d_inv_mult = (self.max_inventory_multiple - other.max_inventory_multiple).abs() / 8.0; // Range: 2.0-10.0
+        
+        // Euclidean distance in 17D normalized space
         (d_risk.powi(2) + d_size.powi(2) + d_window.powi(2) + d_lifetime.powi(2) + 
          d_inventory.powi(2) + d_vol_cap.powi(2) +
          d_horizon.powi(2) + d_depth.powi(2) + d_vol_adj.powi(2) + d_inv_penalty.powi(2) +
-         d_trend.powi(2) + d_flow.powi(2) + d_tp.powi(2) + d_sl.powi(2) +
-         d_spread.powi(2) + d_trades.powi(2) + d_adverse.powi(2) + d_fee_mult.powi(2)).sqrt()
+         d_trend.powi(2) + d_flow.powi(2) +
+         d_spread.powi(2) + d_trades.powi(2) + d_adverse.powi(2) + d_fee_mult.powi(2) + d_inv_mult.powi(2)).sqrt()
     }
 }

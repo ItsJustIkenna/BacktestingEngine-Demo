@@ -21,6 +21,8 @@ use std::collections::{BTreeMap, VecDeque};
 use ordered_float::OrderedFloat;
 use serde::{Deserialize, Serialize};
 use bigdecimal::BigDecimal;
+#[cfg(feature = "postgres")]
+use bigdecimal::ToPrimitive;
 
 /// Event types from historical data
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,8 +81,7 @@ pub struct OrderBookEvent {
 use databaseschema::models::historical_order::HistoricalOrder;
 #[cfg(feature = "postgres")]
 use dataloader::MarketData;
-#[cfg(feature = "postgres")]
-use bigdecimal::ToPrimitive;
+// Note: ToPrimitive already imported at line 25
 
 /// Convert MarketData slice (containing HistoricalOrder) to OrderBookEvent vec
 /// This is the bridge between the data loader and the realistic simulation engine
@@ -214,6 +215,33 @@ impl FillModelType {
             "realistic" => FillModelType::Realistic,
             "pessimistic" => FillModelType::Pessimistic,
             _ => FillModelType::Realistic,  // Default to conservative
+        }
+    }
+    
+    /// Infer fill model from exchange name
+    /// Major CEXs use CoLocated (we run on Beeks infrastructure)
+    /// DEXs use Optimistic (fills are deterministic against liquidity pools)
+    pub fn for_exchange(exchange: &str) -> Self {
+        let lower = exchange.to_lowercase();
+        // Beeks Group provides co-location for major CEXs
+        // DEXs don't have queue position mechanics - fills are deterministic
+        match lower.as_str() {
+            // CEXs with Beeks co-location - front of queue advantage
+            "kraken" | "binance" | "binance_us" | "binanceus" | "coinbase" => FillModelType::CoLocated,
+            // DEXs - no queue, fills are deterministic against liquidity pools
+            // Optimistic is appropriate since fill probability is high if liquidity exists
+            // (slippage and MEV are modeled separately, not in fill probability)
+            "deepbook" | "cetus" | "sui" => FillModelType::Optimistic,
+            // Unknown exchanges - assume standard retail access
+            _ => FillModelType::Standard,
+        }
+    }
+    
+    /// Parse fill model from string, or infer from exchange if "auto" or empty
+    pub fn from_str_or_exchange(fill_model: &str, exchange: &str) -> Self {
+        match fill_model.to_lowercase().as_str() {
+            "auto" | "" => Self::for_exchange(exchange),
+            _ => Self::from_str(fill_model),
         }
     }
 }
@@ -2323,4 +2351,68 @@ impl From<&data_prep::OrderBookEventTick> for OrderBookEvent {
             quantity: tick.quantity,
         }
     }
+}
+
+// ============================================================================
+// L2 ORDERBOOK SNAPSHOT CONVERSION
+// ============================================================================
+
+/// Convert L2 orderbook snapshots to OrderBookEvents for backtesting
+/// 
+/// L2 data provides price levels with aggregated quantities (no individual orders).
+/// We convert each snapshot to a series of synthetic "trade" events at the best
+/// bid/ask, which gives the simulator price discovery information.
+/// 
+/// This is less accurate than L3 data (individual orders) but still useful for
+/// market making backtests where we need to know the spread and top-of-book prices.
+#[cfg(feature = "postgres")]
+pub fn l2_snapshots_to_events(
+    snapshots: &[databaseschema::models::l2_orderbook_snapshot::L2OrderbookSnapshot],
+) -> Vec<OrderBookEvent> {
+    let mut events = Vec::with_capacity(snapshots.len() * 2);
+    
+    for (idx, snapshot) in snapshots.iter().enumerate() {
+        let timestamp_ms = snapshot.timestamp.timestamp_millis();
+        
+        // Create a synthetic trade event at the mid price to give the simulator
+        // price discovery. We use the average of best bid/ask quantities.
+        if let (Some(best_bid), Some(best_ask)) = (&snapshot.best_bid_price, &snapshot.best_ask_price) {
+            let bid_price = best_bid.to_f64().unwrap_or(0.0);
+            let ask_price = best_ask.to_f64().unwrap_or(0.0);
+            
+            if bid_price > 0.0 && ask_price > 0.0 {
+                // Create a bid-side quote event (simulates a buy trade at the bid)
+                let bid_qty = snapshot.best_bid_quantity
+                    .as_ref()
+                    .and_then(|q| q.to_f64())
+                    .unwrap_or(0.01);
+                    
+                events.push(OrderBookEvent {
+                    timestamp_ms,
+                    event_type: EventType::Trade,
+                    order_id: format!("l2_bid_{}", idx),
+                    side: Side::Buy,
+                    price: bid_price,
+                    quantity: bid_qty,
+                });
+                
+                // Create an ask-side quote event (simulates a sell trade at the ask)
+                let ask_qty = snapshot.best_ask_quantity
+                    .as_ref()
+                    .and_then(|q| q.to_f64())
+                    .unwrap_or(0.01);
+                    
+                events.push(OrderBookEvent {
+                    timestamp_ms,
+                    event_type: EventType::Trade,
+                    order_id: format!("l2_ask_{}", idx),
+                    side: Side::Sell,
+                    price: ask_price,
+                    quantity: ask_qty,
+                });
+            }
+        }
+    }
+    
+    events
 }

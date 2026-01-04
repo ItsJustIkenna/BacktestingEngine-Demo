@@ -1182,7 +1182,7 @@ impl Worker {
             rate_limit_cooldown_ms: 1000,
             window_ms: params.window_ms as i64,
             min_quote_lifetime_ms: params.min_quote_lifetime_ms as i64,
-            fill_model: backtest::FillModelType::from_str(&params.fill_model),
+            fill_model: backtest::FillModelType::from_str_or_exchange(&params.fill_model, &params.exchange),
             ..Default::default()
         };
         
@@ -1607,8 +1607,8 @@ impl Worker {
                                     taker_fee_rate: fee_config.taker_fee,
                                     fee_spread_multiplier: chr.fee_spread_multiplier,
                                     adverse_selection_sensitivity: chr.adverse_selection_sensitivity,
-                                    take_profit_pct: chr.take_profit_pct,
-                                    stop_loss_pct: chr.stop_loss_pct,
+                                    take_profit_pct: 0.0,  // Disabled - MM uses inventory limits
+                                    stop_loss_pct: 0.0,    // Disabled - MM uses inventory limits
                                     max_trades_per_minute: chr.max_trades_per_minute,
                                     max_orders_per_second: 10.0,
                                     rate_limit_cooldown_ms: 1000,
@@ -1767,8 +1767,8 @@ impl Worker {
                         taker_fee_rate: exchange_fee_config.taker_fee,
                         fee_spread_multiplier: base_chr.fee_spread_multiplier,
                         adverse_selection_sensitivity: base_chr.adverse_selection_sensitivity,
-                        take_profit_pct: base_chr.take_profit_pct,
-                        stop_loss_pct: base_chr.stop_loss_pct,
+                        take_profit_pct: 0.0,  // Disabled - MM uses inventory limits
+                        stop_loss_pct: 0.0,    // Disabled - MM uses inventory limits
                         max_trades_per_minute: base_chr.max_trades_per_minute,
                         max_orders_per_second: 10.0,
                         rate_limit_cooldown_ms: 1000,
@@ -1865,14 +1865,14 @@ impl Worker {
             taker_fee_rate: exchange_fee_config.taker_fee,
             fee_spread_multiplier: base_chr.fee_spread_multiplier,
             adverse_selection_sensitivity: base_chr.adverse_selection_sensitivity,
-            take_profit_pct: base_chr.take_profit_pct,
-            stop_loss_pct: base_chr.stop_loss_pct,
+            take_profit_pct: 0.0,  // Disabled - MM uses inventory limits
+            stop_loss_pct: 0.0,    // Disabled - MM uses inventory limits
             max_trades_per_minute: base_chr.max_trades_per_minute,
             max_orders_per_second: 10.0,
             rate_limit_cooldown_ms: 1000,
             window_ms: base_chr.window_ms as i64,
             min_quote_lifetime_ms: base_chr.min_quote_lifetime_ms as i64,
-            fill_model: backtest::FillModelType::from_str(&params.fill_model),
+            fill_model: backtest::FillModelType::from_str_or_exchange(&params.fill_model, &params.exchange),
             ..Default::default()
         };
         
@@ -2056,9 +2056,10 @@ impl Worker {
             None
         };
         
-        // VaR and ES from portfolio risk metrics if available
-        let value_at_risk_95 = portfolio_result.risk_metrics.as_ref().map(|rm| rm.portfolio_var_95);
-        let expected_shortfall_95 = portfolio_result.risk_metrics.as_ref().map(|rm| rm.portfolio_es_95);
+        // VaR and ES will be populated from Monte Carlo if available (see below)
+        // Initialize from portfolio risk metrics as fallback
+        let mut value_at_risk_95 = portfolio_result.risk_metrics.as_ref().map(|rm| rm.portfolio_var_95);
+        let mut expected_shortfall_95 = portfolio_result.risk_metrics.as_ref().map(|rm| rm.portfolio_es_95);
         
         // Calculate drawdown metrics from equity curve
         let (max_drawdown_duration_days, current_drawdown, avg_drawdown) = {
@@ -2191,6 +2192,12 @@ impl Worker {
             }
             None
         };
+        
+        // Update VaR/ES from Monte Carlo results if available (takes precedence over risk_metrics)
+        if let Some(ref mc) = monte_carlo_summary {
+            value_at_risk_95 = Some(mc.var_95);
+            expected_shortfall_95 = Some(mc.cvar_95);
+        }
         
         // Build aggregated inventory metrics for the portfolio from symbol results
         let total_starting_inv_value: f64 = portfolio_result.symbol_results.iter()
@@ -2583,8 +2590,8 @@ impl Worker {
                     taker_fee_rate: fee_config.taker_fee,
                     fee_spread_multiplier: chr.fee_spread_multiplier,
                     adverse_selection_sensitivity: chr.adverse_selection_sensitivity,
-                    take_profit_pct: chr.take_profit_pct,
-                    stop_loss_pct: chr.stop_loss_pct,
+                    take_profit_pct: 0.0,  // Disabled - MM uses inventory limits
+                    stop_loss_pct: 0.0,    // Disabled - MM uses inventory limits
                     max_trades_per_minute: chr.max_trades_per_minute,
                     max_orders_per_second: 10.0,
                     rate_limit_cooldown_ms: 1000,
@@ -2790,8 +2797,8 @@ impl Worker {
                             market_depth_k: chr.market_depth_k,
                             min_spread_bps: chr.min_spread_bps,
                             max_trades_per_minute: chr.max_trades_per_minute,
-                            take_profit_pct: chr.take_profit_pct,
-                            stop_loss_pct: chr.stop_loss_pct,
+                            take_profit_pct: 0.0,  // Disabled - MM uses inventory limits
+                            stop_loss_pct: 0.0,    // Disabled - MM uses inventory limits
                             volatility_adjustment_factor: chr.volatility_adjustment_factor,
                             inventory_penalty_factor: chr.inventory_penalty_factor,
                             trend_sensitivity: chr.trend_sensitivity,
@@ -2937,8 +2944,6 @@ impl Worker {
             "market_depth_k" => format!("{:.2}", best_chromosome.market_depth_k),
             "min_spread_bps" => format!("{:.1}", best_chromosome.min_spread_bps),
             "max_trades_per_min" => format!("{:.2}", best_chromosome.max_trades_per_minute),
-            "take_profit_pct" => format!("{:.4}", best_chromosome.take_profit_pct),
-            "stop_loss_pct" => format!("{:.4}", best_chromosome.stop_loss_pct),
             "vol_adj_factor" => format!("{:.2}", best_chromosome.volatility_adjustment_factor),
             "inv_penalty_factor" => format!("{:.2}", best_chromosome.inventory_penalty_factor),
             "trend_sensitivity" => format!("{:.3}", best_chromosome.trend_sensitivity),
@@ -3200,12 +3205,11 @@ impl Worker {
             inventory_penalty_factor: params.inventory_penalty_factor,
             trend_sensitivity: params.trend_sensitivity,
             flow_sensitivity: params.flow_sensitivity,
-            take_profit_pct: params.take_profit_pct,
-            stop_loss_pct: params.stop_loss_pct,
             min_spread_bps: params.min_spread_bps,
             max_trades_per_minute: params.max_trades_per_minute,
             adverse_selection_sensitivity: params.adverse_selection_sensitivity,
             fee_spread_multiplier: params.fee_spread_multiplier,
+            max_inventory_multiple: params.max_inventory_multiple,
         };
         
         log_info_structured!(WALKFORWARD_LOGGER, "WALKFORWARD_FIXED_PARAMS",
@@ -3878,7 +3882,7 @@ impl Worker {
             initial_inventory_pct: _initial_inventory_pct,  // Use the passed parameter
             maker_fee_rate: exchange_fee_config.maker_fee,
             taker_fee_rate: exchange_fee_config.taker_fee,
-            max_inventory_multiple: 5.0,
+            max_inventory_multiple: chromosome.max_inventory_multiple,
             latency_mean_ms: exchange_fee_config.latency_mean_ms,
             latency_std_ms: exchange_fee_config.latency_std_ms,
             enable_partial_fills: true,
@@ -3895,13 +3899,13 @@ impl Worker {
             inventory_penalty_factor: chromosome.inventory_penalty_factor,
             trend_sensitivity: chromosome.trend_sensitivity,
             flow_sensitivity: chromosome.flow_sensitivity,
-            take_profit_pct: chromosome.take_profit_pct,
-            stop_loss_pct: chromosome.stop_loss_pct,
+            take_profit_pct: 0.0,  // Disabled - MM uses inventory limits
+            stop_loss_pct: 0.0,    // Disabled - MM uses inventory limits
             max_trades_per_minute: chromosome.max_trades_per_minute,
             window_ms: chromosome.window_ms as i64,
             min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,
-            // Fill model from function parameter
-            fill_model: backtest::FillModelType::from_str(fill_model),
+            // Fill model from function parameter, with auto-detection from exchange
+            fill_model: backtest::FillModelType::from_str_or_exchange(fill_model, exchange),
         };
         
         // Store params for walk-forward (will need to reconstruct for each window)
@@ -4306,8 +4310,8 @@ impl Worker {
             inventory_penalty_factor: chromosome.inventory_penalty_factor,
             trend_sensitivity: chromosome.trend_sensitivity,
             flow_sensitivity: chromosome.flow_sensitivity,
-            take_profit_pct: chromosome.take_profit_pct,
-            stop_loss_pct: chromosome.stop_loss_pct,
+            take_profit_pct: 0.0,  // Disabled - MM uses inventory limits
+            stop_loss_pct: 0.0,    // Disabled - MM uses inventory limits
             min_spread_bps: chromosome.min_spread_bps,
             max_trades_per_minute: chromosome.max_trades_per_minute,
             
@@ -4734,7 +4738,8 @@ impl Worker {
     }
     
     /// Load order book events (new, cancel, modify) for market making strategies
-    /// Uses PARALLEL streaming to load FULL dataset ~10x faster than sequential
+    /// Tries historical_orders first (higher fidelity L3-like data from DataEngine or Tardis incremental_book_L2),
+    /// then falls back to L2 orderbook snapshots (from Tardis book_snapshot uploads)
     #[cfg(feature = "postgres")]
     async fn load_order_events(
         &self,
@@ -4743,23 +4748,112 @@ impl Worker {
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
         use crate::streaming::ParallelDataLoader;
         
-        log_info!(MAIN_LOGGER, "Loading ALL market data for {} on {} using PARALLEL loader (10 workers)", symbol, exchange);
+        log_info!(MAIN_LOGGER, "Loading order events for {} on {} (prefer historical_orders, fall back to L2)", symbol, exchange);
         
         let pool = self.job_queue.get_pool()
             .ok_or("Database pool not available")?;
         
-        // Use parallel loader with 10 concurrent connections
-        // Divides data into 10 time-based partitions and loads them concurrently
-        // ~10x faster than sequential loading
+        // First, try to load from historical_orders (L3-like data)
+        // This includes both DataEngine collected data and Tardis incremental_book_L2 uploads
         const NUM_WORKERS: usize = 10;
-        let loader = ParallelDataLoader::new(pool, NUM_WORKERS);
+        let loader = ParallelDataLoader::new(pool.clone(), NUM_WORKERS);
         
-        // Load ALL data - no limits
-        // Memory management is handled by running only 1 job at a time (--threads 1)
-        let merged = loader.load_all(symbol, exchange).await?;
+        match loader.load_all(symbol, exchange).await {
+            Ok(data) if !data.is_empty() => {
+                log_info!(MAIN_LOGGER, "Loaded {} events from historical_orders for {} on {}", data.len(), symbol, exchange);
+                return Ok(data);
+            }
+            Ok(_) => {
+                log_info!(MAIN_LOGGER, "No historical_orders found for {} on {}, trying L2 snapshots", symbol, exchange);
+            }
+            Err(e) => {
+                log_warn!(MAIN_LOGGER, "historical_orders query failed ({}), trying L2 snapshots", e);
+            }
+        }
         
-        log_info!(MAIN_LOGGER, "Loaded {} total events (orders + trades) using parallel streaming", merged.len());
-        Ok(merged)
+        // Fall back to L2 orderbook snapshots (from Tardis book_snapshot uploads)
+        log_info!(MAIN_LOGGER, "Trying to load L2 orderbook data for {} on {}", symbol, exchange);
+        
+        match self.load_l2_orderbook_as_market_data(symbol, exchange).await {
+            Ok(data) if !data.is_empty() => {
+                log_info!(MAIN_LOGGER, "Loaded {} L2 orderbook snapshots for {} on {}", data.len(), symbol, exchange);
+                return Ok(data);
+            }
+            Ok(_) => {
+                log_warn!(MAIN_LOGGER, "No L2 data found for {} on {}", symbol, exchange);
+            }
+            Err(e) => {
+                log_warn!(MAIN_LOGGER, "L2 data query failed: {}", e);
+            }
+        }
+        
+        // No data found in either table
+        log_error!(MAIN_LOGGER, "No market data found for {} on {} in either historical_orders or L2 snapshots", symbol, exchange);
+        Ok(vec![])
+    }
+    
+    /// Load L2 orderbook snapshots and convert to MarketData (trade events)
+    /// Used for Tardis data uploads where we have L2 snapshots instead of L3 order events
+    #[cfg(feature = "postgres")]
+    async fn load_l2_orderbook_as_market_data(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        use databaseschema::ops::l2_orderbook_snapshot_ops;
+        use chrono::{Duration, Utc};
+        
+        let pool = self.job_queue.get_pool()
+            .ok_or("Database pool not available")?;
+        
+        // Query L2 snapshots for this symbol/exchange
+        // Load last 90 days of data (matching retention policy)
+        let end_time = Utc::now();
+        let start_time = end_time - Duration::days(90);
+        
+        let snapshots = l2_orderbook_snapshot_ops::get_l2_snapshots_by_range(
+            pool.clone(),
+            symbol,
+            exchange,
+            start_time,
+            end_time,
+        ).await?;
+        
+        if snapshots.is_empty() {
+            log_info!(MAIN_LOGGER, "No L2 snapshots found for {} on {} in date range", symbol, exchange);
+            return Ok(vec![]);
+        }
+        
+        log_info!(MAIN_LOGGER, "Found {} L2 snapshots for {} on {}", snapshots.len(), symbol, exchange);
+        
+        // Convert L2 snapshots to OrderBookEvents, then wrap in MarketData::Trade
+        let events = backtest::l2_snapshots_to_events(&snapshots);
+        
+        // Convert OrderBookEvents to MarketData::Trade format for compatibility
+        let market_data: Vec<MarketData> = events.iter().map(|event| {
+            // Create a synthetic TradeData from the OrderBookEvent using the constructor
+            let price = BigDecimal::from_f64(event.price).unwrap_or_default();
+            let quantity = BigDecimal::from_f64(event.quantity).unwrap_or_default();
+            let timestamp = chrono::DateTime::from_timestamp_millis(event.timestamp_ms)
+                .unwrap_or_else(|| Utc::now());
+            let side = match event.side {
+                backtest::Side::Buy => "buy".to_string(),
+                backtest::Side::Sell => "sell".to_string(),
+            };
+            let trade = TradeData::new(
+                timestamp,
+                symbol.to_string(),
+                exchange.to_string(),
+                price,
+                quantity,
+                side,
+                event.order_id.clone(),
+            );
+            MarketData::Trade(trade)
+        }).collect();
+        
+        log_info!(MAIN_LOGGER, "Converted {} L2 snapshots to {} trade events", snapshots.len(), market_data.len());
+        Ok(market_data)
     }
     
     #[cfg(not(feature = "postgres"))]
@@ -4968,8 +5062,6 @@ impl Worker {
             
             // Risk control parameters
             "max_trades_per_minute": chromosome.max_trades_per_minute,
-            "take_profit_pct": chromosome.take_profit_pct,
-            "stop_loss_pct": chromosome.stop_loss_pct,
             
             // Dynamic adjustment parameters (optimized)
             "volatility_adjustment_factor": chromosome.volatility_adjustment_factor,

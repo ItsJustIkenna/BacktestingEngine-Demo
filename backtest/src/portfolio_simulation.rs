@@ -240,21 +240,21 @@ impl PortfolioSimulator {
             0.0
         };
         
-        // Aggregate profit factor
-        let total_wins: f64 = symbol_results.iter()
-            .filter(|r| r.total_pnl > 0.0)
-            .map(|r| r.total_pnl)
+        // Aggregate profit factor from individual trade returns (not symbol-level PnL)
+        // This correctly counts winning and losing trades across all symbols
+        let gross_profit: f64 = all_trade_returns.iter()
+            .filter(|&&r| r > 0.0)
             .sum();
-        let total_losses: f64 = symbol_results.iter()
-            .filter(|r| r.total_pnl < 0.0)
-            .map(|r| r.total_pnl.abs())
+        let gross_loss: f64 = all_trade_returns.iter()
+            .filter(|&&r| r < 0.0)
+            .map(|r| r.abs())
             .sum();
-        let portfolio_profit_factor = if total_losses > 0.0 {
-            (total_wins / total_losses).min(100.0)
-        } else if total_wins > 0.0 {
-            10.0
+        let portfolio_profit_factor = if gross_loss > 0.0 {
+            (gross_profit / gross_loss).min(100.0)
+        } else if gross_profit > 0.0 {
+            10.0 // All winning trades
         } else {
-            1.0
+            1.0 // No trades
         };
         
         // Calculate correlation matrix between symbol returns

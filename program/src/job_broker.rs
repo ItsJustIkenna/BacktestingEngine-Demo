@@ -373,6 +373,7 @@ mod tests {
             stop_loss_pct: 0.003,
             min_spread_bps: 15.0,
             max_trades_per_minute: 30.0,
+            max_inventory_multiple: 5.0,
             train_ratio: 0.6,
             test_ratio: 0.2,
             validate_ratio: 0.2,
@@ -468,6 +469,7 @@ mod tests {
             execution_style: None,
             execution_duration_ms: None,
             min_arb_profit_bps: None,
+            max_inventory_multiple: 5.0,
         };
 
         let job_id = broker.submit_job(params).await;

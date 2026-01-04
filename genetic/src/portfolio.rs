@@ -25,10 +25,6 @@ pub struct SharedParams {
     pub volatility_adjustment_factor: f64,
     /// Inventory penalty factor - how aggressively to rebalance
     pub inventory_penalty_factor: f64,
-    /// Take profit percentage (0.0 = disabled)
-    pub take_profit_pct: f64,
-    /// Stop loss percentage (0.0 = disabled)
-    pub stop_loss_pct: f64,
     /// Maximum trades per minute across portfolio
     pub max_trades_per_minute: f64,
 }
@@ -39,8 +35,6 @@ impl Default for SharedParams {
             risk_aversion: 0.1,
             volatility_adjustment_factor: 0.5,
             inventory_penalty_factor: 0.5,
-            take_profit_pct: 0.0,
-            stop_loss_pct: 0.0,
             max_trades_per_minute: 30.0,
         }
     }
@@ -53,8 +47,6 @@ impl SharedParams {
             risk_aversion: chr.risk_aversion,
             volatility_adjustment_factor: chr.volatility_adjustment_factor,
             inventory_penalty_factor: chr.inventory_penalty_factor,
-            take_profit_pct: chr.take_profit_pct,
-            stop_loss_pct: chr.stop_loss_pct,
             max_trades_per_minute: chr.max_trades_per_minute,
         }
     }
@@ -64,8 +56,6 @@ impl SharedParams {
         chr.risk_aversion = self.risk_aversion;
         chr.volatility_adjustment_factor = self.volatility_adjustment_factor;
         chr.inventory_penalty_factor = self.inventory_penalty_factor;
-        chr.take_profit_pct = self.take_profit_pct;
-        chr.stop_loss_pct = self.stop_loss_pct;
         chr.max_trades_per_minute = self.max_trades_per_minute;
     }
 }

@@ -866,7 +866,7 @@ impl DistributedGAWorker {
         }
         
         // Deserialize chromosome and enforce bounds (handles legacy data)
-        let chromosome: AvellanedaStoikovChromosome = match serde_json::from_slice(&request.chromosome_params) {
+        let chromosome: AvellanedaStoikovChromosome = match serde_json::from_slice::<AvellanedaStoikovChromosome>(&request.chromosome_params) {
             Ok(mut c) => {
                 c.enforce_bounds();
                 c
@@ -1063,7 +1063,7 @@ impl DistributedGAWorker {
             initial_inventory_pct: initial_inventory_pct,
             maker_fee_rate: exchange_fee_config.maker_fee,
             taker_fee_rate: exchange_fee_config.taker_fee,
-            max_inventory_multiple: 5.0,
+            max_inventory_multiple: chromosome.max_inventory_multiple,
             latency_mean_ms: exchange_fee_config.latency_mean_ms,
             latency_std_ms: exchange_fee_config.latency_std_ms,
             enable_partial_fills: true,
@@ -1080,8 +1080,8 @@ impl DistributedGAWorker {
             inventory_penalty_factor: chromosome.inventory_penalty_factor,
             trend_sensitivity: chromosome.trend_sensitivity,
             flow_sensitivity: chromosome.flow_sensitivity,
-            take_profit_pct: chromosome.take_profit_pct,
-            stop_loss_pct: chromosome.stop_loss_pct,
+            take_profit_pct: 0.0,  // Pure market making - no TP/SL
+            stop_loss_pct: 0.0,
             max_trades_per_minute: chromosome.max_trades_per_minute,
             window_ms: chromosome.window_ms as i64,
             min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,
@@ -1170,8 +1170,8 @@ impl DistributedGAWorker {
             market_depth_k: chromosome.market_depth_k,
             min_spread_bps: chromosome.min_spread_bps,
             max_trades_per_minute: chromosome.max_trades_per_minute,
-            take_profit_pct: chromosome.take_profit_pct,
-            stop_loss_pct: chromosome.stop_loss_pct,
+            take_profit_pct: 0.0,  // Pure market making - no TP/SL
+            stop_loss_pct: 0.0,
             volatility_adjustment_factor: chromosome.volatility_adjustment_factor,
             inventory_penalty_factor: chromosome.inventory_penalty_factor,
             trend_sensitivity: chromosome.trend_sensitivity,
@@ -1400,7 +1400,7 @@ impl DistributedGAWorker {
             initial_inventory_pct: 0.5,  // Default 50% for single simulation
             maker_fee_rate: exchange_fee_config.maker_fee,
             taker_fee_rate: exchange_fee_config.taker_fee,
-            max_inventory_multiple: 5.0,
+            max_inventory_multiple: chromosome.max_inventory_multiple,
             latency_mean_ms: exchange_fee_config.latency_mean_ms,
             latency_std_ms: exchange_fee_config.latency_std_ms,
             enable_partial_fills: true,
@@ -1417,8 +1417,8 @@ impl DistributedGAWorker {
             inventory_penalty_factor: chromosome.inventory_penalty_factor,
             trend_sensitivity: chromosome.trend_sensitivity,
             flow_sensitivity: chromosome.flow_sensitivity,
-            take_profit_pct: chromosome.take_profit_pct,
-            stop_loss_pct: chromosome.stop_loss_pct,
+            take_profit_pct: 0.0,  // Pure market making - no TP/SL
+            stop_loss_pct: 0.0,
             max_trades_per_minute: chromosome.max_trades_per_minute,
             window_ms: chromosome.window_ms as i64,
             min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,
@@ -1634,8 +1634,8 @@ impl DistributedGAWorker {
             maker_fee_rate: exchange_fee_config.maker_fee,
             taker_fee_rate: exchange_fee_config.taker_fee,
             
-            // Inventory limits (TODO: make configurable per exchange)
-            max_inventory_multiple: 5.0,
+            // Inventory limits from chromosome
+            max_inventory_multiple: chromosome.max_inventory_multiple,
             
             // Latency from exchange configuration
             latency_mean_ms: exchange_fee_config.latency_mean_ms,
@@ -1665,8 +1665,8 @@ impl DistributedGAWorker {
             inventory_penalty_factor: chromosome.inventory_penalty_factor,
             trend_sensitivity: chromosome.trend_sensitivity,
             flow_sensitivity: chromosome.flow_sensitivity,
-            take_profit_pct: chromosome.take_profit_pct,
-            stop_loss_pct: chromosome.stop_loss_pct,
+            take_profit_pct: 0.0,  // Pure market making - no TP/SL
+            stop_loss_pct: 0.0,
             max_trades_per_minute: chromosome.max_trades_per_minute,
             window_ms: chromosome.window_ms as i64,
             min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,
@@ -2236,7 +2236,7 @@ fn run_walkforward_realistic(
         initial_inventory_pct: 0.5,  // Default 50% for walk-forward
         maker_fee_rate: exchange_fee_config.maker_fee,
         taker_fee_rate: exchange_fee_config.taker_fee,
-        max_inventory_multiple: 5.0,
+        max_inventory_multiple: chromosome.max_inventory_multiple,
         latency_mean_ms: exchange_fee_config.latency_mean_ms,
         latency_std_ms: exchange_fee_config.latency_std_ms,
         enable_partial_fills: true,
@@ -2253,8 +2253,8 @@ fn run_walkforward_realistic(
         inventory_penalty_factor: chromosome.inventory_penalty_factor,
         trend_sensitivity: chromosome.trend_sensitivity,
         flow_sensitivity: chromosome.flow_sensitivity,
-        take_profit_pct: chromosome.take_profit_pct,
-        stop_loss_pct: chromosome.stop_loss_pct,
+        take_profit_pct: 0.0,  // Pure market making - no TP/SL
+        stop_loss_pct: 0.0,
         max_trades_per_minute: chromosome.max_trades_per_minute,
         window_ms: chromosome.window_ms as i64,
         min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,

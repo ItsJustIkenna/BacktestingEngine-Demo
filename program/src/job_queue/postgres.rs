@@ -724,7 +724,16 @@ impl JobQueue for PostgresQueue {
                         "win_rate": sr.win_rate,
                         "profit_factor": sr.profit_factor,
                         "total_trades": sr.total_trades,
-                        "allocation_weight": sr.allocation_weight
+                        "allocation_weight": sr.allocation_weight,
+                        // Per-symbol position tracking
+                        "starting_capital": sr.starting_capital,
+                        "ending_capital": sr.ending_capital,
+                        "starting_inventory": sr.starting_inventory,
+                        "ending_inventory": sr.ending_inventory,
+                        "starting_inventory_value": sr.starting_inventory_value,
+                        "ending_inventory_value": sr.ending_inventory_value,
+                        "starting_mark_price": sr.starting_mark_price,
+                        "ending_mark_price": sr.ending_mark_price
                     })).collect::<Vec<_>>(),
                     "correlation_matrix": pm.correlation_matrix.iter().map(|cp| serde_json::json!({
                         "symbol_a": cp.symbol_a,
@@ -805,7 +814,17 @@ impl JobQueue for PostgresQueue {
                     "sell_fills": inv.sell_fills,
                     "buy_volume": inv.buy_volume,
                     "sell_volume": inv.sell_volume,
-                    "imbalance_ratio": inv.imbalance_ratio
+                    "imbalance_ratio": inv.imbalance_ratio,
+                    // Position tracking fields
+                    "starting_inventory": inv.starting_inventory,
+                    "starting_inventory_value": inv.starting_inventory_value,
+                    "starting_mark_price": inv.starting_mark_price,
+                    "ending_inventory": inv.ending_inventory,
+                    "ending_inventory_value": inv.ending_inventory_value,
+                    "ending_mark_price": inv.ending_mark_price,
+                    "starting_capital": inv.starting_capital,
+                    "ending_capital": inv.ending_capital,
+                    "final_equity": inv.final_equity
                 })),
                 // Execution quality metrics
                 "execution_metrics": result.execution_metrics.as_ref().map(|exec| serde_json::json!({
@@ -1530,6 +1549,7 @@ mod tests {
             stop_loss_pct: 0.003,
             min_spread_bps: 15.0,
             max_trades_per_minute: 30.0,
+            max_inventory_multiple: 5.0,
             train_ratio: 0.6,
             test_ratio: 0.2,
             validate_ratio: 0.2,

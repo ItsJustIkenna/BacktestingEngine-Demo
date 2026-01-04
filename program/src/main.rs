@@ -729,8 +729,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                                 
                                                                 // Risk control parameters
                                                                 "max_trades_per_minute": best_chromosome.max_trades_per_minute,
-                                                                "take_profit_pct": best_chromosome.take_profit_pct,
-                                                                "stop_loss_pct": best_chromosome.stop_loss_pct,
                                                                 
                                                                 // Dynamic adjustment parameters
                                                                 "volatility_adjustment_factor": best_chromosome.volatility_adjustment_factor,
@@ -854,8 +852,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                                 
                                                                 // Risk control parameters
                                                                 "max_trades_per_minute": best_chromosome.max_trades_per_minute,
-                                                                "take_profit_pct": best_chromosome.take_profit_pct,
-                                                                "stop_loss_pct": best_chromosome.stop_loss_pct,
                                                                 
                                                                 // Dynamic adjustment parameters
                                                                 "volatility_adjustment_factor": best_chromosome.volatility_adjustment_factor,
@@ -1084,9 +1080,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Suppress unused variable warnings for future use
             let _ = (population_size, generations);
             
-            // Construct file paths
+            // Construct file paths - try multiple naming conventions
             let trades_path = format!("{}/{}_trades.csv.gz", data_path, symbol);
-            let orderbook_path = format!("{}/{}_orderbook.csv.gz", data_path, symbol);
+            
+            // Try standard naming first, then Tardis book_snapshot_25 format
+            let orderbook_candidates = [
+                format!("{}/{}_orderbook.csv.gz", data_path, symbol),
+                format!("{}/{}_book_snapshot_25.csv.gz", data_path, symbol),
+            ];
+            let orderbook_path = orderbook_candidates
+                .iter()
+                .find(|p| std::path::Path::new(p).exists())
+                .cloned()
+                .unwrap_or_else(|| orderbook_candidates[0].clone());
             
             println!("\n📂 Loading data files:");
             println!("   Trades: {}", trades_path);

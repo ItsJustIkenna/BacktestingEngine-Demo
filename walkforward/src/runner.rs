@@ -461,8 +461,8 @@ async fn optimize_parameters(_train_data: &[MarketData]) -> AvellanedaStoikovPar
         market_depth_k: best_chromo.market_depth_k,
         min_spread_bps: best_chromo.min_spread_bps,
         max_trades_per_minute: best_chromo.max_trades_per_minute,
-        take_profit_pct: best_chromo.take_profit_pct,
-        stop_loss_pct: best_chromo.stop_loss_pct,
+        take_profit_pct: 0.0,  // Pure market making - no TP/SL
+        stop_loss_pct: 0.0,
         
         // Phase 2: Dynamic adjustment parameters
         volatility_adjustment_factor: best_chromo.volatility_adjustment_factor,
@@ -809,8 +809,8 @@ pub async fn run_walkforward_for_chromosome(
         market_depth_k: chromosome.market_depth_k,
         min_spread_bps: chromosome.min_spread_bps,
         max_trades_per_minute: chromosome.max_trades_per_minute,
-        take_profit_pct: chromosome.take_profit_pct,
-        stop_loss_pct: chromosome.stop_loss_pct,
+        take_profit_pct: 0.0,  // Pure market making - no TP/SL
+        stop_loss_pct: 0.0,
         volatility_adjustment_factor: chromosome.volatility_adjustment_factor,
         inventory_penalty_factor: chromosome.inventory_penalty_factor,
         trend_sensitivity: chromosome.trend_sensitivity,

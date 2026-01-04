@@ -194,6 +194,9 @@ pub struct BacktestJobParams {
     pub min_spread_bps: f64,
     #[serde(default = "default_max_trades_per_minute")]
     pub max_trades_per_minute: f64,
+    /// Maximum inventory as multiple of order size (2.0 = conservative, 10.0 = aggressive)
+    #[serde(default = "default_max_inventory_multiple")]
+    pub max_inventory_multiple: f64,
     
     // Monte Carlo configuration
     #[serde(default = "default_monte_carlo_enabled")]
@@ -320,6 +323,7 @@ fn default_take_profit_pct() -> f64 { 0.0 }  // Disabled for MM (profit from spr
 fn default_stop_loss_pct() -> f64 { 0.0 }    // Disabled for MM (use inventory limits instead)
 fn default_min_spread_bps() -> f64 { 15.0 }    // 15 basis points minimum spread
 fn default_max_trades_per_minute() -> f64 { 30.0 }  // 30 trades per minute max
+fn default_max_inventory_multiple() -> f64 { 5.0 }  // 5x order size max inventory
 fn default_monte_carlo_enabled() -> bool { true }
 fn default_monte_carlo_runs() -> usize { 1000 }
 fn default_walk_forward_enabled() -> bool { true } // Re-enabled - now uses sampled data (200K events/window max)
@@ -332,7 +336,7 @@ fn default_min_profit_factor() -> f64 { 1.2 }
 fn default_max_drawdown() -> f64 { 0.25 }
 fn default_min_win_rate() -> f64 { 0.40 }
 fn default_min_trades() -> usize { 30 }
-fn default_fill_model() -> String { "realistic".to_string() }  // Conservative fill model by default
+fn default_fill_model() -> String { "auto".to_string() }  // Auto-detect from exchange (colocated = CoLocated, otherwise Realistic)
 
 impl Default for BacktestJobParams {
     fn default() -> Self {
@@ -397,6 +401,7 @@ impl Default for BacktestJobParams {
             stop_loss_pct: default_stop_loss_pct(),
             min_spread_bps: default_min_spread_bps(),
             max_trades_per_minute: default_max_trades_per_minute(),
+            max_inventory_multiple: default_max_inventory_multiple(),
             fill_model: default_fill_model(),
             commission_rate: 0.0,
             start_date: None,
