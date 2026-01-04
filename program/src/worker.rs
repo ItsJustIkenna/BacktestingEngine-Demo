@@ -34,23 +34,44 @@ use dataloader::{MarketData, TradeData};
 
 /// Calculate comprehensive fitness score for genetic optimization
 /// 
-/// This function evaluates strategies holistically to find genuinely profitable ones.
-/// It penalizes strategies that look good on paper but fail after transaction costs.
+/// This function evaluates market-making strategies holistically to find genuinely 
+/// profitable ones. It penalizes strategies that look good on paper but fail after 
+/// transaction costs, or that don't exhibit normal market-making behavior.
 /// 
 /// # Weights (sum to 1.0)
-/// - Sortino Ratio: 0.25 (risk-adjusted returns, downside only)
+/// - Sortino Ratio: 0.20 (risk-adjusted returns, downside only)
 /// - Sharpe Ratio: 0.15 (risk-adjusted returns, total volatility)
-/// - Profit Factor: 0.20 (gross profit / gross loss)
-/// - Win Rate: 0.15 (consistency of winning)
-/// - Net Profit %: 0.15 (absolute profitability)
-/// - Calmar Ratio: 0.10 (recovery ability)
+/// - Profit Factor: 0.10 (gross profit / gross loss)
+/// - Win Rate: 0.05 (consistency of winning)
+/// - Net Profit %: 0.35 (absolute profitability)
+/// - Calmar Ratio: 0.15 (recovery ability)
 /// 
-/// # Penalties
-/// - Commission ratio > 30%: scaled penalty up to 0.1x (stricter than before)
+/// # Hard Rejects (return near-zero fitness)
+/// - Commission ratio ≥ 60%: Strategy can't overcome costs
+/// - Fill rate < 1%: Strategy isn't actually trading
+/// 
+/// # General Penalties
+/// - Commission ratio 30-60%: Scaled penalty
 /// - Drawdown > 10%: 0.8x, > 20%: 0.5x, > 35%: 0.2x
-/// - < 30 trades: linear penalty
-/// - Avg trade < 4x commission: 0.5x (raised from 3x)
-/// - VaR > 5% of capital: penalty
+/// - < 30 trades: Linear penalty
+/// - Avg trade < 4x commission: 0.4x (marginal trades)
+/// - Fill rate < 5%: Scaled penalty (quotes too wide)
+/// 
+/// # Market-Making Specific Penalties
+/// - Round-trip win rate < 40%: Adverse selection eating profits
+/// - Adverse selection rate > 50%: Getting picked off
+/// - Bid/Ask fill imbalance > 5:1: Extreme one-sidedness (some imbalance OK from inventory skewing)
+/// - Inventory turnover < 1x/day: Holding too long
+/// - Inventory imbalance > 50%: Never reverting (moderate imbalance OK from skewing)
+/// - Trades < 0.5/hour: Too inactive
+/// - Avg trade > 2% of capital: Directional betting, not MM
+/// 
+/// # Bonuses
+/// - Well-rounded strategy (profit >5%, PF >1.5, WR >50%, DD <10%): 1.3x
+/// - Commission ratio < 20%: 1.2x, < 30%: 1.1x
+/// - Fill rate ≥ 10%: 1.15x, ≥ 5%: 1.05x
+/// - Round-trip win rate ≥ 60%: 1.10x
+/// - Inventory turnover ≥ 3x/day: 1.10x
 pub fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult, initial_capital: f64) -> f64 {
     use bigdecimal::ToPrimitive;
     
@@ -80,6 +101,17 @@ pub fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult,
         }
     } else {
         log_warn!(GENETIC_LOGGER, "FITNESS: gross_profit or transaction_costs is None!");
+    }
+    
+    // === HARD CONSTRAINT: Reject strategies with extremely low fill rates ===
+    // A strategy that can't get filled is useless regardless of theoretical returns
+    if let Some(execution_metrics) = &result.execution_metrics {
+        let fill_rate = execution_metrics.fill_rate;
+        if fill_rate < 0.01 {
+            // Less than 1% fill rate is essentially not trading
+            log_warn!(GENETIC_LOGGER, "FITNESS REJECTED: fill_rate={:.2}% < 1%, returning 0.002", fill_rate * 100.0);
+            return 0.002;
+        }
     }
     
     // === Primary Metrics ===
@@ -144,6 +176,20 @@ pub fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult,
         }
     }
     
+    // === Penalty: Low Fill Rate (market making strategies need fills!) ===
+    // A strategy with low fill rate can't capture spreads effectively
+    if let Some(execution_metrics) = &result.execution_metrics {
+        let fill_rate = execution_metrics.fill_rate;
+        if fill_rate < 0.05 {
+            // Less than 5% fill rate = quotes too wide or market too fast
+            // Scale penalty: 5% = 0.5x, 2% = 0.2x
+            let fill_penalty = (fill_rate / 0.05).max(0.2);
+            fitness *= fill_penalty;
+            log_debug!(GENETIC_LOGGER, "FITNESS: fill_rate={:.2}% < 5%, penalty={:.2}x", 
+                fill_rate * 100.0, fill_penalty);
+        }
+    }
+    
     // === Bonus: Well-Rounded Strategy ===
     if net_profit_pct > 0.05 && pf > 1.5 && win_rate > 0.50 && dd_pct < 0.10 {
         fitness *= 1.3; // Increased bonus for truly good strategies
@@ -163,6 +209,130 @@ pub fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult,
             } else if commission_ratio < 0.30 {
                 // Moderate reward: 20-30% commission ratio = 1.1x bonus
                 fitness *= 1.1;
+            }
+        }
+    }
+    
+    // === Bonus: Good Fill Rate (reward executable strategies) ===
+    if let Some(execution_metrics) = &result.execution_metrics {
+        let fill_rate = execution_metrics.fill_rate;
+        if fill_rate >= 0.10 {
+            // 10%+ fill rate is good for market making with realistic fills
+            fitness *= 1.15;
+        } else if fill_rate >= 0.05 {
+            // 5-10% is acceptable
+            fitness *= 1.05;
+        }
+    }
+    
+    // =========================================================================
+    // MARKET MAKING SPECIFIC CONSTRAINTS
+    // These penalize strategies that don't exhibit normal MM behavior
+    // =========================================================================
+    
+    // === Penalty: Poor Round-Trip Win Rate ===
+    // MM strategies should capture spreads consistently (55-70% win rate typical)
+    if let Some(execution_metrics) = &result.execution_metrics {
+        if let Some(rt_win_rate) = execution_metrics.round_trip_win_rate {
+            if rt_win_rate < 0.40 {
+                // Win rate < 40% indicates adverse selection eating profits
+                let penalty = (rt_win_rate / 0.40).max(0.3);
+                fitness *= penalty;
+                log_debug!(GENETIC_LOGGER, "FITNESS: round_trip_win_rate={:.1}% < 40%, penalty={:.2}x", 
+                    rt_win_rate * 100.0, penalty);
+            } else if rt_win_rate >= 0.60 {
+                // Bonus for strong win rate
+                fitness *= 1.10;
+            }
+        }
+        
+        // === Penalty: High Adverse Selection Rate ===
+        // Indicates strategy is getting picked off by informed traders
+        if let Some(adverse_rate) = execution_metrics.adverse_selection_rate {
+            if adverse_rate > 0.50 {
+                // More than 50% adverse selection is a major red flag
+                let penalty = (0.50 / adverse_rate).max(0.4);
+                fitness *= penalty;
+                log_debug!(GENETIC_LOGGER, "FITNESS: adverse_selection_rate={:.1}% > 50%, penalty={:.2}x", 
+                    adverse_rate * 100.0, penalty);
+            }
+        }
+        
+        // === Penalty: Imbalanced Bid/Ask Fill Rates ===
+        // Some imbalance is expected due to inventory skewing - only penalize extreme cases
+        // (e.g., 5:1 ratio suggests strategy is effectively one-sided)
+        if execution_metrics.bid_fills > 10 && execution_metrics.ask_fills > 10 {
+            let bid_rate = execution_metrics.bid_fill_rate;
+            let ask_rate = execution_metrics.ask_fill_rate;
+            if bid_rate > 0.0 && ask_rate > 0.0 {
+                let imbalance = (bid_rate / ask_rate).max(ask_rate / bid_rate);
+                if imbalance > 5.0 {
+                    // More than 5:1 imbalance suggests one-sided market or broken skewing
+                    fitness *= 0.85;
+                    log_debug!(GENETIC_LOGGER, "FITNESS: bid/ask imbalance {:.1}:1 > 5:1, penalty=0.85x", imbalance);
+                }
+            }
+        }
+    }
+    
+    // === Penalty: Poor Inventory Turnover ===
+    // MM should cycle inventory, not hold forever
+    if let Some(inventory_metrics) = &result.inventory_metrics {
+        let turnover = inventory_metrics.turnover_per_day;
+        if turnover < 1.0 && inventory_metrics.total_volume_traded > 0.0 {
+            // Less than 1x daily turnover = holding inventory too long
+            let penalty = (turnover / 1.0).max(0.5);
+            fitness *= penalty;
+            log_debug!(GENETIC_LOGGER, "FITNESS: turnover_per_day={:.2}x < 1.0, penalty={:.2}x", 
+                turnover, penalty);
+        } else if turnover >= 3.0 {
+            // Good turnover = actively market making
+            fitness *= 1.10;
+        }
+        
+        // === Penalty: Extreme Inventory Imbalance ===
+        // Some imbalance is fine (inventory skewing), but >50% net over entire backtest
+        // suggests strategy never reverts and is just accumulating directionally
+        let imbalance = inventory_metrics.imbalance_ratio.abs();
+        if imbalance > 0.50 {
+            // More than 50% net directional bias = not reverting properly
+            let penalty = ((1.0 - imbalance) / 0.50).max(0.6);
+            fitness *= penalty;
+            log_debug!(GENETIC_LOGGER, "FITNESS: inventory_imbalance={:.1}% > 50%, penalty={:.2}x", 
+                imbalance * 100.0, penalty);
+        }
+    }
+    
+    // === Penalty: Trades Too Infrequent ===
+    // MM should be active, not just sitting with stale quotes
+    if result.num_trades > 0 {
+        if let (Some(first_ts), Some(last_ts)) = (&result.first_trade_timestamp, &result.last_trade_timestamp) {
+            let duration_hours = (last_ts.signed_duration_since(*first_ts).num_seconds() as f64) / 3600.0;
+            if duration_hours > 0.0 {
+                let trades_per_hour = result.num_trades as f64 / duration_hours;
+                if trades_per_hour < 0.5 {
+                    // Less than 1 trade per 2 hours is too inactive for MM
+                    let penalty = (trades_per_hour / 0.5).max(0.3);
+                    fitness *= penalty;
+                    log_debug!(GENETIC_LOGGER, "FITNESS: trades_per_hour={:.2} < 0.5, penalty={:.2}x", 
+                        trades_per_hour, penalty);
+                }
+            }
+        }
+    }
+    
+    // === Penalty: Average Trade Too Large Relative to Position ===
+    // MM should make many small spread captures, not few large directional bets
+    if let Some(avg_trade) = result.avg_trade_return {
+        let initial = result.initial_capital;
+        if initial > 0.0 {
+            let avg_trade_pct = avg_trade.abs() / initial;
+            if avg_trade_pct > 0.02 {
+                // Average trade > 2% of capital suggests directional betting, not MM
+                let penalty = (0.02 / avg_trade_pct).max(0.5);
+                fitness *= penalty;
+                log_debug!(GENETIC_LOGGER, "FITNESS: avg_trade_pct={:.2}% > 2%, penalty={:.2}x", 
+                    avg_trade_pct * 100.0, penalty);
             }
         }
     }

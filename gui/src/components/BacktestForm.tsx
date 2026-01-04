@@ -438,10 +438,8 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
     setJobId(null);
 
     try {
-      // Determine effective exchange name (append _colocated if enabled)
-      const effectiveExchange = formData.is_colocated 
-        ? `${formData.exchange}_colocated` 
-        : formData.exchange;
+      // Use exchange name as-is - fill model is auto-detected from exchange name
+      const effectiveExchange = formData.exchange;
       
       // Determine effective fill model (use colocated if infrastructure is co-located)
       const effectiveFillModel = formData.is_colocated 
@@ -478,10 +476,10 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
       // Always send portfolio_assets - if empty, use the primary symbol/exchange
       if (formData.portfolio_assets.length > 0) {
         // Use explicitly added portfolio assets (weight = null so GA optimizes)
-        // Apply co-located suffix to all exchanges if enabled
+        // Exchange names are used as-is - fill model is auto-detected
         params.portfolio_assets = formData.portfolio_assets.map(asset => ({
           symbol: asset.symbol,
-          exchange: formData.is_colocated ? `${asset.exchange}_colocated` : asset.exchange,
+          exchange: asset.exchange,
           weight: null,  // null weight = GA will optimize
         }));
       } else if (formData.symbol && formData.exchange) {

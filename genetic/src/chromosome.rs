@@ -53,13 +53,16 @@ impl AvellanedaStoikovChromosome {
         self.time_horizon_minutes = self.time_horizon_minutes.clamp(0.167, 60.0);
         self.market_depth_k = self.market_depth_k.clamp(1.0, 50.0);
         // min_spread_bps is a soft floor - the REAL floor comes from fee_spread_multiplier
-        // Range 5-50 bps - tighter bounds to prevent wide spreads that kill fill rates
-        self.min_spread_bps = self.min_spread_bps.clamp(5.0, 50.0);
-        self.adverse_selection_sensitivity = self.adverse_selection_sensitivity.clamp(0.0, 2.0);
+        // Range 3-30 bps - tighter bounds to encourage fills (was 5-50)
+        // 30 bps max prevents wide spreads that kill fill rates
+        self.min_spread_bps = self.min_spread_bps.clamp(3.0, 30.0);
+        // Adverse selection: 0 = aggressive, 1.5 = defensive (was 2.0 max)
+        // Lower max to prevent over-widening on toxic flow
+        self.adverse_selection_sensitivity = self.adverse_selection_sensitivity.clamp(0.0, 1.5);
         // Min 2x fee multiplier is breakeven: spread >= 2 × maker_fee
-        // With 25 bps fee: 2x = 50 bps (breakeven), 3x = 75 bps, 3.5x = 87 bps max
-        // Tighter upper bound (3.5) prevents wide spreads that kill fill rates
-        self.fee_spread_multiplier = self.fee_spread_multiplier.clamp(2.0, 3.5);
+        // With 25 bps fee: 2x = 50 bps (breakeven), 2.5x = 62 bps, 3.0x = 75 bps max
+        // Tighter upper bound (3.0 from 3.5) to encourage more fills
+        self.fee_spread_multiplier = self.fee_spread_multiplier.clamp(2.0, 3.0);
         // Max inventory: 2x (conservative) to 10x (aggressive) order size
         self.max_inventory_multiple = self.max_inventory_multiple.clamp(2.0, 10.0);
     }
@@ -117,21 +120,21 @@ impl Chromosome for AvellanedaStoikovChromosome {
             // Minimum spread in basis points (soft floor)
             // The REAL profitability floor comes from fee_spread_multiplier × maker_fee
             // This is a secondary constraint for market conditions (volatility, liquidity)
-            // Range 5-50 bps - tighter bounds to ensure reasonable fill rates
-            min_spread_bps: rng.gen_range(5.0..50.0),
+            // Range 3-30 bps - tighter bounds to encourage more fills (was 5-50)
+            min_spread_bps: rng.gen_range(3.0..30.0),
             
             // Trade frequency: 0.01 to 60 trades per minute
             // 0.01 = 1 trade per 100 minutes (swing), 60 = 1 trade per second (HFT)
             max_trades_per_minute: rng.gen_range(0.01..60.0),
             
             // Adverse selection sensitivity: how much to widen spreads when detecting toxic flow
-            // 0.0 = ignore (aggressive), 1.0 = proportional widening, 2.0 = defensive
-            adverse_selection_sensitivity: rng.gen_range(0.0..2.0),
+            // 0.0 = ignore (aggressive), 1.0 = proportional widening, 1.5 = defensive (was 2.0)
+            adverse_selection_sensitivity: rng.gen_range(0.0..1.5),
             
             // Fee-based spread multiplier: how many times the exchange fee to use as min spread
-            // Range 2.0-3.5: 2x = breakeven, 2.5x = small profit, 3.5x = max (87 bps with 25 bps fee)
-            // Tighter range prevents wide spreads that kill fill rates
-            fee_spread_multiplier: rng.gen_range(2.0..3.5),
+            // Range 2.0-3.0: 2x = breakeven, 2.5x = small profit, 3.0x = max (was 3.5)
+            // Tighter range encourages more fills
+            fee_spread_multiplier: rng.gen_range(2.0..3.0),
             
             // Max inventory: how many order sizes of inventory to allow
             // 2x = very conservative, 5x = balanced, 10x = aggressive
@@ -240,24 +243,25 @@ impl Chromosome for AvellanedaStoikovChromosome {
         
         // Trading control mutations
         // Min spread: soft floor (profitability ensured by fee_spread_multiplier)
+        // Range 3-30 bps - tighter bounds to encourage more fills (was 5-50)
         if rng.gen_bool(mutation_rate) {
             self.min_spread_bps *= rng.gen_range(0.5..2.0);
-            self.min_spread_bps = self.min_spread_bps.clamp(5.0, 50.0);
+            self.min_spread_bps = self.min_spread_bps.clamp(3.0, 30.0);
         }
         // Trade frequency: range 0.01-60 trades/min
         if rng.gen_bool(mutation_rate) {
             self.max_trades_per_minute *= rng.gen_range(0.5..2.0);
             self.max_trades_per_minute = self.max_trades_per_minute.clamp(0.01, 60.0);
         }
-        // Adverse selection sensitivity: range 0.0-2.0
+        // Adverse selection sensitivity: range 0.0-1.5 (was 2.0)
         if rng.gen_bool(mutation_rate) {
             self.adverse_selection_sensitivity += rng.gen_range(-0.3..0.3);
-            self.adverse_selection_sensitivity = self.adverse_selection_sensitivity.clamp(0.0, 2.0);
+            self.adverse_selection_sensitivity = self.adverse_selection_sensitivity.clamp(0.0, 1.5);
         }
-        // Fee spread multiplier: range 2.0-3.5 (tighter to improve fill rates)
+        // Fee spread multiplier: range 2.0-3.0 (was 3.5, tighter to improve fill rates)
         if rng.gen_bool(mutation_rate) {
-            self.fee_spread_multiplier += rng.gen_range(-0.3..0.3);
-            self.fee_spread_multiplier = self.fee_spread_multiplier.clamp(2.0, 3.5);
+            self.fee_spread_multiplier += rng.gen_range(-0.2..0.2);
+            self.fee_spread_multiplier = self.fee_spread_multiplier.clamp(2.0, 3.0);
         }
         // Max inventory multiple: range 2.0-10.0
         if rng.gen_bool(mutation_rate) {
