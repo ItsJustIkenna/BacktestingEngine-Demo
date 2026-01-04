@@ -47,19 +47,20 @@ impl AvellanedaStoikovChromosome {
     /// Enforce bounds on all parameters to prevent invalid values
     pub fn enforce_bounds(&mut self) {
         self.risk_aversion = self.risk_aversion.clamp(0.0001, 1.0);
-        self.order_size_pct = self.order_size_pct.clamp(0.005, 0.05);
+        // Order size: 0.5%-2% (was 5% - too large causes adverse selection on altcoins)
+        self.order_size_pct = self.order_size_pct.clamp(0.005, 0.02);
         // Window: 1s-5min (was 30min - too slow for responsive MM)
         self.window_ms = self.window_ms.clamp(1_000, 300_000);
         // Quote lifetime: 10ms-10s (was 60s - too passive)
         self.min_quote_lifetime_ms = self.min_quote_lifetime_ms.clamp(10, 10_000);
         self.inventory_target = self.inventory_target.clamp(0.0, 0.5);
         self.volatility_cap = self.volatility_cap.clamp(0.20, 5.0);
-        self.time_horizon_minutes = self.time_horizon_minutes.clamp(0.167, 60.0);
+        // Time horizon: 1-20 min (was 60min - too passive for active MM)
+        self.time_horizon_minutes = self.time_horizon_minutes.clamp(1.0, 20.0);
         self.market_depth_k = self.market_depth_k.clamp(1.0, 50.0);
-        // min_spread_bps is a soft floor - the REAL floor comes from fee_spread_multiplier
-        // Range 3-30 bps - tighter bounds to encourage fills (was 5-50)
-        // 30 bps max prevents wide spreads that kill fill rates
-        self.min_spread_bps = self.min_spread_bps.clamp(3.0, 30.0);
+        // min_spread_bps: 15-50 bps (was 3-30 - too tight causes adverse selection)
+        // Altcoins need wider spreads to cover volatility and slippage
+        self.min_spread_bps = self.min_spread_bps.clamp(15.0, 50.0);
         // Adverse selection: 0 = aggressive, 1.5 = defensive (was 2.0 max)
         // Lower max to prevent over-widening on toxic flow
         self.adverse_selection_sensitivity = self.adverse_selection_sensitivity.clamp(0.0, 1.5);
@@ -81,8 +82,8 @@ impl Chromosome for AvellanedaStoikovChromosome {
             risk_aversion: rng.gen_range(0.0001..1.0),
             
             // Order size as percentage of capital
-            // 0.5% = conservative to 5% = moderate (avoid excessive commission at higher sizes)
-            order_size_pct: rng.gen_range(0.005..0.05),
+            // 0.5% = conservative to 2% = moderate (was 5% - too large causes adverse selection)
+            order_size_pct: rng.gen_range(0.005..0.02),
             
             // Volatility estimation window: 1s to 5 min (was 30 min - too slow)
             // Short windows for HFT, long windows for swing trading
@@ -107,9 +108,9 @@ impl Chromosome for AvellanedaStoikovChromosome {
             // Range 0.20-5.0 ensures trades can execute (20% min > 15% floor)
             volatility_cap: rng.gen_range(0.20..5.0),
             
-            // Time horizon: 10 seconds to 60 minutes
-            // Short for scalping, long for position trading
-            time_horizon_minutes: rng.gen_range(0.167..60.0),
+            // Time horizon: 1-20 minutes (was 60min - too passive for active MM)
+            // Forces more active inventory management and quote updates
+            time_horizon_minutes: rng.gen_range(1.0..20.0),
             
             // Market depth parameter k (higher = tighter spreads, divides liquidity term)
             // For liquid markets like BTC/USD, k should be 1-50
@@ -125,9 +126,9 @@ impl Chromosome for AvellanedaStoikovChromosome {
             
             // Minimum spread in basis points (soft floor)
             // The REAL profitability floor comes from fee_spread_multiplier × maker_fee
-            // This is a secondary constraint for market conditions (volatility, liquidity)
-            // Range 3-30 bps - tighter bounds to encourage more fills (was 5-50)
-            min_spread_bps: rng.gen_range(3.0..30.0),
+            // Range 15-50 bps (was 3-30 - too tight causes adverse selection on altcoins)
+            // Wider spreads protect against volatility and informed traders
+            min_spread_bps: rng.gen_range(15.0..50.0),
             
             // Trade frequency: 0.01 to 60 trades per minute
             // 0.01 = 1 trade per 100 minutes (swing), 60 = 1 trade per second (HFT)
@@ -191,10 +192,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.risk_aversion *= rng.gen_range(0.5..2.0); // Multiplicative mutation for log-scale param
             self.risk_aversion = self.risk_aversion.clamp(0.0001, 1.0);
         }
-        // Order size: range 0.5%-5% (reduced to avoid excessive commission)
+        // Order size: range 0.5%-2% (was 5% - too large causes adverse selection)
         if rng.gen_bool(mutation_rate) {
             self.order_size_pct *= rng.gen_range(0.5..2.0);
-            self.order_size_pct = self.order_size_pct.clamp(0.005, 0.05);
+            self.order_size_pct = self.order_size_pct.clamp(0.005, 0.02);
         }
         // Window: range 1s-5min (was 30min - too slow for responsive MM)
         if rng.gen_bool(mutation_rate) {
@@ -218,10 +219,10 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.volatility_cap += rng.gen_range(-0.5..0.5);
             self.volatility_cap = self.volatility_cap.clamp(0.20, 5.0);
         }
-        // Time horizon: range 10s-60min
+        // Time horizon: range 1-20min (was 60min - too passive for active MM)
         if rng.gen_bool(mutation_rate) {
             self.time_horizon_minutes *= rng.gen_range(0.5..2.0);
-            self.time_horizon_minutes = self.time_horizon_minutes.clamp(0.167, 60.0);
+            self.time_horizon_minutes = self.time_horizon_minutes.clamp(1.0, 20.0);
         }
         // Market depth: range 1.0-50.0
         if rng.gen_bool(mutation_rate) {
@@ -248,11 +249,11 @@ impl Chromosome for AvellanedaStoikovChromosome {
         }
         
         // Trading control mutations
-        // Min spread: soft floor (profitability ensured by fee_spread_multiplier)
-        // Range 3-30 bps - tighter bounds to encourage more fills (was 5-50)
+        // Min spread: 15-50 bps (was 3-30 - too tight causes adverse selection)
+        // Wider spreads protect against volatility and informed traders
         if rng.gen_bool(mutation_rate) {
             self.min_spread_bps *= rng.gen_range(0.5..2.0);
-            self.min_spread_bps = self.min_spread_bps.clamp(3.0, 30.0);
+            self.min_spread_bps = self.min_spread_bps.clamp(15.0, 50.0);
         }
         // Trade frequency: range 0.01-60 trades/min
         if rng.gen_bool(mutation_rate) {

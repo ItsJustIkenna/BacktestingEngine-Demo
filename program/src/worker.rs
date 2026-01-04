@@ -300,7 +300,7 @@ pub fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult,
             fitness *= 1.10;
         }
         
-        // === Penalty: Extreme Inventory Imbalance ===
+        // === Penalty: Extreme Inventory Imbalance (Buy/Sell Volume) ===
         // Some imbalance is fine (inventory skewing), but >50% net over entire backtest
         // suggests strategy never reverts and is just accumulating directionally
         let imbalance = inventory_metrics.imbalance_ratio.abs();
@@ -310,6 +310,26 @@ pub fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult,
             fitness *= penalty;
             log_debug!(GENETIC_LOGGER, "FITNESS: inventory_imbalance={:.1}% > 50%, penalty={:.2}x", 
                 imbalance * 100.0, penalty);
+        }
+        
+        // === Penalty: Large Ending Inventory Exposure ===
+        // MM should end close to flat - large ending positions indicate failed reversion
+        // Penalize strategies that end with >20% of capital in unrealized inventory exposure
+        let ending_exposure = inventory_metrics.ending_inventory_value.abs();
+        let initial_capital = result.initial_capital;
+        if initial_capital > 0.0 {
+            let exposure_pct = ending_exposure / initial_capital;
+            if exposure_pct > 0.20 {
+                // >20% ending exposure = directional betting, not MM
+                // Scale penalty: 20% = 0.8x, 40% = 0.6x, 60%+ = 0.4x
+                let penalty = (0.20 / exposure_pct).max(0.4);
+                fitness *= penalty;
+                log_debug!(GENETIC_LOGGER, "FITNESS: ending_inventory_exposure={:.1}% > 20%, penalty={:.2}x", 
+                    exposure_pct * 100.0, penalty);
+            } else if exposure_pct < 0.05 {
+                // Reward near-flat ending positions
+                fitness *= 1.10;
+            }
         }
     }
     
