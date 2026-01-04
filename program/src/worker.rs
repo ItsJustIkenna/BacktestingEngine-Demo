@@ -114,6 +114,16 @@ pub fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult,
         }
     }
     
+    // === HARD CONSTRAINT: Reject strategies with too few trades ===
+    // Statistical significance requires minimum trades - otherwise Sharpe/metrics are meaningless
+    if result.num_trades < 10 {
+        // Less than 10 trades makes metrics statistically unreliable
+        let tiny_fitness = 0.003 + (result.num_trades as f64 * 0.0001);
+        log_warn!(GENETIC_LOGGER, "FITNESS REJECTED: num_trades={} < 10, returning {:.6}", 
+            result.num_trades, tiny_fitness);
+        return tiny_fitness;
+    }
+    
     // === Primary Metrics ===
     let sharpe = result.sharpe_ratio.unwrap_or(0.0);
     let sortino = result.sortino_ratio.unwrap_or(sharpe);

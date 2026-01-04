@@ -48,6 +48,10 @@ impl AvellanedaStoikovChromosome {
     pub fn enforce_bounds(&mut self) {
         self.risk_aversion = self.risk_aversion.clamp(0.0001, 1.0);
         self.order_size_pct = self.order_size_pct.clamp(0.005, 0.05);
+        // Window: 1s-5min (was 30min - too slow for responsive MM)
+        self.window_ms = self.window_ms.clamp(1_000, 300_000);
+        // Quote lifetime: 10ms-10s (was 60s - too passive)
+        self.min_quote_lifetime_ms = self.min_quote_lifetime_ms.clamp(10, 10_000);
         self.inventory_target = self.inventory_target.clamp(0.0, 0.5);
         self.volatility_cap = self.volatility_cap.clamp(0.20, 5.0);
         self.time_horizon_minutes = self.time_horizon_minutes.clamp(0.167, 60.0);
@@ -80,13 +84,15 @@ impl Chromosome for AvellanedaStoikovChromosome {
             // 0.5% = conservative to 5% = moderate (avoid excessive commission at higher sizes)
             order_size_pct: rng.gen_range(0.005..0.05),
             
-            // Volatility estimation window: 1s to 30 min
+            // Volatility estimation window: 1s to 5 min (was 30 min - too slow)
             // Short windows for HFT, long windows for swing trading
-            window_ms: rng.gen_range(1_000..1_800_000),
+            // 300s (5min) max keeps strategy responsive to market changes
+            window_ms: rng.gen_range(1_000..300_000),
             
-            // Min time between quote updates: 10ms to 60s
+            // Min time between quote updates: 10ms to 10s (was 60s - too passive)
             // Fast for HFT, slow for less active markets
-            min_quote_lifetime_ms: rng.gen_range(10..60_000),
+            // 10s max ensures quotes stay fresh and competitive
+            min_quote_lifetime_ms: rng.gen_range(10..10_000),
             
             // fee_rate removed - use exchange maker fee from config instead
             // latency_buffer removed - latency now simulated in order matching
@@ -190,15 +196,15 @@ impl Chromosome for AvellanedaStoikovChromosome {
             self.order_size_pct *= rng.gen_range(0.5..2.0);
             self.order_size_pct = self.order_size_pct.clamp(0.005, 0.05);
         }
-        // Window: range 1s-30min
+        // Window: range 1s-5min (was 30min - too slow for responsive MM)
         if rng.gen_bool(mutation_rate) {
             let factor = rng.gen_range(0.5..2.0);
-            self.window_ms = ((self.window_ms as f64 * factor) as u64).clamp(1_000, 1_800_000);
+            self.window_ms = ((self.window_ms as f64 * factor) as u64).clamp(1_000, 300_000);
         }
-        // Quote lifetime: range 10ms-60s
+        // Quote lifetime: range 10ms-10s (was 60s - too passive)
         if rng.gen_bool(mutation_rate) {
             let factor = rng.gen_range(0.5..2.0);
-            self.min_quote_lifetime_ms = ((self.min_quote_lifetime_ms as f64 * factor) as u64).clamp(10, 60_000);
+            self.min_quote_lifetime_ms = ((self.min_quote_lifetime_ms as f64 * factor) as u64).clamp(10, 10_000);
         }
         // fee_rate removed - use exchange config
         // latency_buffer removed - latency now simulated in order matching
