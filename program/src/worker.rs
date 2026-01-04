@@ -2697,29 +2697,54 @@ impl Worker {
         let _ = progress_tracker.persist_progress(5.0).await; // 5% - data loaded
         eprintln!("⏱️ TIMING | DATA_LOAD | {} points in {:.2}s", data.len(), timing_data_load_elapsed.as_secs_f64());
         
-        // Use FULL dataset for all phases - no sampling
-        // This ensures accurate fill simulation for market making strategies
-        // OPTIMIZATION: Wrap in Arc ONCE to avoid cloning 6.8M elements multiple times
-        // Previously we cloned data twice which used ~3x memory and was very slow
-        let data_len = data.len();
-        let shared_data = Arc::new(data);
+        // ============================================================================
+        // TRAIN/TEST/VALIDATE SPLIT for Walk-Forward Validation
+        // ============================================================================
+        // train_ratio: GA optimization + backtest (default 60%)
+        // test_ratio: Walk-forward out-of-sample validation (default 20%)
+        // validate_ratio: Final held-out validation (default 20%, reserved for future)
+        //
+        // This prevents overfitting by testing the strategy on unseen data
+        let total_len = data.len();
+        let train_end = (total_len as f64 * params.train_ratio) as usize;
+        let test_end = train_end + (total_len as f64 * params.test_ratio) as usize;
+        
+        // Split data chronologically (time-series data must preserve order)
+        let train_data: Vec<MarketData> = data[..train_end].to_vec();
+        let test_data: Vec<MarketData> = data[train_end..test_end].to_vec();
+        // validate_data would be data[test_end..] - reserved for future use
+        
+        // Wrap splits in Arc for efficient sharing
+        let shared_train_data = Arc::new(train_data);
+        let shared_test_data = Arc::new(test_data);
         
         log_info_structured!(GENETIC_LOGGER, "GA_DATA_SPLIT",
             "event" => "GA_DATA_SPLIT",
             "job_id" => &job.id,
-            "ga_data_points" => data_len,
-            "backtest_data_points" => data_len,
-            "walkforward_data_points" => data_len
+            "total_data_points" => total_len,
+            "train_data_points" => shared_train_data.len(),
+            "test_data_points" => shared_test_data.len(),
+            "train_ratio" => format!("{:.0}%", params.train_ratio * 100.0),
+            "test_ratio" => format!("{:.0}%", params.test_ratio * 100.0)
         );
-        eprintln!("📊 Data wrapped in Arc (no cloning) - {} points shared across all phases", data_len);
+        eprintln!("📊 Data split: train={} ({:.0}%) | test/walkforward={} ({:.0}%) | total={}", 
+            shared_train_data.len(), params.train_ratio * 100.0,
+            shared_test_data.len(), params.test_ratio * 100.0,
+            total_len);
         
-        // === CONVERT TO EVENTS FOR REALISTIC SIMULATION ===
+        // GA optimization and backtest use training data only
+        let data_for_backtest = Arc::clone(&shared_train_data);
+        // Walk-forward uses test data (unseen during optimization)
+        let data_for_walkforward = Arc::clone(&shared_test_data);
+        
+        // Convert training data to events for GA fitness evaluation
         let events_start = std::time::Instant::now();
-        eprintln!("📊 Converting to trade events for RealisticSimulator...");
-        let events = backtest::ticks_to_trade_events(&shared_data);
+        eprintln!("📊 Converting training data to trade events for RealisticSimulator...");
+        let events = backtest::ticks_to_trade_events(&shared_train_data);
         let events_arc = std::sync::Arc::new(events);
-        eprintln!("📊 Events converted in {:.2}s ({} events)", events_start.elapsed().as_secs_f64(), events_arc.len());
-        log_info!(GENETIC_LOGGER, "Converted to trade events in {:.2}ms | {} events",
+        eprintln!("📊 Events converted in {:.2}s ({} events from {} train points)", 
+            events_start.elapsed().as_secs_f64(), events_arc.len(), shared_train_data.len());
+        log_info!(GENETIC_LOGGER, "Converted training data to trade events in {:.2}ms | {} events",
             events_start.elapsed().as_millis(),
             events_arc.len());
         
@@ -2740,13 +2765,12 @@ impl Worker {
         // Use efficient progress callback that batches DB writes
         let generation_callback = progress_tracker.generation_callback();
         
-        // All phases share the same Arc - no cloning needed
-        let data_for_backtest = Arc::clone(&shared_data);
-        let data_for_walkforward = Arc::clone(&shared_data);
+        // NOTE: data_for_backtest and data_for_walkforward are already defined above
+        // from the train/test split. Here we just set up the remaining references.
         let events_for_fitness = std::sync::Arc::clone(&events_arc);
         let fee_config_for_fitness = exchange_fee_config.clone();
         // Create separate clones for distributed mode fallback (local GA uses these too)
-        let data_for_distributed = Arc::clone(&shared_data);
+        let data_for_distributed = Arc::clone(&shared_train_data);  // Use training data for distributed GA
         let _symbol = params.symbol.clone();
         let exchange = params.exchange.clone();
         let symbol_for_distributed = params.symbol.clone();
@@ -2935,7 +2959,7 @@ impl Worker {
             DistributedGARunner::run_with_fallback(
                 &distributed_mode,
                 &distributed_config,
-                &shared_data,  // Pass slice reference
+                &shared_train_data,  // Pass training data slice reference
                 move |chromo: &AvellanedaStoikovChromosome| {
                     // This fitness function is used for LOCAL fallback only
                     // When distributed mode works, workers evaluate chromosomes
@@ -4229,17 +4253,16 @@ impl Worker {
             );
         }
         
-        // Run walk-forward on FULL data separately (engine samples per-window at 200K max)
-        // This validates the strategy generalizes across all time periods
-        // TODO: Implement walk-forward using RealisticSimulator for consistency
-        // For now, walk-forward is disabled until RealisticSimulator-based implementation is ready
+        // Run walk-forward on OUT-OF-SAMPLE test data (not seen during GA optimization)
+        // This validates the strategy generalizes to unseen time periods
+        // The test data is separate from training data (default 20% held out)
         if walk_forward_enabled && !walkforward_data.is_empty() {
-            log_info!(MAIN_LOGGER, "Job {} Walk-Forward requested but not yet implemented with RealisticSimulator - skipping", job_id);
-            log_warn!(MAIN_LOGGER, "Job {} Walk-Forward analysis skipped: pending RealisticSimulator integration", job_id);
+            log_info!(MAIN_LOGGER, "Job {} Walk-Forward starting on {} out-of-sample data points", 
+                job_id, walkforward_data.len());
             
             // ============ TIMING: Walk-Forward ============
             let wf_timing_start = std::time::Instant::now();
-            eprintln!("⏱️ TIMING | WALK_FORWARD | starting on {} data points (using RealisticSimulator)...", walkforward_data.len());
+            eprintln!("⏱️ TIMING | WALK_FORWARD | starting on {} OOS data points...", walkforward_data.len());
             
             // Convert walkforward data to events
             let wf_events = market_data_to_order_events(walkforward_data);
