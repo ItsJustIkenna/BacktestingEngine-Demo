@@ -157,15 +157,22 @@ mod tests {
             mutation_rate: 0.1, use_monte_carlo_fitness: false, mc_sample_size: 50, top_percentile_threshold: 0.10, };
 
         // Simple fitness function for A-S parameters
+        // Note: ranges must match chromosome bounds in chromosome.rs:
+        // - risk_aversion: 0.0001..1.0, clamped to 0.0001..1.0
+        // - order_size_pct: 0.005..0.02, clamped to 0.005..0.02
+        // - inventory_target: 0.0..0.5, clamped to 0.0..0.5
         let fitness_fn: AsyncFitnessFn<AvellanedaStoikovChromosome> = Arc::new(|chromo| {
             let risk = chromo.risk_aversion;
             let size_pct = chromo.order_size_pct;
             let inv_target = chromo.inventory_target;
             Box::pin(async move {
                 // Prefer moderate risk aversion and reasonable order size percentages
-                let risk_score = if risk > 0.01 && risk < 0.05 { 10.0 } else { 1.0 };
-                let size_score = if size_pct > 0.02 && size_pct < 0.10 { 10.0 } else { 1.0 };
-                let inv_score = if inv_target.abs() < 0.5 { 5.0 } else { 1.0 };
+                // Risk: prefer 0.01-0.5 (moderate risk aversion)
+                let risk_score = if risk > 0.01 && risk < 0.5 { 10.0 } else { 1.0 };
+                // Size: prefer 0.01-0.02 (1-2% order size - within bounds of 0.005-0.02)
+                let size_score = if size_pct > 0.01 && size_pct <= 0.02 { 10.0 } else { 1.0 };
+                // Inventory target: prefer low/balanced (< 0.3)
+                let inv_score = if inv_target < 0.3 { 5.0 } else { 1.0 };
                 FitnessResult::new(risk_score + size_score + inv_score, Vec::new())
             })
         });
