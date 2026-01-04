@@ -1722,6 +1722,38 @@ impl Worker {
         let symbols: Vec<String> = symbol_events.keys().cloned().collect();
         let actual_num_symbols = symbols.len();
         
+        // ========== TRAIN/TEST SPLIT FOR PORTFOLIO MODE ==========
+        // Apply the same train/test split logic as single-symbol mode
+        // Train data is used for GA optimization, test data for OOS validation
+        let train_ratio = params.train_ratio;
+        let test_ratio = params.test_ratio;
+        
+        let mut symbol_train_data: std::collections::HashMap<String, Vec<dataloader::MarketData>> = std::collections::HashMap::new();
+        let mut symbol_test_data: std::collections::HashMap<String, Vec<dataloader::MarketData>> = std::collections::HashMap::new();
+        let mut symbol_train_events: std::collections::HashMap<String, Vec<backtest::realistic_simulation::OrderBookEvent>> = std::collections::HashMap::new();
+        let mut symbol_test_events: std::collections::HashMap<String, Vec<backtest::realistic_simulation::OrderBookEvent>> = std::collections::HashMap::new();
+        
+        for (asset_key, data) in &symbol_data {
+            let n = data.len();
+            let train_end = ((n as f64) * train_ratio).ceil() as usize;
+            let test_end = ((n as f64) * (train_ratio + test_ratio)).ceil() as usize;
+            
+            let train_data: Vec<dataloader::MarketData> = data[..train_end].to_vec();
+            let test_data: Vec<dataloader::MarketData> = data[train_end..test_end.min(n)].to_vec();
+            
+            let train_events = backtest::ticks_to_trade_events(&train_data);
+            let test_events = backtest::ticks_to_trade_events(&test_data);
+            
+            log_info!(MAIN_LOGGER, "📊 [{}] {} split: train={} ({:.0}%), test={} ({:.0}%)", 
+                job.id, asset_key, train_data.len(), train_ratio * 100.0, 
+                test_data.len(), test_ratio * 100.0);
+            
+            symbol_train_data.insert(asset_key.clone(), train_data);
+            symbol_test_data.insert(asset_key.clone(), test_data);
+            symbol_train_events.insert(asset_key.clone(), train_events);
+            symbol_test_events.insert(asset_key.clone(), test_events);
+        }
+        
         // ========== PHASE 1: Per-symbol GA optimization (parallel) ==========
         let _ = self.job_queue.update_phase(&job.id, "portfolio_ga_symbol_optimization", serde_json::json!({
             "phase": "per_symbol_ga",
@@ -1729,7 +1761,7 @@ impl Worker {
         })).await;
         let _ = self.job_queue.update_progress(&job.id, 15.0).await;
         
-        log_info!(MAIN_LOGGER, "🧬 [{}] Phase 1: Starting parallel per-symbol GA optimization", job.id);
+        log_info!(MAIN_LOGGER, "🧬 [{}] Phase 1: Starting parallel per-symbol GA optimization (using training data only)", job.id);
         
         // GA config for per-symbol optimization
         let ga_config = GeneticConfig {
@@ -1750,8 +1782,8 @@ impl Worker {
             job.id.clone(),
         );
         
-        // Create fitness function factory for each symbol
-        let symbol_data_arc = std::sync::Arc::new(symbol_data.clone());
+        // Create fitness function factory for each symbol - use TRAINING data only
+        let symbol_train_data_arc = std::sync::Arc::new(symbol_train_data.clone());
         let initial_capital = params.initial_capital;
         let _commission_rate = params.commission_rate;
         let exchange = params.exchange.clone();
@@ -1764,20 +1796,21 @@ impl Worker {
             
             for asset_key in symbols.iter() {
                 let asset_key = asset_key.clone();
-                let symbol_data_arc = std::sync::Arc::clone(&symbol_data_arc);
+                let symbol_train_data_arc = std::sync::Arc::clone(&symbol_train_data_arc);
                 let ga_config = ga_config.clone();
                 let job_id = job.id.clone();
                 let exchange = exchange.clone();
                 
                 join_set.spawn(async move {
-                    let data = symbol_data_arc.get(&asset_key)
-                        .ok_or_else(|| format!("No data for {}", asset_key))?;
+                    // Use TRAINING data only for GA optimization
+                    let data = symbol_train_data_arc.get(&asset_key)
+                        .ok_or_else(|| format!("No training data for {}", asset_key))?;
                     
                     // Convert to events for realistic simulation
                     let events = backtest::ticks_to_trade_events(data);
                     let events_arc = std::sync::Arc::new(events);
                     
-                    eprintln!("🧬 [{}] GA for {} with {} events (using RealisticSimulator)", job_id, asset_key, events_arc.len());
+                    eprintln!("🧬 [{}] GA for {} with {} TRAINING events (using RealisticSimulator)", job_id, asset_key, events_arc.len());
                     
                     // Get exchange fee config
                     let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&exchange);
@@ -1905,6 +1938,11 @@ impl Worker {
             symbol_chromosomes.insert(result.asset_key.clone(), result.chromosome.clone());
         }
         
+        // Guard: Ensure we have at least one optimized chromosome
+        if symbol_chromosomes.is_empty() {
+            return Err("No symbols were successfully optimized".into());
+        }
+        
         // ========== PHASE 2: Allocation weight optimization ==========
         let _ = self.job_queue.update_phase(&job.id, "portfolio_ga_weight_optimization", serde_json::json!({
             "phase": "weight_optimization",
@@ -1943,17 +1981,20 @@ impl Worker {
                     let weights = chr.normalized_weights();
                     
                     // Run portfolio simulation with these weights and optimized params
+                    // Use TRAINING data only for weight optimization
                     let mut symbol_events_for_sim: std::collections::HashMap<String, Vec<backtest::realistic_simulation::OrderBookEvent>> = 
                         std::collections::HashMap::new();
                     
                     for asset_key in &symbols_ordered {
-                        if let Some(data) = symbol_data.get(asset_key) {
+                        if let Some(data) = symbol_train_data.get(asset_key) {
                             symbol_events_for_sim.insert(asset_key.clone(), backtest::ticks_to_trade_events(data));
                         }
                     }
                     
                     // Build sim params from best chromosome (use first symbol's as base)
-                    let base_chr = symbol_chromosomes.values().next().unwrap();
+                    // Safe: guarded by symbol_chromosomes.is_empty() check above
+                    let base_chr = symbol_chromosomes.values().next()
+                        .expect("symbol_chromosomes checked non-empty above");
                     let sim_params = RealisticASParams {
                         risk_aversion: base_chr.risk_aversion,
                         inventory_target: base_chr.inventory_target,
@@ -1985,6 +2026,11 @@ impl Worker {
                         Some(&weights),
                     );
                     
+                    // Calculate ending inventory exposure for fitness penalty
+                    let ending_inventory_exposure: f64 = portfolio_result.symbol_results.iter()
+                        .map(|r| r.ending_inventory_value.abs())
+                        .sum();
+                    
                     // Calculate fitness
                     let fitness = fitness_config.calculate_fitness(
                         portfolio_result.portfolio_sharpe,
@@ -1998,6 +2044,8 @@ impl Worker {
                         portfolio_result.total_trades,
                         actual_num_symbols,
                         Some(portfolio_result.avg_fill_rate),
+                        Some(ending_inventory_exposure),
+                        initial_capital,
                     );
                     
                     fitness_results.push((chr.clone(), fitness));
@@ -2042,16 +2090,19 @@ impl Worker {
         
         let _ = self.job_queue.update_progress(&job.id, 80.0).await;
         
-        // ========== PHASE 3: Final portfolio simulation ==========
+        // ========== PHASE 3: Final portfolio simulation on OUT-OF-SAMPLE test data ==========
         let _ = self.job_queue.update_phase(&job.id, "portfolio_final_simulation", serde_json::json!({
-            "phase": "final_simulation",
+            "phase": "final_simulation_oos",
             "optimized_weights": &optimized_weights,
+            "data_type": "test_data_oos",
         })).await;
         
-        log_info!(MAIN_LOGGER, "🧬 [{}] Phase 3: Final portfolio simulation with optimized params", job.id);
+        log_info!(MAIN_LOGGER, "🧬 [{}] Phase 3: Final portfolio simulation on OUT-OF-SAMPLE test data", job.id);
         
         // Run final simulation with optimized params and weights
-        let base_chr = symbol_chromosomes.values().next().unwrap();
+        // Safe: guarded by symbol_chromosomes.is_empty() check above
+        let base_chr = symbol_chromosomes.values().next()
+            .expect("symbol_chromosomes checked non-empty above");
         let sim_params = RealisticASParams {
             risk_aversion: base_chr.risk_aversion,
             inventory_target: base_chr.inventory_target,
@@ -2077,13 +2128,15 @@ impl Worker {
         };
         
         let simulator = PortfolioSimulator::new(initial_capital, exchange_fee_config);
+        
+        // Run final simulation on OUT-OF-SAMPLE test data
         let portfolio_result = simulator.run(
-            &symbol_events,
+            &symbol_test_events,
             &sim_params,
             Some(&optimized_weights),
         );
         
-        log_info!(MAIN_LOGGER, "✅ [{}] Portfolio GA complete: pnl=${:.2}, sharpe={:.3}, trades={}", 
+        log_info!(MAIN_LOGGER, "✅ [{}] Portfolio GA complete (OOS): pnl=${:.2}, sharpe={:.3}, trades={}", 
             job.id, portfolio_result.total_pnl, portfolio_result.portfolio_sharpe, portfolio_result.total_trades);
         
         // Build portfolio metrics

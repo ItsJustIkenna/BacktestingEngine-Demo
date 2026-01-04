@@ -243,6 +243,8 @@ pub struct PortfolioFitnessConfig {
     pub target_trades_per_day: f64,
     /// Maximum acceptable drawdown (absolute value)
     pub max_acceptable_drawdown: f64,
+    /// Maximum acceptable ending inventory exposure (as fraction of capital)
+    pub max_ending_inventory_exposure: f64,
 }
 
 impl Default for PortfolioFitnessConfig {
@@ -261,17 +263,21 @@ impl Default for PortfolioFitnessConfig {
             min_trades_per_symbol: 1000,  // ~33 trades/symbol/day over 30 days - prevents "do nothing" exploit
             target_trades_per_day: 33.0,  // Target ~33 trades/day for active market making
             max_acceptable_drawdown: 0.25,
+            max_ending_inventory_exposure: 0.20,  // Penalize >20% ending inventory exposure
         }
     }
 }
 
 impl PortfolioFitnessConfig {
     /// Create from job params fitness weights
-    pub fn from_weights(weights: &crate::chromosome::AvellanedaStoikovChromosome) -> Self {
+    pub fn from_weights(_weights: &crate::chromosome::AvellanedaStoikovChromosome) -> Self {
         Self::default() // Use defaults, can be extended later
     }
     
     /// Calculate fitness from portfolio metrics
+    /// 
+    /// # Arguments
+    /// * `ending_inventory_exposure` - Total absolute ending inventory value / initial capital
     pub fn calculate_fitness(
         &self,
         sharpe: f64,
@@ -285,6 +291,8 @@ impl PortfolioFitnessConfig {
         total_trades: usize,
         num_symbols: usize,
         fill_rate: Option<f64>,
+        ending_inventory_exposure: Option<f64>,
+        initial_capital: f64,
     ) -> f64 {
         // Check minimum trades constraint - HARD cutoff to prevent "do nothing" exploit
         let avg_trades_per_symbol = total_trades as f64 / num_symbols.max(1) as f64;
@@ -352,7 +360,31 @@ impl PortfolioFitnessConfig {
             trade_penalty +
             fill_rate_penalty;
         
-        fitness
+        // === Penalty: Large Ending Inventory Exposure ===
+        // MM should end close to flat - large ending positions indicate failed reversion
+        // Penalize strategies that end with >20% of capital in unrealized inventory exposure
+        let ending_inventory_penalty = if let Some(exposure) = ending_inventory_exposure {
+            if initial_capital > 0.0 {
+                let exposure_pct = exposure / initial_capital;
+                if exposure_pct > self.max_ending_inventory_exposure {
+                    // >20% ending exposure = directional betting, not MM
+                    // Scale penalty: 20% = 0.8x, 40% = 0.6x, 60%+ = 0.4x
+                    let penalty_factor = (self.max_ending_inventory_exposure / exposure_pct).max(0.4);
+                    fitness * (penalty_factor - 1.0)  // This will reduce fitness by (1 - penalty_factor)
+                } else if exposure_pct < 0.05 {
+                    // Reward near-flat ending positions with 10% bonus
+                    fitness * 0.10
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+        
+        fitness + ending_inventory_penalty
     }
 }
 
@@ -424,7 +456,7 @@ impl PortfolioGAOptimizer {
         &self,
         symbols: &[String],
         fitness_fn_factory: F,
-        progress_callback: Option<ProgressCallback>,
+        _progress_callback: Option<ProgressCallback>,
     ) -> Result<Vec<SymbolOptimizationResult>, Box<dyn std::error::Error + Send + Sync>>
     where
         F: Fn(&str) -> AsyncFitnessFn<AvellanedaStoikovChromosome> + Send + Sync + 'static,
@@ -504,7 +536,7 @@ impl PortfolioGAOptimizer {
     /// Uses a separate GA to find optimal capital allocation
     pub async fn optimize_allocation_weights<F>(
         &self,
-        symbol_chromosomes: &HashMap<String, AvellanedaStoikovChromosome>,
+        _symbol_chromosomes: &HashMap<String, AvellanedaStoikovChromosome>,
         symbols: &[String],
         portfolio_fitness_fn: F,
     ) -> Result<Vec<f64>, Box<dyn std::error::Error + Send + Sync>>
