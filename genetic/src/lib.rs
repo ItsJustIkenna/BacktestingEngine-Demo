@@ -359,7 +359,7 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
         let mut best_fitness = initial_result.fitness;
         let mut best_equity_curve = initial_result.equity_curve;
         let mut generations_without_improvement = 0;
-        const CONVERGENCE_THRESHOLD: usize = 5; // Stop after 5 gens without meaningful improvement
+        const CONVERGENCE_THRESHOLD: usize = 10; // Stop after 10 gens without meaningful improvement
         
         let elite_size = (self.config.population_size as f64 * 0.05).ceil() as usize;
         

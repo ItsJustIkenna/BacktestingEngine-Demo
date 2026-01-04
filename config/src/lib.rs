@@ -987,10 +987,10 @@ impl Default for ReportConfig {
 impl Default for GeneticConfig {
     fn default() -> Self {
         Self {
-            population_size: 50,
+            population_size: 100,
             generations: 100,
             crossover_rate: 0.8,
-            mutation_rate: 0.1,
+            mutation_rate: 0.15,
             use_monte_carlo_fitness: true,      // Enabled by default for robustness
             mc_sample_size: 50,                 // Fast MC for fitness eval
             top_percentile_threshold: 0.10,     // Only check top 10%
