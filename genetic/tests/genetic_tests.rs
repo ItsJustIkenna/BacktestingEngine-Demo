@@ -206,11 +206,11 @@ fn test_genetic_config_custom() {
 fn test_genetic_config_default_values() {
     let config = GeneticConfig::default();
     
-    // Check default values
-    assert_eq!(config.population_size, 50);
+    // Check default values (updated for better convergence)
+    assert_eq!(config.population_size, 100);
     assert_eq!(config.generations, 100);
     assert_eq!(config.crossover_rate, 0.8);
-    assert_eq!(config.mutation_rate, 0.1);
+    assert_eq!(config.mutation_rate, 0.15);
     assert!(config.use_monte_carlo_fitness);
 }
 
