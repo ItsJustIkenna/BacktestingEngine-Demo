@@ -139,11 +139,21 @@ fn normalize_symbol(symbol: &str) -> String {
     let symbol = symbol.to_uppercase();
     
     // Common quote currencies to look for (in order of preference)
+    // Note: More specific suffixes (USDT, USDC, BUSD) must come before less specific (USD)
+    // to avoid false matches like BNBUSD -> BN/BUSD instead of BNB/USD.
+    // We also need to validate the base currency is reasonable (>= 2 chars for most, >= 3 for ambiguous).
     let quote_currencies = ["USDT", "USDC", "BUSD", "USD", "EUR", "GBP", "BTC", "ETH"];
     
     for quote in &quote_currencies {
         if symbol.ends_with(quote) && symbol.len() > quote.len() {
             let base = &symbol[..symbol.len() - quote.len()];
+            
+            // Special handling for BUSD: require at least 3 char base to avoid
+            // false positives like BNBUSD being parsed as BN/BUSD instead of BNB/USD
+            if *quote == "BUSD" && base.len() < 3 {
+                continue; // Skip BUSD match, let USD match handle it
+            }
+            
             return format!("{}/{}", base, quote);
         }
     }
