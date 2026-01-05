@@ -1867,112 +1867,111 @@ impl Worker {
                                 
                                 let num_trades = sim_result.num_trades as f64;
                                 
-                                // === HARD REJECT CONDITIONS ===
-                                // These return very negative fitness to kill bad strategies early
+                                // ==============================================
+                                // AGGRESSIVE HARD REJECT - MARKET MAKING VIABILITY
+                                // ==============================================
+                                // Only allow chromosomes that meet ALL viable MM criteria.
+                                // Fail fast = faster evolution toward profitable strategies.
                                 
-                                // 1. Too few trades = no statistical significance
-                                if sim_result.num_trades < 20 {
-                                    return FitnessResult::new(-10.0, sim_result.equity_curve);
-                                }
-                                
-                                // 2. Commission ratio > 80% = strategy is just paying fees
                                 let gross_profit = sim_result.trade_returns.iter()
                                     .filter(|&&r| r > 0.0).sum::<f64>();
                                 let commission_ratio = if gross_profit > 0.0 {
                                     sim_result.total_fees / gross_profit
                                 } else {
-                                    1.0  // No gross profit = 100% commission ratio
+                                    1.0
                                 };
-                                if commission_ratio > 0.80 {
+                                let ending_inv_exposure = sim_result.inventory_metrics.ending_inventory_value.abs() / initial_capital;
+                                
+                                // 1. Minimum trades for statistical significance (MM should trade frequently)
+                                if sim_result.num_trades < 1000 {
+                                    return FitnessResult::new(-10.0, sim_result.equity_curve);
+                                }
+                                
+                                // 2. Win rate >= 51% (MM MUST have edge, not get picked off)
+                                if sim_result.win_rate < 0.51 {
+                                    return FitnessResult::new(-8.0, sim_result.equity_curve);
+                                }
+                                
+                                // 3. Profit factor >= 1.2 (must have clear edge after costs)
+                                if sim_result.profit_factor < 1.2 {
+                                    return FitnessResult::new(-7.0, sim_result.equity_curve);
+                                }
+                                
+                                // 4. Sharpe ratio >= 1.0 (MM should have excellent risk-adjusted returns)
+                                if sim_result.sharpe_ratio < 1.0 {
+                                    return FitnessResult::new(-6.5, sim_result.equity_curve);
+                                }
+                                
+                                // 5. Max drawdown <= 20% (risk control is non-negotiable)
+                                if sim_result.max_drawdown > 0.20 {
+                                    return FitnessResult::new(-6.0, sim_result.equity_curve);
+                                }
+                                
+                                // 6. Commission ratio <= 60% (fees can't eat most of profit)
+                                if commission_ratio > 0.60 {
                                     return FitnessResult::new(-5.0, sim_result.equity_curve);
                                 }
                                 
-                                // 3. Catastrophic drawdown > 30%
-                                if sim_result.max_drawdown > 0.30 {
-                                    return FitnessResult::new(-5.0, sim_result.equity_curve);
+                                // 7. Inventory exposure <= 10% (MM must stay flat, not take directional bets)
+                                if ending_inv_exposure > 0.10 {
+                                    return FitnessResult::new(-4.0, sim_result.equity_curve);
                                 }
                                 
-                                // === CORE PROFITABILITY METRICS ===
+                                // 8. Must be profitable (this is the whole point)
+                                if sim_result.total_pnl <= 0.0 {
+                                    return FitnessResult::new(-3.0, sim_result.equity_curve);
+                                }
                                 
-                                // Net profit normalized by capital (most important for MM)
+                                // 9. Avg profit per trade >= 2× avg commission (edge must be robust)
+                                let avg_profit_per_trade = sim_result.total_pnl / sim_result.num_trades as f64;
+                                let avg_commission_per_trade = sim_result.total_fees / sim_result.num_trades as f64;
+                                if avg_profit_per_trade < 2.0 * avg_commission_per_trade {
+                                    return FitnessResult::new(-2.5, sim_result.equity_curve);
+                                }
+                                
+                                // ==============================================
+                                // PASSED ALL GATES - Now rank by quality
+                                // ==============================================
+                                // At this point we have a VIABLE strategy. Rank by how good it is.
+                                
+                                let num_trades = sim_result.num_trades as f64;
                                 let net_profit_pct = sim_result.total_pnl / initial_capital;
                                 
-                                // Profit per trade (must be positive after commissions)
-                                let avg_profit_per_trade = sim_result.total_pnl / num_trades.max(1.0);
-                                let profit_per_trade_score = (avg_profit_per_trade / initial_capital * 1000.0).tanh();
+                                // Profit score (primary driver - we want maximum profit)
+                                let profit_score = (net_profit_pct * 10.0).tanh();  // 10% return = 0.76, 20% = 0.96
                                 
-                                // === CONSISTENCY METRICS ===
+                                // Sharpe bonus (risk-adjusted, capped at 3)
+                                let sharpe_score = (sim_result.sharpe_ratio.max(0.0) / 3.0).min(1.0);
                                 
-                                // Profit factor: gross wins / gross losses (want > 1.2)
-                                let pf_score = ((sim_result.profit_factor - 1.0) * 2.0).tanh();
+                                // Win rate bonus (baseline at 51%)
+                                let win_rate_bonus = (sim_result.win_rate - 0.51) * 2.0;  // 61% WR = 0.2 bonus
                                 
-                                // Win rate bonus (MM wants 50-60%, higher is better but diminishing)
-                                let win_rate_score = (sim_result.win_rate - 0.45) * 2.0;
+                                // Profit factor bonus (baseline at 1.2)
+                                let pf_bonus = ((sim_result.profit_factor - 1.2) / 1.8).min(1.0);  // PF 2.0 = 0.44 bonus
                                 
-                                // Trade count bonus: more trades = more robust estimate
-                                // Log scale to not over-reward extreme trade counts
-                                let trade_count_score = (num_trades.ln() - 3.0) / 5.0;  // ~0 at 20 trades, ~0.5 at 150
+                                // Trade count bonus (more trades = more confidence, log scale)
+                                let trade_bonus = (num_trades.ln() - 3.4) / 4.0;  // 30 trades = 0, 200 = 0.43
                                 
-                                // === RISK METRICS ===
+                                // Low drawdown bonus
+                                let dd_bonus = (0.20 - sim_result.max_drawdown) * 2.0;  // 5% DD = 0.30 bonus
                                 
-                                // Sharpe ratio (but capped to not over-reward outliers)
-                                let sharpe_score = sim_result.sharpe_ratio.min(3.0) / 3.0;
+                                // Commission efficiency bonus
+                                let comm_bonus = (0.60 - commission_ratio) / 0.60;  // 30% ratio = 0.5 bonus
                                 
-                                // Drawdown penalty (want < 10%)
-                                let dd_score = if sim_result.max_drawdown < 0.05 {
-                                    0.2  // Bonus for very low drawdown
-                                } else if sim_result.max_drawdown < 0.10 {
-                                    0.1
-                                } else if sim_result.max_drawdown < 0.20 {
-                                    0.0
-                                } else {
-                                    -0.3  // Penalty for high drawdown
-                                };
+                                // Inventory management bonus (tighter = better)
+                                let inv_bonus = (0.10 - ending_inv_exposure) / 0.10;  // 10% exposure = 0.67 bonus
                                 
-                                // === INVENTORY MANAGEMENT ===
-                                
-                                // Ending inventory penalty (MM should be flat, not directional)
-                                let ending_inv_exposure = sim_result.inventory_metrics.ending_inventory_value.abs() / initial_capital;
-                                let inventory_score = if ending_inv_exposure < 0.05 {
-                                    0.15  // Bonus for clean inventory
-                                } else if ending_inv_exposure < 0.10 {
-                                    0.05
-                                } else if ending_inv_exposure < 0.20 {
-                                    -0.1
-                                } else {
-                                    -0.3  // Large penalty for inventory accumulation
-                                };
-                                
-                                // Turnover rate bonus (want high turnover = not holding positions)
-                                let turnover_per_day = sim_result.inventory_metrics.turnover_rate;
-                                let turnover_score = (turnover_per_day / 10.0).min(0.2);  // Up to 0.2 bonus
-                                
-                                // === COMMISSION EFFICIENCY ===
-                                
-                                // Commission ratio penalty (want < 30% of gross profit going to fees)
-                                let commission_score = if commission_ratio < 0.30 {
-                                    0.2  // Excellent efficiency
-                                } else if commission_ratio < 0.50 {
-                                    0.1  // Good
-                                } else if commission_ratio < 0.70 {
-                                    0.0  // Marginal
-                                } else {
-                                    -0.2  // Poor, most profit eaten by fees
-                                };
-                                
-                                // === WEIGHTED FITNESS ===
-                                // Weights designed for market making profitability
+                                // === FINAL FITNESS ===
+                                // Heavily weight profit, then consistency, then risk metrics
                                 let fitness = 
-                                    net_profit_pct * 0.30 +          // 30% weight on raw profit
-                                    profit_per_trade_score * 0.15 +   // 15% on profit efficiency
-                                    pf_score * 0.10 +                 // 10% on profit factor
-                                    sharpe_score * 0.10 +             // 10% on risk-adjusted returns
-                                    win_rate_score * 0.05 +           // 5% on win rate
-                                    trade_count_score * 0.05 +        // 5% on trade count
-                                    dd_score +                        // Drawdown bonus/penalty
-                                    inventory_score +                 // Inventory bonus/penalty
-                                    turnover_score +                  // Turnover bonus
-                                    commission_score;                 // Commission efficiency
+                                    profit_score * 0.40 +       // 40% raw profitability
+                                    sharpe_score * 0.15 +       // 15% risk-adjusted return
+                                    pf_bonus * 0.15 +           // 15% profit factor
+                                    win_rate_bonus * 0.10 +     // 10% win rate
+                                    trade_bonus * 0.05 +        // 5% statistical confidence
+                                    dd_bonus * 0.05 +           // 5% drawdown control
+                                    comm_bonus * 0.05 +         // 5% commission efficiency
+                                    inv_bonus * 0.05;           // 5% inventory management
                                 
                                 FitnessResult::with_metrics(
                                     fitness,
@@ -2991,120 +2990,106 @@ impl Worker {
                 // ==============================================
                 // MARKET MAKING FITNESS FUNCTION
                 // ==============================================
-                // Prioritizes what makes MM strategies actually profitable:
-                // 1. Net profit after ALL costs (commissions are the enemy)
-                // 2. Consistency (many small wins > few big wins)
-                // 3. Inventory control (don't take directional bets)
-                // 4. Risk-adjusted returns (survive bad periods)
+                // AGGRESSIVE HARD REJECT - MARKET MAKING VIABILITY
+                // ==============================================
+                // Only allow chromosomes that meet ALL viable MM criteria.
+                // Fail fast = faster evolution toward profitable strategies.
                 
-                let num_trades = sim_result.num_trades as f64;
-                
-                // === HARD REJECT CONDITIONS ===
-                // These return very negative fitness to kill bad strategies early
-                
-                // 1. Too few trades = no statistical significance
-                if sim_result.num_trades < 20 {
-                    return genetic::FitnessResult::new(-10.0, sim_result.equity_curve);
-                }
-                
-                // 2. Commission ratio > 80% = strategy is just paying fees
                 let gross_profit = sim_result.trade_returns.iter()
                     .filter(|&&r| r > 0.0).sum::<f64>();
                 let commission_ratio = if gross_profit > 0.0 {
                     sim_result.total_fees / gross_profit
                 } else {
-                    1.0  // No gross profit = 100% commission ratio
+                    1.0
                 };
-                if commission_ratio > 0.80 {
+                let ending_inv_exposure = sim_result.inventory_metrics.ending_inventory_value.abs() / initial_capital;
+                
+                // 1. Minimum trades for statistical significance (MM should trade frequently)
+                if sim_result.num_trades < 1000 {
+                    return genetic::FitnessResult::new(-10.0, sim_result.equity_curve);
+                }
+                
+                // 2. Win rate >= 51% (MM MUST have edge, not get picked off)
+                if sim_result.win_rate < 0.51 {
+                    return genetic::FitnessResult::new(-8.0, sim_result.equity_curve);
+                }
+                
+                // 3. Profit factor >= 1.2 (must have clear edge after costs)
+                if sim_result.profit_factor < 1.2 {
+                    return genetic::FitnessResult::new(-7.0, sim_result.equity_curve);
+                }
+                
+                // 4. Sharpe ratio >= 1.0 (MM should have excellent risk-adjusted returns)
+                if sim_result.sharpe_ratio < 1.0 {
+                    return genetic::FitnessResult::new(-6.5, sim_result.equity_curve);
+                }
+                
+                // 5. Max drawdown <= 20% (risk control is non-negotiable)
+                if sim_result.max_drawdown > 0.20 {
+                    return genetic::FitnessResult::new(-6.0, sim_result.equity_curve);
+                }
+                
+                // 6. Commission ratio <= 60% (fees can't eat most of profit)
+                if commission_ratio > 0.60 {
                     return genetic::FitnessResult::new(-5.0, sim_result.equity_curve);
                 }
                 
-                // 3. Catastrophic drawdown > 30%
-                if sim_result.max_drawdown > 0.30 {
-                    return genetic::FitnessResult::new(-5.0, sim_result.equity_curve);
+                // 7. Inventory exposure <= 10% (MM must stay flat, not take directional bets)
+                if ending_inv_exposure > 0.10 {
+                    return genetic::FitnessResult::new(-4.0, sim_result.equity_curve);
                 }
                 
-                // === CORE PROFITABILITY METRICS ===
+                // 8. Must be profitable (this is the whole point)
+                if sim_result.total_pnl <= 0.0 {
+                    return genetic::FitnessResult::new(-3.0, sim_result.equity_curve);
+                }
                 
-                // Net profit normalized by capital (most important for MM)
+                // 9. Avg profit per trade >= 2× avg commission (edge must be robust)
+                let avg_profit_per_trade = sim_result.total_pnl / sim_result.num_trades as f64;
+                let avg_commission_per_trade = sim_result.total_fees / sim_result.num_trades as f64;
+                if avg_profit_per_trade < 2.0 * avg_commission_per_trade {
+                    return genetic::FitnessResult::new(-2.5, sim_result.equity_curve);
+                }
+                
+                // ==============================================
+                // PASSED ALL GATES - Now rank by quality
+                // ==============================================
+                let num_trades = sim_result.num_trades as f64;
                 let net_profit_pct = sim_result.total_pnl / initial_capital;
                 
-                // Profit per trade (must be positive after commissions)
-                let avg_profit_per_trade = sim_result.total_pnl / num_trades.max(1.0);
-                let profit_per_trade_score = (avg_profit_per_trade / initial_capital * 1000.0).tanh();
+                // Profit score (primary driver)
+                let profit_score = (net_profit_pct * 10.0).tanh();
                 
-                // === CONSISTENCY METRICS ===
+                // Sharpe bonus
+                let sharpe_score = (sim_result.sharpe_ratio.max(0.0) / 3.0).min(1.0);
                 
-                // Profit factor: gross wins / gross losses (want > 1.2)
-                let pf_score = ((sim_result.profit_factor - 1.0) * 2.0).tanh();
+                // Win rate bonus (baseline at 51%)
+                let win_rate_bonus = (sim_result.win_rate - 0.51) * 2.0;
                 
-                // Win rate bonus (MM wants 50-60%, higher is better but diminishing)
-                let win_rate_score = (sim_result.win_rate - 0.45) * 2.0;
+                // Profit factor bonus (baseline at 1.2)
+                let pf_bonus = ((sim_result.profit_factor - 1.2) / 1.8).min(1.0);
                 
-                // Trade count bonus: more trades = more robust estimate
-                // Log scale to not over-reward extreme trade counts
-                let trade_count_score = (num_trades.ln() - 3.0) / 5.0;  // ~0 at 20 trades, ~0.5 at 150
+                // Trade count bonus (log scale, baseline at 1000)
+                let trade_bonus = (num_trades.ln() - 6.9) / 3.0;  // 1000 trades = 0, 5000 = 0.54
                 
-                // === RISK METRICS ===
+                // Low drawdown bonus
+                let dd_bonus = (0.20 - sim_result.max_drawdown) * 2.0;
                 
-                // Sharpe ratio (but capped to not over-reward outliers)
-                let sharpe_score = sim_result.sharpe_ratio.min(3.0) / 3.0;
+                // Commission efficiency bonus
+                let comm_bonus = (0.60 - commission_ratio) / 0.60;
                 
-                // Drawdown penalty (want < 10%)
-                let dd_score = if sim_result.max_drawdown < 0.05 {
-                    0.2  // Bonus for very low drawdown
-                } else if sim_result.max_drawdown < 0.10 {
-                    0.1
-                } else if sim_result.max_drawdown < 0.20 {
-                    0.0
-                } else {
-                    -0.3  // Penalty for high drawdown
-                };
+                // Inventory management bonus (tighter = better)
+                let inv_bonus = (0.10 - ending_inv_exposure) / 0.10;
                 
-                // === INVENTORY MANAGEMENT ===
-                
-                // Ending inventory penalty (MM should be flat, not directional)
-                let ending_inv_exposure = sim_result.inventory_metrics.ending_inventory_value.abs() / initial_capital;
-                let inventory_score = if ending_inv_exposure < 0.05 {
-                    0.15  // Bonus for clean inventory
-                } else if ending_inv_exposure < 0.10 {
-                    0.05
-                } else if ending_inv_exposure < 0.20 {
-                    -0.1
-                } else {
-                    -0.3  // Large penalty for inventory accumulation
-                };
-                
-                // Turnover rate bonus (want high turnover = not holding positions)
-                let turnover_per_day = sim_result.inventory_metrics.turnover_rate;
-                let turnover_score = (turnover_per_day / 10.0).min(0.2);  // Up to 0.2 bonus
-                
-                // === COMMISSION EFFICIENCY ===
-                
-                // Commission ratio penalty (want < 30% of gross profit going to fees)
-                let commission_score = if commission_ratio < 0.30 {
-                    0.2  // Excellent efficiency
-                } else if commission_ratio < 0.50 {
-                    0.1  // Good
-                } else if commission_ratio < 0.70 {
-                    0.0  // Marginal
-                } else {
-                    -0.2  // Poor, most profit eaten by fees
-                };
-                
-                // === WEIGHTED FITNESS ===
-                // Weights designed for market making profitability
                 let fitness = 
-                    net_profit_pct * 0.30 +          // 30% weight on raw profit
-                    profit_per_trade_score * 0.15 +   // 15% on profit efficiency
-                    pf_score * 0.10 +                 // 10% on profit factor
-                    sharpe_score * 0.10 +             // 10% on risk-adjusted returns
-                    win_rate_score * 0.05 +           // 5% on win rate
-                    trade_count_score * 0.05 +        // 5% on trade count
-                    dd_score +                        // Drawdown bonus/penalty
-                    inventory_score +                 // Inventory bonus/penalty
-                    turnover_score +                  // Turnover bonus
-                    commission_score;                 // Commission efficiency
+                    profit_score * 0.40 +
+                    sharpe_score * 0.15 +
+                    pf_bonus * 0.15 +
+                    win_rate_bonus * 0.10 +
+                    trade_bonus * 0.05 +
+                    dd_bonus * 0.05 +
+                    comm_bonus * 0.05 +
+                    inv_bonus * 0.05;
                 
                 log_info_structured!(GENETIC_LOGGER, "REALISTIC_FITNESS_EVAL",
                     "event" => "REALISTIC_FITNESS_EVAL",
