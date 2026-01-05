@@ -1390,11 +1390,21 @@ impl RealisticSimulator {
                         // Start with base probability
                         let mut fill_prob = base_prob;
                         
-                        // Adjust for queue position: if we're back of queue, need more volume
-                        // Model: we get filled when (1 - queue_percentile) of the level volume trades
+                        // Queue position adjustment:
+                        // For CoLocated (15% percentile), we're near front of queue
+                        // queue_factor represents our advantage: 0.85 for CoLocated, 0.3 for Realistic
+                        // This scales the base probability, not the per-trade volume comparison
                         let queue_factor = 1.0 - queue_percentile;
-                        let level_volume_traded = event.quantity / our_order.quantity.max(0.001);
-                        fill_prob *= (level_volume_traded * queue_factor).min(1.0);
+                        
+                        // Queue-adjusted probability: front of queue gets nearly full base_prob
+                        // Back of queue (Realistic: 0.7 percentile) gets only 30% of base_prob
+                        fill_prob *= queue_factor.max(0.1);
+                        
+                        // Volume factor: large trades more likely to sweep through queue and fill us
+                        // Normalize by order size but cap the penalty for small trades
+                        let volume_ratio = (event.quantity / our_order.quantity.max(0.001)).min(2.0);
+                        let volume_factor = 0.3 + 0.7 * volume_ratio.min(1.0);  // 30% base + up to 70% from volume
+                        fill_prob *= volume_factor;
                         
                         // Boost probability for adverse selection fills (we get filled more when wrong)
                         if is_adverse_fill {
