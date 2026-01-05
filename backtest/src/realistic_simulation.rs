@@ -1007,7 +1007,8 @@ impl RealisticSimulator {
         let mut trades: Vec<(f64, f64)> = Vec::new();  // (pnl, timestamp)
         let mut trade_records: Vec<TradeRecord> = Vec::new();  // Full trade details
         let mut equity_curve = Vec::with_capacity(events.len() / 100);
-        let mut returns: Vec<f64> = Vec::new();
+        // Note: Sharpe is calculated from trade P&Ls, not equity curve returns,
+        // to prevent inventory mark-to-market gains from inflating Sharpe.
         
         // Fill statistics
         let mut orders_placed = 0usize;
@@ -1898,14 +1899,6 @@ impl RealisticSimulator {
                 if dd > max_drawdown {
                     max_drawdown = dd;
                 }
-                
-                // Track returns for Sharpe
-                if equity_curve.len() > 1 {
-                    let prev = equity_curve[equity_curve.len() - 2];
-                    if prev > 0.0 {
-                        returns.push((equity - prev) / prev);
-                    }
-                }
             }
         }
         
@@ -1914,31 +1907,54 @@ impl RealisticSimulator {
         let final_equity = capital + inventory * final_mark;
         let total_pnl = final_equity - self.initial_capital;
         
-        // Calculate Sharpe ratio (annualized)
-        // Use actual time span of the data to properly annualize
-        let sharpe_ratio: f64 = if returns.len() > 10 {
-            let mean_return: f64 = returns.iter().sum::<f64>() / returns.len() as f64;
-            let variance: f64 = returns.iter().map(|r| (r - mean_return).powi(2)).sum::<f64>() / returns.len() as f64;
+        // Calculate Sharpe ratio (annualized) from TRADE RETURNS, not equity curve
+        // This prevents inventory mark-to-market gains from inflating Sharpe.
+        // A losing trading strategy should show negative Sharpe, even if the asset appreciated.
+        
+        // Extract trade P&L returns as % of average trade size for proper scaling
+        let trade_pnls: Vec<f64> = trades.iter().map(|(pnl, _)| *pnl).collect();
+        let avg_capital_per_trade = self.initial_capital / trades.len().max(1) as f64;
+        let trade_returns_pct: Vec<f64> = trade_pnls.iter()
+            .map(|pnl| pnl / avg_capital_per_trade)
+            .collect();
+        
+        let sharpe_ratio: f64 = if trade_returns_pct.len() >= 10 {
+            let mean_return: f64 = trade_returns_pct.iter().sum::<f64>() / trade_returns_pct.len() as f64;
+            let variance: f64 = trade_returns_pct.iter()
+                .map(|r| (r - mean_return).powi(2))
+                .sum::<f64>() / trade_returns_pct.len() as f64;
             let std_dev: f64 = variance.sqrt();
+            
             if std_dev > 1e-10 {
                 // Calculate actual trading days from timestamp span
-                // last_event_timestamp is in milliseconds
                 let duration_days = if last_event_timestamp > 0 && events.len() > 1 {
                     let first_ts = events.first().map(|e| e.timestamp_ms).unwrap_or(0);
                     let duration_ms = last_event_timestamp - first_ts;
-                    (duration_ms as f64 / 1000.0 / 86400.0).max(1.0) // At least 1 day
+                    (duration_ms as f64 / 1000.0 / 86400.0).max(1.0)
                 } else {
-                    30.0 // Default to 30 days
+                    30.0
                 };
                 
-                // Samples per day = num_returns / duration_days
-                let samples_per_day = returns.len() as f64 / duration_days;
-                // Annualize: sqrt(252 trading days * samples_per_day)
-                let annualization = (252.0 * samples_per_day).sqrt();
-                // Cap to prevent extreme values from very high frequency data
-                let annualization = annualization.min(100.0);
+                // Trades per day for annualization
+                let trades_per_day = trade_returns_pct.len() as f64 / duration_days;
+                // Annualize: sqrt(252 * trades_per_day)
+                let annualization = (252.0 * trades_per_day).sqrt();
+                // Cap to prevent extreme values
+                let annualization = annualization.min(50.0);
                 
                 (mean_return / std_dev) * annualization
+            } else {
+                0.0
+            }
+        } else if !trade_returns_pct.is_empty() {
+            // With few trades, use a simpler calculation without annualization
+            let mean_return: f64 = trade_returns_pct.iter().sum::<f64>() / trade_returns_pct.len() as f64;
+            let variance: f64 = trade_returns_pct.iter()
+                .map(|r| (r - mean_return).powi(2))
+                .sum::<f64>() / trade_returns_pct.len() as f64;
+            let std_dev: f64 = variance.sqrt();
+            if std_dev > 1e-10 {
+                mean_return / std_dev // Un-annualized for low trade counts
             } else {
                 0.0
             }
