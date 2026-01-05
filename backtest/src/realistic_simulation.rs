@@ -403,8 +403,10 @@ impl Default for RealisticASParams {
             window_ms: 60_000,              // 1 minute volatility window
             min_quote_lifetime_ms: 1000,    // 1 second minimum quote lifetime
             
-            // Fill model: Realistic by default for conservative estimates
-            fill_model: FillModelType::Realistic,
+            // Fill model: CoLocated by default for major CEXs (Kraken, Binance)
+            // We use Beeks co-location infrastructure for sub-ms latency
+            // CoLocated has 85% fill probability vs Realistic's 30%
+            fill_model: FillModelType::CoLocated,
         }
     }
 }

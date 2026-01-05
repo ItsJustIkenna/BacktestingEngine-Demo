@@ -1856,18 +1856,48 @@ impl Worker {
                                 );
                                 let sim_result = simulator.run(&events, &sim_params);
                                 
-                                // Calculate fitness
+                                // Calculate fitness with comprehensive penalties
                                 let sharpe = sim_result.sharpe_ratio;
                                 let profit_factor = sim_result.profit_factor;
+                                
+                                // Drawdown penalty: harsh penalty for >25% drawdown
                                 let drawdown_penalty = if sim_result.max_drawdown > 0.25 { -0.5 } else { 0.0 };
+                                
+                                // Trade count penalty: need minimum trades for statistical significance
                                 let trade_penalty = if sim_result.num_trades < 30 { -0.3 } else { 0.0 };
                                 
-                                let fitness = sharpe * 0.4 
-                                    + (sim_result.total_pnl / initial_capital) * 0.3 
-                                    + (profit_factor - 1.0).min(1.0) * 0.2
+                                // Fill rate penalty: penalize strategies that rarely get filled
+                                // avg_fill_rate is 0.0-1.0, we want at least 0.01% (0.0001)
+                                let fill_rate_penalty = if sim_result.avg_fill_rate < 0.0001 {
+                                    -0.5 // Severe penalty for essentially no fills
+                                } else if sim_result.avg_fill_rate < 0.001 {
+                                    -0.2 // Moderate penalty for very low fill rate
+                                } else {
+                                    0.0
+                                };
+                                
+                                // Ending inventory penalty: penalize strategies that just accumulate inventory
+                                // High ending inventory means unrealized P&L, not trading skill
+                                let ending_inventory_value = sim_result.inventory_metrics.ending_inventory_value.abs();
+                                let inventory_exposure = ending_inventory_value / initial_capital;
+                                let inventory_penalty = if inventory_exposure > 0.20 {
+                                    -0.4 // Severe penalty for >20% exposure in ending inventory
+                                } else if inventory_exposure > 0.10 {
+                                    -0.2 // Moderate penalty for >10% exposure
+                                } else {
+                                    // Small bonus for low inventory (clean trading)
+                                    (0.05 - inventory_exposure).max(0.0) * 0.5
+                                };
+                                
+                                let fitness = sharpe * 0.35 
+                                    + (sim_result.total_pnl / initial_capital) * 0.25 
+                                    + (profit_factor - 1.0).min(1.0) * 0.15
                                     + (sim_result.win_rate - 0.5) * 0.1
+                                    + (sim_result.avg_fill_rate * 100.0).min(0.15) // Up to 0.15 bonus for good fill rate
                                     + drawdown_penalty
-                                    + trade_penalty;
+                                    + trade_penalty
+                                    + fill_rate_penalty
+                                    + inventory_penalty;
                                 
                                 FitnessResult::with_metrics(
                                     fitness,
@@ -2889,12 +2919,36 @@ impl Worker {
                 let drawdown_penalty = if sim_result.max_drawdown > 0.25 { -0.5 } else { 0.0 };
                 let trade_penalty = if sim_result.num_trades < 30 { -0.3 } else { 0.0 };
                 
-                let fitness = sharpe * 0.4 
-                    + (sim_result.total_pnl / initial_capital) * 0.3 
-                    + (profit_factor - 1.0).min(1.0) * 0.2
+                // Fill rate penalty - critical for realistic backtesting
+                // avg_fill_rate is already calculated as percentage
+                let fill_rate = sim_result.avg_fill_rate;
+                let fill_rate_penalty = if fill_rate < 0.0001 { -0.5 }  // < 0.01% = disaster
+                    else if fill_rate < 0.001 { -0.2 }  // < 0.1% = very bad
+                    else { 0.0 };
+                
+                // Ending inventory penalty - must close positions
+                let ending_inventory = sim_result.inventory_metrics.ending_inventory.abs();
+                let inventory_exposure = ending_inventory * sim_result.equity_curve.last().cloned().unwrap_or(initial_capital) / initial_capital;
+                let inventory_penalty = if inventory_exposure > 0.20 { -0.4 }  // > 20% exposure = major penalty
+                    else if inventory_exposure > 0.10 { -0.2 }  // > 10% = moderate penalty
+                    else if inventory_exposure < 0.05 { 0.05 }  // < 5% = small bonus for good inventory management
+                    else { 0.0 };
+                
+                // Fill rate bonus for good fill rates
+                let fill_rate_bonus = if fill_rate > 0.10 { 0.15 }  // > 10% fill rate = excellent
+                    else if fill_rate > 0.05 { 0.10 }  // > 5% = good
+                    else if fill_rate > 0.01 { 0.05 }  // > 1% = acceptable
+                    else { 0.0 };
+                
+                let fitness = sharpe * 0.35 
+                    + (sim_result.total_pnl / initial_capital) * 0.25 
+                    + (profit_factor - 1.0).min(1.0) * 0.15
                     + (sim_result.win_rate - 0.5) * 0.1
+                    + fill_rate_bonus
                     + drawdown_penalty
-                    + trade_penalty;
+                    + trade_penalty
+                    + fill_rate_penalty
+                    + inventory_penalty;
                 
                 log_info_structured!(GENETIC_LOGGER, "REALISTIC_FITNESS_EVAL",
                     "event" => "REALISTIC_FITNESS_EVAL",

@@ -58,9 +58,10 @@ impl AvellanedaStoikovChromosome {
         // Time horizon: 1-20 min (was 60min - too passive for active MM)
         self.time_horizon_minutes = self.time_horizon_minutes.clamp(1.0, 20.0);
         self.market_depth_k = self.market_depth_k.clamp(1.0, 50.0);
-        // min_spread_bps: 15-50 bps (was 3-30 - too tight causes adverse selection)
-        // Altcoins need wider spreads to cover volatility and slippage
-        self.min_spread_bps = self.min_spread_bps.clamp(15.0, 50.0);
+        // min_spread_bps: 5-25 bps for competitive quotes on liquid CEXs
+        // The real profitability floor comes from fee_spread_multiplier × maker_fee
+        // Wider spreads = fewer fills, so keep this tight for CoLocated infrastructure
+        self.min_spread_bps = self.min_spread_bps.clamp(5.0, 25.0);
         // Adverse selection: 0 = aggressive, 1.5 = defensive (was 2.0 max)
         // Lower max to prevent over-widening on toxic flow
         self.adverse_selection_sensitivity = self.adverse_selection_sensitivity.clamp(0.0, 1.5);
@@ -126,9 +127,9 @@ impl Chromosome for AvellanedaStoikovChromosome {
             
             // Minimum spread in basis points (soft floor)
             // The REAL profitability floor comes from fee_spread_multiplier × maker_fee
-            // Range 15-50 bps (was 3-30 - too tight causes adverse selection on altcoins)
-            // Wider spreads protect against volatility and informed traders
-            min_spread_bps: rng.gen_range(15.0..50.0),
+            // Range 5-25 bps for competitive quotes on liquid CEXs with CoLocated infra
+            // Tighter spreads = more fills (with Beeks co-location we're front of queue)
+            min_spread_bps: rng.gen_range(5.0..25.0),
             
             // Trade frequency: 0.01 to 60 trades per minute
             // 0.01 = 1 trade per 100 minutes (swing), 60 = 1 trade per second (HFT)
