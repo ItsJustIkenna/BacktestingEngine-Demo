@@ -20,6 +20,9 @@ use once_cell::sync::Lazy;
 
 pub mod chromosome;
 
+// Re-export chromosome types for external use
+pub use chromosome::{AvellanedaStoikovChromosome, MomentumChromosome};
+
 /// Portfolio-level genetic algorithm optimization
 pub mod portfolio;
 

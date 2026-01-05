@@ -1153,6 +1153,7 @@ impl DistributedGAWorker {
             inventory_penalty_factor: chromosome.inventory_penalty_factor,
             trend_sensitivity: chromosome.trend_sensitivity,
             flow_sensitivity: chromosome.flow_sensitivity,
+            quote_withdrawal_threshold: 0.6,  // Withdraw quotes when flow is 80%+ one-sided
             take_profit_pct: 0.0,  // Pure market making - no TP/SL
             stop_loss_pct: 0.0,
             max_trades_per_minute: chromosome.max_trades_per_minute,
@@ -1490,6 +1491,7 @@ impl DistributedGAWorker {
             inventory_penalty_factor: chromosome.inventory_penalty_factor,
             trend_sensitivity: chromosome.trend_sensitivity,
             flow_sensitivity: chromosome.flow_sensitivity,
+            quote_withdrawal_threshold: 0.6,  // Withdraw quotes when flow is 80%+ one-sided
             take_profit_pct: 0.0,  // Pure market making - no TP/SL
             stop_loss_pct: 0.0,
             max_trades_per_minute: chromosome.max_trades_per_minute,
@@ -1738,6 +1740,7 @@ impl DistributedGAWorker {
             inventory_penalty_factor: chromosome.inventory_penalty_factor,
             trend_sensitivity: chromosome.trend_sensitivity,
             flow_sensitivity: chromosome.flow_sensitivity,
+            quote_withdrawal_threshold: 0.6,  // Withdraw quotes when flow is 80%+ one-sided
             take_profit_pct: 0.0,  // Pure market making - no TP/SL
             stop_loss_pct: 0.0,
             max_trades_per_minute: chromosome.max_trades_per_minute,
@@ -2340,6 +2343,7 @@ fn run_walkforward_realistic(
         inventory_penalty_factor: chromosome.inventory_penalty_factor,
         trend_sensitivity: chromosome.trend_sensitivity,
         flow_sensitivity: chromosome.flow_sensitivity,
+        quote_withdrawal_threshold: 0.6,  // Withdraw quotes when flow is 80%+ one-sided
         take_profit_pct: 0.0,  // Pure market making - no TP/SL
         stop_loss_pct: 0.0,
         max_trades_per_minute: chromosome.max_trades_per_minute,

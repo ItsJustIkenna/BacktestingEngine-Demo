@@ -319,6 +319,12 @@ pub struct RealisticASParams {
     /// Flow sensitivity: follow (>0) or fade (<0) order flow
     pub flow_sensitivity: f64,
     
+    // === Quote Withdrawal (Adverse Flow Protection) ===
+    /// Flow imbalance threshold for quote withdrawal (0.0 = disabled, 0.6 = withdraw when 80%+ one-sided)
+    /// When flow_imbalance exceeds this threshold, quotes are cancelled entirely (go flat)
+    /// This models SignalEngine's momentum/imbalance-based quote cancellation
+    pub quote_withdrawal_threshold: f64,
+    
     // === Trade Exit Controls ===
     /// Take profit threshold as percentage (0.0 = disabled, 2.0 = exit at +2% PnL)
     pub take_profit_pct: f64,
@@ -393,6 +399,10 @@ impl Default for RealisticASParams {
             // Trend and flow following: neutral by default
             trend_sensitivity: 0.0,
             flow_sensitivity: 0.0,
+            
+            // Quote withdrawal: 0.6 = withdraw when flow is 80%+ one-sided
+            // This models SignalEngine's toxic flow detection and quote cancellation
+            quote_withdrawal_threshold: 0.6,
             
             // Trade exit controls: disabled by default
             take_profit_pct: 0.0,
@@ -1058,6 +1068,7 @@ impl RealisticSimulator {
         // Debug: track skipped quotes
         let mut skipped_no_price = 0usize;
         let mut quote_refresh_attempts = 0usize;
+        let mut quotes_withdrawn_for_flow = 0usize;  // Track quote withdrawals due to toxic flow
         
         // Debug: track our quote prices vs trade prices
         let mut our_bid_prices: Vec<f64> = Vec::new();
@@ -1793,6 +1804,17 @@ impl RealisticSimulator {
                     0.0
                 };
                 
+                // === QUOTE WITHDRAWAL (TOXIC FLOW PROTECTION) ===
+                // If flow imbalance exceeds threshold, withdraw quotes entirely
+                // This models SignalEngine's momentum/imbalance-based cancellation
+                if params.quote_withdrawal_threshold > 0.0 && flow_imbalance > params.quote_withdrawal_threshold {
+                    // Toxic flow detected - cancel our quotes and skip this cycle
+                    our_bid = None;
+                    our_ask = None;
+                    quotes_withdrawn_for_flow += 1;
+                    continue;  // Don't quote until flow normalizes
+                }
+                
                 // Apply adverse selection spread multiplier
                 // adverse_selection_sensitivity: 0.0 = ignore flow, 1.0 = proportional, 2.0 = aggressive
                 // At max imbalance (1.0) with sensitivity 1.0: spread widened by 50%
@@ -2018,6 +2040,7 @@ impl RealisticSimulator {
             eprintln!("  - snapshot_boundaries_detected: {}", snapshot_count);
             eprintln!("  - quote_refresh_attempts: {}", quote_refresh_attempts);
             eprintln!("  - skipped_no_price: {}", skipped_no_price);
+            eprintln!("  - quotes_withdrawn_for_flow: {}", quotes_withdrawn_for_flow);
             eprintln!("  - orders_placed: {}", orders_placed);
             eprintln!("  - orders_filled: {}", orders_filled);
             eprintln!("  - rate_limit_rejections: {}", rate_limit_rejections);

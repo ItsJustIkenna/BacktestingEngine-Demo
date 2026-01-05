@@ -2759,6 +2759,13 @@ impl Worker {
         &self,
         job: &BacktestJob,
     ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
+        // Dispatch to strategy-specific optimization
+        let strategy_type = job.params.strategy_type.to_lowercase();
+        if strategy_type.contains("momentum") || strategy_type.contains("trend") {
+            return self.execute_momentum_ga_optimization(job).await;
+        }
+        
+        // Default: Avellaneda-Stoikov market making optimization
         use genetic::GeneticOptimizer;
         use genetic::chromosome::AvellanedaStoikovChromosome;
         use config::GeneticConfig;
@@ -3682,6 +3689,7 @@ impl Worker {
             adverse_selection_sensitivity: params.adverse_selection_sensitivity,
             fee_spread_multiplier: params.fee_spread_multiplier,
             max_inventory_multiple: params.max_inventory_multiple,
+            quote_withdrawal_threshold: 0.6,  // Default: withdraw quotes when flow is 60%+ one-sided
         };
         
         log_info_structured!(WALKFORWARD_LOGGER, "WALKFORWARD_FIXED_PARAMS",
@@ -4376,6 +4384,7 @@ impl Worker {
             max_trades_per_minute: chromosome.max_trades_per_minute,
             window_ms: chromosome.window_ms as i64,
             min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,
+            quote_withdrawal_threshold: chromosome.quote_withdrawal_threshold,
             // Fill model from function parameter, with auto-detection from exchange
             fill_model: backtest::FillModelType::from_str_or_exchange(fill_model, exchange),
         };
@@ -5577,6 +5586,281 @@ impl Worker {
                     "critical_threshold": def.critical_threshold,
                 }))
             }).collect::<std::collections::HashMap<_, _>>(),
+        })
+    }
+    
+    /// Execute genetic optimization for momentum/trend-following strategy
+    async fn execute_momentum_ga_optimization(
+        &self,
+        job: &BacktestJob,
+    ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
+        use genetic::chromosome::MomentumChromosome;
+        use genetic::Chromosome;
+        use backtest::momentum_simulation::MomentumSimulator;
+        use backtest::realistic_simulation::{OrderBookEvent, EventType, Side};
+        use rand::{SeedableRng, Rng};
+        
+        let params = &job.params;
+        
+        eprintln!("\n============================================================");
+        eprintln!("🚀 [MOMENTUM_GA] STARTING job_id={}", job.id);
+        eprintln!("   symbol: {}", params.symbol);
+        eprintln!("   exchange: {}", params.exchange);
+        eprintln!("   strategy_type: {}", params.strategy_type);
+        eprintln!("   population_size: {}", params.population_size);
+        eprintln!("   generations: {}", params.generations);
+        eprintln!("============================================================\n");
+        
+        let timing_total_start = std::time::Instant::now();
+        
+        log_info_structured!(GENETIC_LOGGER, "MOMENTUM_GA_STARTING",
+            "event" => "MOMENTUM_GA_STARTING",
+            "job_id" => &job.id,
+            "population_size" => params.population_size,
+            "generations" => params.generations,
+            "symbol" => &params.symbol
+        );
+        
+        // Create progress tracker
+        let progress_tracker = Arc::new(ProgressTracker::new(job.id.clone(), Arc::clone(&self.job_queue)));
+        let _ = progress_tracker.persist_progress(2.0).await;
+        
+        // Load market data - for momentum we need trades
+        let data = self.load_market_data_for_strategy(&params.symbol, &params.exchange, &params.strategy_type).await?;
+        
+        if data.is_empty() {
+            return Err("No market data available".into());
+        }
+        
+        // Convert MarketData to OrderBookEvent for MomentumSimulator
+        let events: Vec<OrderBookEvent> = data.iter().filter_map(|md| {
+            // Extract trade data from MarketData enum
+            match md {
+                MarketData::Trade(trade) => {
+                    let side = if trade.side == "buy" { Side::Buy } else { Side::Sell };
+                    Some(OrderBookEvent {
+                        timestamp_ms: trade.timestamp.timestamp_millis(),
+                        event_type: EventType::Trade,
+                        order_id: trade.trade_id.clone(),
+                        side,
+                        price: trade.price_f64,
+                        quantity: trade.quantity_f64,
+                    })
+                },
+                #[cfg(feature = "postgres")]
+                MarketData::Order(order) => {
+                    use bigdecimal::ToPrimitive;
+                    // Convert order to trade-like event
+                    let side = if order.side == "buy" { Side::Buy } else { Side::Sell };
+                    let price = order.price_level.to_f64().unwrap_or(0.0);
+                    let qty = order.quantity.to_f64().unwrap_or(0.0);
+                    Some(OrderBookEvent {
+                        timestamp_ms: order.timestamp.timestamp_millis(),
+                        event_type: EventType::Trade,
+                        order_id: order.order_id.clone(),
+                        side,
+                        price,
+                        quantity: qty,
+                    })
+                },
+                _ => None,
+            }
+        }).collect();
+        
+        if events.is_empty() {
+            return Err("No trade events found in market data".into());
+        }
+        
+        let events_arc = Arc::new(events);
+        let _ = progress_tracker.persist_progress(10.0).await;
+        
+        // Get exchange fee config
+        let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(&params.exchange);
+        
+        let initial_capital = params.initial_capital;
+        let taker_fee = exchange_fee_config.taker_fee;
+        let maker_fee = exchange_fee_config.maker_fee;
+        
+        // GA parameters
+        let population_size = params.population_size;
+        let generations = params.generations;
+        let mutation_rate = 0.15;
+        let elite_ratio = 0.1;
+        
+        // Initialize population
+        let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+        let mut population: Vec<MomentumChromosome> = (0..population_size)
+            .map(|_| {
+                let mut chromo = MomentumChromosome::random(&mut rng);
+                chromo.taker_fee_rate = taker_fee;
+                chromo.maker_fee_rate = maker_fee;
+                chromo
+            })
+            .collect();
+        
+        let simulator = MomentumSimulator::new(initial_capital);
+        let mut best_fitness = f64::MIN;
+        let mut best_chromo: Option<MomentumChromosome> = None;
+        let mut best_result: Option<backtest::momentum_simulation::MomentumSimResult> = None;
+        
+        log_info!(GENETIC_LOGGER, "Momentum GA starting {} generations with {} population", 
+            generations, population_size);
+        
+        for gen in 0..generations {
+            let gen_start = std::time::Instant::now();
+            
+            // Evaluate population
+            let mut fitness_scores: Vec<(usize, f64, backtest::momentum_simulation::MomentumSimResult)> = population
+                .iter()
+                .enumerate()
+                .map(|(i, chromo)| {
+                    let result = simulator.run_chromosome(&events_arc, chromo);
+                    
+                    // Comprehensive momentum fitness function
+                    let mut fitness = 0.0;
+                    
+                    // Base metrics (weighted)
+                    fitness += result.sharpe_ratio * 0.20;
+                    fitness += result.sortino_ratio * 0.15;
+                    fitness += result.profit_factor.min(3.0) * 0.15;
+                    fitness += result.win_rate * 0.10;
+                    fitness += result.net_pnl_pct * 10.0 * 0.25; // Scale PnL %
+                    fitness += result.calmar_ratio.min(5.0) * 0.15;
+                    
+                    // Penalties
+                    if result.total_trades < 20 {
+                        fitness *= 0.5; // Too few trades
+                    }
+                    if result.max_drawdown_pct > 0.15 {
+                        fitness *= 0.7; // High drawdown
+                    }
+                    if result.net_pnl < 0.0 {
+                        fitness *= 0.3; // Losing strategy
+                    }
+                    
+                    (i, fitness, result)
+                })
+                .collect();
+            
+            // Sort by fitness (descending)
+            fitness_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            
+            let gen_best_fitness = fitness_scores[0].1;
+            if gen_best_fitness > best_fitness {
+                best_fitness = gen_best_fitness;
+                best_chromo = Some(population[fitness_scores[0].0].clone());
+                best_result = Some(fitness_scores[0].2.clone());
+            }
+            
+            let gen_time = gen_start.elapsed();
+            let avg_fitness = fitness_scores.iter().map(|(_, f, _)| f).sum::<f64>() / population.len() as f64;
+            
+            // Update progress
+            let progress = 10.0 + (gen as f64 / generations as f64) * 80.0;
+            let _ = progress_tracker.persist_progress(progress).await;
+            
+            progress_tracker.broadcast_phase("ga_evolution", serde_json::json!({
+                "generation": gen + 1,
+                "total_generations": generations,
+                "best_fitness": gen_best_fitness,
+                "avg_fitness": avg_fitness,
+                "elapsed_ms": gen_time.as_millis(),
+            }));
+            
+            log_info!(GENETIC_LOGGER, "Gen {}/{}: best={:.4}, avg={:.4} ({:.1}s)",
+                gen + 1, generations, gen_best_fitness, avg_fitness, gen_time.as_secs_f64());
+            
+            // Selection + Crossover + Mutation
+            let elite_count = (population.len() as f64 * elite_ratio).ceil() as usize;
+            let mut new_population: Vec<MomentumChromosome> = Vec::with_capacity(population.len());
+            
+            // Keep elites
+            for &(idx, _, _) in fitness_scores.iter().take(elite_count) {
+                new_population.push(population[idx].clone());
+            }
+            
+            // Tournament selection + crossover for rest
+            let selection_pool_size = (population.len() / 2).max(1);
+            while new_population.len() < population.len() {
+                let parent1_idx = fitness_scores[rng.gen_range(0..selection_pool_size)].0;
+                let parent2_idx = fitness_scores[rng.gen_range(0..selection_pool_size)].0;
+                
+                let mut child = population[parent1_idx].crossover(&population[parent2_idx], &mut rng);
+                child.mutate(&mut rng, mutation_rate);
+                child.taker_fee_rate = taker_fee;
+                child.maker_fee_rate = maker_fee;
+                new_population.push(child);
+            }
+            
+            population = new_population;
+        }
+        
+        let _ = progress_tracker.persist_progress(95.0).await;
+        
+        // Build result from best chromosome
+        let best = best_chromo.ok_or("No best chromosome found")?;
+        let result = best_result.ok_or("No best result found")?;
+        
+        let total_elapsed = timing_total_start.elapsed();
+        
+        log_info_structured!(GENETIC_LOGGER, "MOMENTUM_GA_COMPLETE",
+            "event" => "MOMENTUM_GA_COMPLETE",
+            "job_id" => &job.id,
+            "best_fitness" => format!("{:.4}", best_fitness),
+            "net_pnl" => format!("{:.2}", result.net_pnl),
+            "sharpe" => format!("{:.4}", result.sharpe_ratio),
+            "total_trades" => result.total_trades,
+            "elapsed_sec" => format!("{:.2}", total_elapsed.as_secs_f64())
+        );
+        
+        let _ = progress_tracker.persist_progress(100.0).await;
+        
+        // Build BacktestResult with momentum metrics
+        Ok(BacktestResult {
+            job_id: job.id.clone(),
+            strategy_type: Some("momentum".to_string()),
+            total_pnl: result.net_pnl,
+            total_trades: result.total_trades as usize,
+            sharpe_ratio: result.sharpe_ratio,
+            max_drawdown: result.max_drawdown_pct,
+            win_rate: result.win_rate,
+            profit_factor: result.profit_factor,
+            sortino_ratio: Some(result.sortino_ratio),
+            calmar_ratio: Some(result.calmar_ratio),
+            avg_trade_return: Some(result.avg_trade_pnl / initial_capital * 100.0),
+            // Handle edge case where no trades occurred (default MIN/MAX values)
+            best_trade: if result.best_trade_pnl > -1e100 { Some(result.best_trade_pnl) } else { None },
+            worst_trade: if result.worst_trade_pnl < 1e100 { Some(result.worst_trade_pnl) } else { None },
+            total_commission_paid: Some(result.total_fees),
+            // Momentum-specific best parameters
+            strategy_params: Some(serde_json::json!({
+                "strategy": "momentum",
+                "momentum_threshold_pct": best.momentum_threshold_pct,
+                "momentum_lookback_ms": best.momentum_lookback_ms,
+                "volume_spike_threshold": best.volume_spike_threshold,
+                "imbalance_threshold": best.imbalance_threshold,
+                "take_profit_pct": best.take_profit_pct,
+                "stop_loss_pct": best.stop_loss_pct,
+                "trailing_stop_enabled": best.trailing_stop_enabled,
+                "trailing_stop_pct": best.trailing_stop_pct,
+                "position_size_pct": best.position_size_pct,
+                "max_position_pct": best.max_position_pct,
+                "signal_stats": {
+                    "total_long_signals": result.total_long_signals,
+                    "total_short_signals": result.total_short_signals,
+                    "signals_filtered_by_volatility": result.signals_filtered_by_volatility,
+                    "signals_filtered_by_regime": result.signals_filtered_by_regime,
+                    "winning_trades": result.winning_trades,
+                    "losing_trades": result.losing_trades,
+                },
+                "fitness": best_fitness,
+            })),
+            metrics_profile: Some(serde_json::json!({
+                "strategy_type": "momentum",
+                "primary_metrics": ["total_pnl", "sharpe_ratio", "profit_factor", "win_rate"],
+                "secondary_metrics": ["sortino_ratio", "max_drawdown", "total_trades", "calmar_ratio"],
+            })),
+            ..Default::default()
         })
     }
 }

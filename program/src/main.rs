@@ -122,6 +122,64 @@ enum Commands {
         #[arg(long)]
         output: Option<String>,
     },
+    /// Run momentum strategy backtest using Tardis CSV data
+    BacktestMomentum {
+        /// Trading symbol (e.g., "BTCUSD", "SOLUSD", "SUIUSD")
+        #[arg(long)]
+        symbol: String,
+        
+        /// Path to Tardis data directory containing {symbol}_trades.csv.gz files
+        #[arg(long, default_value = "/data/tardis")]
+        data_path: String,
+        
+        /// Initial capital in USD
+        #[arg(long, default_value = "10000")]
+        initial_capital: f64,
+        
+        /// Taker fee rate (e.g., 0.0016 for 0.16%)
+        #[arg(long, default_value = "0.0016")]
+        taker_fee: f64,
+        
+        /// Maker fee rate (e.g., 0.0016 for 0.16%)
+        #[arg(long, default_value = "0.0016")]
+        maker_fee: f64,
+        
+        /// Momentum threshold percentage to trigger entry (e.g., 0.003 for 0.3%)
+        #[arg(long, default_value = "0.003")]
+        momentum_threshold: f64,
+        
+        /// Momentum lookback window in milliseconds
+        #[arg(long, default_value = "10000")]
+        momentum_lookback_ms: i64,
+        
+        /// Take profit percentage (e.g., 0.015 for 1.5%)
+        #[arg(long, default_value = "0.015")]
+        take_profit_pct: f64,
+        
+        /// Stop loss percentage (e.g., 0.008 for 0.8%)
+        #[arg(long, default_value = "0.008")]
+        stop_loss_pct: f64,
+        
+        /// Position size as percentage of capital
+        #[arg(long, default_value = "0.02")]
+        position_size_pct: f64,
+        
+        /// Enable genetic optimization
+        #[arg(long, default_value = "false")]
+        optimize: bool,
+        
+        /// Population size for genetic optimization
+        #[arg(long, default_value = "50")]
+        population_size: usize,
+        
+        /// Number of generations for genetic optimization
+        #[arg(long, default_value = "25")]
+        generations: usize,
+        
+        /// Output results to JSON file
+        #[arg(long)]
+        output: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -1301,6 +1359,350 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             
             println!("\n✅ Backtest complete!");
+        }
+        
+        Commands::BacktestMomentum {
+            symbol,
+            data_path,
+            initial_capital,
+            taker_fee,
+            maker_fee,
+            momentum_threshold,
+            momentum_lookback_ms,
+            take_profit_pct,
+            stop_loss_pct,
+            position_size_pct,
+            optimize,
+            population_size,
+            generations,
+            output,
+        } => {
+            use dataloader::tardis::TardisLoader;
+            use dataloader::Tick;
+            use backtest::realistic_simulation::{OrderBookEvent, EventType, Side};
+            use backtest::momentum_simulation::{MomentumSimulator, MomentumParams};
+            use genetic::{MomentumChromosome, Chromosome};
+            
+            println!("🚀 Momentum Strategy Backtester");
+            println!("   Symbol: {}", symbol);
+            println!("   Data path: {}", data_path);
+            println!("   Initial capital: ${:.2}", initial_capital);
+            println!("   Fees: taker={:.2}bps, maker={:.2}bps", taker_fee * 10000.0, maker_fee * 10000.0);
+            println!("   Momentum threshold: {:.2}%", momentum_threshold * 100.0);
+            println!("   Take profit: {:.2}%, Stop loss: {:.2}%", take_profit_pct * 100.0, stop_loss_pct * 100.0);
+            println!("   Optimize: {}", optimize);
+            
+            // Construct file path
+            let trades_path = format!("{}/{}_trades.csv.gz", data_path, symbol);
+            
+            println!("\n📂 Loading trades data: {}", trades_path);
+            
+            // Load trades data
+            let start = std::time::Instant::now();
+            let trades = match TardisLoader::load_trades(&trades_path) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("❌ Failed to load trades: {}", e);
+                    eprintln!("   Make sure the file exists: {}", trades_path);
+                    std::process::exit(1);
+                }
+            };
+            let trades_load_time = start.elapsed();
+            println!("✅ Loaded {} trades in {:.2}s", trades.len(), trades_load_time.as_secs_f64());
+            
+            if trades.is_empty() {
+                eprintln!("❌ No trades found in file");
+                std::process::exit(1);
+            }
+            
+            // Show data range
+            let first_trade = &trades[0];
+            let last_trade = &trades[trades.len() - 1];
+            
+            println!("\n📊 Data Summary:");
+            println!("   Date range: {} to {}", first_trade.timestamp(), last_trade.timestamp());
+            println!("   Price range: ${:.2} - ${:.2}",
+                trades.iter().map(|t| t.price).fold(f64::MAX, f64::min),
+                trades.iter().map(|t| t.price).fold(f64::MIN, f64::max));
+            
+            // Convert trades to OrderBookEvent (momentum only needs trades, not full orderbook)
+            println!("\n🔄 Converting {} trades to event stream...", trades.len());
+            let events: Vec<OrderBookEvent> = trades
+                .iter()
+                .map(|t| {
+                    let side = match t.side {
+                        dataloader::tick::Side::Buy => Side::Buy,
+                        dataloader::tick::Side::Sell => Side::Sell,
+                    };
+                    OrderBookEvent {
+                        timestamp_ms: t.timestamp().timestamp_millis(),
+                        event_type: EventType::Trade,
+                        order_id: t.trade_id.to_string(),
+                        side,
+                        price: t.price,
+                        quantity: t.quantity(),
+                    }
+                })
+                .collect();
+            
+            println!("✅ Generated {} trade events", events.len());
+            
+            if optimize {
+                // Genetic optimization mode
+                println!("\n🧬 Starting Genetic Optimization");
+                println!("   Population: {}", population_size);
+                println!("   Generations: {}", generations);
+                
+                use rand::{SeedableRng, Rng};
+                let mut rng = rand::rngs::StdRng::seed_from_u64(42);
+                
+                // Initialize population
+                let mut population: Vec<MomentumChromosome> = (0..population_size)
+                    .map(|_| {
+                        let mut chromo = MomentumChromosome::random(&mut rng);
+                        chromo.taker_fee_rate = taker_fee;
+                        chromo.maker_fee_rate = maker_fee;
+                        chromo
+                    })
+                    .collect();
+                
+                let simulator = MomentumSimulator::new(initial_capital);
+                let mut best_fitness = f64::MIN;
+                let mut best_chromo: Option<MomentumChromosome> = None;
+                
+                for gen in 0..generations {
+                    let gen_start = std::time::Instant::now();
+                    
+                    // Evaluate population
+                    let mut fitness_scores: Vec<(usize, f64)> = population
+                        .iter()
+                        .enumerate()
+                        .map(|(i, chromo)| {
+                            let result = simulator.run_chromosome(&events, chromo);
+                            
+                            // Comprehensive fitness function
+                            let mut fitness = 0.0;
+                            
+                            // Base metrics (weighted)
+                            fitness += result.sharpe_ratio * 0.20;
+                            fitness += result.sortino_ratio * 0.15;
+                            fitness += result.profit_factor.min(3.0) * 0.15;
+                            fitness += result.win_rate * 0.10;
+                            fitness += result.net_pnl_pct * 10.0 * 0.25; // Scale PnL %
+                            fitness += result.calmar_ratio.min(5.0) * 0.15;
+                            
+                            // Penalties
+                            if result.total_trades < 20 {
+                                fitness *= 0.5; // Too few trades
+                            }
+                            if result.max_drawdown_pct > 0.15 {
+                                fitness *= 0.7; // High drawdown
+                            }
+                            if result.net_pnl < 0.0 {
+                                fitness *= 0.3; // Losing strategy
+                            }
+                            
+                            (i, fitness)
+                        })
+                        .collect();
+                    
+                    // Sort by fitness (descending)
+                    fitness_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                    
+                    let gen_best = fitness_scores[0].1;
+                    if gen_best > best_fitness {
+                        best_fitness = gen_best;
+                        best_chromo = Some(population[fitness_scores[0].0].clone());
+                    }
+                    
+                    let gen_time = gen_start.elapsed();
+                    println!("   Gen {:3}/{}: best={:.4}, avg={:.4} ({:.1}s)",
+                        gen + 1, generations, gen_best,
+                        fitness_scores.iter().map(|(_, f)| f).sum::<f64>() / population_size as f64,
+                        gen_time.as_secs_f64());
+                    
+                    // Selection + Crossover + Mutation
+                    let elite_count = (population_size as f64 * 0.1).ceil() as usize;
+                    let mut new_population: Vec<MomentumChromosome> = Vec::with_capacity(population_size);
+                    
+                    // Keep elites
+                    for &(idx, _) in fitness_scores.iter().take(elite_count) {
+                        new_population.push(population[idx].clone());
+                    }
+                    
+                    // Tournament selection + crossover for rest
+                    while new_population.len() < population_size {
+                        // Tournament selection
+                        let parent1_idx = fitness_scores[rng.gen_range(0..population_size / 2)].0;
+                        let parent2_idx = fitness_scores[rng.gen_range(0..population_size / 2)].0;
+                        
+                        let mut child = population[parent1_idx].crossover(&population[parent2_idx], &mut rng);
+                        child.mutate(&mut rng, 0.15); // 15% mutation rate
+                        child.taker_fee_rate = taker_fee;
+                        child.maker_fee_rate = maker_fee;
+                        new_population.push(child);
+                    }
+                    
+                    population = new_population;
+                }
+                
+                // Final evaluation with best chromosome
+                if let Some(best) = best_chromo {
+                    println!("\n🏆 Best Chromosome Found:");
+                    println!("   Momentum threshold: {:.3}%", best.momentum_threshold_pct * 100.0);
+                    println!("   Momentum lookback: {}ms", best.momentum_lookback_ms);
+                    println!("   Take profit: {:.2}%", best.take_profit_pct * 100.0);
+                    println!("   Stop loss: {:.2}%", best.stop_loss_pct * 100.0);
+                    println!("   Position size: {:.1}%", best.position_size_pct * 100.0);
+                    println!("   Trailing stop: {}", if best.trailing_stop_enabled { "enabled" } else { "disabled" });
+                    println!("   Volume spike threshold: {:.1}x", best.volume_spike_threshold);
+                    println!("   Imbalance threshold: {:.2}", best.imbalance_threshold);
+                    
+                    let result = simulator.run_chromosome(&events, &best);
+                    
+                    println!("\n📈 Final Results:");
+                    println!("   ─────────────────────────────────");
+                    println!("   Net PnL: ${:.2} ({:.2}%)", result.net_pnl, result.net_pnl_pct * 100.0);
+                    println!("   Sharpe Ratio: {:.4}", result.sharpe_ratio);
+                    println!("   Sortino Ratio: {:.4}", result.sortino_ratio);
+                    println!("   Max Drawdown: {:.2}%", result.max_drawdown_pct * 100.0);
+                    println!("   Total Trades: {}", result.total_trades);
+                    println!("   Win Rate: {:.1}%", result.win_rate * 100.0);
+                    println!("   Profit Factor: {:.2}", result.profit_factor);
+                    println!("   Total Fees: ${:.2}", result.total_fees);
+                    println!("   ─────────────────────────────────");
+                    
+                    // Save to file if requested
+                    if let Some(output_path) = output {
+                        let output_json = serde_json::json!({
+                            "symbol": symbol,
+                            "strategy": "momentum",
+                            "optimized": true,
+                            "generations": generations,
+                            "population_size": population_size,
+                            "best_chromosome": {
+                                "momentum_threshold_pct": best.momentum_threshold_pct,
+                                "momentum_lookback_ms": best.momentum_lookback_ms,
+                                "take_profit_pct": best.take_profit_pct,
+                                "stop_loss_pct": best.stop_loss_pct,
+                                "position_size_pct": best.position_size_pct,
+                                "trailing_stop_enabled": best.trailing_stop_enabled,
+                                "trailing_stop_pct": best.trailing_stop_pct,
+                                "volume_spike_threshold": best.volume_spike_threshold,
+                                "imbalance_threshold": best.imbalance_threshold,
+                            },
+                            "results": {
+                                "net_pnl": result.net_pnl,
+                                "net_pnl_pct": result.net_pnl_pct,
+                                "sharpe_ratio": result.sharpe_ratio,
+                                "sortino_ratio": result.sortino_ratio,
+                                "max_drawdown_pct": result.max_drawdown_pct,
+                                "total_trades": result.total_trades,
+                                "win_rate": result.win_rate,
+                                "profit_factor": result.profit_factor,
+                                "total_fees": result.total_fees,
+                            },
+                        });
+                        
+                        match std::fs::write(&output_path, serde_json::to_string_pretty(&output_json).unwrap()) {
+                            Ok(_) => println!("\n💾 Results saved to: {}", output_path),
+                            Err(e) => eprintln!("\n⚠️ Failed to save results: {}", e),
+                        }
+                    }
+                }
+            } else {
+                // Single run mode with specified parameters
+                let params = MomentumParams {
+                    momentum_threshold_pct: momentum_threshold,
+                    momentum_lookback_ms,
+                    take_profit_pct,
+                    stop_loss_pct,
+                    position_size_pct,
+                    taker_fee_rate: taker_fee,
+                    maker_fee_rate: maker_fee,
+                    ..Default::default()
+                };
+                
+                println!("\n🎯 Running single simulation...");
+                let sim_start = std::time::Instant::now();
+                let simulator = MomentumSimulator::new(initial_capital);
+                let result = simulator.run(&events, &params);
+                let sim_time = sim_start.elapsed();
+                
+                println!("\n📈 Backtest Results");
+                println!("   ─────────────────────────────────");
+                println!("   Simulation time: {:.2}s", sim_time.as_secs_f64());
+                println!("   Net PnL: ${:.2} ({:.2}%)", result.net_pnl, result.net_pnl_pct * 100.0);
+                println!("   Sharpe Ratio: {:.4}", result.sharpe_ratio);
+                println!("   Sortino Ratio: {:.4}", result.sortino_ratio);
+                println!("   Max Drawdown: {:.2}%", result.max_drawdown_pct * 100.0);
+                println!("   Total Trades: {}", result.total_trades);
+                println!("   Winning Trades: {}", result.winning_trades);
+                println!("   Losing Trades: {}", result.losing_trades);
+                println!("   Win Rate: {:.1}%", result.win_rate * 100.0);
+                println!("   Profit Factor: {:.2}", result.profit_factor);
+                println!("   ─────────────────────────────────");
+                
+                println!("\n💰 P&L Breakdown");
+                println!("   Gross Profit: ${:.2}", result.gross_profit);
+                println!("   Gross Loss: ${:.2}", result.gross_loss);
+                println!("   Total Fees: ${:.2}", result.total_fees);
+                println!("   Best Trade: ${:.2}", result.best_trade_pnl);
+                println!("   Worst Trade: ${:.2}", result.worst_trade_pnl);
+                println!("   Avg Trade: ${:.2}", result.avg_trade_pnl);
+                
+                println!("\n📊 Signal Statistics");
+                println!("   Long Signals: {}", result.total_long_signals);
+                println!("   Short Signals: {}", result.total_short_signals);
+                println!("   Filtered by Volatility: {}", result.signals_filtered_by_volatility);
+                println!("   Filtered by Regime: {}", result.signals_filtered_by_regime);
+                
+                // Save to file if requested
+                if let Some(output_path) = output {
+                    let output_json = serde_json::json!({
+                        "symbol": symbol,
+                        "strategy": "momentum",
+                        "optimized": false,
+                        "parameters": {
+                            "momentum_threshold_pct": momentum_threshold,
+                            "momentum_lookback_ms": momentum_lookback_ms,
+                            "take_profit_pct": take_profit_pct,
+                            "stop_loss_pct": stop_loss_pct,
+                            "position_size_pct": position_size_pct,
+                            "taker_fee": taker_fee,
+                            "maker_fee": maker_fee,
+                        },
+                        "results": {
+                            "net_pnl": result.net_pnl,
+                            "net_pnl_pct": result.net_pnl_pct,
+                            "sharpe_ratio": result.sharpe_ratio,
+                            "sortino_ratio": result.sortino_ratio,
+                            "max_drawdown_pct": result.max_drawdown_pct,
+                            "total_trades": result.total_trades,
+                            "winning_trades": result.winning_trades,
+                            "losing_trades": result.losing_trades,
+                            "win_rate": result.win_rate,
+                            "profit_factor": result.profit_factor,
+                            "gross_profit": result.gross_profit,
+                            "gross_loss": result.gross_loss,
+                            "total_fees": result.total_fees,
+                        },
+                        "signals": {
+                            "total_long": result.total_long_signals,
+                            "total_short": result.total_short_signals,
+                            "filtered_volatility": result.signals_filtered_by_volatility,
+                            "filtered_regime": result.signals_filtered_by_regime,
+                        },
+                    });
+                    
+                    match std::fs::write(&output_path, serde_json::to_string_pretty(&output_json).unwrap()) {
+                        Ok(_) => println!("\n💾 Results saved to: {}", output_path),
+                        Err(e) => eprintln!("\n⚠️ Failed to save results: {}", e),
+                    }
+                }
+            }
+            
+            println!("\n✅ Momentum backtest complete!");
         }
     }
 

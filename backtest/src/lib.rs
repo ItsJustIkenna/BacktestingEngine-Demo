@@ -13,6 +13,7 @@ pub mod engine;
 pub mod html_export;
 pub mod monte_carlo;
 pub mod realistic_simulation;
+pub mod momentum_simulation;
 pub mod statistical_significance;
 pub mod portfolio_simulation;
 pub mod lightweight_sim;
@@ -43,5 +44,15 @@ pub use statistical_significance::{
     SignificanceResult, 
     compute_sharpe_significance,
     expected_max_sharpe_under_null,
+};
+
+// Momentum strategy simulation
+pub use momentum_simulation::{
+    MomentumSimulator,
+    MomentumParams,
+    MomentumSimResult,
+    MomentumSignal,
+    Position,
+    RollingWindow,
 };
 
