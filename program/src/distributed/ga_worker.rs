@@ -1158,7 +1158,7 @@ impl DistributedGAWorker {
             max_trades_per_minute: chromosome.max_trades_per_minute,
             window_ms: chromosome.window_ms as i64,
             min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,
-            fill_model: backtest::FillModelType::Standard,  // Use Standard during GA optimization for speed
+            fill_model: backtest::FillModelType::for_exchange(exchange),  // Auto-detect from exchange (CoLocated for Kraken/Binance)
         };
         let simulator = RealisticSimulator::with_exchange_config(initial_capital, exchange_fee_config);
         let result = simulator.run(&events, &realistic_params);
@@ -1495,7 +1495,7 @@ impl DistributedGAWorker {
             max_trades_per_minute: chromosome.max_trades_per_minute,
             window_ms: chromosome.window_ms as i64,
             min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,
-            fill_model: backtest::FillModelType::Standard,  // Use Standard for single simulation
+            fill_model: backtest::FillModelType::for_exchange(exchange),  // Auto-detect from exchange (CoLocated for Kraken/Binance)
         };
         
         let simulator = RealisticSimulator::with_exchange_config(initial_capital, exchange_fee_config);
@@ -1743,7 +1743,7 @@ impl DistributedGAWorker {
             max_trades_per_minute: chromosome.max_trades_per_minute,
             window_ms: chromosome.window_ms as i64,
             min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,
-            fill_model: backtest::FillModelType::Standard,  // Standard for walk-forward validation
+            fill_model: backtest::FillModelType::for_exchange(&request.exchange),  // Auto-detect from exchange (CoLocated for Kraken/Binance)
         };
         
         // WALK-FORWARD IS THE PRIMARY VALIDATION
@@ -2345,7 +2345,7 @@ fn run_walkforward_realistic(
         max_trades_per_minute: chromosome.max_trades_per_minute,
         window_ms: chromosome.window_ms as i64,
         min_quote_lifetime_ms: chromosome.min_quote_lifetime_ms as i64,
-        fill_model: backtest::FillModelType::Realistic,  // Use Realistic for final walk-forward validation
+        fill_model: backtest::FillModelType::for_exchange(exchange),  // Auto-detect from exchange (CoLocated for Kraken/Binance)
     };
     
     // Process each window using RealisticSimulator

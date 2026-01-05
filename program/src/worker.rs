@@ -2119,7 +2119,7 @@ impl Worker {
                         rate_limit_cooldown_ms: 1000,
                         window_ms: base_chr.window_ms as i64,
                         min_quote_lifetime_ms: base_chr.min_quote_lifetime_ms as i64,
-                        fill_model: backtest::FillModelType::Realistic,
+                        fill_model: backtest::FillModelType::from_str_or_exchange(&params.fill_model, &params.exchange),
                         ..Default::default()
                     };
                     
