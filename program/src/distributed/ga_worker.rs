@@ -103,6 +103,9 @@ fn calculate_calmar_ratio(total_return_pct: f64, max_drawdown: f64, _trading_day
 
 /// Calculate weighted fitness score from multiple metrics
 /// Normalizes each metric to a comparable scale before weighting
+/// 
+/// This is the MARKET MAKING focused fitness function for distributed GA
+/// that respects user-selected preset weights while adding hard reject conditions.
 fn calculate_weighted_fitness(
     sharpe: f64,
     sortino: f64,
@@ -114,8 +117,39 @@ fn calculate_weighted_fitness(
     max_dd: f64,
     weights: &FitnessWeights,
     initial_capital: f64,
+    num_trades: usize,
+    total_fees: f64,
 ) -> f64 {
-    // Normalize metrics to 0-1 or similar comparable scales
+    // ==============================================
+    // HARD REJECT CONDITIONS (same as local GA)
+    // ==============================================
+    
+    // 1. Too few trades = no statistical significance
+    if num_trades < 20 {
+        return -10.0;
+    }
+    
+    // 2. Catastrophic drawdown > 30%
+    if max_dd > 0.30 {
+        return -5.0;
+    }
+    
+    // 3. Commission ratio > 80% = strategy is just paying fees
+    // Calculate gross profit from net profit + fees
+    let gross_profit = if net_profit > 0.0 { 
+        net_profit + total_fees 
+    } else { 
+        total_fees.max(0.01) // Avoid division by zero
+    };
+    let commission_ratio = total_fees / gross_profit.max(0.01);
+    if commission_ratio > 0.80 && net_profit <= 0.0 {
+        return -5.0;
+    }
+    
+    // ==============================================
+    // NORMALIZED METRICS (0-1 scale)
+    // ==============================================
+    
     // Sharpe: typically -3 to +5, normalize to 0-1 with sigmoid-like mapping
     let norm_sharpe = (sharpe / 3.0).tanh().max(0.0); // Range ~0 to 0.9 for sharpe 0-3
     
@@ -135,19 +169,68 @@ fn calculate_weighted_fitness(
     // Calmar: typically 0.5-3 is good
     let norm_calmar = (calmar / 2.0).tanh().max(0.0);
     
-    // Calculate weighted sum
+    // Trade count: log scale, normalized
+    let norm_trades = ((num_trades as f64).ln() / 7.0).clamp(0.0, 1.0); // ~1000 trades = ~1.0
+    
+    // Fill rate proxy: higher trade count relative to time = better fill rate
+    // This approximates fill rate when actual fill_rate isn't available
+    
+    // ==============================================
+    // WEIGHTED SUM (using user-selected preset)
+    // ==============================================
+    
     let weighted_score = 
         norm_sharpe * weights.sharpe +
         norm_sortino * weights.sortino +
         norm_pf * weights.profit_factor +
         norm_wr * weights.win_rate +
         norm_profit * weights.net_profit +
-        norm_calmar * weights.calmar;
+        norm_calmar * weights.calmar +
+        norm_trades * weights.num_trades +
+        norm_trades * weights.fill_rate;  // Use trade count as fill proxy
     
-    // Apply consistency multiplier and drawdown penalty
-    let dd_factor = 1.0 - max_dd.min(1.0);
+    // ==============================================
+    // BONUSES AND PENALTIES
+    // ==============================================
     
-    weighted_score * consistency * dd_factor
+    // Drawdown penalty (want < 10%)
+    let dd_penalty = if max_dd < 0.05 {
+        1.2  // Bonus for very low drawdown
+    } else if max_dd < 0.10 {
+        1.1
+    } else if max_dd < 0.20 {
+        1.0
+    } else {
+        0.7  // Penalty for high drawdown
+    };
+    
+    // Commission efficiency bonus/penalty
+    let commission_factor = if commission_ratio < 0.30 {
+        1.2  // Excellent efficiency
+    } else if commission_ratio < 0.50 {
+        1.1  // Good
+    } else if commission_ratio < 0.70 {
+        1.0  // Marginal
+    } else {
+        0.7  // Poor
+    };
+    
+    // Trade count multiplier (more trades = more confidence)
+    let trade_factor = if num_trades >= 100 {
+        1.2
+    } else if num_trades >= 50 {
+        1.1
+    } else if num_trades >= 30 {
+        1.0
+    } else {
+        0.8  // Few trades = less reliable
+    };
+    
+    // Consistency multiplier from walk-forward
+    let consistency_factor = consistency.max(0.1);
+    
+    // Final fitness
+    weighted_score * dd_penalty * commission_factor * trade_factor * consistency_factor
 }
 
 /// Cache entry for binary file metadata
@@ -1872,11 +1955,17 @@ impl DistributedGAWorker {
             FitnessWeights::balanced()
         };
         
+        // Calculate total fees from walk-forward windows
+        let total_fees: f64 = wf_summary.window_results.iter()
+            .map(|w| w.test_metrics.total_commission)
+            .sum();
+        
         // Calculate additional metrics for weighted fitness
         let sortino = calculate_sortino_ratio(&all_trade_returns);
         let calmar = calculate_calmar_ratio(total_return_pct, max_dd, 252.0);
         
         // Calculate fitness from walk-forward metrics using custom weights
+        // Now includes hard reject conditions and market-making bonuses
         let fitness = if wf_summary.num_windows > 0 {
             calculate_weighted_fitness(
                 sharpe,
@@ -1889,6 +1978,8 @@ impl DistributedGAWorker {
                 max_dd,
                 &weights,
                 request.initial_capital,
+                num_trades as usize,
+                total_fees,
             )
         } else {
             0.0
