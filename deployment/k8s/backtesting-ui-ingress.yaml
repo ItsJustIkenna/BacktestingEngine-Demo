@@ -5,6 +5,7 @@ metadata:
   namespace: backtestingengine
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-body-size: "500m"  # Allow large Tardis CSV uploads
 spec:
   ingressClassName: nginx
   rules:
