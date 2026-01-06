@@ -120,12 +120,12 @@ impl OrderBookStreamIterator {
         log_debug!(MAIN_LOGGER, "Got database connection, executing query (offset={})", self.offset);
 
         // Query order book events with LIMIT/OFFSET for chunking
+        // No event_type filter - simulation code handles all data types (L2/L3, Tardis/DataEngine)
         let query = format!(
             "SELECT timestamp, symbol, exchange, event_type, side, price_level, quantity, \
              order_id, prev_price, prev_quantity, status \
              FROM historical_orders \
              WHERE symbol = '{}' AND exchange = '{}' \
-             AND event_type IN ('new', 'cancel', 'modify', 'snapshot') \
              ORDER BY timestamp ASC LIMIT {} OFFSET {}",
             self.symbol, self.exchange, self.chunk_size, self.offset
         );
@@ -683,13 +683,13 @@ impl StreamingDataLoader {
             .map_err(|_| "Connection pool timeout")?
             .map_err(|e| format!("Failed to get connection: {}", e))?;
         
+        // No event_type filter - simulation code handles all data types (L2/L3, Tardis/DataEngine)
         let query = format!(
             "SELECT timestamp, symbol, exchange, event_type, side, price_level, quantity, \
              order_id, prev_price, prev_quantity, status \
              FROM historical_orders \
              WHERE symbol = '{}' AND exchange = '{}' \
              AND timestamp >= '{}' AND timestamp < '{}' \
-             AND event_type IN ('new', 'cancel', 'modify', 'snapshot') \
              ORDER BY timestamp ASC \
              LIMIT {} OFFSET {}",
             symbol, exchange, 
@@ -1227,11 +1227,11 @@ impl ParallelDataLoader {
         let mut conn = self.pool.get().await
             .map_err(|e| format!("Failed to get connection: {}", e))?;
         
+        // No event_type filter - include all data types for time range calculation
         let query = format!(
             "SELECT MIN(timestamp) as min_ts, MAX(timestamp) as max_ts \
              FROM historical_orders \
-             WHERE symbol = '{}' AND exchange = '{}' \
-             AND event_type IN ('new', 'cancel', 'modify', 'snapshot')",
+             WHERE symbol = '{}' AND exchange = '{}'",
             symbol, exchange
         );
         
@@ -1325,13 +1325,13 @@ impl ParallelDataLoader {
         let mut conn = pool.get().await
             .map_err(|e| format!("Partition {} connection failed: {}", partition_idx, e))?;
         
+        // No event_type filter - simulation code handles all data types (L2/L3, Tardis/DataEngine)
         let query = format!(
             "SELECT timestamp, symbol, exchange, event_type, side, price_level, quantity, \
              order_id, prev_price, prev_quantity, status \
              FROM historical_orders \
              WHERE symbol = '{}' AND exchange = '{}' \
              AND timestamp >= '{}' AND timestamp < '{}' \
-             AND event_type IN ('new', 'cancel', 'modify', 'snapshot') \
              ORDER BY timestamp ASC",
             symbol, exchange,
             start.to_rfc3339(), end.to_rfc3339()
