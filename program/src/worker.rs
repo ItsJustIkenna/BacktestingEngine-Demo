@@ -6117,7 +6117,6 @@ impl Worker {
                             if result.max_drawdown_pct > 0.25 { rejection_stats.2 += 1; }
                             if result.sharpe_ratio < 0.0 { rejection_stats.3 += 1; }
                         }
-                        }
                         
                         // Soft scoring
                         let mut fitness = 0.0;
@@ -6172,17 +6171,19 @@ impl Worker {
                 rejection_stats.0, rejection_stats.1, rejection_stats.2, rejection_stats.3);
             
             // Store best result for this asset
-            if let (Some(chromo), Some(result)) = (best_chromo, best_result) {
+            if let (Some(chromo), Some(result)) = (best_chromo, best_result.clone()) {
                 eprintln!("    ✅ {} on {}: PnL=${:.2}, Sharpe={:.3}, Trades={}, DD={:.1}%", 
                     symbol, exchange, result.net_pnl, result.sharpe_ratio, result.total_trades, result.max_drawdown_pct * 100.0);
                 asset_results.push((symbol.clone(), exchange.clone(), result, chromo, best_fitness));
             } else {
                 eprintln!("    ❌ {} on {}: No profitable strategy found (all chromosomes rejected)", symbol, exchange);
-                eprintln!("       Best seen: PnL={:.2}, Trades={}, DD={:.1}%, Sharpe={:.3}", 
-                    best_result.as_ref().map(|r| r.net_pnl).unwrap_or(0.0),
-                    best_result.as_ref().map(|r| r.total_trades).unwrap_or(0),
-                    best_result.as_ref().map(|r| r.max_drawdown_pct * 100.0).unwrap_or(0.0),
-                    best_result.as_ref().map(|r| r.sharpe_ratio).unwrap_or(0.0));
+                if let Some(ref best_seen) = best_result {
+                    eprintln!("       Best seen: PnL={:.2}, Trades={}, DD={:.1}%, Sharpe={:.3}", 
+                        best_seen.net_pnl,
+                        best_seen.total_trades,
+                        best_seen.max_drawdown_pct * 100.0,
+                        best_seen.sharpe_ratio);
+                }
             }
             
             // Update progress
