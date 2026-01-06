@@ -138,6 +138,15 @@ pub static MAIN_LOGGER: once_cell::sync::Lazy<Arc<UltraLogger>> =
         ))
     });
 
+/// API request handling logger
+pub static API_LOGGER: once_cell::sync::Lazy<Arc<UltraLogger>> = 
+    once_cell::sync::Lazy::new(|| {
+        Arc::new(UltraLogger::with_config(
+            "BacktestingEngine-api".to_string(),
+            create_elasticsearch_config("api")
+        ))
+    });
+
 /// Performance-optimized logging macros for BacktestingEngine
 /// These use tokio::spawn to ensure non-blocking operation in sync contexts
 

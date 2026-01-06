@@ -508,8 +508,8 @@ pub async fn upload_file(
     let normalized_symbol = normalize_symbol(&symbol);
     let normalized_exchange = normalize_exchange(&exchange);
     
-    tracing::info!(
-        "Uploaded {} file: {} ({} rows) - {} on {} (normalized: {}/{})",
+    eprintln!(
+        "📤 [TARDIS] Uploaded {} file: {} ({} rows) - {} on {} (normalized: {}/{})",
         file_type, filename, row_count, symbol, exchange, normalized_symbol, normalized_exchange
     );
     
@@ -587,18 +587,18 @@ pub async fn upload_file(
         
         match import_result {
             Ok((rows_inserted, data_type)) => {
-                tracing::info!(
-                    "Auto-imported {} {} rows for {}/{} to database",
+                eprintln!(
+                    "✅ [TARDIS] Auto-imported {} {} rows for {}/{} to database",
                     rows_inserted, data_type, normalized_symbol, normalized_exchange
                 );
             }
             Err(e) => {
-                tracing::warn!("Auto-import failed (data saved to file): {}", e);
+                eprintln!("⚠️ [TARDIS] Auto-import failed (data saved to file): {}", e);
                 // Don't fail the upload - the file is still saved
             }
         }
     } else {
-        tracing::debug!("No database pool available, skipping auto-import");
+        eprintln!("⚠️ [TARDIS] No database pool available, skipping auto-import");
     }
     
     Ok(Json(FileUploadResponse {
@@ -805,9 +805,14 @@ async fn auto_import_to_database(
     normalized_exchange: &str,
     pool: Arc<deadpool::Pool<AsyncPgConnection>>,
 ) -> Result<(usize, &'static str), String> {
+    eprintln!("🔄 [TARDIS] Starting auto-import: {} for {}/{}", 
+        file_info.file_type, normalized_symbol, normalized_exchange);
+    
     // Read file data
     let file_data = tokio::fs::read(&file_info.stored_path).await
         .map_err(|e| format!("Failed to read file: {}", e))?;
+    
+    eprintln!("📖 [TARDIS] Read {} bytes from {}", file_data.len(), file_info.stored_path);
     
     // Get or create exchange
     let exchange_record = exchange_ops::create_exchange(
@@ -815,6 +820,7 @@ async fn auto_import_to_database(
         NewExchange { exchange: normalized_exchange.to_string() }
     ).await.map_err(|e| format!("Exchange error: {}", e))?;
     let exchange_id = exchange_record.exchange_id;
+    eprintln!("✅ [TARDIS] Created/found exchange '{}' with id {}", normalized_exchange, exchange_id);
 
     // Get or create security
     let security_record = securities_ops::create_security(
@@ -822,6 +828,7 @@ async fn auto_import_to_database(
         NewSecurity { symbol: normalized_symbol.to_string() }
     ).await.map_err(|e| format!("Security error: {}", e))?;
     let security_id = security_record.security_id;
+    eprintln!("✅ [TARDIS] Created/found security '{}' with id {}", normalized_symbol, security_id);
 
     // Get or create order book
     let order_book_record = order_book_ops::create_orderbook(
@@ -833,9 +840,10 @@ async fn auto_import_to_database(
             exchange_id,
         }
     ).await.map_err(|e| format!("Order book error: {}", e))?;
+    eprintln!("✅ [TARDIS] Created/found orderbook with id {}", order_book_record.order_book_id);
     
-    tracing::info!(
-        "Using order_book_id: {}, security_id: {}, exchange_id: {} for auto-import",
+    eprintln!(
+        "📊 [TARDIS] Using order_book_id: {}, security_id: {}, exchange_id: {} for auto-import",
         order_book_record.order_book_id, security_id, exchange_id
     );
 
