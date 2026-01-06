@@ -113,6 +113,24 @@ const FitnessPieChart: React.FC<FitnessPieChartProps> = ({ weights, size = 120 }
   );
 };
 
+// Strategy types with display info
+const STRATEGY_TYPES = {
+  'market_making': {
+    name: 'Avellaneda-Stoikov Market Making',
+    icon: '📈',
+    description: 'Optimal bid-ask quoting with inventory management. Places limit orders on both sides of the order book, earning the bid-ask spread while managing inventory risk.',
+    badge: 'Market Making',
+    badgeColor: '#17a2b8',
+  },
+  'momentum': {
+    name: 'Momentum Strategy',
+    icon: '🚀',
+    description: 'Trend-following strategy that identifies and trades in the direction of strong price movements. Uses volume confirmation and volatility filters to time entries and exits.',
+    badge: 'Momentum',
+    badgeColor: '#6f42c1',
+  },
+};
+
 // Exchange display name mapping (database code -> friendly name)
 const EXCHANGE_DISPLAY_NAMES: Record<string, string> = {
   'BNUS': 'Binance US',
@@ -751,32 +769,65 @@ export const BacktestForm: React.FC<BacktestFormProps> = ({ onJobSubmit }) => {
           icon="📊"
           isExpanded={expandedSections.strategy ?? true}
           onToggle={() => toggleSection('strategy')}
-          badge="Market Making"
-          badgeColor="#17a2b8"
+          badge={STRATEGY_TYPES[formData.strategy_type as keyof typeof STRATEGY_TYPES]?.badge || 'Strategy'}
+          badgeColor={STRATEGY_TYPES[formData.strategy_type as keyof typeof STRATEGY_TYPES]?.badgeColor || '#17a2b8'}
         >
           <div style={{ display: 'grid', gap: '16px' }}>
-            {/* Strategy Info */}
-            <div style={{ 
-              padding: '16px', 
-              backgroundColor: '#f0f7ff', 
-              borderRadius: '8px',
-              border: '1px solid #cce5ff'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
-                <span style={{ fontSize: '24px' }}>📈</span>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: '15px', color: '#004085' }}>Avellaneda-Stoikov Market Making</div>
-                  <div style={{ fontSize: '12px', color: '#666', marginTop: '2px' }}>
-                    Optimal bid-ask quoting with inventory management
+            {/* Strategy Selector */}
+            <div>
+              <label style={{ display: 'block', marginBottom: '6px', fontWeight: 500, fontSize: '13px' }}>
+                Strategy Type
+              </label>
+              <select
+                name="strategy_type"
+                value={formData.strategy_type}
+                onChange={handleChange}
+                style={{
+                  width: '100%',
+                  padding: '10px 12px',
+                  borderRadius: '6px',
+                  border: '1px solid #ced4da',
+                  fontSize: '14px',
+                  backgroundColor: 'white',
+                }}
+              >
+                {Object.entries(STRATEGY_TYPES).map(([key, info]) => (
+                  <option key={key} value={key}>{info.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Strategy Info - Dynamic based on selection */}
+            {(() => {
+              const strategy = STRATEGY_TYPES[formData.strategy_type as keyof typeof STRATEGY_TYPES];
+              if (!strategy) return null;
+              return (
+                <div style={{ 
+                  padding: '16px', 
+                  backgroundColor: formData.strategy_type === 'momentum' ? '#f5f0ff' : '#f0f7ff', 
+                  borderRadius: '8px',
+                  border: formData.strategy_type === 'momentum' ? '1px solid #d4c5f9' : '1px solid #cce5ff'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+                    <span style={{ fontSize: '24px' }}>{strategy.icon}</span>
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: '15px', color: formData.strategy_type === 'momentum' ? '#4a2c7a' : '#004085' }}>
+                        {strategy.name}
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#666', marginTop: '2px' }}>
+                        {formData.strategy_type === 'momentum' 
+                          ? 'Trend-following with volume confirmation'
+                          : 'Optimal bid-ask quoting with inventory management'}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: '12px', color: '#555', lineHeight: 1.5 }}>
+                    {strategy.description}
+                    {' '}The Genetic Algorithm optimizes parameters per symbol and capital allocation weights across your portfolio.
                   </div>
                 </div>
-              </div>
-              <div style={{ fontSize: '12px', color: '#555', lineHeight: 1.5 }}>
-                The strategy places limit orders on both sides of the order book, earning the bid-ask spread 
-                while managing inventory risk. The Genetic Algorithm optimizes ~18 parameters per symbol 
-                and capital allocation weights across your portfolio.
-              </div>
-            </div>
+              );
+            })()}
 
             {/* Active Exchanges (auto-populated from portfolio) */}
             <div style={{ 

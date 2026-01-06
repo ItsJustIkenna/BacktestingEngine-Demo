@@ -4,7 +4,7 @@ import React, { useState, useCallback, useRef } from 'react';
 interface UploadedFileInfo {
   file_id: string;
   original_name: string;
-  file_type: 'trades' | 'orderbook';
+  file_type: 'trades' | 'orderbook' | 'incremental_l2';
   symbol: string;
   exchange: string;
   start_time: string;
@@ -19,6 +19,7 @@ interface SymbolUploadSession {
   exchange: string;
   trades_file: UploadedFileInfo | null;
   orderbook_file: UploadedFileInfo | null;
+  incremental_l2_file: UploadedFileInfo | null;
   start_time: string | null;
   end_time: string | null;
   created_at: string;
@@ -262,7 +263,9 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
   };
 
   const selectedSessionData = sessions.find(s => s.session_id === selectedSession);
-  const isReadyToBacktest = selectedSessionData?.trades_file && selectedSessionData?.orderbook_file;
+  // Accept either orderbook_file or incremental_l2_file as orderbook source
+  const hasOrderbookData = selectedSessionData?.orderbook_file || selectedSessionData?.incremental_l2_file;
+  const isReadyToBacktest = selectedSessionData?.trades_file && hasOrderbookData;
 
   return (
     <div style={{ padding: '20px', maxWidth: '900px', margin: '0 auto' }}>
@@ -382,20 +385,26 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
                         )}
                       </div>
                       
-                      {/* Orderbook file status */}
-                      <div style={{ 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        gap: '6px',
-                        color: session.orderbook_file ? '#28a745' : '#dc3545'
-                      }}>
-                        {session.orderbook_file ? '✅' : '❌'} Orderbook
-                        {session.orderbook_file && (
-                          <span style={{ color: '#666' }}>
-                            ({formatNumber(session.orderbook_file.row_count)} snapshots, {formatBytes(session.orderbook_file.file_size_bytes)})
-                          </span>
-                        )}
-                      </div>
+                      {/* Orderbook file status - accepts L2 snapshots or incremental L2 */}
+                      {(() => {
+                        const orderbookSource = session.orderbook_file || session.incremental_l2_file;
+                        const orderbookLabel = session.incremental_l2_file ? 'L2 Data' : 'Orderbook';
+                        return (
+                          <div style={{ 
+                            display: 'flex', 
+                            alignItems: 'center', 
+                            gap: '6px',
+                            color: orderbookSource ? '#28a745' : '#dc3545'
+                          }}>
+                            {orderbookSource ? '✅' : '❌'} {orderbookLabel}
+                            {orderbookSource && (
+                              <span style={{ color: '#666' }}>
+                                ({formatNumber(orderbookSource.row_count)} {session.incremental_l2_file ? 'updates' : 'snapshots'}, {formatBytes(orderbookSource.file_size_bytes)})
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
                   

@@ -28,6 +28,7 @@ use databaseschema::{
         order_book::NewOrderBook,
         l2_orderbook_snapshot::NewL2OrderbookSnapshot,
         historical_order::NewHistoricalOrder,
+        trade::NewTrade,
     },
     ops::{
         exchange_ops,
@@ -35,6 +36,7 @@ use databaseschema::{
         order_book_ops,
         l2_orderbook_snapshot_ops,
         historical_order_ops,
+        trades_ops,
     },
 };
 #[cfg(feature = "postgres")]
@@ -409,10 +411,11 @@ fn parse_csv_metadata(data: &[u8], file_type_hint: Option<TardisFileType>) -> Re
     Ok((exchange, symbol, start_dt, end_dt, row_count, file_type))
 }
 
-/// Handle file upload
+/// Handle file upload and auto-import to database
 /// POST /api/tardis/upload
+#[cfg(feature = "postgres")]
 pub async fn upload_file(
-    State(state): State<TardisUploadState>,
+    State((state, job_queue)): State<(TardisUploadState, Arc<dyn crate::job_queue::JobQueue>)>,
     mut multipart: Multipart,
 ) -> Result<Json<FileUploadResponse>, (StatusCode, Json<FileUploadResponse>)> {
     let mut file_data: Option<(String, bytes::Bytes)> = None;
@@ -501,17 +504,21 @@ pub async fn upload_file(
         }))
     })?;
     
+    // Normalize symbol and exchange for database consistency
+    let normalized_symbol = normalize_symbol(&symbol);
+    let normalized_exchange = normalize_exchange(&exchange);
+    
     tracing::info!(
-        "Uploaded {} file: {} ({} rows) - auto-detected as {:?}",
-        file_type, filename, row_count, file_type
+        "Uploaded {} file: {} ({} rows) - {} on {} (normalized: {}/{})",
+        file_type, filename, row_count, symbol, exchange, normalized_symbol, normalized_exchange
     );
     
     let file_info = UploadedFileInfo {
         file_id: file_id.clone(),
         original_name: filename,
         file_type,
-        symbol: symbol.clone(),
-        exchange: exchange.clone(),
+        symbol: normalized_symbol.clone(),
+        exchange: normalized_exchange.clone(),
         start_time: start_time.clone(),
         end_time: end_time.clone(),
         row_count,
@@ -519,15 +526,15 @@ pub async fn upload_file(
         stored_path: stored_path.to_string_lossy().to_string(),
     };
     
-    // Create or update session
-    let session_id = format!("{}_{}", symbol, exchange);
+    // Create or update session using normalized values
+    let session_id = format!("{}_{}", normalized_symbol, normalized_exchange);
     let mut sessions = state.sessions.write().await;
     
     let session = sessions.entry(session_id.clone())
         .or_insert_with(|| SymbolUploadSession {
             session_id: session_id.clone(),
-            symbol: symbol.clone(),
-            exchange: exchange.clone(),
+            symbol: normalized_symbol.clone(),
+            exchange: normalized_exchange.clone(),
             trades_file: None,
             orderbook_file: None,
             incremental_l2_file: None,
@@ -567,6 +574,32 @@ pub async fn upload_file(
     }
     
     let session_clone = session.clone();
+    drop(sessions); // Release the write lock before database operations
+    
+    // Auto-import to database
+    if let Some(pool) = job_queue.get_pool() {
+        let import_result = auto_import_to_database(
+            &file_info,
+            &normalized_symbol,
+            &normalized_exchange,
+            pool,
+        ).await;
+        
+        match import_result {
+            Ok((rows_inserted, data_type)) => {
+                tracing::info!(
+                    "Auto-imported {} {} rows for {}/{} to database",
+                    rows_inserted, data_type, normalized_symbol, normalized_exchange
+                );
+            }
+            Err(e) => {
+                tracing::warn!("Auto-import failed (data saved to file): {}", e);
+                // Don't fail the upload - the file is still saved
+            }
+        }
+    } else {
+        tracing::debug!("No database pool available, skipping auto-import");
+    }
     
     Ok(Json(FileUploadResponse {
         success: true,
@@ -579,7 +612,7 @@ pub async fn upload_file(
 /// List all upload sessions
 /// GET /api/tardis/sessions
 pub async fn list_sessions(
-    State(state): State<TardisUploadState>,
+    State((state, _job_queue)): State<(TardisUploadState, Arc<dyn crate::job_queue::JobQueue>)>,
 ) -> Json<ListSessionsResponse> {
     let sessions = state.sessions.read().await;
     let session_list: Vec<SymbolUploadSession> = sessions.values().cloned().collect();
@@ -592,7 +625,7 @@ pub async fn list_sessions(
 /// Delete an upload session
 /// DELETE /api/tardis/sessions/:session_id
 pub async fn delete_session(
-    State(state): State<TardisUploadState>,
+    State((state, _job_queue)): State<(TardisUploadState, Arc<dyn crate::job_queue::JobQueue>)>,
     axum::extract::Path(session_id): axum::extract::Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let mut sessions = state.sessions.write().await;
@@ -762,6 +795,232 @@ pub async fn submit_tardis_backtest(
 // =============================================================================
 // Database Import Functionality
 // =============================================================================
+
+/// Auto-import uploaded file to database
+/// Called automatically after file upload
+#[cfg(feature = "postgres")]
+async fn auto_import_to_database(
+    file_info: &UploadedFileInfo,
+    normalized_symbol: &str,
+    normalized_exchange: &str,
+    pool: Arc<deadpool::Pool<AsyncPgConnection>>,
+) -> Result<(usize, &'static str), String> {
+    // Read file data
+    let file_data = tokio::fs::read(&file_info.stored_path).await
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+    
+    // Get or create exchange
+    let exchange_record = exchange_ops::create_exchange(
+        pool.clone(),
+        NewExchange { exchange: normalized_exchange.to_string() }
+    ).await.map_err(|e| format!("Exchange error: {}", e))?;
+    let exchange_id = exchange_record.exchange_id;
+
+    // Get or create security
+    let security_record = securities_ops::create_security(
+        pool.clone(),
+        NewSecurity { symbol: normalized_symbol.to_string() }
+    ).await.map_err(|e| format!("Security error: {}", e))?;
+    let security_id = security_record.security_id;
+
+    // Get or create order book
+    let order_book_record = order_book_ops::create_orderbook(
+        pool.clone(),
+        NewOrderBook {
+            symbol: normalized_symbol.to_string(),
+            exchange: normalized_exchange.to_string(),
+            security_id,
+            exchange_id,
+        }
+    ).await.map_err(|e| format!("Order book error: {}", e))?;
+    
+    tracing::info!(
+        "Using order_book_id: {}, security_id: {}, exchange_id: {} for auto-import",
+        order_book_record.order_book_id, security_id, exchange_id
+    );
+
+    // Import based on file type
+    match file_info.file_type {
+        TardisFileType::Trades => {
+            let (trades_inserted, rows_processed) = parse_and_insert_trades(
+                &file_data,
+                normalized_symbol,
+                normalized_exchange,
+                security_id,
+                exchange_id,
+                pool,
+            ).await?;
+            Ok((trades_inserted, "trades"))
+        }
+        TardisFileType::Orderbook => {
+            let (snapshots_inserted, _rows_processed) = parse_and_insert_l2_orderbook(
+                &file_data,
+                normalized_symbol,
+                normalized_exchange,
+                security_id,
+                exchange_id,
+                pool,
+            ).await?;
+            Ok((snapshots_inserted, "L2 snapshots"))
+        }
+        TardisFileType::IncrementalL2 => {
+            let (orders_inserted, _rows_processed) = parse_and_insert_incremental_l2(
+                &file_data,
+                normalized_symbol,
+                normalized_exchange,
+                security_id,
+                exchange_id,
+                pool,
+            ).await?;
+            Ok((orders_inserted, "incremental L2 updates"))
+        }
+    }
+}
+
+/// Parse and insert trades from Tardis CSV into the database
+/// Trades format: exchange,symbol,timestamp,local_timestamp,id,side,price,amount
+#[cfg(feature = "postgres")]
+async fn parse_and_insert_trades(
+    data: &[u8],
+    symbol: &str,
+    exchange: &str,
+    security_id: uuid::Uuid,
+    exchange_id: uuid::Uuid,
+    pool: Arc<deadpool::Pool<AsyncPgConnection>>,
+) -> Result<(usize, usize), String> {
+    // Decompress if gzipped
+    let reader: Box<dyn Read + Send> = if data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+        Box::new(GzDecoder::new(std::io::Cursor::new(data)))
+    } else {
+        Box::new(std::io::Cursor::new(data))
+    };
+    
+    let buf_reader = BufReader::new(reader);
+    let mut lines = buf_reader.lines();
+    
+    // Read header
+    let header = lines.next()
+        .ok_or("Empty file")?
+        .map_err(|e| format!("Read error: {}", e))?;
+    
+    let header_fields: Vec<&str> = header.split(',').collect();
+    
+    // Find column indices
+    let timestamp_idx = header_fields.iter().position(|&f| f == "timestamp")
+        .ok_or("Missing 'timestamp' column")?;
+    let id_idx = header_fields.iter().position(|&f| f == "id")
+        .ok_or("Missing 'id' column")?;
+    let side_idx = header_fields.iter().position(|&f| f == "side")
+        .ok_or("Missing 'side' column")?;
+    let price_idx = header_fields.iter().position(|&f| f == "price")
+        .ok_or("Missing 'price' column")?;
+    let amount_idx = header_fields.iter().position(|&f| f == "amount")
+        .ok_or("Missing 'amount' column")?;
+    
+    tracing::info!(
+        "Trades columns - timestamp: {}, id: {}, side: {}, price: {}, amount: {}",
+        timestamp_idx, id_idx, side_idx, price_idx, amount_idx
+    );
+    
+    let mut rows_processed = 0;
+    let mut trades_inserted = 0;
+    
+    // Batch for efficient inserts
+    const BATCH_SIZE: usize = 5000;
+    let mut batch: Vec<NewTrade> = Vec::with_capacity(BATCH_SIZE);
+    
+    for line_result in lines {
+        let line = match line_result {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!("Error reading line {}: {}", rows_processed, e);
+                continue;
+            }
+        };
+        
+        rows_processed += 1;
+        let fields: Vec<&str> = line.split(',').collect();
+        
+        // Skip if we don't have enough fields
+        let max_idx = *[timestamp_idx, id_idx, side_idx, price_idx, amount_idx]
+            .iter()
+            .max()
+            .unwrap();
+        if fields.len() <= max_idx {
+            continue;
+        }
+        
+        // Parse trade data
+        let trade_id_str = fields[id_idx];
+        let side_str = fields[side_idx].to_uppercase();
+        let price_str = fields[price_idx];
+        let amount_str = fields[amount_idx];
+        
+        // Skip empty values
+        if price_str.is_empty() || amount_str.is_empty() {
+            continue;
+        }
+        
+        // Parse price and quantity
+        let price = match BigDecimal::from_str(price_str) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        let quantity = match BigDecimal::from_str(amount_str) {
+            Ok(q) => q,
+            Err(_) => continue,
+        };
+        
+        // Normalize side to "BUY" or "SELL"
+        let normalized_side = if side_str.contains("BUY") || side_str == "B" {
+            "BUY".to_string()
+        } else if side_str.contains("SELL") || side_str == "S" || side_str == "ASK" {
+            "SELL".to_string()
+        } else {
+            side_str.clone()
+        };
+        
+        batch.push(NewTrade {
+            symbol: symbol.to_string(),
+            exchange: exchange.to_string(),
+            trade_id: trade_id_str.to_string(),
+            security_id,
+            exchange_id,
+            side: normalized_side,
+            price,
+            quantity,
+        });
+        
+        // Insert batch when full
+        if batch.len() >= BATCH_SIZE {
+            let batch_len = batch.len();
+            trades_ops::create_trades(pool.clone(), std::mem::take(&mut batch))
+                .await
+                .map_err(|e| format!("Database insert error: {}", e))?;
+            trades_inserted += batch_len;
+            
+            if trades_inserted % 50000 == 0 {
+                tracing::info!("Inserted {} trades...", trades_inserted);
+            }
+        }
+    }
+    
+    // Insert remaining batch
+    if !batch.is_empty() {
+        let batch_len = batch.len();
+        trades_ops::create_trades(pool.clone(), batch)
+            .await
+            .map_err(|e| format!("Database insert error: {}", e))?;
+        trades_inserted += batch_len;
+    }
+    
+    tracing::info!(
+        "Trades import complete: {} trades inserted from {} rows",
+        trades_inserted, rows_processed
+    );
+    
+    Ok((trades_inserted, rows_processed))
+}
 
 /// Request to import Tardis orderbook data into database
 #[derive(Debug, Deserialize)]

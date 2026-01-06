@@ -2761,8 +2761,16 @@ impl Worker {
     ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
         // Dispatch to strategy-specific optimization
         let strategy_type = job.params.strategy_type.to_lowercase();
-        if strategy_type.contains("momentum") || strategy_type.contains("trend") {
-            return self.execute_momentum_ga_optimization(job).await;
+        let is_momentum = strategy_type.contains("momentum") || strategy_type.contains("trend");
+        
+        if is_momentum {
+            // Check if portfolio mode (multiple assets)
+            if job.params.is_portfolio() {
+                eprintln!("🚀 [MOMENTUM_PORTFOLIO_GA] Dispatching to portfolio momentum optimization");
+                return self.execute_momentum_portfolio_ga_optimization(job).await;
+            } else {
+                return self.execute_momentum_ga_optimization(job).await;
+            }
         }
         
         // Default: Avellaneda-Stoikov market making optimization
@@ -5196,25 +5204,73 @@ impl Worker {
             // For market making, load historical orders and trades
             self.load_order_events(symbol, base_exchange).await
         } else {
-            log_info!(GENETIC_LOGGER, "Strategy '{}' requires candle data", strategy_type);
-            // For momentum/trend strategies, try candles first
+            log_info!(GENETIC_LOGGER, "Strategy '{}' requires trade/candle data", strategy_type);
+            // For momentum/trend strategies, try multiple data sources in order:
+            // 1. Candles (aggregated data, best for momentum)
+            // 2. Trades table (raw trades from Tardis uploads)
+            // 3. Order events (historical_orders, less ideal but works)
+            
+            // Try candles first
             match self.load_market_data(symbol, base_exchange).await {
                 Ok(data) if !data.is_empty() => {
                     log_info!(GENETIC_LOGGER, "Successfully loaded {} candles", data.len());
-                    Ok(data)
+                    return Ok(data);
                 }
                 Ok(_) => {
-                    log_warn!(GENETIC_LOGGER, "No candle data found, falling back to order events for {} on {}", symbol, base_exchange);
-                    // Fall back to order events if no candles
-                    self.load_order_events(symbol, base_exchange).await
+                    log_info!(GENETIC_LOGGER, "No candle data found for {} on {}", symbol, base_exchange);
                 }
                 Err(e) => {
-                    log_warn!(GENETIC_LOGGER, "Failed to load candles ({}), falling back to order events", e);
-                    // Fall back to order events if candle query fails (e.g., view doesn't exist)
-                    self.load_order_events(symbol, base_exchange).await
+                    log_info!(GENETIC_LOGGER, "Candle query failed ({})", e);
                 }
             }
+            
+            // Try trades table (where Tardis trades are imported)
+            match self.load_trades_data(symbol, base_exchange).await {
+                Ok(data) if !data.is_empty() => {
+                    log_info!(GENETIC_LOGGER, "Successfully loaded {} trades from trades table", data.len());
+                    return Ok(data);
+                }
+                Ok(_) => {
+                    log_info!(GENETIC_LOGGER, "No trades found in trades table for {} on {}", symbol, base_exchange);
+                }
+                Err(e) => {
+                    log_info!(GENETIC_LOGGER, "Trades query failed ({})", e);
+                }
+            }
+            
+            // Final fallback: order events
+            log_warn!(GENETIC_LOGGER, "Falling back to order events for {} on {}", symbol, base_exchange);
+            self.load_order_events(symbol, base_exchange).await
         }
+    }
+    
+    /// Load trades from the trades table (populated by Tardis CSV uploads)
+    #[cfg(feature = "postgres")]
+    async fn load_trades_data(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        use crate::streaming::ParallelDataLoader;
+        
+        log_info!(MAIN_LOGGER, "Loading trades from trades table for {} on {}", symbol, exchange);
+        
+        let pool = self.job_queue.get_pool()
+            .ok_or("Database pool not available")?;
+        
+        const NUM_WORKERS: usize = 4;
+        let loader = ParallelDataLoader::new(pool.clone(), NUM_WORKERS);
+        
+        loader.load_all_trades(symbol, exchange).await
+    }
+    
+    #[cfg(not(feature = "postgres"))]
+    async fn load_trades_data(
+        &self,
+        _symbol: &str,
+        _exchange: &str,
+    ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        Err("PostgreSQL feature not enabled".into())
     }
     
     /// Load order book events (new, cancel, modify) for market making strategies
@@ -5716,7 +5772,30 @@ impl Worker {
                 .map(|(i, chromo)| {
                     let result = simulator.run_chromosome(&events_arc, chromo);
                     
-                    // Comprehensive momentum fitness function
+                    // === HARD REJECTION CRITERIA ===
+                    // These result in fitness = 0 (will be eliminated)
+                    
+                    // Hard reject: Losing strategies (must be profitable)
+                    if result.net_pnl <= 0.0 {
+                        return (i, 0.0, result);
+                    }
+                    
+                    // Hard reject: Too few trades (not statistically significant)
+                    if result.total_trades < 10 {
+                        return (i, 0.0, result);
+                    }
+                    
+                    // Hard reject: Catastrophic drawdown (too risky)
+                    if result.max_drawdown_pct > 0.25 {
+                        return (i, 0.0, result);
+                    }
+                    
+                    // Hard reject: Negative Sharpe (risk-adjusted loss)
+                    if result.sharpe_ratio < 0.0 {
+                        return (i, 0.0, result);
+                    }
+                    
+                    // === SOFT SCORING (only for profitable strategies) ===
                     let mut fitness = 0.0;
                     
                     // Base metrics (weighted)
@@ -5727,15 +5806,15 @@ impl Worker {
                     fitness += result.net_pnl_pct * 10.0 * 0.25; // Scale PnL %
                     fitness += result.calmar_ratio.min(5.0) * 0.15;
                     
-                    // Penalties
-                    if result.total_trades < 20 {
-                        fitness *= 0.5; // Too few trades
+                    // Soft penalties for suboptimal but acceptable strategies
+                    if result.total_trades < 30 {
+                        fitness *= 0.8; // Prefer more trades for statistical confidence
                     }
                     if result.max_drawdown_pct > 0.15 {
-                        fitness *= 0.7; // High drawdown
+                        fitness *= 0.85; // Prefer lower drawdown
                     }
-                    if result.net_pnl < 0.0 {
-                        fitness *= 0.3; // Losing strategy
+                    if result.win_rate < 0.4 {
+                        fitness *= 0.9; // Prefer higher win rate
                     }
                     
                     (i, fitness, result)
@@ -5859,6 +5938,310 @@ impl Worker {
                 "strategy_type": "momentum",
                 "primary_metrics": ["total_pnl", "sharpe_ratio", "profit_factor", "win_rate"],
                 "secondary_metrics": ["sortino_ratio", "max_drawdown", "total_trades", "calmar_ratio"],
+            })),
+            ..Default::default()
+        })
+    }
+    
+    /// Execute genetic optimization for momentum strategy with MULTIPLE symbol/exchange pairs
+    /// Runs independent GA optimization on each asset, then aggregates portfolio results
+    async fn execute_momentum_portfolio_ga_optimization(
+        &self,
+        job: &BacktestJob,
+    ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
+        use genetic::chromosome::MomentumChromosome;
+        use genetic::Chromosome;
+        use backtest::momentum_simulation::MomentumSimulator;
+        use backtest::realistic_simulation::{OrderBookEvent, EventType, Side};
+        use rand::{SeedableRng, Rng};
+        
+        let params = &job.params;
+        
+        // Get all assets from portfolio_assets
+        let assets = job.params.get_portfolio_assets();
+        if assets.is_empty() {
+            return Err("No portfolio assets defined".into());
+        }
+        
+        eprintln!("\n============================================================");
+        eprintln!("🚀 [MOMENTUM_PORTFOLIO_GA] STARTING job_id={}", job.id);
+        eprintln!("   assets: {:?}", assets.iter().map(|a| format!("{}:{}", a.symbol, a.exchange)).collect::<Vec<_>>());
+        eprintln!("   population_size: {}", params.population_size);
+        eprintln!("   generations: {}", params.generations);
+        eprintln!("============================================================\n");
+        
+        let timing_total_start = std::time::Instant::now();
+        
+        log_info_structured!(GENETIC_LOGGER, "MOMENTUM_PORTFOLIO_GA_STARTING",
+            "event" => "MOMENTUM_PORTFOLIO_GA_STARTING",
+            "job_id" => &job.id,
+            "num_assets" => assets.len(),
+            "population_size" => params.population_size,
+            "generations" => params.generations
+        );
+        
+        let progress_tracker = Arc::new(ProgressTracker::new(job.id.clone(), Arc::clone(&self.job_queue)));
+        let _ = progress_tracker.persist_progress(2.0).await;
+        
+        // Track results per asset
+        let mut asset_results: Vec<(String, String, backtest::momentum_simulation::MomentumSimResult, MomentumChromosome, f64)> = Vec::new();
+        let num_assets = assets.len();
+        
+        for (asset_idx, asset) in assets.iter().enumerate() {
+            let symbol = &asset.symbol;
+            let exchange = &asset.exchange;
+            
+            eprintln!("  📊 Processing asset {}/{}: {} on {}", asset_idx + 1, num_assets, symbol, exchange);
+            
+            // Load data for this asset
+            let data = match self.load_market_data_for_strategy(symbol, exchange, &params.strategy_type).await {
+                Ok(d) if !d.is_empty() => d,
+                Ok(_) => {
+                    log_warn!(GENETIC_LOGGER, "No data for {} on {}, skipping", symbol, exchange);
+                    continue;
+                }
+                Err(e) => {
+                    log_warn!(GENETIC_LOGGER, "Failed to load data for {} on {}: {}", symbol, exchange, e);
+                    continue;
+                }
+            };
+            
+            // Convert to events
+            let events: Vec<OrderBookEvent> = data.iter().filter_map(|md| {
+                match md {
+                    MarketData::Trade(trade) => {
+                        let side = if trade.side == "buy" { Side::Buy } else { Side::Sell };
+                        Some(OrderBookEvent {
+                            timestamp_ms: trade.timestamp.timestamp_millis(),
+                            event_type: EventType::Trade,
+                            order_id: trade.trade_id.clone(),
+                            side,
+                            price: trade.price_f64,
+                            quantity: trade.quantity_f64,
+                        })
+                    },
+                    #[cfg(feature = "postgres")]
+                    MarketData::Order(order) => {
+                        use bigdecimal::ToPrimitive;
+                        let side = if order.side == "buy" { Side::Buy } else { Side::Sell };
+                        Some(OrderBookEvent {
+                            timestamp_ms: order.timestamp.timestamp_millis(),
+                            event_type: EventType::Trade,
+                            order_id: order.order_id.clone(),
+                            side,
+                            price: order.price_level.to_f64().unwrap_or(0.0),
+                            quantity: order.quantity.to_f64().unwrap_or(0.0),
+                        })
+                    },
+                    _ => None,
+                }
+            }).collect();
+            
+            if events.is_empty() {
+                log_warn!(GENETIC_LOGGER, "No trade events for {} on {}, skipping", symbol, exchange);
+                continue;
+            }
+            
+            let events_arc = Arc::new(events);
+            
+            // GA for this asset
+            let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(exchange);
+            let initial_capital = params.initial_capital / num_assets as f64; // Split capital
+            let taker_fee = exchange_fee_config.taker_fee;
+            let maker_fee = exchange_fee_config.maker_fee;
+            
+            let population_size = params.population_size;
+            let generations = params.generations;
+            let mutation_rate = 0.15;
+            let elite_ratio = 0.1;
+            
+            let mut rng = rand::rngs::StdRng::seed_from_u64(42 + asset_idx as u64);
+            let mut population: Vec<MomentumChromosome> = (0..population_size)
+                .map(|_| {
+                    let mut chromo = MomentumChromosome::random(&mut rng);
+                    chromo.taker_fee_rate = taker_fee;
+                    chromo.maker_fee_rate = maker_fee;
+                    chromo
+                })
+                .collect();
+            
+            let simulator = MomentumSimulator::new(initial_capital);
+            let mut best_fitness = f64::MIN;
+            let mut best_chromo: Option<MomentumChromosome> = None;
+            let mut best_result: Option<backtest::momentum_simulation::MomentumSimResult> = None;
+            
+            for gen in 0..generations {
+                let mut fitness_scores: Vec<(usize, f64, backtest::momentum_simulation::MomentumSimResult)> = population
+                    .iter()
+                    .enumerate()
+                    .map(|(i, chromo)| {
+                        let result = simulator.run_chromosome(&events_arc, chromo);
+                        
+                        // Hard rejection criteria
+                        if result.net_pnl <= 0.0 || result.total_trades < 10 || 
+                           result.max_drawdown_pct > 0.25 || result.sharpe_ratio < 0.0 {
+                            return (i, 0.0, result);
+                        }
+                        
+                        // Soft scoring
+                        let mut fitness = 0.0;
+                        fitness += result.sharpe_ratio * 0.20;
+                        fitness += result.sortino_ratio * 0.15;
+                        fitness += result.profit_factor.min(3.0) * 0.15;
+                        fitness += result.win_rate * 0.10;
+                        fitness += result.net_pnl_pct * 10.0 * 0.25;
+                        fitness += result.calmar_ratio.min(5.0) * 0.15;
+                        
+                        if result.total_trades < 30 { fitness *= 0.8; }
+                        if result.max_drawdown_pct > 0.15 { fitness *= 0.85; }
+                        if result.win_rate < 0.4 { fitness *= 0.9; }
+                        
+                        (i, fitness, result)
+                    })
+                    .collect();
+                
+                fitness_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                
+                let gen_best = fitness_scores[0].1;
+                if gen_best > best_fitness {
+                    best_fitness = gen_best;
+                    best_chromo = Some(population[fitness_scores[0].0].clone());
+                    best_result = Some(fitness_scores[0].2.clone());
+                }
+                
+                // Selection + Crossover + Mutation
+                let elite_count = (population.len() as f64 * elite_ratio).ceil() as usize;
+                let mut new_population: Vec<MomentumChromosome> = Vec::with_capacity(population.len());
+                
+                for &(idx, _, _) in fitness_scores.iter().take(elite_count) {
+                    new_population.push(population[idx].clone());
+                }
+                
+                let selection_pool_size = (population.len() / 2).max(1);
+                while new_population.len() < population.len() {
+                    let p1 = fitness_scores[rng.gen_range(0..selection_pool_size)].0;
+                    let p2 = fitness_scores[rng.gen_range(0..selection_pool_size)].0;
+                    let mut child = population[p1].crossover(&population[p2], &mut rng);
+                    child.mutate(&mut rng, mutation_rate);
+                    child.taker_fee_rate = taker_fee;
+                    child.maker_fee_rate = maker_fee;
+                    new_population.push(child);
+                }
+                
+                population = new_population;
+            }
+            
+            // Store best result for this asset
+            if let (Some(chromo), Some(result)) = (best_chromo, best_result) {
+                eprintln!("    ✅ {} on {}: PnL=${:.2}, Sharpe={:.3}, Trades={}", 
+                    symbol, exchange, result.net_pnl, result.sharpe_ratio, result.total_trades);
+                asset_results.push((symbol.clone(), exchange.clone(), result, chromo, best_fitness));
+            }
+            
+            // Update progress
+            let progress = 10.0 + ((asset_idx + 1) as f64 / num_assets as f64) * 85.0;
+            let _ = progress_tracker.persist_progress(progress).await;
+        }
+        
+        if asset_results.is_empty() {
+            return Err("No profitable strategies found for any asset".into());
+        }
+        
+        // Aggregate portfolio results
+        let total_pnl: f64 = asset_results.iter().map(|(_, _, r, _, _)| r.net_pnl).sum();
+        let total_trades: usize = asset_results.iter().map(|(_, _, r, _, _)| r.total_trades as usize).sum();
+        let avg_sharpe: f64 = asset_results.iter().map(|(_, _, r, _, _)| r.sharpe_ratio).sum::<f64>() / asset_results.len() as f64;
+        let avg_win_rate: f64 = asset_results.iter().map(|(_, _, r, _, _)| r.win_rate).sum::<f64>() / asset_results.len() as f64;
+        let max_dd: f64 = asset_results.iter().map(|(_, _, r, _, _)| r.max_drawdown_pct).fold(0.0, f64::max);
+        let avg_profit_factor: f64 = asset_results.iter().map(|(_, _, r, _, _)| r.profit_factor).sum::<f64>() / asset_results.len() as f64;
+        let total_fees: f64 = asset_results.iter().map(|(_, _, r, _, _)| r.total_fees).sum();
+        
+        let total_elapsed = timing_total_start.elapsed();
+        
+        log_info_structured!(GENETIC_LOGGER, "MOMENTUM_PORTFOLIO_GA_COMPLETE",
+            "event" => "MOMENTUM_PORTFOLIO_GA_COMPLETE",
+            "job_id" => &job.id,
+            "num_assets" => asset_results.len(),
+            "total_pnl" => format!("{:.2}", total_pnl),
+            "avg_sharpe" => format!("{:.4}", avg_sharpe),
+            "total_trades" => total_trades,
+            "elapsed_sec" => format!("{:.2}", total_elapsed.as_secs_f64())
+        );
+        
+        let _ = progress_tracker.persist_progress(100.0).await;
+        
+        // Build per-symbol results
+        let symbol_results: Vec<serde_json::Value> = asset_results.iter().map(|(sym, ex, res, chromo, fitness)| {
+            serde_json::json!({
+                "symbol": sym,
+                "exchange": ex,
+                "net_pnl": res.net_pnl,
+                "sharpe_ratio": res.sharpe_ratio,
+                "sortino_ratio": res.sortino_ratio,
+                "profit_factor": res.profit_factor,
+                "win_rate": res.win_rate,
+                "total_trades": res.total_trades,
+                "max_drawdown_pct": res.max_drawdown_pct,
+                "fitness": fitness,
+                "best_params": {
+                    "momentum_threshold_pct": chromo.momentum_threshold_pct,
+                    "momentum_lookback_ms": chromo.momentum_lookback_ms,
+                    "take_profit_pct": chromo.take_profit_pct,
+                    "stop_loss_pct": chromo.stop_loss_pct,
+                    "position_size_pct": chromo.position_size_pct,
+                }
+            })
+        }).collect();
+        
+        Ok(BacktestResult {
+            job_id: job.id.clone(),
+            strategy_type: Some("momentum_portfolio".to_string()),
+            total_pnl,
+            total_trades,
+            sharpe_ratio: avg_sharpe,
+            max_drawdown: max_dd,
+            win_rate: avg_win_rate,
+            profit_factor: avg_profit_factor,
+            sortino_ratio: Some(asset_results.iter().map(|(_, _, r, _, _)| r.sortino_ratio).sum::<f64>() / asset_results.len() as f64),
+            calmar_ratio: Some(asset_results.iter().map(|(_, _, r, _, _)| r.calmar_ratio).sum::<f64>() / asset_results.len() as f64),
+            total_commission_paid: Some(total_fees),
+            portfolio_metrics: Some(crate::job_queue::PortfolioMetrics {
+                total_symbols: asset_results.len(),
+                symbol_results: asset_results.iter().map(|(sym, ex, res, _, _)| {
+                    crate::job_queue::SymbolResult {
+                        symbol: sym.clone(),
+                        exchange: Some(ex.clone()),
+                        total_pnl: res.net_pnl,
+                        total_trades: res.total_trades as usize,
+                        sharpe_ratio: res.sharpe_ratio,
+                        win_rate: res.win_rate,
+                        max_drawdown: res.max_drawdown_pct,
+                        profit_factor: res.profit_factor,
+                        allocation_weight: 1.0 / asset_results.len() as f64, // Equal weight for now
+                        starting_capital: None,
+                        ending_capital: None,
+                        starting_inventory: None,
+                        ending_inventory: None,
+                        starting_inventory_value: None,
+                        ending_inventory_value: None,
+                        starting_mark_price: None,
+                        ending_mark_price: None,
+                    }
+                }).collect(),
+                correlation_matrix: vec![],
+                portfolio_sharpe: avg_sharpe,
+                portfolio_max_drawdown: max_dd,
+                diversification_ratio: Some(1.0),
+            }),
+            strategy_params: Some(serde_json::json!({
+                "strategy": "momentum_portfolio",
+                "num_assets": asset_results.len(),
+                "symbol_results": symbol_results,
+            })),
+            metrics_profile: Some(serde_json::json!({
+                "strategy_type": "momentum_portfolio",
+                "primary_metrics": ["total_pnl", "sharpe_ratio", "profit_factor"],
+                "secondary_metrics": ["sortino_ratio", "max_drawdown", "total_trades"],
             })),
             ..Default::default()
         })
