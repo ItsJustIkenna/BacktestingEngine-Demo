@@ -1656,6 +1656,16 @@ impl Worker {
         &self,
         job: &BacktestJob,
     ) -> Result<BacktestResult, Box<dyn std::error::Error + Send + Sync>> {
+        // Check if this is a momentum strategy - route to momentum portfolio GA
+        let strategy_type = job.params.strategy_type.to_lowercase();
+        let is_momentum = strategy_type.contains("momentum") || strategy_type.contains("trend");
+        
+        if is_momentum {
+            eprintln!("🚀 [PORTFOLIO_GA] Dispatching to MOMENTUM portfolio optimization (strategy_type={})", job.params.strategy_type);
+            return self.execute_momentum_portfolio_ga_optimization(job).await;
+        }
+        
+        // Default: Avellaneda-Stoikov market making portfolio optimization
         use genetic::{
             PortfolioGAOptimizer, PortfolioFitnessConfig, 
             GeneticOptimizer, FitnessResult, AsyncFitnessFn,

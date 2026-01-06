@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 
 // Types for Tardis file upload
 interface UploadedFileInfo {
@@ -30,29 +30,14 @@ interface FileUploadResponse {
   file: UploadedFileInfo | null;
   session: SymbolUploadSession | null;
   error: string | null;
-}
-
-interface TardisBacktestRequest {
-  session_id: string;
-  initial_capital: number;
-  commission_rate: number;
-  strategy_type: string;
-  optimize: boolean;
-  population_size?: number;
-  generations?: number;
-  risk_aversion?: number;
-  min_spread_bps?: number;
-}
-
-interface TardisBacktestResponse {
-  success: boolean;
-  job_id: string | null;
-  message: string;
-  error: string | null;
-}
-
-interface TardisUploadProps {
-  onBacktestSubmitted?: (jobId: string, session: SymbolUploadSession) => void;
+  details?: {
+    detected_type?: string;
+    detected_exchange?: string;
+    detected_symbol?: string;
+    rows_parsed?: number;
+    sample_headers?: string[];
+    parse_errors?: string[];
+  };
 }
 
 // Format bytes to human readable
@@ -69,41 +54,121 @@ const formatNumber = (n: number): string => {
   return n.toLocaleString();
 };
 
-export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted }) => {
+// Error explanation mapping
+const getErrorExplanation = (error: string): { title: string; explanation: string; suggestions: string[] } => {
+  const errorLower = error.toLowerCase();
+  
+  if (errorLower.includes('header') || errorLower.includes('column')) {
+    return {
+      title: 'Invalid CSV Headers',
+      explanation: 'The file headers don\'t match the expected Tardis format.',
+      suggestions: [
+        'Trades files should have: timestamp, side, price, amount (or similar)',
+        'Orderbook files should have: timestamp, bid_price, bid_size, ask_price, ask_size',
+        'Check you downloaded the correct data type from Tardis.dev',
+      ],
+    };
+  }
+  
+  if (errorLower.includes('symbol') || errorLower.includes('detect')) {
+    return {
+      title: 'Could Not Detect Symbol/Exchange',
+      explanation: 'Unable to determine the trading pair or exchange from the file.',
+      suggestions: [
+        'Ensure the filename contains the symbol (e.g., BTC-USD_trades.csv.gz)',
+        'Or the file content should have a symbol column',
+        'Supported format: EXCHANGE_SYMBOL_TYPE.csv.gz',
+      ],
+    };
+  }
+  
+  if (errorLower.includes('empty') || errorLower.includes('no data')) {
+    return {
+      title: 'Empty or Corrupt File',
+      explanation: 'The file appears to be empty or could not be read.',
+      suggestions: [
+        'Re-download the file from Tardis.dev',
+        'Check the file is not corrupted (try opening in a text editor)',
+        'Ensure the .gz compression is valid',
+      ],
+    };
+  }
+  
+  if (errorLower.includes('decompress') || errorLower.includes('gzip')) {
+    return {
+      title: 'Decompression Error',
+      explanation: 'Failed to decompress the .gz file.',
+      suggestions: [
+        'The file may be corrupted during download',
+        'Try re-downloading from Tardis.dev',
+        'Ensure the file has a .csv.gz extension',
+      ],
+    };
+  }
+  
+  if (errorLower.includes('type') || errorLower.includes('unknown file')) {
+    return {
+      title: 'Unknown File Type',
+      explanation: 'Could not determine if this is a trades or orderbook file.',
+      suggestions: [
+        'Trades files should be named *_trades.csv.gz',
+        'Orderbook files should be named *_orderbook.csv.gz or *_incremental_l2.csv.gz',
+        'Check the file contains the expected columns for that data type',
+      ],
+    };
+  }
+  
+  return {
+    title: 'Upload Error',
+    explanation: error,
+    suggestions: [
+      'Check the file format matches Tardis.dev export format',
+      'Try a different file or re-download',
+      'Contact support if the issue persists',
+    ],
+  };
+};
+
+export const TardisUpload: React.FC = () => {
   // Upload state
   const [sessions, setSessions] = useState<SymbolUploadSession[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
-  
-  // Backtest form state
-  const [selectedSession, setSelectedSession] = useState<string | null>(null);
-  const [backtestConfig, setBacktestConfig] = useState({
-    initial_capital: 10000,
-    commission_rate: 0.001,
-    strategy_type: 'avellaneda_stoikov',
-    optimize: true,
-    population_size: 30,
-    generations: 15,
-    risk_aversion: 0.5,
-    min_spread_bps: 10,
-  });
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [uploadResult, setUploadResult] = useState<{
+    success: boolean;
+    message: string;
+    errorDetails?: { title: string; explanation: string; suggestions: string[] };
+    fileInfo?: UploadedFileInfo;
+  } | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Load existing sessions on mount
+  useEffect(() => {
+    const loadSessions = async () => {
+      try {
+        const response = await fetch('/api/tardis/sessions');
+        if (response.ok) {
+          const data = await response.json();
+          setSessions(data.sessions || []);
+        }
+      } catch (err) {
+        console.error('Failed to load sessions:', err);
+      }
+    };
+    loadSessions();
+  }, []);
 
   // Handle file upload
   const uploadFile = useCallback(async (file: File) => {
     setUploading(true);
-    setUploadError(null);
+    setUploadResult(null);
     setUploadProgress(`Uploading ${file.name}...`);
     
     try {
       const formData = new FormData();
       formData.append('file', file);
-      // Exchange is auto-detected from CSV file content or filename
       
       const response = await fetch('/api/tardis/upload', {
         method: 'POST',
@@ -125,23 +190,29 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
           }
         });
         
-        // Auto-select if first session
-        setSessions(prev => {
-          if (prev.length === 1 && prev[0]) {
-            setSelectedSession(prev[0].session_id);
-          }
-          return prev;
+        setUploadResult({
+          success: true,
+          message: `Successfully uploaded ${file.name}`,
+          fileInfo: result.file || undefined,
         });
-        
-        setUploadProgress(`✅ ${file.name} uploaded successfully`);
-        setTimeout(() => setUploadProgress(null), 3000);
       } else {
-        setUploadError(result.error || 'Upload failed');
+        const errorDetails = getErrorExplanation(result.error || 'Unknown error');
+        setUploadResult({
+          success: false,
+          message: result.error || 'Upload failed',
+          errorDetails,
+        });
       }
     } catch (err) {
-      setUploadError(`Failed to upload: ${err}`);
+      const errorDetails = getErrorExplanation(`Network error: ${err}`);
+      setUploadResult({
+        success: false,
+        message: `Failed to upload: ${err}`,
+        errorDetails,
+      });
     } finally {
       setUploading(false);
+      setUploadProgress(null);
     }
   }, []);
 
@@ -176,7 +247,18 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
     );
     
     if (csvFiles.length === 0) {
-      setUploadError('Please drop CSV or CSV.GZ files');
+      setUploadResult({
+        success: false,
+        message: 'No valid files found',
+        errorDetails: {
+          title: 'Invalid File Type',
+          explanation: 'Only CSV and CSV.GZ files are supported.',
+          suggestions: [
+            'Download data from Tardis.dev in CSV format',
+            'Files should have .csv or .csv.gz extension',
+          ],
+        },
+      });
       return;
     }
     
@@ -210,69 +292,23 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
       
       if (response.ok) {
         setSessions(prev => prev.filter(s => s.session_id !== sessionId));
-        if (selectedSession === sessionId) {
-          setSelectedSession(null);
-        }
       }
     } catch (err) {
       console.error('Failed to delete session:', err);
     }
   };
 
-  // Submit backtest
-  const handleSubmitBacktest = async () => {
-    if (!selectedSession) return;
-    
-    setSubmitting(true);
-    setSubmitError(null);
-    
-    try {
-      const request: TardisBacktestRequest = {
-        session_id: selectedSession,
-        initial_capital: backtestConfig.initial_capital,
-        commission_rate: backtestConfig.commission_rate,
-        strategy_type: backtestConfig.strategy_type,
-        optimize: backtestConfig.optimize,
-        population_size: backtestConfig.optimize ? backtestConfig.population_size : undefined,
-        generations: backtestConfig.optimize ? backtestConfig.generations : undefined,
-        risk_aversion: backtestConfig.risk_aversion,
-        min_spread_bps: backtestConfig.min_spread_bps,
-      };
-      
-      const response = await fetch('/api/tardis/backtest', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
-      });
-      
-      const result: TardisBacktestResponse = await response.json();
-      
-      if (result.success && result.job_id) {
-        const session = sessions.find(s => s.session_id === selectedSession);
-        if (session && onBacktestSubmitted) {
-          onBacktestSubmitted(result.job_id, session);
-        }
-      } else {
-        setSubmitError(result.error || 'Failed to submit backtest');
-      }
-    } catch (err) {
-      setSubmitError(`Failed to submit: ${err}`);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const selectedSessionData = sessions.find(s => s.session_id === selectedSession);
-  // Accept either orderbook_file or incremental_l2_file as orderbook source
-  const hasOrderbookData = selectedSessionData?.orderbook_file || selectedSessionData?.incremental_l2_file;
-  const isReadyToBacktest = selectedSessionData?.trades_file && hasOrderbookData;
-
   return (
     <div style={{ padding: '20px', maxWidth: '900px', margin: '0 auto' }}>
-      <h2 style={{ marginBottom: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+      <h2 style={{ marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '10px' }}>
         <span>📁</span>
-        <span>Tardis Data Upload</span>
+        <span>Upload Market Data</span>
       </h2>
+      
+      <p style={{ color: '#666', marginBottom: '20px', fontSize: '14px' }}>
+        Upload Tardis.dev CSV files to make them available for backtesting. 
+        Data is automatically imported into the database.
+      </p>
       
       {/* Drop Zone */}
       <div
@@ -310,365 +346,258 @@ export const TardisUpload: React.FC<TardisUploadProps> = ({ onBacktestSubmitted 
         </div>
         
         <div style={{ color: '#666', fontSize: '14px' }}>
-          Drop <code>*_trades.csv.gz</code> and <code>*_orderbook.csv.gz</code> files here
+          Supported files: <code>*_trades.csv.gz</code>, <code>*_orderbook.csv.gz</code>, <code>*_incremental_l2.csv.gz</code>
           <br />
-          Exchange is auto-detected from file content
+          Exchange and symbol are auto-detected from file content
         </div>
         
         {uploadProgress && (
-          <div style={{ marginTop: '15px', color: '#28a745', fontWeight: 500 }}>
-            {uploadProgress}
-          </div>
-        )}
-        
-        {uploadError && (
-          <div style={{ marginTop: '15px', color: '#dc3545', fontWeight: 500 }}>
-            ❌ {uploadError}
+          <div style={{ marginTop: '15px', color: '#17a2b8', fontWeight: 500 }}>
+            ⏳ {uploadProgress}
           </div>
         )}
       </div>
       
-      {/* Uploaded Sessions */}
-      {sessions.length > 0 && (
-        <div style={{ marginBottom: '20px' }}>
-          <h3 style={{ marginBottom: '12px' }}>Uploaded Data Sets</h3>
-          
-          <div style={{ display: 'grid', gap: '12px' }}>
-            {sessions.map(session => (
-              <div
-                key={session.session_id}
-                onClick={() => setSelectedSession(session.session_id)}
-                style={{
-                  border: `2px solid ${selectedSession === session.session_id ? '#007bff' : '#e0e0e0'}`,
-                  borderRadius: '8px',
-                  padding: '16px',
-                  cursor: 'pointer',
-                  backgroundColor: selectedSession === session.session_id ? '#f0f8ff' : 'white',
-                  transition: 'all 0.2s ease',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div>
-                    <div style={{ fontSize: '18px', fontWeight: 600, marginBottom: '4px' }}>
-                      {session.symbol} 
-                      <span style={{ 
-                        fontSize: '12px', 
-                        backgroundColor: '#6c757d', 
-                        color: 'white', 
-                        padding: '2px 8px', 
-                        borderRadius: '4px',
-                        marginLeft: '8px'
-                      }}>
-                        {session.exchange}
-                      </span>
-                    </div>
-                    
-                    {session.start_time && session.end_time && (
-                      <div style={{ fontSize: '13px', color: '#666', marginBottom: '8px' }}>
-                        📅 {session.start_time} → {session.end_time}
-                      </div>
-                    )}
-                    
-                    <div style={{ display: 'flex', gap: '20px', fontSize: '13px' }}>
-                      {/* Trades file status */}
-                      <div style={{ 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        gap: '6px',
-                        color: session.trades_file ? '#28a745' : '#dc3545'
-                      }}>
-                        {session.trades_file ? '✅' : '❌'} Trades
-                        {session.trades_file && (
-                          <span style={{ color: '#666' }}>
-                            ({formatNumber(session.trades_file.row_count)} rows, {formatBytes(session.trades_file.file_size_bytes)})
-                          </span>
-                        )}
-                      </div>
-                      
-                      {/* Orderbook file status - accepts L2 snapshots or incremental L2 */}
-                      {(() => {
-                        const orderbookSource = session.orderbook_file || session.incremental_l2_file;
-                        const orderbookLabel = session.incremental_l2_file ? 'L2 Data' : 'Orderbook';
-                        return (
-                          <div style={{ 
-                            display: 'flex', 
-                            alignItems: 'center', 
-                            gap: '6px',
-                            color: orderbookSource ? '#28a745' : '#dc3545'
-                          }}>
-                            {orderbookSource ? '✅' : '❌'} {orderbookLabel}
-                            {orderbookSource && (
-                              <span style={{ color: '#666' }}>
-                                ({formatNumber(orderbookSource.row_count)} {session.incremental_l2_file ? 'updates' : 'snapshots'}, {formatBytes(orderbookSource.file_size_bytes)})
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                  
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeleteSession(session.session_id);
-                    }}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      fontSize: '18px',
-                      color: '#dc3545',
-                      padding: '4px 8px',
-                    }}
-                    title="Delete session"
-                  >
-                    🗑️
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-      
-      {/* Backtest Configuration */}
-      {selectedSessionData && (
+      {/* Upload Result */}
+      {uploadResult && (
         <div style={{ 
-          border: '1px solid #e0e0e0', 
-          borderRadius: '8px', 
-          padding: '20px',
-          backgroundColor: 'white'
+          backgroundColor: uploadResult.success ? '#d4edda' : '#f8d7da',
+          border: `1px solid ${uploadResult.success ? '#c3e6cb' : '#f5c6cb'}`,
+          borderRadius: '8px',
+          padding: '16px',
+          marginBottom: '20px',
         }}>
-          <h3 style={{ marginBottom: '16px' }}>
-            Backtest Configuration - {selectedSessionData.symbol}
-          </h3>
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: '8px',
+            fontWeight: 600,
+            color: uploadResult.success ? '#155724' : '#721c24',
+            marginBottom: uploadResult.errorDetails ? '12px' : '0',
+          }}>
+            {uploadResult.success ? '✅' : '❌'} {uploadResult.success ? 'Success' : uploadResult.errorDetails?.title || 'Error'}
+          </div>
           
-          {!isReadyToBacktest && (
-            <div style={{ 
-              backgroundColor: '#fff3cd', 
-              border: '1px solid #ffc107',
-              borderRadius: '6px',
-              padding: '12px',
-              marginBottom: '16px',
-              color: '#856404'
-            }}>
-              ⚠️ Please upload both trades and orderbook files to run a backtest.
+          {uploadResult.success && uploadResult.fileInfo && (
+            <div style={{ fontSize: '14px', color: '#155724' }}>
+              <strong>{uploadResult.fileInfo.symbol}</strong> on <strong>{uploadResult.fileInfo.exchange}</strong>
+              <br />
+              Type: {uploadResult.fileInfo.file_type} • {formatNumber(uploadResult.fileInfo.row_count)} rows • {formatBytes(uploadResult.fileInfo.file_size_bytes)}
             </div>
           )}
           
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '20px' }}>
-            {/* Initial Capital */}
+          {uploadResult.errorDetails && (
             <div>
-              <label style={{ display: 'block', marginBottom: '4px', fontWeight: 500 }}>
-                Initial Capital ($)
-              </label>
-              <input
-                type="number"
-                value={backtestConfig.initial_capital}
-                onChange={e => setBacktestConfig(prev => ({ ...prev, initial_capital: parseFloat(e.target.value) || 0 }))}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  border: '1px solid #ccc',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                }}
-              />
-            </div>
-            
-            {/* Commission Rate */}
-            <div>
-              <label style={{ display: 'block', marginBottom: '4px', fontWeight: 500 }}>
-                Commission Rate (%)
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                value={backtestConfig.commission_rate * 100}
-                onChange={e => setBacktestConfig(prev => ({ ...prev, commission_rate: (parseFloat(e.target.value) || 0) / 100 }))}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  border: '1px solid #ccc',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                }}
-              />
-            </div>
-            
-            {/* Strategy Type */}
-            <div>
-              <label style={{ display: 'block', marginBottom: '4px', fontWeight: 500 }}>
-                Strategy
-              </label>
-              <select
-                value={backtestConfig.strategy_type}
-                onChange={e => setBacktestConfig(prev => ({ ...prev, strategy_type: e.target.value }))}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  border: '1px solid #ccc',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                }}
-              >
-                <option value="avellaneda_stoikov">Avellaneda-Stoikov Market Making</option>
-                <option value="grid">Grid Trading</option>
-                <option value="twap">TWAP</option>
-              </select>
-            </div>
-            
-            {/* Optimization Toggle */}
-            <div>
-              <label style={{ display: 'block', marginBottom: '4px', fontWeight: 500 }}>
-                Optimization
-              </label>
-              <select
-                value={backtestConfig.optimize ? 'genetic' : 'manual'}
-                onChange={e => setBacktestConfig(prev => ({ ...prev, optimize: e.target.value === 'genetic' }))}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  border: '1px solid #ccc',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                }}
-              >
-                <option value="genetic">Genetic Algorithm</option>
-                <option value="manual">Manual Parameters</option>
-              </select>
-            </div>
-            
-            {/* GA Settings (if optimize enabled) */}
-            {backtestConfig.optimize && (
-              <>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '4px', fontWeight: 500 }}>
-                    Population Size
-                  </label>
-                  <input
-                    type="number"
-                    value={backtestConfig.population_size}
-                    onChange={e => setBacktestConfig(prev => ({ ...prev, population_size: parseInt(e.target.value) || 30 }))}
-                    style={{
-                      width: '100%',
-                      padding: '8px 12px',
-                      border: '1px solid #ccc',
-                      borderRadius: '4px',
-                      fontSize: '14px',
-                    }}
-                  />
-                </div>
-                
-                <div>
-                  <label style={{ display: 'block', marginBottom: '4px', fontWeight: 500 }}>
-                    Generations
-                  </label>
-                  <input
-                    type="number"
-                    value={backtestConfig.generations}
-                    onChange={e => setBacktestConfig(prev => ({ ...prev, generations: parseInt(e.target.value) || 15 }))}
-                    style={{
-                      width: '100%',
-                      padding: '8px 12px',
-                      border: '1px solid #ccc',
-                      borderRadius: '4px',
-                      fontSize: '14px',
-                    }}
-                  />
-                </div>
-              </>
-            )}
-            
-            {/* Manual Parameters (if not optimize) */}
-            {!backtestConfig.optimize && (
-              <>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '4px', fontWeight: 500 }}>
-                    Risk Aversion (γ)
-                  </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={backtestConfig.risk_aversion}
-                    onChange={e => setBacktestConfig(prev => ({ ...prev, risk_aversion: parseFloat(e.target.value) || 0.5 }))}
-                    style={{
-                      width: '100%',
-                      padding: '8px 12px',
-                      border: '1px solid #ccc',
-                      borderRadius: '4px',
-                      fontSize: '14px',
-                    }}
-                  />
-                </div>
-                
-                <div>
-                  <label style={{ display: 'block', marginBottom: '4px', fontWeight: 500 }}>
-                    Min Spread (bps)
-                  </label>
-                  <input
-                    type="number"
-                    value={backtestConfig.min_spread_bps}
-                    onChange={e => setBacktestConfig(prev => ({ ...prev, min_spread_bps: parseFloat(e.target.value) || 10 }))}
-                    style={{
-                      width: '100%',
-                      padding: '8px 12px',
-                      border: '1px solid #ccc',
-                      borderRadius: '4px',
-                      fontSize: '14px',
-                    }}
-                  />
-                </div>
-              </>
-            )}
-          </div>
-          
-          {submitError && (
-            <div style={{ 
-              backgroundColor: '#f8d7da', 
-              border: '1px solid #f5c6cb',
-              borderRadius: '6px',
-              padding: '12px',
-              marginBottom: '16px',
-              color: '#721c24'
-            }}>
-              ❌ {submitError}
+              <div style={{ color: '#721c24', marginBottom: '8px' }}>
+                {uploadResult.errorDetails.explanation}
+              </div>
+              <div style={{ fontSize: '13px' }}>
+                <strong>Suggestions:</strong>
+                <ul style={{ margin: '4px 0 0 0', paddingLeft: '20px' }}>
+                  {uploadResult.errorDetails.suggestions.map((s, i) => (
+                    <li key={i} style={{ marginBottom: '2px' }}>{s}</li>
+                  ))}
+                </ul>
+              </div>
             </div>
           )}
           
           <button
-            onClick={handleSubmitBacktest}
-            disabled={!isReadyToBacktest || submitting}
+            onClick={() => setUploadResult(null)}
             style={{
-              width: '100%',
-              padding: '14px 20px',
-              fontSize: '16px',
-              fontWeight: 600,
-              backgroundColor: isReadyToBacktest && !submitting ? '#007bff' : '#ccc',
-              color: 'white',
-              border: 'none',
-              borderRadius: '6px',
-              cursor: isReadyToBacktest && !submitting ? 'pointer' : 'not-allowed',
-              transition: 'background-color 0.2s',
+              marginTop: '10px',
+              padding: '4px 12px',
+              fontSize: '12px',
+              backgroundColor: 'transparent',
+              border: `1px solid ${uploadResult.success ? '#155724' : '#721c24'}`,
+              borderRadius: '4px',
+              color: uploadResult.success ? '#155724' : '#721c24',
+              cursor: 'pointer',
             }}
           >
-            {submitting ? '⏳ Submitting...' : '🚀 Run Backtest'}
+            Dismiss
           </button>
         </div>
       )}
       
-      {/* Help text */}
-      <div style={{ marginTop: '20px', padding: '16px', backgroundColor: '#e7f3ff', borderRadius: '8px' }}>
-        <h4 style={{ marginBottom: '8px' }}>📚 How to use</h4>
-        <ol style={{ margin: 0, paddingLeft: '20px', lineHeight: 1.8 }}>
-          <li>Download L2 orderbook snapshots and trades from <a href="https://tardis.dev" target="_blank" rel="noopener noreferrer">Tardis.dev</a></li>
-          <li>Drag and drop both <code>*_trades.csv.gz</code> and <code>*_orderbook.csv.gz</code> files</li>
-          <li>Configure backtest parameters (capital, commission, strategy)</li>
-          <li>Click "Run Backtest" to start the simulation</li>
+      {/* Uploaded Sessions */}
+      {sessions.length > 0 && (
+        <div style={{ marginBottom: '20px' }}>
+          <h3 style={{ marginBottom: '12px' }}>📊 Uploaded Data Sets</h3>
+          <p style={{ fontSize: '13px', color: '#666', marginBottom: '12px' }}>
+            These datasets are available for backtesting. Go to <strong>Create Backtest</strong> to run a strategy on them.
+          </p>
+          
+          <div style={{ display: 'grid', gap: '12px' }}>
+            {sessions.map(session => {
+              const orderbookSource = session.orderbook_file || session.incremental_l2_file;
+              const isComplete = session.trades_file && orderbookSource;
+              
+              return (
+                <div
+                  key={session.session_id}
+                  style={{
+                    border: `2px solid ${isComplete ? '#28a745' : '#ffc107'}`,
+                    borderRadius: '8px',
+                    padding: '16px',
+                    backgroundColor: 'white',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: '18px', fontWeight: 600, marginBottom: '4px' }}>
+                        {session.symbol} 
+                        <span style={{ 
+                          fontSize: '12px', 
+                          backgroundColor: '#6c757d', 
+                          color: 'white', 
+                          padding: '2px 8px', 
+                          borderRadius: '4px',
+                          marginLeft: '8px'
+                        }}>
+                          {session.exchange}
+                        </span>
+                        {isComplete && (
+                          <span style={{ 
+                            fontSize: '12px', 
+                            backgroundColor: '#28a745', 
+                            color: 'white', 
+                            padding: '2px 8px', 
+                            borderRadius: '4px',
+                            marginLeft: '8px'
+                          }}>
+                            Ready
+                          </span>
+                        )}
+                      </div>
+                      
+                      {session.start_time && session.end_time && (
+                        <div style={{ fontSize: '13px', color: '#666', marginBottom: '8px' }}>
+                          📅 {session.start_time} → {session.end_time}
+                        </div>
+                      )}
+                      
+                      <div style={{ display: 'flex', gap: '20px', fontSize: '13px', flexWrap: 'wrap' }}>
+                        {/* Trades file status */}
+                        <div style={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          gap: '6px',
+                          color: session.trades_file ? '#28a745' : '#dc3545'
+                        }}>
+                          {session.trades_file ? '✅' : '❌'} Trades
+                          {session.trades_file && (
+                            <span style={{ color: '#666' }}>
+                              ({formatNumber(session.trades_file.row_count)} rows)
+                            </span>
+                          )}
+                        </div>
+                        
+                        {/* Orderbook file status */}
+                        <div style={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          gap: '6px',
+                          color: orderbookSource ? '#28a745' : '#dc3545'
+                        }}>
+                          {orderbookSource ? '✅' : '❌'} {session.incremental_l2_file ? 'L2 Updates' : 'Orderbook'}
+                          {orderbookSource && (
+                            <span style={{ color: '#666' }}>
+                              ({formatNumber(orderbookSource.row_count)} {session.incremental_l2_file ? 'updates' : 'snapshots'})
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      
+                      {!isComplete && (
+                        <div style={{ 
+                          marginTop: '8px', 
+                          fontSize: '12px', 
+                          color: '#856404',
+                          backgroundColor: '#fff3cd',
+                          padding: '6px 10px',
+                          borderRadius: '4px',
+                          display: 'inline-block'
+                        }}>
+                          ⚠️ Upload {!session.trades_file ? 'trades' : 'orderbook'} file to complete this dataset
+                        </div>
+                      )}
+                    </div>
+                    
+                    <button
+                      onClick={() => handleDeleteSession(session.session_id)}
+                      style={{
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        fontSize: '18px',
+                        color: '#dc3545',
+                        padding: '4px 8px',
+                      }}
+                      title="Delete dataset"
+                    >
+                      🗑️
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      
+      {/* Help Section */}
+      <div style={{ 
+        marginTop: '20px', 
+        padding: '16px', 
+        backgroundColor: '#e7f3ff', 
+        borderRadius: '8px',
+        border: '1px solid #b3d9ff'
+      }}>
+        <h4 style={{ marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span>📚</span> How to Get Data from Tardis.dev
+        </h4>
+        
+        <ol style={{ margin: 0, paddingLeft: '20px', lineHeight: 1.8, fontSize: '14px' }}>
+          <li>Go to <a href="https://tardis.dev/datasets" target="_blank" rel="noopener noreferrer">tardis.dev/datasets</a></li>
+          <li>Select an exchange (Binance US, Kraken, Coinbase, etc.)</li>
+          <li>Choose a trading pair (e.g., BTC-USD)</li>
+          <li>Download both <strong>trades</strong> and <strong>book_snapshot</strong> (or <strong>incremental_book_L2</strong>) data</li>
+          <li>Upload the .csv.gz files here</li>
         </ol>
-        <div style={{ marginTop: '10px', fontSize: '13px', color: '#666' }}>
-          Supported exchanges: Binance.US, Binance, Kraken, Coinbase, OKX, Bybit
+        
+        <div style={{ marginTop: '16px', padding: '12px', backgroundColor: '#fff', borderRadius: '6px' }}>
+          <strong style={{ fontSize: '13px' }}>Expected File Format:</strong>
+          <table style={{ width: '100%', marginTop: '8px', fontSize: '13px', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ backgroundColor: '#f8f9fa' }}>
+                <th style={{ padding: '6px 10px', textAlign: 'left', borderBottom: '1px solid #dee2e6' }}>File Type</th>
+                <th style={{ padding: '6px 10px', textAlign: 'left', borderBottom: '1px solid #dee2e6' }}>Naming Pattern</th>
+                <th style={{ padding: '6px 10px', textAlign: 'left', borderBottom: '1px solid #dee2e6' }}>Required Columns</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid #eee' }}>Trades</td>
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid #eee' }}><code>*_trades.csv.gz</code></td>
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid #eee' }}>timestamp, side, price, amount</td>
+              </tr>
+              <tr>
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid #eee' }}>Orderbook</td>
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid #eee' }}><code>*_orderbook.csv.gz</code></td>
+                <td style={{ padding: '6px 10px', borderBottom: '1px solid #eee' }}>timestamp, bids, asks</td>
+              </tr>
+              <tr>
+                <td style={{ padding: '6px 10px' }}>L2 Updates</td>
+                <td style={{ padding: '6px 10px' }}><code>*_incremental_l2.csv.gz</code></td>
+                <td style={{ padding: '6px 10px' }}>timestamp, side, price, amount, is_snapshot</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        
+        <div style={{ marginTop: '12px', fontSize: '13px', color: '#666' }}>
+          <strong>Supported Exchanges:</strong> Binance US, Kraken, Coinbase, Binance, OKX, Bybit
         </div>
       </div>
     </div>

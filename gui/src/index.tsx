@@ -26,11 +26,6 @@ const App: React.FC = () => {
     setSelectedJobId(null);
   };
 
-  const handleTardisBacktestSubmitted = (jobId: string) => {
-    setSelectedJobId(jobId);
-    setCurrentView('list');
-  };
-
   return (
     <div className="app">
       <header style={{
@@ -88,7 +83,7 @@ const App: React.FC = () => {
           <BacktestForm onJobSubmit={handleJobSubmit} />
         )}
         {currentView === 'tardis' && (
-          <TardisUpload onBacktestSubmitted={handleTardisBacktestSubmitted} />
+          <TardisUpload />
         )}
         {currentView === 'list' && (
           <JobList onJobClick={handleJobClick} />
