@@ -51,8 +51,15 @@ pub fn build_router(job_queue: Arc<dyn JobQueue>) -> Router {
         .with_state(metrics_state);
     
     // Tardis file upload routes - upload now auto-imports to database
+    #[cfg(feature = "postgres")]
     let tardis_routes = Router::new()
         .route("/api/tardis/upload", post(tardis_upload::upload_file))
+        .route("/api/tardis/sessions", get(tardis_upload::list_sessions))
+        .route("/api/tardis/sessions/:session_id", delete(tardis_upload::delete_session))
+        .with_state((tardis_state.clone(), Arc::clone(&job_queue)));
+    
+    #[cfg(not(feature = "postgres"))]
+    let tardis_routes = Router::new()
         .route("/api/tardis/sessions", get(tardis_upload::list_sessions))
         .route("/api/tardis/sessions/:session_id", delete(tardis_upload::delete_session))
         .with_state((tardis_state.clone(), Arc::clone(&job_queue)));

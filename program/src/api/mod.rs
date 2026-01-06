@@ -12,4 +12,6 @@ pub mod tardis_upload;
 pub use router::build_router;
 pub use security::{ApiKeyStore, auth_middleware};
 pub use metrics::{init_metrics, MetricsState, metrics_handler};
-pub use tardis_upload::{TardisUploadState, upload_file, list_sessions, delete_session, submit_tardis_backtest};
+pub use tardis_upload::{TardisUploadState, list_sessions, delete_session, submit_tardis_backtest};
+#[cfg(feature = "postgres")]
+pub use tardis_upload::upload_file;
