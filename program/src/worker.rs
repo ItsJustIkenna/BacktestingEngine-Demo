@@ -6042,10 +6042,19 @@ impl Worker {
                     #[cfg(feature = "postgres")]
                     MarketData::Order(order) => {
                         use bigdecimal::ToPrimitive;
-                        let side = if order.side == "buy" { Side::Buy } else { Side::Sell };
+                        let side = if order.side == "buy" || order.side == "bid" { Side::Buy } else { Side::Sell };
+                        // Map the order's event_type string to EventType enum
+                        let event_type = match order.event_type.to_lowercase().as_str() {
+                            "trade" => EventType::Trade,
+                            "new" => EventType::New,
+                            "modify" => EventType::Modify,
+                            "cancel" => EventType::Cancel,
+                            "snapshot" => EventType::New, // Treat snapshots as "new" order book state
+                            _ => EventType::New, // Default to New for unknown types
+                        };
                         Some(OrderBookEvent {
                             timestamp_ms: order.timestamp.timestamp_millis(),
-                            event_type: EventType::Trade,
+                            event_type,
                             order_id: order.order_id.clone(),
                             side,
                             price: order.price_level.to_f64().unwrap_or(0.0),
@@ -6057,13 +6066,19 @@ impl Worker {
             }).collect();
             
             if events.is_empty() {
-                eprintln!("    ✗ Data loaded but no trade events after conversion for {} on {}", symbol, exchange);
-                log_warn!(GENETIC_LOGGER, "No trade events for {} on {}, skipping", symbol, exchange);
+                eprintln!("    ✗ Data loaded but no events after conversion for {} on {}", symbol, exchange);
+                log_warn!(GENETIC_LOGGER, "No events for {} on {}, skipping", symbol, exchange);
                 assets_with_no_events.push(format!("{}:{}", symbol, exchange));
                 continue;
             }
             
-            eprintln!("    ✓ Converted to {} trade events", events.len());
+            eprintln!("    ✓ Converted to {} order book events (trades: {}, new: {}, modify: {}, cancel: {})", 
+                events.len(),
+                events.iter().filter(|e| matches!(e.event_type, EventType::Trade)).count(),
+                events.iter().filter(|e| matches!(e.event_type, EventType::New)).count(),
+                events.iter().filter(|e| matches!(e.event_type, EventType::Modify)).count(),
+                events.iter().filter(|e| matches!(e.event_type, EventType::Cancel)).count()
+            );
             let events_arc = Arc::new(events);
             
             // GA for this asset
@@ -6198,7 +6213,7 @@ impl Worker {
                 error_msg.push_str("Check that symbol/exchange names match exactly what's in the database.");
             }
             if !assets_with_no_events.is_empty() {
-                error_msg.push_str(&format!("Assets with no trade events: {}\n", assets_with_no_events.join(", ")));
+                error_msg.push_str(&format!("Assets with no market events: {}\n", assets_with_no_events.join(", ")));
             }
             return Err(error_msg.into());
         }
