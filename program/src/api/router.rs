@@ -1,6 +1,7 @@
 //! API router configuration
 
 use axum::{
+    extract::DefaultBodyLimit,
     middleware,
     routing::{get, post, delete},
     Router,
@@ -51,11 +52,13 @@ pub fn build_router(job_queue: Arc<dyn JobQueue>) -> Router {
         .with_state(metrics_state);
     
     // Tardis file upload routes - upload now auto-imports to database
+    // Allow up to 2GB uploads for large Tardis CSV files
     #[cfg(feature = "postgres")]
     let tardis_routes = Router::new()
         .route("/api/tardis/upload", post(tardis_upload::upload_file))
         .route("/api/tardis/sessions", get(tardis_upload::list_sessions))
         .route("/api/tardis/sessions/:session_id", delete(tardis_upload::delete_session))
+        .layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024)) // 2GB limit for file uploads
         .with_state((tardis_state.clone(), Arc::clone(&job_queue)));
     
     #[cfg(not(feature = "postgres"))]
