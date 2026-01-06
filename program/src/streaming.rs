@@ -125,7 +125,7 @@ impl OrderBookStreamIterator {
              order_id, prev_price, prev_quantity, status \
              FROM historical_orders \
              WHERE symbol = '{}' AND exchange = '{}' \
-             AND event_type IN ('new', 'cancel', 'modify') \
+             AND event_type IN ('new', 'cancel', 'modify', 'snapshot') \
              ORDER BY timestamp ASC LIMIT {} OFFSET {}",
             self.symbol, self.exchange, self.chunk_size, self.offset
         );
@@ -689,7 +689,7 @@ impl StreamingDataLoader {
              FROM historical_orders \
              WHERE symbol = '{}' AND exchange = '{}' \
              AND timestamp >= '{}' AND timestamp < '{}' \
-             AND event_type IN ('new', 'cancel', 'modify') \
+             AND event_type IN ('new', 'cancel', 'modify', 'snapshot') \
              ORDER BY timestamp ASC \
              LIMIT {} OFFSET {}",
             symbol, exchange, 
@@ -1231,7 +1231,7 @@ impl ParallelDataLoader {
             "SELECT MIN(timestamp) as min_ts, MAX(timestamp) as max_ts \
              FROM historical_orders \
              WHERE symbol = '{}' AND exchange = '{}' \
-             AND event_type IN ('new', 'cancel', 'modify')",
+             AND event_type IN ('new', 'cancel', 'modify', 'snapshot')",
             symbol, exchange
         );
         
@@ -1331,7 +1331,7 @@ impl ParallelDataLoader {
              FROM historical_orders \
              WHERE symbol = '{}' AND exchange = '{}' \
              AND timestamp >= '{}' AND timestamp < '{}' \
-             AND event_type IN ('new', 'cancel', 'modify') \
+             AND event_type IN ('new', 'cancel', 'modify', 'snapshot') \
              ORDER BY timestamp ASC",
             symbol, exchange,
             start.to_rfc3339(), end.to_rfc3339()
