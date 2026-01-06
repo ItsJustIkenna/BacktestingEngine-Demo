@@ -5995,6 +5995,8 @@ impl Worker {
         
         // Track results per asset
         let mut asset_results: Vec<(String, String, backtest::momentum_simulation::MomentumSimResult, MomentumChromosome, f64)> = Vec::new();
+        let mut assets_with_no_data: Vec<String> = Vec::new();
+        let mut assets_with_no_events: Vec<String> = Vec::new();
         let num_assets = assets.len();
         
         for (asset_idx, asset) in assets.iter().enumerate() {
@@ -6005,13 +6007,20 @@ impl Worker {
             
             // Load data for this asset
             let data = match self.load_market_data_for_strategy(symbol, exchange, &params.strategy_type).await {
-                Ok(d) if !d.is_empty() => d,
+                Ok(d) if !d.is_empty() => {
+                    eprintln!("    ✓ Loaded {} data points", d.len());
+                    d
+                },
                 Ok(_) => {
+                    eprintln!("    ✗ No data found in database for {} on {}", symbol, exchange);
                     log_warn!(GENETIC_LOGGER, "No data for {} on {}, skipping", symbol, exchange);
+                    assets_with_no_data.push(format!("{}:{}", symbol, exchange));
                     continue;
                 }
                 Err(e) => {
+                    eprintln!("    ✗ Failed to load data for {} on {}: {}", symbol, exchange, e);
                     log_warn!(GENETIC_LOGGER, "Failed to load data for {} on {}: {}", symbol, exchange, e);
+                    assets_with_no_data.push(format!("{}:{}", symbol, exchange));
                     continue;
                 }
             };
@@ -6048,10 +6057,13 @@ impl Worker {
             }).collect();
             
             if events.is_empty() {
+                eprintln!("    ✗ Data loaded but no trade events after conversion for {} on {}", symbol, exchange);
                 log_warn!(GENETIC_LOGGER, "No trade events for {} on {}, skipping", symbol, exchange);
+                assets_with_no_events.push(format!("{}:{}", symbol, exchange));
                 continue;
             }
             
+            eprintln!("    ✓ Converted to {} trade events", events.len());
             let events_arc = Arc::new(events);
             
             // GA for this asset
@@ -6079,6 +6091,7 @@ impl Worker {
             let mut best_fitness = f64::MIN;
             let mut best_chromo: Option<MomentumChromosome> = None;
             let mut best_result: Option<backtest::momentum_simulation::MomentumSimResult> = None;
+            let mut rejection_stats = (0usize, 0usize, 0usize, 0usize); // (neg_pnl, low_trades, high_dd, neg_sharpe)
             
             for gen in 0..generations {
                 let mut fitness_scores: Vec<(usize, f64, backtest::momentum_simulation::MomentumSimResult)> = population
@@ -6087,10 +6100,23 @@ impl Worker {
                     .map(|(i, chromo)| {
                         let result = simulator.run_chromosome(&events_arc, chromo);
                         
-                        // Hard rejection criteria
-                        if result.net_pnl <= 0.0 || result.total_trades < 10 || 
-                           result.max_drawdown_pct > 0.25 || result.sharpe_ratio < 0.0 {
+                        // Relaxed rejection - only reject catastrophic losses
+                        // Allow exploration of marginal strategies
+                        let hard_reject = result.net_pnl < -initial_capital * 0.5 || // Lost more than 50%
+                                         result.total_trades < 5 || // At least 5 trades
+                                         result.max_drawdown_pct > 0.5; // 50% drawdown max
+                        
+                        if hard_reject {
                             return (i, 0.0, result);
+                        }
+                        
+                        // Track stats for first generation only
+                        if gen == 0 && i < 10 {
+                            if result.net_pnl <= 0.0 { rejection_stats.0 += 1; }
+                            if result.total_trades < 10 { rejection_stats.1 += 1; }
+                            if result.max_drawdown_pct > 0.25 { rejection_stats.2 += 1; }
+                            if result.sharpe_ratio < 0.0 { rejection_stats.3 += 1; }
+                        }
                         }
                         
                         // Soft scoring
@@ -6141,11 +6167,22 @@ impl Worker {
                 population = new_population;
             }
             
+            // Log rejection stats from first generation
+            eprintln!("    📊 First 10 chromosomes rejection reasons: neg_pnl={}, low_trades={}, high_dd={}, neg_sharpe={}", 
+                rejection_stats.0, rejection_stats.1, rejection_stats.2, rejection_stats.3);
+            
             // Store best result for this asset
             if let (Some(chromo), Some(result)) = (best_chromo, best_result) {
-                eprintln!("    ✅ {} on {}: PnL=${:.2}, Sharpe={:.3}, Trades={}", 
-                    symbol, exchange, result.net_pnl, result.sharpe_ratio, result.total_trades);
+                eprintln!("    ✅ {} on {}: PnL=${:.2}, Sharpe={:.3}, Trades={}, DD={:.1}%", 
+                    symbol, exchange, result.net_pnl, result.sharpe_ratio, result.total_trades, result.max_drawdown_pct * 100.0);
                 asset_results.push((symbol.clone(), exchange.clone(), result, chromo, best_fitness));
+            } else {
+                eprintln!("    ❌ {} on {}: No profitable strategy found (all chromosomes rejected)", symbol, exchange);
+                eprintln!("       Best seen: PnL={:.2}, Trades={}, DD={:.1}%, Sharpe={:.3}", 
+                    best_result.as_ref().map(|r| r.net_pnl).unwrap_or(0.0),
+                    best_result.as_ref().map(|r| r.total_trades).unwrap_or(0),
+                    best_result.as_ref().map(|r| r.max_drawdown_pct * 100.0).unwrap_or(0.0),
+                    best_result.as_ref().map(|r| r.sharpe_ratio).unwrap_or(0.0));
             }
             
             // Update progress
@@ -6154,7 +6191,15 @@ impl Worker {
         }
         
         if asset_results.is_empty() {
-            return Err("No profitable strategies found for any asset".into());
+            let mut error_msg = String::from("No profitable strategies found for any asset.\n");
+            if !assets_with_no_data.is_empty() {
+                error_msg.push_str(&format!("Assets with no data: {}\n", assets_with_no_data.join(", ")));
+                error_msg.push_str("Check that symbol/exchange names match exactly what's in the database.");
+            }
+            if !assets_with_no_events.is_empty() {
+                error_msg.push_str(&format!("Assets with no trade events: {}\n", assets_with_no_events.join(", ")));
+            }
+            return Err(error_msg.into());
         }
         
         // Aggregate portfolio results
