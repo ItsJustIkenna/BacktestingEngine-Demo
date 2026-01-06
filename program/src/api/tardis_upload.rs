@@ -1376,10 +1376,13 @@ async fn parse_and_insert_l2_orderbook(
     
     let mut rows_processed = 0;
     let mut total_snapshots = 0;
+    let mut total_historical_orders = 0;
     
     // Batch for efficient inserts
     const BATCH_SIZE: usize = 1000;
+    const HISTORICAL_BATCH_SIZE: usize = 5000;
     let mut snapshot_batch: Vec<NewL2OrderbookSnapshot> = Vec::with_capacity(BATCH_SIZE);
+    let mut historical_order_batch: Vec<NewHistoricalOrder> = Vec::with_capacity(HISTORICAL_BATCH_SIZE);
     
     for line_result in lines {
         let line = match line_result {
@@ -1467,10 +1470,10 @@ async fn parse_and_insert_l2_orderbook(
             exchange,
             security_id,
             exchange_id,
-            bid_prices,
-            bid_quantities,
-            ask_prices,
-            ask_quantities,
+            bid_prices.clone(),
+            bid_quantities.clone(),
+            ask_prices.clone(),
+            ask_quantities.clone(),
         ));
         
         // Insert batch when it reaches the limit
@@ -1479,6 +1482,52 @@ async fn parse_and_insert_l2_orderbook(
             match l2_orderbook_snapshot_ops::create_l2_snapshots(pool.clone(), batch_to_insert).await {
                 Ok(count) => total_snapshots += count,
                 Err(e) => tracing::warn!("L2 snapshot batch insert error: {}", e),
+            }
+        }
+        
+        // ALSO insert into historical_orders for backtesting queries
+        // Each price level becomes a historical_order entry with event_type="snapshot"
+        for (i, (price, qty)) in bid_prices.iter().zip(bid_quantities.iter()).enumerate() {
+            historical_order_batch.push(NewHistoricalOrder::new(
+                timestamp,
+                &format!("{}_{}_bid_{}_{}", symbol, timestamp.timestamp_micros(), i, rows_processed),
+                "snapshot",
+                "bid",
+                price,
+                qty,
+                None,
+                None,
+                "open",
+                exchange,
+                symbol,
+                exchange_id,
+                security_id,
+            ));
+        }
+        for (i, (price, qty)) in ask_prices.iter().zip(ask_quantities.iter()).enumerate() {
+            historical_order_batch.push(NewHistoricalOrder::new(
+                timestamp,
+                &format!("{}_{}_ask_{}_{}", symbol, timestamp.timestamp_micros(), i, rows_processed),
+                "snapshot",
+                "ask",
+                price,
+                qty,
+                None,
+                None,
+                "open",
+                exchange,
+                symbol,
+                exchange_id,
+                security_id,
+            ));
+        }
+        
+        // Insert historical_order batch when it reaches the limit
+        if historical_order_batch.len() >= HISTORICAL_BATCH_SIZE {
+            let batch_to_insert = std::mem::take(&mut historical_order_batch);
+            match historical_order_ops::create_historical_orders(pool.clone(), batch_to_insert).await {
+                Ok(inserted) => total_historical_orders += inserted.len(),
+                Err(e) => tracing::warn!("Historical order batch insert error: {}", e),
             }
         }
         
@@ -1491,7 +1540,7 @@ async fn parse_and_insert_l2_orderbook(
         }
     }
     
-    // Insert remaining batch
+    // Insert remaining snapshot batch
     if !snapshot_batch.is_empty() {
         match l2_orderbook_snapshot_ops::create_l2_snapshots(pool.clone(), snapshot_batch).await {
             Ok(count) => total_snapshots += count,
@@ -1499,9 +1548,17 @@ async fn parse_and_insert_l2_orderbook(
         }
     }
     
+    // Insert remaining historical order batch
+    if !historical_order_batch.is_empty() {
+        match historical_order_ops::create_historical_orders(pool.clone(), historical_order_batch).await {
+            Ok(inserted) => total_historical_orders += inserted.len(),
+            Err(e) => tracing::warn!("Final historical order batch insert error: {}", e),
+        }
+    }
+    
     tracing::info!(
-        "Import complete: {} rows processed, {} L2 snapshots inserted",
-        rows_processed, total_snapshots
+        "Import complete: {} rows processed, {} L2 snapshots inserted, {} historical orders inserted",
+        rows_processed, total_snapshots, total_historical_orders
     );
     
     Ok((total_snapshots, rows_processed))
