@@ -176,8 +176,11 @@ export const TardisUpload: React.FC = () => {
       });
       
       const result: FileUploadResponse = await response.json();
+      console.log('Upload response:', JSON.stringify(result, null, 2));
       
       if (result.success && result.session) {
+        console.log('Session orderbook_file:', result.session.orderbook_file);
+        console.log('Session incremental_l2_file:', result.session.incremental_l2_file);
         // Update or add session
         setSessions(prev => {
           const existing = prev.findIndex(s => s.session_id === result.session!.session_id);
