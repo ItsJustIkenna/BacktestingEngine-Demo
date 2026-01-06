@@ -165,11 +165,10 @@ fn normalize_symbol(symbol: &str) -> String {
 }
 
 /// Normalize exchange name from Tardis format to display format
-/// Converts: binance-us -> Binance US, binance -> Binance, kraken -> Kraken
+/// Converts: binance-us -> Binance, binance -> Binance, kraken -> Kraken
 fn normalize_exchange(exchange: &str) -> String {
     match exchange.to_lowercase().as_str() {
-        "binance-us" | "binanceus" => "Binance US".to_string(),
-        "binance" => "Binance".to_string(),
+        "binance-us" | "binanceus" | "binance" => "Binance".to_string(),
         "kraken" => "Kraken".to_string(),
         "coinbase" | "coinbasepro" | "coinbase-pro" => "Coinbase".to_string(),
         "ftx" => "FTX".to_string(),
@@ -1789,16 +1788,16 @@ mod tests {
     // These tests ensure exchange names are consistently formatted.
     //
     // Tardis CSV format:  "binance-us", "binance", "kraken" (lowercase with hyphens)
-    // Database format:    "Binance US", "Binance", "Kraken" (display format)
+    // Database format:    "Binance", "Kraken" (display format, max 8 chars)
     // ============================================================================
 
     #[test]
     fn test_normalize_exchange_binance_us() {
-        // Various ways Binance US might appear
-        assert_eq!(normalize_exchange("binance-us"), "Binance US");
-        assert_eq!(normalize_exchange("binanceus"), "Binance US");
-        assert_eq!(normalize_exchange("BINANCE-US"), "Binance US");
-        assert_eq!(normalize_exchange("BinanceUS"), "Binance US");
+        // binance-us normalizes to "Binance" to fit VARCHAR(8)
+        assert_eq!(normalize_exchange("binance-us"), "Binance");
+        assert_eq!(normalize_exchange("binanceus"), "Binance");
+        assert_eq!(normalize_exchange("BINANCE-US"), "Binance");
+        assert_eq!(normalize_exchange("BinanceUS"), "Binance");
     }
 
     #[test]
@@ -1934,7 +1933,7 @@ mod tests {
         
         // Final database format
         assert_eq!(normalize_symbol(tardis_symbol), "BTC/USD");
-        assert_eq!(normalize_exchange(tardis_exchange), "Binance US");
+        assert_eq!(normalize_exchange(tardis_exchange), "Binance");
     }
 
     #[test]
