@@ -330,8 +330,8 @@ describe('BacktestForm', () => {
 
     // Check that strategy section exists
     expect(screen.getByText(/^strategy$/i)).toBeInTheDocument();
-    // Check market making strategy info is shown
-    expect(screen.getByText(/avellaneda-stoikov/i)).toBeInTheDocument();
+    // Check market making strategy info is shown (may appear in dropdown and description)
+    expect(screen.getAllByText(/avellaneda-stoikov/i).length).toBeGreaterThan(0);
   });
 
   test('adding assets updates active exchanges display', async () => {
