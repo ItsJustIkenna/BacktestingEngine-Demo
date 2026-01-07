@@ -6225,6 +6225,15 @@ impl Worker {
             let mut best_result: Option<backtest::momentum_simulation::MomentumSimResult> = None;
             let mut rejection_stats = (0usize, 0usize, 0usize, 0usize); // (neg_pnl, low_trades, high_dd, neg_sharpe)
             
+            // Minimum standards for a viable momentum strategy
+            const MIN_TRADES: u32 = 20;             // Need statistical significance
+            const MIN_SHARPE: f64 = 0.5;            // Must beat risk-free meaningfully
+            const MAX_DRAWDOWN_PCT: f64 = 0.25;     // Max 25% drawdown
+            const MIN_WIN_RATE: f64 = 0.40;         // At least 40% winners
+            const MIN_PROFIT_FACTOR: f64 = 1.1;     // Gross profit > gross loss
+            const MAX_PROFIT_FACTOR: f64 = 20.0;    // Cap unrealistic values (data issues)
+            const MAX_SHARPE: f64 = 10.0;           // Cap unrealistic Sharpe (volatility bug)
+            
             for gen in 0..generations {
                 let mut fitness_scores: Vec<(usize, f64, backtest::momentum_simulation::MomentumSimResult)> = population
                     .iter()
@@ -6232,11 +6241,19 @@ impl Worker {
                     .map(|(i, chromo)| {
                         let result = simulator.run_chromosome(&events_arc, chromo);
                         
-                        // Relaxed rejection - only reject catastrophic losses
-                        // Allow exploration of marginal strategies
-                        let hard_reject = result.net_pnl < -initial_capital * 0.5 || // Lost more than 50%
-                                         result.total_trades < 5 || // At least 5 trades
-                                         result.max_drawdown_pct > 0.5; // 50% drawdown max
+                        // Hard rejection criteria for momentum strategies
+                        let hard_reject = 
+                            result.total_trades < MIN_TRADES ||           // Not enough trades
+                            result.net_pnl <= 0.0 ||                      // Must be profitable
+                            result.max_drawdown_pct > MAX_DRAWDOWN_PCT || // Drawdown too high
+                            result.sharpe_ratio < MIN_SHARPE ||           // Risk-adjusted return too low
+                            result.sharpe_ratio > MAX_SHARPE ||           // Unrealistic (volatility bug)
+                            result.win_rate < MIN_WIN_RATE ||             // Win rate too low
+                            result.profit_factor < MIN_PROFIT_FACTOR ||   // Not profitable enough
+                            result.profit_factor > MAX_PROFIT_FACTOR ||   // Unrealistic (no losses)
+                            !result.sharpe_ratio.is_finite() ||           // NaN/Inf check
+                            !result.sortino_ratio.is_finite() ||          // NaN/Inf check
+                            !result.profit_factor.is_finite();            // NaN/Inf check
                         
                         if hard_reject {
                             return (i, 0.0, result);
@@ -6245,23 +6262,34 @@ impl Worker {
                         // Track stats for first generation only
                         if gen == 0 && i < 10 {
                             if result.net_pnl <= 0.0 { rejection_stats.0 += 1; }
-                            if result.total_trades < 10 { rejection_stats.1 += 1; }
+                            if result.total_trades < MIN_TRADES { rejection_stats.1 += 1; }
                             if result.max_drawdown_pct > 0.25 { rejection_stats.2 += 1; }
-                            if result.sharpe_ratio < 0.0 { rejection_stats.3 += 1; }
+                            if result.sharpe_ratio < MIN_SHARPE { rejection_stats.3 += 1; }
                         }
                         
-                        // Soft scoring
+                        // Cap metrics to prevent outliers from dominating
+                        let capped_sharpe = result.sharpe_ratio.min(5.0);
+                        let capped_sortino = result.sortino_ratio.min(10.0);
+                        let capped_profit_factor = result.profit_factor.min(5.0);
+                        let capped_calmar = result.calmar_ratio.min(5.0);
+                        
+                        // Soft scoring with capped values
                         let mut fitness = 0.0;
-                        fitness += result.sharpe_ratio * 0.20;
-                        fitness += result.sortino_ratio * 0.15;
-                        fitness += result.profit_factor.min(3.0) * 0.15;
+                        fitness += capped_sharpe * 0.20;
+                        fitness += capped_sortino * 0.15;
+                        fitness += capped_profit_factor * 0.15;
                         fitness += result.win_rate * 0.10;
                         fitness += result.net_pnl_pct * 10.0 * 0.25;
-                        fitness += result.calmar_ratio.min(5.0) * 0.15;
+                        fitness += capped_calmar * 0.15;
                         
-                        if result.total_trades < 30 { fitness *= 0.8; }
-                        if result.max_drawdown_pct > 0.15 { fitness *= 0.85; }
-                        if result.win_rate < 0.4 { fitness *= 0.9; }
+                        // Penalties for marginal performance
+                        if result.total_trades < 50 { fitness *= 0.85; }
+                        if result.total_trades < 30 { fitness *= 0.85; }
+                        if result.max_drawdown_pct > 0.15 { fitness *= 0.90; }
+                        if result.win_rate < 0.50 { fitness *= 0.95; }
+                        
+                        // Bonus for more trades (statistical confidence)
+                        if result.total_trades >= 100 { fitness *= 1.10; }
                         
                         (i, fitness, result)
                     })
@@ -6338,6 +6366,26 @@ impl Worker {
         // Aggregate portfolio results
         let total_pnl: f64 = asset_results.iter().map(|(_, _, r, _, _)| r.net_pnl).sum();
         let total_trades: usize = asset_results.iter().map(|(_, _, r, _, _)| r.total_trades as usize).sum();
+        
+        // Aggregate equity curves from all assets
+        // Find the longest equity curve to determine the length
+        let max_len = asset_results.iter().map(|(_, _, r, _, _)| r.equity_curve.len()).max().unwrap_or(0);
+        let mut aggregated_equity: Vec<f64> = Vec::with_capacity(max_len);
+        
+        if max_len > 0 {
+            // For each time point, sum the equity values from all assets
+            for i in 0..max_len {
+                let equity_at_i: f64 = asset_results.iter().map(|(_, _, r, _, _)| {
+                    // Use last known value if this curve is shorter
+                    if i < r.equity_curve.len() {
+                        r.equity_curve[i]
+                    } else {
+                        r.equity_curve.last().copied().unwrap_or(0.0)
+                    }
+                }).sum();
+                aggregated_equity.push(equity_at_i);
+            }
+        }
         let avg_sharpe: f64 = asset_results.iter().map(|(_, _, r, _, _)| r.sharpe_ratio).sum::<f64>() / asset_results.len() as f64;
         let avg_win_rate: f64 = asset_results.iter().map(|(_, _, r, _, _)| r.win_rate).sum::<f64>() / asset_results.len() as f64;
         let max_dd: f64 = asset_results.iter().map(|(_, _, r, _, _)| r.max_drawdown_pct).fold(0.0, f64::max);
@@ -6431,6 +6479,7 @@ impl Worker {
                 "primary_metrics": ["total_pnl", "sharpe_ratio", "profit_factor"],
                 "secondary_metrics": ["sortino_ratio", "max_drawdown", "total_trades"],
             })),
+            equity_curve: aggregated_equity,
             ..Default::default()
         })
     }
