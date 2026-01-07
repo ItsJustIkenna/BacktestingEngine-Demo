@@ -620,6 +620,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                                     average_performance: wf.average_test_sharpe,
                                                                     consistency_score: wf.consistency_score,
                                                                     out_of_sample_degradation: 1.0 - wf.out_of_sample_performance_ratio,
+                                                                    ..Default::default()
                                                                 })
                                                         } else {
                                                             None

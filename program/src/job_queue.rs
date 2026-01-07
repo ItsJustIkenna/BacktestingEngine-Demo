@@ -606,12 +606,42 @@ pub struct MonteCarloSummary {
 }
 
 /// Walk-Forward results summary
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WalkForwardSummary {
+    /// Number of walk-forward windows completed
     pub periods_tested: usize,
+    /// Average out-of-sample performance (Sharpe or PnL depending on context)
     pub average_performance: f64,
+    /// Consistency score (0-1, how consistent are results across windows)
     pub consistency_score: f64,
+    /// Degradation from in-sample to out-of-sample (ratio, <1 = degradation)
     pub out_of_sample_degradation: f64,
+    
+    // === Extended Walk-Forward Metrics ===
+    /// Number of windows that completed successfully
+    #[serde(default)]
+    pub windows_completed: usize,
+    /// Total out-of-sample PnL across all windows
+    #[serde(default)]
+    pub total_oos_pnl: f64,
+    /// Average out-of-sample Sharpe ratio
+    #[serde(default)]
+    pub avg_oos_sharpe: f64,
+    /// Maximum out-of-sample drawdown across all windows
+    #[serde(default)]
+    pub max_oos_drawdown: f64,
+    /// Average out-of-sample win rate
+    #[serde(default)]
+    pub avg_oos_win_rate: f64,
+    /// Total out-of-sample trades across all windows
+    #[serde(default)]
+    pub total_oos_trades: usize,
+    /// Average out-of-sample profit factor
+    #[serde(default)]
+    pub avg_oos_profit_factor: f64,
+    /// Parameter stability score (0-1, how stable are optimized params)
+    #[serde(default)]
+    pub parameter_stability: f64,
 }
 
 /// Inventory metrics summary for market making strategies

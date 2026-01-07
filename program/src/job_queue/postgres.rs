@@ -1039,6 +1039,15 @@ impl JobQueue for PostgresQueue {
                                 average_performance: v.get("average_performance")?.as_f64()?,
                                 consistency_score: v.get("consistency_score")?.as_f64()?,
                                 out_of_sample_degradation: v.get("out_of_sample_degradation")?.as_f64()?,
+                                // Extended fields from JSON if available
+                                windows_completed: v.get("windows_completed").and_then(|x| x.as_u64()).map(|x| x as usize).unwrap_or(0),
+                                total_oos_pnl: v.get("total_oos_pnl").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                avg_oos_sharpe: v.get("avg_oos_sharpe").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                max_oos_drawdown: v.get("max_oos_drawdown").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                avg_oos_win_rate: v.get("avg_oos_win_rate").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                total_oos_trades: v.get("total_oos_trades").and_then(|x| x.as_u64()).map(|x| x as usize).unwrap_or(0),
+                                avg_oos_profit_factor: v.get("avg_oos_profit_factor").and_then(|x| x.as_f64()).unwrap_or(0.0),
+                                parameter_stability: v.get("parameter_stability").and_then(|x| x.as_f64()).unwrap_or(0.0),
                             })
                         });
                     

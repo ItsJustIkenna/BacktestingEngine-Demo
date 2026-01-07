@@ -603,6 +603,40 @@ struct WalkForwardWindowResult {
     oos_trades: usize,
 }
 
+/// Optimal parameters for momentum strategy walk-forward
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct MomentumOptimalParams {
+    momentum_threshold_pct: f64,
+    momentum_lookback_ms: i64,
+    take_profit_pct: f64,
+    stop_loss_pct: f64,
+    position_size_pct: f64,
+}
+
+/// Result from a single momentum walk-forward window
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct MomentumWalkForwardWindowResult {
+    window_id: u32,
+    symbol: String,
+    exchange: String,
+    opt_start: chrono::DateTime<Utc>,
+    opt_end: chrono::DateTime<Utc>,
+    test_start: chrono::DateTime<Utc>,
+    test_end: chrono::DateTime<Utc>,
+    optimal_params: MomentumOptimalParams,
+    optimization_fitness: f64,
+    oos_pnl: f64,
+    oos_sharpe: f64,
+    oos_sortino: f64,
+    oos_profit_factor: f64,
+    oos_max_drawdown: f64,
+    oos_win_rate: f64,
+    oos_trades: usize,
+    oos_trade_pnls: Vec<f64>,
+}
+
 /// Backtest worker
 pub struct Worker {
     id: usize,
@@ -1156,6 +1190,7 @@ impl Worker {
             average_performance: wf.average_performance,
             consistency_score: wf.consistency_score,
             out_of_sample_degradation: wf.out_of_sample_degradation,
+            ..Default::default()
         });
         
         // Calculate annualized return from equity curve
@@ -4630,6 +4665,7 @@ impl Worker {
             average_performance: wf.average_performance,
             consistency_score: wf.consistency_score,
             out_of_sample_degradation: wf.out_of_sample_degradation,
+            ..Default::default()
         });
         
         Ok(BacktestResult {
@@ -6461,6 +6497,301 @@ impl Worker {
             None
         };
         
+        // ===================================================================
+        // WALK-FORWARD VALIDATION
+        // ===================================================================
+        // Validates that optimized parameters generalize to out-of-sample data
+        // using rolling train/test windows
+        
+        let walkforward_enabled = params.walkforward_optimization_days.is_some();
+        let walkforward_summary = if walkforward_enabled && !asset_results.is_empty() {
+            let opt_days = params.walkforward_optimization_days.unwrap_or(30);
+            let test_days = params.walkforward_test_days.unwrap_or(7);
+            let step_days = params.walkforward_step_days.unwrap_or(7);
+            
+            eprintln!("\n🔄 [WALK-FORWARD] Starting validation: opt={}d, test={}d, step={}d", 
+                opt_days, test_days, step_days);
+            
+            log_info_structured!(WALKFORWARD_LOGGER, "MOMENTUM_WALKFORWARD_START",
+                "event" => "MOMENTUM_WALKFORWARD_START",
+                "job_id" => &job.id,
+                "opt_days" => opt_days,
+                "test_days" => test_days,
+                "step_days" => step_days,
+                "num_assets" => asset_results.len()
+            );
+            
+            let mut all_wf_results: Vec<MomentumWalkForwardWindowResult> = Vec::new();
+            let mut oos_total_pnl = 0.0;
+            let mut oos_total_trades = 0usize;
+            let mut oos_trade_pnls: Vec<f64> = Vec::new();
+            
+            // For each asset, run walk-forward with the optimized chromosome as baseline
+            for (sym, ex, _, best_chromo, _) in asset_results.iter() {
+                eprintln!("  📊 Walk-forward for {} on {}...", sym, ex);
+                
+                // Reload full data for this asset to split into windows
+                let full_data = match self.load_market_data_for_strategy(sym, ex, &params.strategy_type).await {
+                    Ok(d) if !d.is_empty() => d,
+                    _ => {
+                        eprintln!("    ⚠️ Failed to reload data, skipping walk-forward for this asset");
+                        continue;
+                    }
+                };
+                
+                // Determine date range
+                let (data_start, data_end) = match self.get_data_date_range(&full_data) {
+                    Ok(range) => range,
+                    Err(_) => continue,
+                };
+                
+                // Generate walk-forward windows
+                let windows = self.generate_walkforward_windows(
+                    data_start, data_end, opt_days, test_days, step_days
+                );
+                
+                if windows.is_empty() {
+                    eprintln!("    ⚠️ Not enough data for walk-forward (need at least {} + {} days)", opt_days, test_days);
+                    continue;
+                }
+                
+                eprintln!("    Generated {} walk-forward windows", windows.len());
+                
+                // Convert market data to events once
+                let events: Vec<backtest::realistic_simulation::OrderBookEvent> = full_data.iter().filter_map(|md| {
+                    match md {
+                        MarketData::Trade(trade) => {
+                            let side = if trade.side == "buy" { 
+                                backtest::realistic_simulation::Side::Buy 
+                            } else { 
+                                backtest::realistic_simulation::Side::Sell 
+                            };
+                            Some(backtest::realistic_simulation::OrderBookEvent {
+                                timestamp_ms: trade.timestamp.timestamp_millis(),
+                                event_type: backtest::realistic_simulation::EventType::Trade,
+                                order_id: trade.trade_id.clone(),
+                                side,
+                                price: trade.price_f64,
+                                quantity: trade.quantity_f64,
+                            })
+                        },
+                        MarketData::Candle(candle) => {
+                            use bigdecimal::ToPrimitive;
+                            Some(backtest::realistic_simulation::OrderBookEvent {
+                                timestamp_ms: candle.timestamp.timestamp_millis(),
+                                event_type: backtest::realistic_simulation::EventType::Trade,
+                                order_id: format!("candle_{}", candle.timestamp.timestamp_millis()),
+                                side: backtest::realistic_simulation::Side::Buy,
+                                price: candle.close.to_f64().unwrap_or(0.0),
+                                quantity: candle.volume.to_f64().unwrap_or(1.0),
+                            })
+                        },
+                        _ => None,
+                    }
+                }).collect();
+                
+                if events.is_empty() {
+                    continue;
+                }
+                
+                let initial_capital = params.initial_capital / num_assets as f64;
+                let simulator = backtest::momentum_simulation::MomentumSimulator::new(initial_capital);
+                
+                for (window_idx, window) in windows.iter().enumerate() {
+                    let window_num = (window_idx + 1) as u32;
+                    
+                    // Filter events for training window (optimization)
+                    let train_events: Vec<_> = events.iter()
+                        .filter(|e| {
+                            let ts = chrono::DateTime::from_timestamp_millis(e.timestamp_ms)
+                                .unwrap_or(chrono::DateTime::UNIX_EPOCH.with_timezone(&Utc));
+                            ts >= window.opt_start && ts < window.opt_end
+                        })
+                        .cloned()
+                        .collect();
+                    
+                    // Filter events for test window (out-of-sample)
+                    let test_events: Vec<_> = events.iter()
+                        .filter(|e| {
+                            let ts = chrono::DateTime::from_timestamp_millis(e.timestamp_ms)
+                                .unwrap_or(chrono::DateTime::UNIX_EPOCH.with_timezone(&Utc));
+                            ts >= window.test_start && ts < window.test_end
+                        })
+                        .cloned()
+                        .collect();
+                    
+                    if train_events.len() < 100 || test_events.len() < 50 {
+                        continue; // Skip windows with insufficient data
+                    }
+                    
+                    // Re-optimize on training window (smaller GA for efficiency)
+                    let train_events_arc = Arc::new(train_events);
+                    let mut rng = rand::rngs::StdRng::seed_from_u64(42 + window_idx as u64);
+                    
+                    // Start with the previously optimized chromosome and run brief GA
+                    let exchange_fee_config = config::ExchangeFeeConfig::for_exchange(ex);
+                    let mut window_population: Vec<genetic::chromosome::MomentumChromosome> = vec![best_chromo.clone()];
+                    
+                    // Add mutations of the best chromosome
+                    for _ in 0..(params.population_size / 4).max(10) {
+                        let mut mutant = best_chromo.clone();
+                        mutant.mutate(&mut rng, 0.3); // Higher mutation for diversity
+                        window_population.push(mutant);
+                    }
+                    
+                    // Fill rest with random chromosomes
+                    while window_population.len() < params.population_size / 2 {
+                        let mut chromo = genetic::chromosome::MomentumChromosome::random(&mut rng);
+                        chromo.taker_fee_rate = exchange_fee_config.taker_fee;
+                        chromo.maker_fee_rate = exchange_fee_config.maker_fee;
+                        window_population.push(chromo);
+                    }
+                    
+                    // Quick optimization (fewer generations for walk-forward)
+                    let wf_generations = (params.generations / 4).max(5);
+                    let mut best_wf_fitness = f64::MIN;
+                    let mut best_wf_chromo = best_chromo.clone();
+                    
+                    for _gen in 0..wf_generations {
+                        let mut fitness_scores: Vec<(usize, f64, _)> = window_population
+                            .iter()
+                            .enumerate()
+                            .map(|(i, chromo)| {
+                                let result = simulator.run_chromosome(&train_events_arc, chromo);
+                                
+                                if result.net_pnl <= 0.0 || result.total_trades < 10 {
+                                    return (i, 0.0, result);
+                                }
+                                
+                                let fitness = result.sharpe_ratio.min(5.0) * 0.3 
+                                    + result.profit_factor.min(5.0) * 0.3
+                                    + result.net_pnl_pct * 10.0 * 0.4;
+                                
+                                (i, fitness, result)
+                            })
+                            .collect();
+                        
+                        fitness_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                        
+                        if fitness_scores[0].1 > best_wf_fitness {
+                            best_wf_fitness = fitness_scores[0].1;
+                            best_wf_chromo = window_population[fitness_scores[0].0].clone();
+                        }
+                        
+                        // Evolution
+                        let elite_count = (window_population.len() / 5).max(1);
+                        let mut new_pop: Vec<genetic::chromosome::MomentumChromosome> = Vec::new();
+                        
+                        for &(idx, _, _) in fitness_scores.iter().take(elite_count) {
+                            new_pop.push(window_population[idx].clone());
+                        }
+                        
+                        while new_pop.len() < window_population.len() {
+                            let p1 = fitness_scores[rng.gen_range(0..elite_count.max(1))].0;
+                            let p2 = fitness_scores[rng.gen_range(0..window_population.len().min(5))].0;
+                            let mut child = window_population[p1].crossover(&window_population[p2], &mut rng);
+                            child.mutate(&mut rng, 0.2);
+                            child.taker_fee_rate = exchange_fee_config.taker_fee;
+                            child.maker_fee_rate = exchange_fee_config.maker_fee;
+                            new_pop.push(child);
+                        }
+                        
+                        window_population = new_pop;
+                    }
+                    
+                    // Test optimized params on OUT-OF-SAMPLE data
+                    let test_events_arc = Arc::new(test_events);
+                    let oos_result = simulator.run_chromosome(&test_events_arc, &best_wf_chromo);
+                    
+                    all_wf_results.push(MomentumWalkForwardWindowResult {
+                        window_id: window_num,
+                        symbol: sym.clone(),
+                        exchange: ex.clone(),
+                        opt_start: window.opt_start,
+                        opt_end: window.opt_end,
+                        test_start: window.test_start,
+                        test_end: window.test_end,
+                        optimal_params: MomentumOptimalParams {
+                            momentum_threshold_pct: best_wf_chromo.momentum_threshold_pct,
+                            momentum_lookback_ms: best_wf_chromo.momentum_lookback_ms,
+                            take_profit_pct: best_wf_chromo.take_profit_pct,
+                            stop_loss_pct: best_wf_chromo.stop_loss_pct,
+                            position_size_pct: best_wf_chromo.position_size_pct,
+                        },
+                        optimization_fitness: best_wf_fitness,
+                        oos_pnl: oos_result.net_pnl,
+                        oos_sharpe: oos_result.sharpe_ratio,
+                        oos_sortino: oos_result.sortino_ratio,
+                        oos_profit_factor: oos_result.profit_factor,
+                        oos_max_drawdown: oos_result.max_drawdown_pct,
+                        oos_win_rate: oos_result.win_rate,
+                        oos_trades: oos_result.total_trades as usize,
+                        oos_trade_pnls: oos_result.trade_pnls.clone(),
+                    });
+                    
+                    oos_total_pnl += oos_result.net_pnl;
+                    oos_total_trades += oos_result.total_trades as usize;
+                    oos_trade_pnls.extend(oos_result.trade_pnls);
+                }
+            }
+            
+            if all_wf_results.is_empty() {
+                eprintln!("  ⚠️ Walk-forward produced no valid windows");
+                None
+            } else {
+                let avg_oos_sharpe = all_wf_results.iter().map(|w| w.oos_sharpe).sum::<f64>() / all_wf_results.len() as f64;
+                let avg_oos_win_rate = all_wf_results.iter().map(|w| w.oos_win_rate).sum::<f64>() / all_wf_results.len() as f64;
+                let max_oos_drawdown = all_wf_results.iter().map(|w| w.oos_max_drawdown).fold(0.0, f64::max);
+                let avg_oos_profit_factor = all_wf_results.iter().map(|w| w.oos_profit_factor).sum::<f64>() / all_wf_results.len() as f64;
+                
+                // Calculate parameter stability across windows (coefficient of variation of momentum_threshold)
+                let thresholds: Vec<f64> = all_wf_results.iter().map(|w| w.optimal_params.momentum_threshold_pct).collect();
+                let mean_thresh = thresholds.iter().sum::<f64>() / thresholds.len() as f64;
+                let var_thresh = thresholds.iter().map(|t| (t - mean_thresh).powi(2)).sum::<f64>() / thresholds.len() as f64;
+                let param_stability = if mean_thresh > 0.0 { 
+                    1.0 - (var_thresh.sqrt() / mean_thresh).min(1.0) 
+                } else { 
+                    0.0 
+                };
+                
+                eprintln!("  ✅ Walk-forward complete: {} windows, OOS PnL=${:.2}, OOS Sharpe={:.3}, Stability={:.1}%", 
+                    all_wf_results.len(), oos_total_pnl, avg_oos_sharpe, param_stability * 100.0);
+                
+                log_info_structured!(WALKFORWARD_LOGGER, "MOMENTUM_WALKFORWARD_COMPLETE",
+                    "event" => "MOMENTUM_WALKFORWARD_COMPLETE",
+                    "job_id" => &job.id,
+                    "windows" => all_wf_results.len(),
+                    "oos_total_pnl" => format!("{:.2}", oos_total_pnl),
+                    "oos_avg_sharpe" => format!("{:.3}", avg_oos_sharpe),
+                    "oos_total_trades" => oos_total_trades,
+                    "param_stability" => format!("{:.2}", param_stability)
+                );
+                
+                // Calculate consistency score (ratio of profitable windows)
+                let profitable_windows = all_wf_results.iter().filter(|w| w.oos_pnl > 0.0).count();
+                let consistency = profitable_windows as f64 / all_wf_results.len() as f64;
+                
+                Some(WalkForwardSummary {
+                    // Original fields (for backward compatibility)
+                    periods_tested: all_wf_results.len(),
+                    average_performance: avg_oos_sharpe,
+                    consistency_score: consistency,
+                    out_of_sample_degradation: 0.0, // Not calculated for momentum (would need in-sample comparison)
+                    // Extended fields
+                    windows_completed: all_wf_results.len(),
+                    total_oos_pnl: oos_total_pnl,
+                    avg_oos_sharpe,
+                    max_oos_drawdown,
+                    avg_oos_win_rate,
+                    total_oos_trades: oos_total_trades,
+                    avg_oos_profit_factor,
+                    parameter_stability: param_stability,
+                })
+            }
+        } else {
+            None
+        };
+        
         let total_elapsed = timing_total_start.elapsed();
         
         log_info_structured!(GENETIC_LOGGER, "MOMENTUM_PORTFOLIO_GA_COMPLETE",
@@ -6552,6 +6883,7 @@ impl Worker {
             value_at_risk_95: monte_carlo_summary.as_ref().map(|mc| mc.var_95),
             expected_shortfall_95: monte_carlo_summary.as_ref().map(|mc| mc.cvar_95),
             monte_carlo: monte_carlo_summary,
+            walk_forward: walkforward_summary,
             ..Default::default()
         })
     }
