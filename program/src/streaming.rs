@@ -556,6 +556,81 @@ impl OrderBookBatchLoader {
         
         Ok(trades)
     }
+    
+    /// Load trade events from historical_orders table (for websocket-sourced data like Kraken)
+    /// 
+    /// This is useful when trades are stored in historical_orders with event_type='trade'
+    /// rather than in the separate trades table.
+    pub async fn load_trades_from_historical_orders(
+        &self,
+    ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        use diesel::sql_types::{Timestamptz, Varchar, Numeric};
+        use dataloader::TradeData;
+        use bigdecimal::ToPrimitive;
+        
+        #[derive(QueryableByName)]
+        #[allow(dead_code)]
+        struct HistoricalTradeRow {
+            #[diesel(sql_type = Timestamptz)]
+            timestamp: NaiveDateTime,
+            #[diesel(sql_type = Varchar)]
+            symbol: String,
+            #[diesel(sql_type = Varchar)]
+            exchange: String,
+            #[diesel(sql_type = Varchar)]
+            order_id: String,
+            #[diesel(sql_type = Varchar)]
+            side: String,
+            #[diesel(sql_type = Numeric)]
+            price_level: BigDecimal,
+            #[diesel(sql_type = Numeric)]
+            quantity: BigDecimal,
+        }
+        
+        let mut conn = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.pool.get()
+        ).await
+            .map_err(|_| "Connection pool timeout loading trades from historical_orders")?
+            .map_err(|e| format!("Failed to get database connection: {}", e))?;
+        
+        // Query historical_orders for trade events only
+        let query = format!(
+            "SELECT timestamp, symbol, exchange, order_id, side, price_level, quantity \
+             FROM historical_orders \
+             WHERE symbol = '{}' AND exchange = '{}' AND event_type = 'trade' \
+             ORDER BY timestamp ASC",
+            self.symbol, self.exchange
+        );
+        
+        eprintln!("      🔍 load_trades_from_historical_orders: querying for {}/{}", self.symbol, self.exchange);
+        
+        let results: Vec<HistoricalTradeRow> = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn)
+        ).await
+            .map_err(|_| "Query timeout loading trades from historical_orders (120s limit)")?
+            .map_err(|e| format!("Failed to load trades from historical_orders: {}", e))?;
+        
+        eprintln!("      📊 load_trades_from_historical_orders: found {} trades", results.len());
+        
+        let trades: Vec<MarketData> = results
+            .into_iter()
+            .map(|row| {
+                MarketData::Trade(TradeData::new(
+                    DateTime::from_naive_utc_and_offset(row.timestamp, Utc),
+                    row.symbol,
+                    row.exchange,
+                    row.price_level,
+                    row.quantity,
+                    row.side,
+                    row.order_id,
+                ))
+            })
+            .collect();
+        
+        Ok(trades)
+    }
 }
 
 // ============================================================================
@@ -1068,6 +1143,128 @@ impl ParallelDataLoader {
         );
         
         Ok(all_trades)
+    }
+    
+    /// Load trades from historical_orders table (for websocket-sourced data like Kraken)
+    /// Queries historical_orders WHERE event_type = 'trade'
+    pub async fn load_trades_from_historical_orders(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        use std::time::Instant;
+        use dataloader::TradeData;
+        
+        let start_time = Instant::now();
+        eprintln!("        📥 load_trades_from_historical_orders: sym={} ex={}", symbol, exchange);
+        
+        // Get time range for trades in historical_orders
+        let (min_ts, max_ts) = self.get_trade_time_range_from_historical_orders(symbol, exchange).await?;
+        
+        if min_ts.is_none() || max_ts.is_none() {
+            eprintln!("        ⚠️ No trades found in historical_orders for {}/{}", symbol, exchange);
+            return Ok(Vec::new());
+        }
+        
+        let min_ts = min_ts.unwrap();
+        let max_ts = max_ts.unwrap();
+        
+        eprintln!("        📅 Trade time range: {} to {}", min_ts, max_ts);
+        
+        // For now, use a simple single query since trade events are usually fewer than order events
+        let mut conn = self.pool.get().await
+            .map_err(|e| format!("Failed to get connection: {}", e))?;
+        
+        let query = format!(
+            "SELECT timestamp, symbol, exchange, order_id, side, price_level, quantity \
+             FROM historical_orders \
+             WHERE symbol = '{}' AND exchange = '{}' AND event_type = 'trade' \
+             ORDER BY timestamp ASC",
+            symbol, exchange
+        );
+        
+        #[derive(diesel::QueryableByName)]
+        #[allow(dead_code)]
+        struct HistoricalTradeRow {
+            #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+            timestamp: NaiveDateTime,
+            #[diesel(sql_type = diesel::sql_types::Varchar)]
+            symbol: String,
+            #[diesel(sql_type = diesel::sql_types::Varchar)]
+            exchange: String,
+            #[diesel(sql_type = diesel::sql_types::Varchar)]
+            order_id: String,
+            #[diesel(sql_type = diesel::sql_types::Varchar)]
+            side: String,
+            #[diesel(sql_type = diesel::sql_types::Numeric)]
+            price_level: BigDecimal,
+            #[diesel(sql_type = diesel::sql_types::Numeric)]
+            quantity: BigDecimal,
+        }
+        
+        let results: Vec<HistoricalTradeRow> = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            diesel_async::RunQueryDsl::load(diesel::sql_query(&query), &mut conn)
+        ).await
+            .map_err(|_| "Query timeout loading trades from historical_orders")?
+            .map_err(|e| format!("Failed to load trades from historical_orders: {}", e))?;
+        
+        let trades: Vec<MarketData> = results
+            .into_iter()
+            .map(|row| {
+                MarketData::Trade(TradeData::new(
+                    DateTime::from_naive_utc_and_offset(row.timestamp, Utc),
+                    row.symbol,
+                    row.exchange,
+                    row.price_level,
+                    row.quantity,
+                    row.side,
+                    row.order_id,
+                ))
+            })
+            .collect();
+        
+        let elapsed = start_time.elapsed();
+        eprintln!("        ✅ Loaded {} trades from historical_orders in {:.2}s", trades.len(), elapsed.as_secs_f64());
+        
+        Ok(trades)
+    }
+    
+    /// Get min/max timestamp for trade events in historical_orders
+    async fn get_trade_time_range_from_historical_orders(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<(Option<DateTime<Utc>>, Option<DateTime<Utc>>), Box<dyn std::error::Error + Send + Sync>> {
+        use diesel::sql_types::{Nullable, Timestamptz};
+        
+        #[derive(diesel::QueryableByName)]
+        struct TimeRange {
+            #[diesel(sql_type = Nullable<Timestamptz>)]
+            min_ts: Option<NaiveDateTime>,
+            #[diesel(sql_type = Nullable<Timestamptz>)]
+            max_ts: Option<NaiveDateTime>,
+        }
+        
+        let mut conn = self.pool.get().await
+            .map_err(|e| format!("Failed to get connection: {}", e))?;
+        
+        let query = format!(
+            "SELECT MIN(timestamp) as min_ts, MAX(timestamp) as max_ts \
+             FROM historical_orders \
+             WHERE symbol = '{}' AND exchange = '{}' AND event_type = 'trade'",
+            symbol, exchange
+        );
+        
+        let result: TimeRange = diesel_async::RunQueryDsl::get_result(
+            diesel::sql_query(&query),
+            &mut conn
+        ).await.map_err(|e| format!("Failed to get trade time range: {}", e))?;
+        
+        Ok((
+            result.min_ts.map(|ts| DateTime::from_naive_utc_and_offset(ts, Utc)),
+            result.max_ts.map(|ts| DateTime::from_naive_utc_and_offset(ts, Utc)),
+        ))
     }
     
     /// Load both orders and trades in parallel, merge by timestamp

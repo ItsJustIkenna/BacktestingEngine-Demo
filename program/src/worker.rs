@@ -5262,8 +5262,26 @@ impl Worker {
                 }
             }
             
-            // Final fallback: order events
-            eprintln!("    🔍 Falling back to order events (historical_orders)...");
+            // Try trades from historical_orders (where websocket data like Kraken is stored)
+            eprintln!("    🔍 Trying trades from historical_orders...");
+            match self.load_trades_from_historical_orders(symbol, base_exchange).await {
+                Ok(data) if !data.is_empty() => {
+                    eprintln!("    ✅ Loaded {} trades from historical_orders", data.len());
+                    log_info!(GENETIC_LOGGER, "Successfully loaded {} trades from historical_orders", data.len());
+                    return Ok(data);
+                }
+                Ok(_) => {
+                    eprintln!("    ⚠️ No trades found in historical_orders");
+                    log_info!(GENETIC_LOGGER, "No trades found in historical_orders for {} on {}", symbol, base_exchange);
+                }
+                Err(e) => {
+                    eprintln!("    ⚠️ historical_orders trades query failed: {}", e);
+                    log_info!(GENETIC_LOGGER, "historical_orders trades query failed ({})", e);
+                }
+            }
+            
+            // Final fallback: all order events (for market making style processing)
+            eprintln!("    🔍 Falling back to all order events (historical_orders)...");
             log_warn!(GENETIC_LOGGER, "Falling back to order events for {} on {}", symbol, base_exchange);
             self.load_order_events(symbol, base_exchange).await
         }
@@ -5297,6 +5315,42 @@ impl Worker {
     
     #[cfg(not(feature = "postgres"))]
     async fn load_trades_data(
+        &self,
+        _symbol: &str,
+        _exchange: &str,
+    ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        Err("PostgreSQL feature not enabled".into())
+    }
+    
+    /// Load trades from historical_orders table (for websocket-sourced data like Kraken)
+    /// This queries historical_orders WHERE event_type = 'trade'
+    #[cfg(feature = "postgres")]
+    async fn load_trades_from_historical_orders(
+        &self,
+        symbol: &str,
+        exchange: &str,
+    ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
+        use crate::streaming::ParallelDataLoader;
+        
+        eprintln!("      🔍 load_trades_from_historical_orders: sym={} ex={}", symbol, exchange);
+        log_info!(MAIN_LOGGER, "Loading trades from historical_orders for {} on {}", symbol, exchange);
+        
+        let pool = self.job_queue.get_pool()
+            .ok_or("Database pool not available")?;
+        
+        const NUM_WORKERS: usize = 4;
+        let loader = ParallelDataLoader::new(pool.clone(), NUM_WORKERS);
+        
+        let result = loader.load_trades_from_historical_orders(symbol, exchange).await;
+        match &result {
+            Ok(trades) => eprintln!("      📊 load_trades_from_historical_orders: found {} trades", trades.len()),
+            Err(e) => eprintln!("      ❌ load_trades_from_historical_orders: error: {}", e),
+        }
+        result
+    }
+    
+    #[cfg(not(feature = "postgres"))]
+    async fn load_trades_from_historical_orders(
         &self,
         _symbol: &str,
         _exchange: &str,
