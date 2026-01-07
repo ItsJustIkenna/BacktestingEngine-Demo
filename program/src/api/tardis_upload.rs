@@ -1778,10 +1778,11 @@ async fn parse_and_insert_l2_orderbook(
         
         // ALSO insert into historical_orders for backtesting queries
         // Each price level becomes a historical_order entry with event_type="snapshot"
+        // Order ID is deterministic: symbol_timestamp_side_level_price (enables idempotent re-imports)
         for (i, (price, qty)) in bid_prices.iter().zip(bid_quantities.iter()).enumerate() {
             historical_order_batch.push(NewHistoricalOrder::new(
                 timestamp,
-                &format!("{}_{}_bid_{}_{}", symbol, timestamp.timestamp_micros(), i, rows_processed),
+                &format!("{}_{}_bid_{}_{}", symbol, timestamp.timestamp_micros(), i, price),
                 "snapshot",
                 "buy",
                 price,
@@ -1798,7 +1799,7 @@ async fn parse_and_insert_l2_orderbook(
         for (i, (price, qty)) in ask_prices.iter().zip(ask_quantities.iter()).enumerate() {
             historical_order_batch.push(NewHistoricalOrder::new(
                 timestamp,
-                &format!("{}_{}_ask_{}_{}", symbol, timestamp.timestamp_micros(), i, rows_processed),
+                &format!("{}_{}_ask_{}_{}", symbol, timestamp.timestamp_micros(), i, price),
                 "snapshot",
                 "sell",
                 price,
