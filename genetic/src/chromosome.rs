@@ -240,7 +240,8 @@ impl MomentumChromosome {
     pub fn enforce_bounds(&mut self) {
         // Entry signals
         self.momentum_threshold_pct = self.momentum_threshold_pct.clamp(0.0005, 0.03);
-        self.momentum_lookback_ms = self.momentum_lookback_ms.clamp(500, 120_000);
+        // Lookback needs to span multiple candles (5-60 minutes for 1m candles)
+        self.momentum_lookback_ms = self.momentum_lookback_ms.clamp(300_000, 3_600_000);
         self.volume_spike_threshold = self.volume_spike_threshold.clamp(1.0, 8.0);
         self.volume_lookback_ms = self.volume_lookback_ms.clamp(10_000, 300_000);
         self.imbalance_threshold = self.imbalance_threshold.clamp(0.0, 0.8);
@@ -320,7 +321,8 @@ impl Chromosome for MomentumChromosome {
         Self {
             // Entry signals
             momentum_threshold_pct: rng.gen_range(0.0005..0.03),
-            momentum_lookback_ms: rng.gen_range(500..120_000),
+            // Lookback spans 5-60 minutes (needs multiple candles for momentum calc)
+            momentum_lookback_ms: rng.gen_range(300_000..3_600_000),
             volume_spike_threshold: rng.gen_range(1.0..8.0),
             volume_lookback_ms: rng.gen_range(10_000..300_000),
             imbalance_threshold: rng.gen_range(0.0..0.8),
