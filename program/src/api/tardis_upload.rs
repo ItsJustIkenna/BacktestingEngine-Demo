@@ -934,7 +934,8 @@ async fn parse_and_insert_trades(
     
     // Batch for efficient inserts
     const BATCH_SIZE: usize = 5000;
-    let mut batch: Vec<NewTrade> = Vec::with_capacity(BATCH_SIZE);
+    let mut trade_batch: Vec<NewTrade> = Vec::with_capacity(BATCH_SIZE);
+    let mut historical_order_batch: Vec<NewHistoricalOrder> = Vec::with_capacity(BATCH_SIZE);
     
     for line_result in lines {
         let line = match line_result {
@@ -958,6 +959,7 @@ async fn parse_and_insert_trades(
         }
         
         // Parse trade data
+        let timestamp_str = fields[timestamp_idx];
         let trade_id_str = fields[id_idx];
         let side_str = fields[side_idx].to_uppercase();
         let price_str = fields[price_idx];
@@ -967,6 +969,16 @@ async fn parse_and_insert_trades(
         if price_str.is_empty() || amount_str.is_empty() {
             continue;
         }
+        
+        // Parse timestamp (microseconds from epoch)
+        let timestamp = match timestamp_str.parse::<i64>() {
+            Ok(ts_micros) => Utc.timestamp_micros(ts_micros).single(),
+            Err(_) => None,
+        };
+        let timestamp = match timestamp {
+            Some(ts) => ts,
+            None => continue,
+        };
         
         // Parse price and quantity
         let price = match BigDecimal::from_str(price_str) {
@@ -987,23 +999,49 @@ async fn parse_and_insert_trades(
             side_str.clone()
         };
         
-        batch.push(NewTrade {
+        // Add to trades table batch (for backwards compatibility)
+        trade_batch.push(NewTrade {
             symbol: symbol.to_string(),
             exchange: exchange.to_string(),
             trade_id: trade_id_str.to_string(),
             security_id,
             exchange_id,
-            side: normalized_side,
-            price,
-            quantity,
+            side: normalized_side.clone(),
+            price: price.clone(),
+            quantity: quantity.clone(),
         });
         
+        // Also add to historical_orders with event_type='trade' for candle aggregation
+        historical_order_batch.push(NewHistoricalOrder::new(
+            timestamp,
+            trade_id_str,
+            "trade",
+            &normalized_side,
+            &price,
+            &quantity,
+            None,
+            None,
+            "filled",
+            exchange,
+            symbol,
+            exchange_id,
+            security_id,
+        ));
+        
         // Insert batch when full
-        if batch.len() >= BATCH_SIZE {
-            let batch_len = batch.len();
-            trades_ops::create_trades(pool.clone(), std::mem::take(&mut batch))
+        if trade_batch.len() >= BATCH_SIZE {
+            let batch_len = trade_batch.len();
+            
+            // Insert into trades table
+            trades_ops::create_trades(pool.clone(), std::mem::take(&mut trade_batch))
                 .await
-                .map_err(|e| format!("Database insert error: {}", e))?;
+                .map_err(|e| format!("Database insert error (trades): {}", e))?;
+            
+            // Insert into historical_orders for candle aggregation
+            historical_order_ops::create_historical_orders(pool.clone(), std::mem::take(&mut historical_order_batch))
+                .await
+                .map_err(|e| format!("Database insert error (historical_orders): {}", e))?;
+            
             trades_inserted += batch_len;
             
             if trades_inserted % 50000 == 0 {
@@ -1013,16 +1051,22 @@ async fn parse_and_insert_trades(
     }
     
     // Insert remaining batch
-    if !batch.is_empty() {
-        let batch_len = batch.len();
-        trades_ops::create_trades(pool.clone(), batch)
+    if !trade_batch.is_empty() {
+        let batch_len = trade_batch.len();
+        
+        trades_ops::create_trades(pool.clone(), trade_batch)
             .await
-            .map_err(|e| format!("Database insert error: {}", e))?;
+            .map_err(|e| format!("Database insert error (trades): {}", e))?;
+        
+        historical_order_ops::create_historical_orders(pool.clone(), historical_order_batch)
+            .await
+            .map_err(|e| format!("Database insert error (historical_orders): {}", e))?;
+        
         trades_inserted += batch_len;
     }
     
     tracing::info!(
-        "Trades import complete: {} trades inserted from {} rows",
+        "Trades import complete: {} trades inserted into both trades and historical_orders from {} rows",
         trades_inserted, rows_processed
     );
     
