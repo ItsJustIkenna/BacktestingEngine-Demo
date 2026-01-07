@@ -6110,6 +6110,20 @@ impl Worker {
                             quantity: order.quantity.to_f64().unwrap_or(0.0),
                         })
                     },
+                    MarketData::Candle(candle) => {
+                        use bigdecimal::ToPrimitive;
+                        // Convert candle to a synthetic trade event at the close price
+                        // This allows momentum strategies to work with candle data
+                        // The momentum simulator uses price history, so close prices work well
+                        Some(OrderBookEvent {
+                            timestamp_ms: candle.timestamp.timestamp_millis(),
+                            event_type: EventType::Trade,
+                            order_id: format!("candle_{}", candle.timestamp.timestamp_millis()),
+                            side: Side::Buy, // Neutral - momentum uses price, not side
+                            price: candle.close.to_f64().unwrap_or(0.0),
+                            quantity: candle.volume.to_f64().unwrap_or(1.0),
+                        })
+                    },
                     _ => None,
                 }
             }).collect();
