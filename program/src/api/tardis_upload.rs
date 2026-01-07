@@ -639,12 +639,15 @@ pub async fn list_sessions(
 /// Delete an upload session
 /// DELETE /api/tardis/sessions/:session_id
 pub async fn delete_session(
-    State((state, _job_queue)): State<(TardisUploadState, Arc<dyn crate::job_queue::JobQueue>)>,
+    State((state, job_queue)): State<(TardisUploadState, Arc<dyn crate::job_queue::JobQueue>)>,
     axum::extract::Path(session_id): axum::extract::Path<String>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let mut sessions = state.sessions.write().await;
     
     if let Some(session) = sessions.remove(&session_id) {
+        let symbol = session.symbol.clone();
+        let exchange = session.exchange.clone();
+        
         // Delete associated files
         if let Some(ref trades) = session.trades_file {
             let _ = tokio::fs::remove_file(&trades.stored_path).await;
@@ -656,9 +659,54 @@ pub async fn delete_session(
             let _ = tokio::fs::remove_file(&incremental.stored_path).await;
         }
         
+        // Also delete imported data from database
+        let mut deleted_trades = 0usize;
+        let mut deleted_historical = 0usize;
+        let mut deleted_snapshots = 0usize;
+        
+        if let Some(pool) = job_queue.get_pool() {
+            eprintln!("🗑️ [TARDIS] Deleting database data for {} on {}...", symbol, exchange);
+            
+            // Delete trades
+            match databaseschema::ops::trades_ops::delete_trades_by_symbol_exchange(
+                pool.clone(), &symbol, &exchange
+            ).await {
+                Ok(count) => {
+                    deleted_trades = count;
+                    eprintln!("✅ [TARDIS] Deleted {} trades", count);
+                },
+                Err(e) => eprintln!("⚠️ [TARDIS] Failed to delete trades: {}", e),
+            }
+            
+            // Delete historical orders
+            match databaseschema::ops::historical_order_ops::delete_historical_orders_by_symbol_exchange(
+                pool.clone(), &symbol, &exchange
+            ).await {
+                Ok(count) => {
+                    deleted_historical = count;
+                    eprintln!("✅ [TARDIS] Deleted {} historical orders", count);
+                },
+                Err(e) => eprintln!("⚠️ [TARDIS] Failed to delete historical orders: {}", e),
+            }
+            
+            // Delete L2 snapshots
+            match databaseschema::ops::l2_orderbook_snapshot_ops::delete_l2_snapshots_by_symbol_exchange(
+                pool.clone(), &symbol, &exchange
+            ).await {
+                Ok(count) => {
+                    deleted_snapshots = count;
+                    eprintln!("✅ [TARDIS] Deleted {} L2 snapshots", count);
+                },
+                Err(e) => eprintln!("⚠️ [TARDIS] Failed to delete L2 snapshots: {}", e),
+            }
+        }
+        
         Ok(Json(serde_json::json!({
             "success": true,
             "deleted_session_id": session_id,
+            "deleted_trades": deleted_trades,
+            "deleted_historical_orders": deleted_historical,
+            "deleted_l2_snapshots": deleted_snapshots,
         })))
     } else {
         Err(StatusCode::NOT_FOUND)
