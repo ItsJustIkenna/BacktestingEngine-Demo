@@ -234,19 +234,40 @@ pub async fn submit_backtest(
     // data on-the-fly. The API pod prepares data once, and all workers can use it.
     #[cfg(feature = "postgres")]
     {
-        eprintln!("📦 [API] Starting auto data preparation for {}/{}", params.symbol, params.exchange);
-        if let Err(e) = ensure_binary_data_for_job(
-            &state.job_queue, 
-            &params.symbol, 
-            &params.exchange,
-            params.start_date.as_deref(),
-            params.end_date.as_deref(),
-        ).await {
-            eprintln!("⚠️ [API] Data preparation warning for {}/{}: {} (job will still be queued)", 
-                params.symbol, params.exchange, e);
-            // Don't fail the job submission - workers can fall back to DB streaming
+        // For portfolio mode, prepare data for all portfolio assets
+        if let Some(ref portfolio_assets) = params.portfolio_assets {
+            eprintln!("📦 [API] Starting auto data preparation for {} portfolio assets", portfolio_assets.len());
+            for asset in portfolio_assets {
+                eprintln!("📦 [API] Preparing data for portfolio asset: {}/{}", asset.symbol, asset.exchange);
+                if let Err(e) = ensure_binary_data_for_job(
+                    &state.job_queue, 
+                    &asset.symbol, 
+                    &asset.exchange,
+                    params.start_date.as_deref(),
+                    params.end_date.as_deref(),
+                ).await {
+                    eprintln!("⚠️ [API] Data preparation warning for {}/{}: {} (job will still be queued)", 
+                        asset.symbol, asset.exchange, e);
+                } else {
+                    eprintln!("✅ [API] Data preparation completed for {}/{}", asset.symbol, asset.exchange);
+                }
+            }
         } else {
-            eprintln!("✅ [API] Data preparation completed for {}/{}", params.symbol, params.exchange);
+            // Single-asset mode: prepare data for primary symbol
+            eprintln!("📦 [API] Starting auto data preparation for {}/{}", params.symbol, params.exchange);
+            if let Err(e) = ensure_binary_data_for_job(
+                &state.job_queue, 
+                &params.symbol, 
+                &params.exchange,
+                params.start_date.as_deref(),
+                params.end_date.as_deref(),
+            ).await {
+                eprintln!("⚠️ [API] Data preparation warning for {}/{}: {} (job will still be queued)", 
+                    params.symbol, params.exchange, e);
+                // Don't fail the job submission - workers can fall back to DB streaming
+            } else {
+                eprintln!("✅ [API] Data preparation completed for {}/{}", params.symbol, params.exchange);
+            }
         }
     }
     
@@ -896,10 +917,10 @@ async fn get_date_range_for_symbol(
             end_date: Option<chrono::NaiveDateTime>,
         }
         
-        // Query for min/max timestamp for this symbol+exchange
+        // Query for min/max timestamp for this symbol+exchange from historical_orders table
         let query = format!(
             "SELECT MIN(timestamp) as start_date, MAX(timestamp) as end_date \
-             FROM orderbook_snapshots \
+             FROM historical_orders \
              WHERE symbol = '{}' AND exchange = '{}'",
             symbol, exchange
         );
