@@ -604,6 +604,10 @@ pub struct MomentumSimResult {
     #[serde(skip)]
     pub equity_curve: Vec<f64>,
     pub pnl_curve: Vec<f64>,
+    
+    // === Trade PnLs for Monte Carlo ===
+    #[serde(skip)]
+    pub trade_pnls: Vec<f64>,
 }
 
 impl Default for MomentumSimResult {
@@ -641,6 +645,7 @@ impl Default for MomentumSimResult {
             signals_filtered_by_volatility: 0,
             equity_curve: Vec::new(),
             pnl_curve: Vec::new(),
+            trade_pnls: Vec::new(),
         }
     }
 }
@@ -1020,6 +1025,9 @@ impl MomentumSimulator {
         result.pnl_curve = result.equity_curve.iter()
             .map(|e| e - self.initial_capital)
             .collect();
+        
+        // Store trade PnLs for Monte Carlo
+        result.trade_pnls = trade_pnls;
         
         result
     }

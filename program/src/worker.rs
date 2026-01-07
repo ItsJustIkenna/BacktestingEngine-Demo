@@ -6059,6 +6059,9 @@ impl Worker {
             return Err("No portfolio assets defined".into());
         }
         
+        // Total portfolio capital
+        let total_initial_capital = params.initial_capital;
+        
         eprintln!("\n============================================================");
         eprintln!("🚀 [MOMENTUM_PORTFOLIO_GA] STARTING job_id={}", job.id);
         eprintln!("   strategy_type: {}", params.strategy_type);
@@ -6392,6 +6395,72 @@ impl Worker {
         let avg_profit_factor: f64 = asset_results.iter().map(|(_, _, r, _, _)| r.profit_factor).sum::<f64>() / asset_results.len() as f64;
         let total_fees: f64 = asset_results.iter().map(|(_, _, r, _, _)| r.total_fees).sum();
         
+        // Run Monte Carlo simulation if enabled and we have enough trades
+        let monte_carlo_enabled = job.params.monte_carlo_enabled;
+        let monte_carlo_runs = job.params.monte_carlo_runs;
+        let monte_carlo_summary = if monte_carlo_enabled && total_trades >= 30 {
+            // Build trade PnLs from all assets
+            let all_trade_pnls: Vec<f64> = asset_results.iter()
+                .flat_map(|(_, _, r, _, _)| r.trade_pnls.iter().copied())
+                .collect();
+            
+            if all_trade_pnls.len() >= 30 {
+                // Build a minimal BacktestResult for Monte Carlo
+                let core_result = backtest::types::BacktestResult {
+                    total_pnl: bigdecimal::BigDecimal::from_f64(total_pnl).unwrap_or_default(),
+                    sharpe_ratio: Some(avg_sharpe),
+                    win_rate: Some(avg_win_rate),
+                    num_trades: total_trades,
+                    max_drawdown: bigdecimal::BigDecimal::from_f64(max_dd).unwrap_or_default(),
+                    profit_factor: Some(avg_profit_factor),
+                    equity_curve: aggregated_equity.clone(),
+                    trade_returns: all_trade_pnls.clone(),
+                    initial_capital: total_initial_capital,
+                    ..Default::default()
+                };
+                
+                match backtest::monte_carlo::run_monte_carlo_simulation(&core_result, monte_carlo_runs) {
+                    Ok(mc) => {
+                        eprintln!("📊 [MONTE_CARLO] Completed {} runs: mean_sharpe={:.3}, var_95=${:.2}", 
+                            monte_carlo_runs, mc.mean_metrics.sharpe_ratio, mc.var_95);
+                        Some(MonteCarloSummary {
+                            num_runs: mc.num_runs,
+                            mean_sharpe: mc.mean_metrics.sharpe_ratio,
+                            stddev_sharpe: mc.stddev_metrics.sharpe_ratio,
+                            var_95: mc.var_95,
+                            cvar_95: mc.cvar_95,
+                            confidence_lower: mc.percentile_metrics.get(&5).map(|m| m.sharpe_ratio).unwrap_or(0.0),
+                            confidence_upper: mc.percentile_metrics.get(&95).map(|m| m.sharpe_ratio).unwrap_or(0.0),
+                            data_points: mc.data_points,
+                            var_unreliable: mc.var_unreliable,
+                            p5_total_pnl: mc.percentile_metrics.get(&5).map(|m| m.net_profit),
+                            p50_total_pnl: mc.percentile_metrics.get(&50).map(|m| m.net_profit),
+                            p95_total_pnl: mc.percentile_metrics.get(&95).map(|m| m.net_profit),
+                            p5_max_drawdown: mc.percentile_metrics.get(&5).map(|m| m.max_drawdown),
+                            p50_max_drawdown: mc.percentile_metrics.get(&50).map(|m| m.max_drawdown),
+                            p95_max_drawdown: mc.percentile_metrics.get(&95).map(|m| m.max_drawdown),
+                            p50_sharpe: mc.percentile_metrics.get(&50).map(|m| m.sharpe_ratio),
+                            p5_win_rate: mc.percentile_metrics.get(&5).map(|m| m.win_rate),
+                            p50_win_rate: mc.percentile_metrics.get(&50).map(|m| m.win_rate),
+                            p95_win_rate: mc.percentile_metrics.get(&95).map(|m| m.win_rate),
+                        })
+                    }
+                    Err(e) => {
+                        eprintln!("⚠️ [MONTE_CARLO] Failed: {}", e);
+                        None
+                    }
+                }
+            } else {
+                eprintln!("⚠️ [MONTE_CARLO] Skipped: only {} trade PnLs (need 30+)", all_trade_pnls.len());
+                None
+            }
+        } else {
+            if monte_carlo_enabled {
+                eprintln!("⚠️ [MONTE_CARLO] Skipped: only {} trades (need 30+)", total_trades);
+            }
+            None
+        };
+        
         let total_elapsed = timing_total_start.elapsed();
         
         log_info_structured!(GENETIC_LOGGER, "MOMENTUM_PORTFOLIO_GA_COMPLETE",
@@ -6480,6 +6549,9 @@ impl Worker {
                 "secondary_metrics": ["sortino_ratio", "max_drawdown", "total_trades"],
             })),
             equity_curve: aggregated_equity,
+            value_at_risk_95: monte_carlo_summary.as_ref().map(|mc| mc.var_95),
+            expected_shortfall_95: monte_carlo_summary.as_ref().map(|mc| mc.cvar_95),
+            monte_carlo: monte_carlo_summary,
             ..Default::default()
         })
     }
