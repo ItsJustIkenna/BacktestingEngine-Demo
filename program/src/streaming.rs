@@ -819,6 +819,7 @@ impl ParallelDataLoader {
         use std::time::Instant;
         
         let start_time = Instant::now();
+        eprintln!("          📥 load_all_orders: sym={} ex={} workers={}", symbol, exchange, self.num_workers);
         log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_START",
             "event" => "PARALLEL_LOAD_START",
             "worker_count" => self.num_workers,
@@ -830,6 +831,7 @@ impl ParallelDataLoader {
         let (min_ts, max_ts) = self.get_time_range(symbol, exchange).await?;
         
         if min_ts.is_none() || max_ts.is_none() {
+            eprintln!("          ⚠️ load_all_orders: NO TIME RANGE FOUND - no data in historical_orders for sym={} ex={}", symbol, exchange);
             log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_NO_DATA",
                 "event" => "PARALLEL_LOAD_NO_DATA",
                 "symbol" => symbol,
@@ -841,6 +843,7 @@ impl ParallelDataLoader {
         let min_ts = min_ts.unwrap();
         let max_ts = max_ts.unwrap();
         
+        eprintln!("          📅 load_all_orders: time range {} to {}", min_ts, max_ts);
         log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_DATA_RANGE",
             "event" => "PARALLEL_LOAD_DATA_RANGE",
             "min_timestamp" => min_ts.to_string(),
@@ -1076,6 +1079,7 @@ impl ParallelDataLoader {
         use std::time::Instant;
         
         let start_time = Instant::now();
+        eprintln!("        📥 ParallelDataLoader::load_all sym={} ex={}", symbol, exchange);
         log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_ALL_START",
             "event" => "PARALLEL_LOAD_ALL_START",
             "symbol" => symbol,
@@ -1091,6 +1095,7 @@ impl ParallelDataLoader {
         let orders = orders_result?;
         let trades = trades_result?;
         
+        eprintln!("        📊 ParallelDataLoader: orders={} trades={}", orders.len(), trades.len());
         log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_ORDERS_TRADES_COUNTS",
             "event" => "PARALLEL_LOAD_ORDERS_TRADES_COUNTS",
             "order_count" => orders.len(),
@@ -1119,6 +1124,7 @@ impl ParallelDataLoader {
         });
         
         let elapsed = start_time.elapsed();
+        eprintln!("        ✅ ParallelDataLoader: merged {} events in {:.2}s", merged.len(), elapsed.as_secs_f64());
         log_info_structured!(MAIN_LOGGER, "PARALLEL_LOAD_ALL_COMPLETE",
             "event" => "PARALLEL_LOAD_ALL_COMPLETE",
             "total_event_count" => merged.len(),
@@ -1235,10 +1241,14 @@ impl ParallelDataLoader {
             symbol, exchange
         );
         
+        eprintln!("            🔍 get_time_range SQL: SELECT MIN/MAX FROM historical_orders WHERE symbol='{}' AND exchange='{}'", symbol, exchange);
+        
         let result: TimeRange = diesel_async::RunQueryDsl::get_result(
             diesel::sql_query(&query),
             &mut conn
         ).await.map_err(|e| format!("Time range query failed: {}", e))?;
+        
+        eprintln!("            📅 get_time_range result: min={:?} max={:?}", result.min_ts, result.max_ts);
         
         Ok((
             result.min_ts.map(|t| DateTime::from_naive_utc_and_offset(t, Utc)),

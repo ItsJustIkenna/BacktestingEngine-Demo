@@ -5198,6 +5198,8 @@ impl Worker {
         // Normalize exchange name for data lookup (strip _colocated, _established, etc.)
         let base_exchange = base_exchange_name(exchange);
         
+        eprintln!("    🔍 load_market_data_for_strategy: type='{}' sym={} ex={} (base={})", 
+            strategy_type, symbol, exchange, base_exchange);
         log_info!(GENETIC_LOGGER, "ENTER load_market_data_for_strategy | type='{}' sym={} ex={} (base={})", 
             strategy_type, symbol, exchange, base_exchange);
         
@@ -5209,11 +5211,15 @@ impl Worker {
             "marketmaking" | "mm" | "arbitrage"
         );
         
+        eprintln!("    🔍 needs_order_flow={} for strategy_type='{}'", needs_order_flow, strategy_type);
+        
         if needs_order_flow {
+            eprintln!("    🔍 Loading order flow data (tick-level)...");
             log_info!(GENETIC_LOGGER, "Strategy '{}' requires order flow data (tick-level)", strategy_type);
             // For market making, load historical orders and trades
             self.load_order_events(symbol, base_exchange).await
         } else {
+            eprintln!("    🔍 Loading trade/candle data...");
             log_info!(GENETIC_LOGGER, "Strategy '{}' requires trade/candle data", strategy_type);
             // For momentum/trend strategies, try multiple data sources in order:
             // 1. Candles (aggregated data, best for momentum)
@@ -5221,34 +5227,43 @@ impl Worker {
             // 3. Order events (historical_orders, less ideal but works)
             
             // Try candles first
+            eprintln!("    🔍 Trying candles first...");
             match self.load_market_data(symbol, base_exchange).await {
                 Ok(data) if !data.is_empty() => {
+                    eprintln!("    ✅ Loaded {} candles", data.len());
                     log_info!(GENETIC_LOGGER, "Successfully loaded {} candles", data.len());
                     return Ok(data);
                 }
                 Ok(_) => {
+                    eprintln!("    ⚠️ No candle data found");
                     log_info!(GENETIC_LOGGER, "No candle data found for {} on {}", symbol, base_exchange);
                 }
                 Err(e) => {
+                    eprintln!("    ⚠️ Candle query failed: {}", e);
                     log_info!(GENETIC_LOGGER, "Candle query failed ({})", e);
                 }
             }
             
             // Try trades table (where Tardis trades are imported)
+            eprintln!("    🔍 Trying trades table...");
             match self.load_trades_data(symbol, base_exchange).await {
                 Ok(data) if !data.is_empty() => {
+                    eprintln!("    ✅ Loaded {} trades from trades table", data.len());
                     log_info!(GENETIC_LOGGER, "Successfully loaded {} trades from trades table", data.len());
                     return Ok(data);
                 }
                 Ok(_) => {
+                    eprintln!("    ⚠️ No trades found in trades table");
                     log_info!(GENETIC_LOGGER, "No trades found in trades table for {} on {}", symbol, base_exchange);
                 }
                 Err(e) => {
+                    eprintln!("    ⚠️ Trades query failed: {}", e);
                     log_info!(GENETIC_LOGGER, "Trades query failed ({})", e);
                 }
             }
             
             // Final fallback: order events
+            eprintln!("    🔍 Falling back to order events (historical_orders)...");
             log_warn!(GENETIC_LOGGER, "Falling back to order events for {} on {}", symbol, base_exchange);
             self.load_order_events(symbol, base_exchange).await
         }
@@ -5263,6 +5278,7 @@ impl Worker {
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
         use crate::streaming::ParallelDataLoader;
         
+        eprintln!("      🔍 load_trades_data: sym={} ex={}", symbol, exchange);
         log_info!(MAIN_LOGGER, "Loading trades from trades table for {} on {}", symbol, exchange);
         
         let pool = self.job_queue.get_pool()
@@ -5271,7 +5287,12 @@ impl Worker {
         const NUM_WORKERS: usize = 4;
         let loader = ParallelDataLoader::new(pool.clone(), NUM_WORKERS);
         
-        loader.load_all_trades(symbol, exchange).await
+        let result = loader.load_all_trades(symbol, exchange).await;
+        match &result {
+            Ok(trades) => eprintln!("      📊 load_trades_data: found {} trades", trades.len()),
+            Err(e) => eprintln!("      ❌ load_trades_data: error: {}", e),
+        }
+        result
     }
     
     #[cfg(not(feature = "postgres"))]
@@ -5294,6 +5315,7 @@ impl Worker {
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {
         use crate::streaming::ParallelDataLoader;
         
+        eprintln!("      🔍 load_order_events: sym={} ex={}", symbol, exchange);
         log_info!(MAIN_LOGGER, "Loading order events for {} on {} (prefer historical_orders, fall back to L2)", symbol, exchange);
         
         let pool = self.job_queue.get_pool()
@@ -5304,36 +5326,45 @@ impl Worker {
         const NUM_WORKERS: usize = 10;
         let loader = ParallelDataLoader::new(pool.clone(), NUM_WORKERS);
         
+        eprintln!("      🔍 Querying historical_orders with {} workers...", NUM_WORKERS);
         match loader.load_all(symbol, exchange).await {
             Ok(data) if !data.is_empty() => {
+                eprintln!("      ✅ Loaded {} events from historical_orders", data.len());
                 log_info!(MAIN_LOGGER, "Loaded {} events from historical_orders for {} on {}", data.len(), symbol, exchange);
                 return Ok(data);
             }
             Ok(_) => {
+                eprintln!("      ⚠️ No historical_orders found, trying L2 snapshots");
                 log_info!(MAIN_LOGGER, "No historical_orders found for {} on {}, trying L2 snapshots", symbol, exchange);
             }
             Err(e) => {
+                eprintln!("      ❌ historical_orders query failed: {}", e);
                 log_warn!(MAIN_LOGGER, "historical_orders query failed ({}), trying L2 snapshots", e);
             }
         }
         
         // Fall back to L2 orderbook snapshots (from Tardis book_snapshot uploads)
+        eprintln!("      🔍 Trying L2 orderbook snapshots...");
         log_info!(MAIN_LOGGER, "Trying to load L2 orderbook data for {} on {}", symbol, exchange);
         
         match self.load_l2_orderbook_as_market_data(symbol, exchange).await {
             Ok(data) if !data.is_empty() => {
+                eprintln!("      ✅ Loaded {} L2 orderbook snapshots", data.len());
                 log_info!(MAIN_LOGGER, "Loaded {} L2 orderbook snapshots for {} on {}", data.len(), symbol, exchange);
                 return Ok(data);
             }
             Ok(_) => {
+                eprintln!("      ⚠️ No L2 data found");
                 log_warn!(MAIN_LOGGER, "No L2 data found for {} on {}", symbol, exchange);
             }
             Err(e) => {
+                eprintln!("      ❌ L2 data query failed: {}", e);
                 log_warn!(MAIN_LOGGER, "L2 data query failed: {}", e);
             }
         }
         
         // No data found in either table
+        eprintln!("      ❌ No market data found in either historical_orders or L2 snapshots!");
         log_error!(MAIN_LOGGER, "No market data found for {} on {} in either historical_orders or L2 snapshots", symbol, exchange);
         Ok(vec![])
     }
@@ -5424,6 +5455,7 @@ impl Worker {
             use diesel_async::RunQueryDsl;
             use dataloader::Candle;
             
+            eprintln!("      🔍 load_market_data (candles): sym={} ex={}", symbol, exchange);
             log_info!(GENETIC_LOGGER, "ENTER load_market_data for {} on {}", symbol, exchange);
             
             #[derive(QueryableByName)]
@@ -5975,6 +6007,7 @@ impl Worker {
         
         eprintln!("\n============================================================");
         eprintln!("🚀 [MOMENTUM_PORTFOLIO_GA] STARTING job_id={}", job.id);
+        eprintln!("   strategy_type: {}", params.strategy_type);
         eprintln!("   assets: {:?}", assets.iter().map(|a| format!("{}:{}", a.symbol, a.exchange)).collect::<Vec<_>>());
         eprintln!("   population_size: {}", params.population_size);
         eprintln!("   generations: {}", params.generations);
@@ -6026,6 +6059,22 @@ impl Worker {
             };
             
             // Convert to events
+            // Debug: count data types
+            let mut trade_count = 0;
+            let mut order_count = 0;
+            let mut candle_count = 0;
+            let mut snapshot_count = 0;
+            for md in data.iter() {
+                match md {
+                    MarketData::Trade(_) => trade_count += 1,
+                    MarketData::Order(_) => order_count += 1,
+                    MarketData::Candle(_) => candle_count += 1,
+                    MarketData::Snapshot(_) => snapshot_count += 1,
+                }
+            }
+            eprintln!("    📊 Data breakdown: {} trades, {} orders, {} candles, {} snapshots", 
+                trade_count, order_count, candle_count, snapshot_count);
+            
             let events: Vec<OrderBookEvent> = data.iter().filter_map(|md| {
                 match md {
                     MarketData::Trade(trade) => {
