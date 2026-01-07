@@ -1512,8 +1512,18 @@ async fn parse_and_insert_l2_orderbook(
     exchange_id: uuid::Uuid,
     pool: Arc<deadpool::Pool<AsyncPgConnection>>,
 ) -> Result<(usize, usize), String> {
+    eprintln!("📝 [TARDIS] parse_and_insert_l2_orderbook called:");
+    eprintln!("   data_len: {} bytes", data.len());
+    eprintln!("   symbol: {}", symbol);
+    eprintln!("   exchange: {}", exchange);
+    eprintln!("   security_id: {}", security_id);
+    eprintln!("   exchange_id: {}", exchange_id);
+    
     // Decompress if gzipped
-    let reader: Box<dyn Read + Send> = if data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+    let is_gzipped = data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b;
+    eprintln!("📦 [TARDIS] L2 Orderbook data is gzipped: {}", is_gzipped);
+    
+    let reader: Box<dyn Read + Send> = if is_gzipped {
         Box::new(GzDecoder::new(std::io::Cursor::new(data)))
     } else {
         Box::new(std::io::Cursor::new(data))
@@ -1523,15 +1533,29 @@ async fn parse_and_insert_l2_orderbook(
     let mut lines = buf_reader.lines();
     
     // Read header
+    eprintln!("📋 [TARDIS] Reading L2 orderbook header...");
     let header = lines.next()
-        .ok_or("Empty file")?
-        .map_err(|e| format!("Read error: {}", e))?;
+        .ok_or_else(|| {
+            eprintln!("❌ [TARDIS] L2 orderbook file is empty");
+            "Empty file"
+        })?
+        .map_err(|e| {
+            eprintln!("❌ [TARDIS] Error reading L2 orderbook header: {}", e);
+            format!("Read error: {}", e)
+        })?;
+    
+    eprintln!("📋 [TARDIS] L2 header (first 200 chars): {}...", &header[..std::cmp::min(200, header.len())]);
     
     let header_fields: Vec<&str> = header.split(',').collect();
+    eprintln!("📋 [TARDIS] L2 header has {} columns", header_fields.len());
     
     // Find column indices for asks and bids (0-24 levels each)
     let timestamp_idx = header_fields.iter().position(|&f| f == "timestamp")
-        .ok_or("Missing 'timestamp' column")?;
+        .ok_or_else(|| {
+            eprintln!("❌ [TARDIS] Missing 'timestamp' column in L2 orderbook");
+            "Missing 'timestamp' column"
+        })?;
+    eprintln!("📊 [TARDIS] timestamp column at index {}", timestamp_idx);
     
     // Find ask and bid column ranges
     let mut ask_indices: Vec<(usize, usize)> = Vec::new();
@@ -1559,12 +1583,15 @@ async fn parse_and_insert_l2_orderbook(
     }
     
     if ask_indices.is_empty() || bid_indices.is_empty() {
+        eprintln!("❌ [TARDIS] No ask/bid columns found! ask_indices={}, bid_indices={}", ask_indices.len(), bid_indices.len());
+        eprintln!("   First 10 columns: {:?}", &header_fields[..std::cmp::min(10, header_fields.len())]);
         return Err("No ask/bid columns found in orderbook CSV".to_string());
     }
     
-    tracing::info!("Found {} ask levels and {} bid levels", ask_indices.len(), bid_indices.len());
+    eprintln!("📊 [TARDIS] Found {} ask levels and {} bid levels", ask_indices.len(), bid_indices.len());
     
     let mut rows_processed = 0;
+    let mut rows_skipped = 0;
     let mut total_snapshots = 0;
     let mut total_historical_orders = 0;
     
@@ -1574,26 +1601,47 @@ async fn parse_and_insert_l2_orderbook(
     let mut snapshot_batch: Vec<NewL2OrderbookSnapshot> = Vec::with_capacity(BATCH_SIZE);
     let mut historical_order_batch: Vec<NewHistoricalOrder> = Vec::with_capacity(HISTORICAL_BATCH_SIZE);
     
+    eprintln!("🔄 [TARDIS] Starting L2 orderbook row parsing...");
+    
     for line_result in lines {
         let line = match line_result {
             Ok(l) => l,
-            Err(_) => continue,
+            Err(e) => {
+                rows_skipped += 1;
+                if rows_skipped <= 3 {
+                    eprintln!("⚠️ [TARDIS] L2 row read error: {}", e);
+                }
+                continue;
+            }
         };
         
         let fields: Vec<&str> = line.split(',').collect();
         if fields.len() <= timestamp_idx {
+            rows_skipped += 1;
+            if rows_skipped <= 3 {
+                eprintln!("⚠️ [TARDIS] L2 row has too few fields: {} <= {}", fields.len(), timestamp_idx);
+            }
             continue;
         }
         
         // Parse timestamp (microseconds)
         let timestamp_us: i64 = match fields[timestamp_idx].parse() {
             Ok(ts) => ts,
-            Err(_) => continue,
+            Err(e) => {
+                rows_skipped += 1;
+                if rows_skipped <= 3 {
+                    eprintln!("⚠️ [TARDIS] L2 timestamp parse error: {} (value='{}')", e, fields[timestamp_idx]);
+                }
+                continue;
+            }
         };
         
         let timestamp = match Utc.timestamp_micros(timestamp_us).single() {
             Some(dt) => dt,
-            None => continue,
+            None => {
+                rows_skipped += 1;
+                continue;
+            }
         };
         
         rows_processed += 1;
@@ -1668,10 +1716,15 @@ async fn parse_and_insert_l2_orderbook(
         
         // Insert batch when it reaches the limit
         if snapshot_batch.len() >= BATCH_SIZE {
+            let batch_len = snapshot_batch.len();
+            eprintln!("💾 [TARDIS] Inserting L2 snapshot batch of {} records...", batch_len);
             let batch_to_insert = std::mem::take(&mut snapshot_batch);
             match l2_orderbook_snapshot_ops::create_l2_snapshots(pool.clone(), batch_to_insert).await {
-                Ok(count) => total_snapshots += count,
-                Err(e) => tracing::warn!("L2 snapshot batch insert error: {}", e),
+                Ok(count) => {
+                    total_snapshots += count;
+                    eprintln!("✅ [TARDIS] L2 snapshot batch inserted: {} records", count);
+                },
+                Err(e) => eprintln!("❌ [TARDIS] L2 snapshot batch insert error: {}", e),
             }
         }
         
@@ -1714,42 +1767,59 @@ async fn parse_and_insert_l2_orderbook(
         
         // Insert historical_order batch when it reaches the limit
         if historical_order_batch.len() >= HISTORICAL_BATCH_SIZE {
+            let batch_len = historical_order_batch.len();
+            eprintln!("💾 [TARDIS] Inserting historical order batch of {} records...", batch_len);
             let batch_to_insert = std::mem::take(&mut historical_order_batch);
             match historical_order_ops::create_historical_orders(pool.clone(), batch_to_insert).await {
-                Ok(inserted) => total_historical_orders += inserted.len(),
-                Err(e) => tracing::warn!("Historical order batch insert error: {}", e),
+                Ok(inserted) => {
+                    total_historical_orders += inserted.len();
+                    eprintln!("✅ [TARDIS] Historical order batch inserted: {} records", inserted.len());
+                },
+                Err(e) => eprintln!("❌ [TARDIS] Historical order batch insert error: {}", e),
             }
         }
         
         // Log progress every 10000 rows
         if rows_processed % 10000 == 0 {
-            tracing::info!(
-                "Progress: {} rows, {} L2 snapshots inserted",
-                rows_processed, total_snapshots
-            );
+            eprintln!("📊 [TARDIS] L2 Progress: {} rows processed, {} snapshots, {} historical orders",
+                rows_processed, total_snapshots, total_historical_orders);
         }
     }
     
+    eprintln!("📊 [TARDIS] L2 parsing complete. rows_processed={}, pending_snapshots={}, pending_historical={}",
+        rows_processed, snapshot_batch.len(), historical_order_batch.len());
+    
     // Insert remaining snapshot batch
     if !snapshot_batch.is_empty() {
+        let batch_len = snapshot_batch.len();
+        eprintln!("💾 [TARDIS] Inserting final L2 snapshot batch of {} records...", batch_len);
         match l2_orderbook_snapshot_ops::create_l2_snapshots(pool.clone(), snapshot_batch).await {
-            Ok(count) => total_snapshots += count,
-            Err(e) => tracing::warn!("Final L2 snapshot batch insert error: {}", e),
+            Ok(count) => {
+                total_snapshots += count;
+                eprintln!("✅ [TARDIS] Final L2 snapshot batch inserted: {} records", count);
+            },
+            Err(e) => eprintln!("❌ [TARDIS] Final L2 snapshot batch insert error: {}", e),
         }
     }
     
     // Insert remaining historical order batch
     if !historical_order_batch.is_empty() {
+        let batch_len = historical_order_batch.len();
+        eprintln!("💾 [TARDIS] Inserting final historical order batch of {} records...", batch_len);
         match historical_order_ops::create_historical_orders(pool.clone(), historical_order_batch).await {
-            Ok(inserted) => total_historical_orders += inserted.len(),
-            Err(e) => tracing::warn!("Final historical order batch insert error: {}", e),
+            Ok(inserted) => {
+                total_historical_orders += inserted.len();
+                eprintln!("✅ [TARDIS] Final historical order batch inserted: {} records", inserted.len());
+            },
+            Err(e) => eprintln!("❌ [TARDIS] Final historical order batch insert error: {}", e),
         }
     }
     
-    tracing::info!(
-        "Import complete: {} rows processed, {} L2 snapshots inserted, {} historical orders inserted",
-        rows_processed, total_snapshots, total_historical_orders
-    );
+    eprintln!("✅ [TARDIS] ====== L2 ORDERBOOK IMPORT COMPLETE ======");
+    eprintln!("   Total rows processed: {}", rows_processed);
+    eprintln!("   Total L2 snapshots inserted: {}", total_snapshots);
+    eprintln!("   Total historical orders inserted: {}", total_historical_orders);
+    eprintln!("   Rows skipped: {}", rows_skipped);
     
     Ok((total_snapshots, rows_processed))
 }
