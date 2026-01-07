@@ -1,102 +1,28 @@
-# Rust build artifacts
-/target/
+# Credentials and secrets
+*.env
+.env.*
+**/secrets.yaml
+**/values-prod.yaml
+**/*secret*.yaml
+*.pem
+*.key
+
+# Build artifacts
+target/
 **/target/
+dist/
+build/
 
-# Cargo lock file for libraries (keep for applications)
-# Cargo.lock
-
-# IDE files
+# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
-# OS generated files
+# OS
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 
 # Logs
 *.log
-
-# Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
-
-# Coverage directory used by tools like istanbul
-coverage/
-*.lcov
-
-# nyc test coverage
-.nyc_output/
-
-# Dependency directories
-node_modules/
-
-# Optional npm cache directory
-.npm
-
-# Optional eslint cache
-.eslintcache
-
-# dotenv environment variables file
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# Cache directories
-cache/
-*.cache
-
-# Temporary directories
-tmp/
-temp/
-
-# Database files
-*.db
-*.sqlite
-*.sqlite3
-
-# Backup files
-*.bak
-*.backup
-
-# Lock files
-*.lock
-yarn.lock
-
-# Test artifacts
-test-results/
-coverage/
-
-# Build artifacts
-dist/
-build/
-out/
-
-# Docker
-Dockerfile.bak
-
-# Kubernetes
-*.yaml.bak
-*.yml.bak
-temp-secret.yaml
-current-values.yaml
-**/temp-*.yaml
-**/current-*.yaml
-
-# Docker compose (removed - use Helm)
-docker-compose*.yml
-docker-compose*.yaml
-supervisord.conf
-docker-entrypoint.sh
-nginx.conf
+logs/

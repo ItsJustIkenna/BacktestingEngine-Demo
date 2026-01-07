@@ -44,14 +44,16 @@ pub struct FitnessWeights {
     pub fill_rate: f64,
 }
 
-fn default_sharpe_weight() -> f64 { 0.10 }
-fn default_sortino_weight() -> f64 { 0.05 }
-fn default_profit_factor_weight() -> f64 { 0.10 }
-fn default_win_rate_weight() -> f64 { 0.05 }  // Reduced - can cause wide spread exploit
-fn default_net_profit_weight() -> f64 { 0.25 }
+// NOTE: These are example weights for demonstration purposes
+// Optimize these for your specific strategy and market conditions
+fn default_sharpe_weight() -> f64 { 0.15 }
+fn default_sortino_weight() -> f64 { 0.10 }
+fn default_profit_factor_weight() -> f64 { 0.15 }
+fn default_win_rate_weight() -> f64 { 0.10 }
+fn default_net_profit_weight() -> f64 { 0.20 }
 fn default_calmar_weight() -> f64 { 0.10 }
-fn default_num_trades_weight() -> f64 { 0.15 }  // Important for market making
-fn default_fill_rate_weight() -> f64 { 0.20 }  // Critical - penalizes wide spreads that don't fill
+fn default_num_trades_weight() -> f64 { 0.10 }
+fn default_fill_rate_weight() -> f64 { 0.10 }  // Critical - penalizes wide spreads that don't fill
 
 impl FitnessWeights {
     /// Balanced preset (default) - good for market making

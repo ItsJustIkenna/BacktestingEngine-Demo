@@ -147,15 +147,17 @@ pub fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult,
         fitness *= (result.num_trades as f64 / 30.0).max(0.1);
     }
     
-    // === Penalty: Excessive Drawdown (Stricter) ===
+    // === Penalty: Excessive Drawdown ===
+    // Penalize strategies with high drawdowns
     let dd_value = result.max_drawdown.to_f64().unwrap_or(0.0);
     let dd_pct = (dd_value / initial_capital).abs();
-    if dd_pct > 0.10 {
-        let dd_penalty = if dd_pct > 0.35 { 0.2 } else if dd_pct > 0.20 { 0.5 } else { 0.8 };
+    if dd_pct > 0.15 {
+        let dd_penalty = if dd_pct > 0.40 { 0.3 } else if dd_pct > 0.25 { 0.6 } else { 0.8 };
         fitness *= dd_penalty;
     }
     
-    // === Soft Penalty for Moderate Commission Ratio (30-60%) - Stricter ===
+    // === Penalty: High Commission Ratio ===
+    // Penalize strategies where commissions eat too much of the profit
     if let (Some(gross_profit), Some(transaction_costs)) = 
         (&result.gross_profit, &result.transaction_costs) 
     {
@@ -164,15 +166,16 @@ pub fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult,
         
         if gross > 0.0 {
             let commission_ratio = commission / gross;
-            if commission_ratio > 0.30 && commission_ratio < 0.60 {
-                // Linear penalty: 30% = no penalty, 60% = 0.2x (before hard cutoff kicks in)
-                let penalty = 1.0 - (commission_ratio - 0.3) * 2.667;
-                fitness *= penalty.max(0.2);
+            if commission_ratio > 0.40 && commission_ratio < 0.70 {
+                // Apply graduated penalty
+                let penalty = 1.0 - (commission_ratio - 0.4) * 2.0;
+                fitness *= penalty.max(0.3);
             }
         }
     }
     
-    // === Penalty: Poor Average Trade (Stricter - must be 4x commission) ===
+    // === Penalty: Poor Average Trade ===
+    // Each trade should be profitable enough to justify execution
     if let (Some(avg_trade), Some(transaction_costs)) = 
         (&result.avg_trade_return, &result.transaction_costs)
     {
@@ -180,32 +183,30 @@ pub fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult,
             transaction_costs.total_commission / result.num_trades as f64
         } else { 0.0 };
         
-        // Each trade should profit more than 4x the commission to be worthwhile (raised from 3x)
-        if *avg_trade > 0.0 && *avg_trade < avg_commission * 4.0 {
-            fitness *= 0.4; // Stronger penalty for marginal trades
+        // Trades should be meaningfully profitable after commissions
+        if *avg_trade > 0.0 && *avg_trade < avg_commission * 3.0 {
+            fitness *= 0.5;
         }
     }
     
-    // === Penalty: Low Fill Rate (market making strategies need fills!) ===
-    // A strategy with low fill rate can't capture spreads effectively
+    // === Penalty: Low Fill Rate ===
+    // Strategies need reasonable fill rates to be executable
     if let Some(execution_metrics) = &result.execution_metrics {
         let fill_rate = execution_metrics.fill_rate;
-        if fill_rate < 0.05 {
-            // Less than 5% fill rate = quotes too wide or market too fast
-            // Scale penalty: 5% = 0.5x, 2% = 0.2x
-            let fill_penalty = (fill_rate / 0.05).max(0.2);
+        if fill_rate < 0.10 {
+            let fill_penalty = (fill_rate / 0.10).max(0.3);
             fitness *= fill_penalty;
-            log_debug!(GENETIC_LOGGER, "FITNESS: fill_rate={:.2}% < 5%, penalty={:.2}x", 
+            log_debug!(GENETIC_LOGGER, "FITNESS: fill_rate={:.2}% < 10%, penalty={:.2}x", 
                 fill_rate * 100.0, fill_penalty);
         }
     }
     
     // === Bonus: Well-Rounded Strategy ===
-    if net_profit_pct > 0.05 && pf > 1.5 && win_rate > 0.50 && dd_pct < 0.10 {
-        fitness *= 1.3; // Increased bonus for truly good strategies
+    if net_profit_pct > 0.08 && pf > 1.6 && win_rate > 0.55 && dd_pct < 0.12 {
+        fitness *= 1.25;
     }
     
-    // === Bonus: Low Commission Ratio (reward efficient strategies) ===
+    // === Bonus: Low Commission Ratio ===
     if let (Some(gross_profit), Some(transaction_costs)) = 
         (&result.gross_profit, &result.transaction_costs) 
     {
@@ -213,21 +214,18 @@ pub fn calculate_comprehensive_fitness(result: &backtest::types::BacktestResult,
         let commission = transaction_costs.total_commission;
         if gross > 0.0 {
             let commission_ratio = commission / gross;
-            if commission_ratio < 0.20 {
-                // Reward very efficient strategies: <20% commission ratio = 1.2x bonus
-                fitness *= 1.2;
-            } else if commission_ratio < 0.30 {
-                // Moderate reward: 20-30% commission ratio = 1.1x bonus
-                fitness *= 1.1;
+            if commission_ratio < 0.25 {
+                fitness *= 1.15;
+            } else if commission_ratio < 0.35 {
+                fitness *= 1.08;
             }
         }
     }
     
-    // === Bonus: Good Fill Rate (reward executable strategies) ===
+    // === Bonus: Good Fill Rate ===
     if let Some(execution_metrics) = &result.execution_metrics {
         let fill_rate = execution_metrics.fill_rate;
-        if fill_rate >= 0.10 {
-            // 10%+ fill rate is good for market making with realistic fills
+        if fill_rate >= 0.15 {
             fitness *= 1.15;
         } else if fill_rate >= 0.05 {
             // 5-10% is acceptable

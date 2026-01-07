@@ -128,7 +128,7 @@ secrets:
     enabled: true
     endpoint: "https://my-observability-deployment-76d771.es.us-east-2.aws.elastic-cloud.com"
     username: "elastic"
-    password: "mN9CNxqYU9J0nw4aywXVxTAw"
+    password: "CHANGE_ME_IN_PRODUCTION"
 
 externalDatabase:
   enabled: true
