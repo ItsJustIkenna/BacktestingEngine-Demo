@@ -1595,9 +1595,9 @@ async fn parse_and_insert_l2_orderbook(
     let mut total_snapshots = 0;
     let mut total_historical_orders = 0;
     
-    // Batch for efficient inserts
-    const BATCH_SIZE: usize = 1000;
-    const HISTORICAL_BATCH_SIZE: usize = 5000;
+    // Batch for efficient inserts - max batch sizes for fastest import
+    const BATCH_SIZE: usize = 10000;          // L2 snapshots
+    const HISTORICAL_BATCH_SIZE: usize = 100000;  // Historical orders (~30MB per batch)
     let mut snapshot_batch: Vec<NewL2OrderbookSnapshot> = Vec::with_capacity(BATCH_SIZE);
     let mut historical_order_batch: Vec<NewHistoricalOrder> = Vec::with_capacity(HISTORICAL_BATCH_SIZE);
     
