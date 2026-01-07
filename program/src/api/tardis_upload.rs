@@ -494,7 +494,10 @@ pub async fn upload_file(
     let stored_filename = format!("{}_{}.csv.gz", file_id, file_type);
     let stored_path = state.upload_dir.join(&stored_filename);
     
+    eprintln!("📁 [TARDIS] Storing file to: {:?} ({} bytes)", stored_path, data.len());
+    
     tokio::fs::write(&stored_path, &data).await.map_err(|e| {
+        eprintln!("❌ [TARDIS] Failed to write file: {}", e);
         (StatusCode::INTERNAL_SERVER_ERROR, Json(FileUploadResponse {
             success: false,
             file: None,
@@ -503,9 +506,13 @@ pub async fn upload_file(
         }))
     })?;
     
+    eprintln!("✅ [TARDIS] File stored successfully");
+    
     // Normalize symbol and exchange for database consistency
     let normalized_symbol = normalize_symbol(&symbol);
     let normalized_exchange = normalize_exchange(&exchange);
+    
+    eprintln!("🔄 [TARDIS] Normalizing: {}:{} -> {}:{}", symbol, exchange, normalized_symbol, normalized_exchange);
     
     eprintln!(
         "📤 [TARDIS] Uploaded {} file: {} ({} rows) - {} on {} (normalized: {}/{})",
@@ -575,8 +582,16 @@ pub async fn upload_file(
     let session_clone = session.clone();
     drop(sessions); // Release the write lock before database operations
     
+    eprintln!("🔍 [TARDIS] Checking for database pool...");
+    
     // Auto-import to database
     if let Some(pool) = job_queue.get_pool() {
+        eprintln!("✅ [TARDIS] Database pool found, starting auto-import for file_type={:?}", file_info.file_type);
+        eprintln!("   file_id: {}", file_info.file_id);
+        eprintln!("   stored_path: {}", file_info.stored_path);
+        eprintln!("   symbol: {}, exchange: {}", normalized_symbol, normalized_exchange);
+        eprintln!("   row_count from metadata: {}", file_info.row_count);
+        
         let import_result = auto_import_to_database(
             &file_info,
             &normalized_symbol,
@@ -804,32 +819,60 @@ async fn auto_import_to_database(
     normalized_exchange: &str,
     pool: Arc<deadpool::Pool<AsyncPgConnection>>,
 ) -> Result<(usize, &'static str), String> {
-    eprintln!("🔄 [TARDIS] Starting auto-import: {} for {}/{}", 
-        file_info.file_type, normalized_symbol, normalized_exchange);
+    eprintln!("🔄 [TARDIS] ====== AUTO-IMPORT START ======");
+    eprintln!("   file_type: {:?}", file_info.file_type);
+    eprintln!("   symbol: {}", normalized_symbol);
+    eprintln!("   exchange: {}", normalized_exchange);
+    eprintln!("   stored_path: {}", file_info.stored_path);
+    
+    // Check if file exists
+    let path = std::path::Path::new(&file_info.stored_path);
+    if !path.exists() {
+        let err = format!("File does not exist: {}", file_info.stored_path);
+        eprintln!("❌ [TARDIS] {}", err);
+        return Err(err);
+    }
+    eprintln!("✅ [TARDIS] File exists at path");
     
     // Read file data
     let file_data = tokio::fs::read(&file_info.stored_path).await
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+        .map_err(|e| {
+            eprintln!("❌ [TARDIS] Failed to read file: {}", e);
+            format!("Failed to read file: {}", e)
+        })?;
     
     eprintln!("📖 [TARDIS] Read {} bytes from {}", file_data.len(), file_info.stored_path);
     
+    // Check if gzipped
+    let is_gzipped = file_data.len() >= 2 && file_data[0] == 0x1f && file_data[1] == 0x8b;
+    eprintln!("📦 [TARDIS] File is gzipped: {}", is_gzipped);
+    
     // Get or create exchange
+    eprintln!("🔄 [TARDIS] Creating/finding exchange record...");
     let exchange_record = exchange_ops::create_exchange(
         pool.clone(),
         NewExchange { exchange: normalized_exchange.to_string() }
-    ).await.map_err(|e| format!("Exchange error: {}", e))?;
+    ).await.map_err(|e| {
+        eprintln!("❌ [TARDIS] Exchange creation failed: {}", e);
+        format!("Exchange error: {}", e)
+    })?;
     let exchange_id = exchange_record.exchange_id;
     eprintln!("✅ [TARDIS] Created/found exchange '{}' with id {}", normalized_exchange, exchange_id);
 
     // Get or create security
+    eprintln!("🔄 [TARDIS] Creating/finding security record...");
     let security_record = securities_ops::create_security(
         pool.clone(),
         NewSecurity { symbol: normalized_symbol.to_string() }
-    ).await.map_err(|e| format!("Security error: {}", e))?;
+    ).await.map_err(|e| {
+        eprintln!("❌ [TARDIS] Security creation failed: {}", e);
+        format!("Security error: {}", e)
+    })?;
     let security_id = security_record.security_id;
     eprintln!("✅ [TARDIS] Created/found security '{}' with id {}", normalized_symbol, security_id);
 
     // Get or create order book
+    eprintln!("🔄 [TARDIS] Creating/finding orderbook record...");
     let order_book_record = order_book_ops::create_orderbook(
         pool.clone(),
         NewOrderBook {
@@ -838,7 +881,10 @@ async fn auto_import_to_database(
             security_id,
             exchange_id,
         }
-    ).await.map_err(|e| format!("Order book error: {}", e))?;
+    ).await.map_err(|e| {
+        eprintln!("❌ [TARDIS] Orderbook creation failed: {}", e);
+        format!("Order book error: {}", e)
+    })?;
     eprintln!("✅ [TARDIS] Created/found orderbook with id {}", order_book_record.order_book_id);
     
     eprintln!(
@@ -847,17 +893,30 @@ async fn auto_import_to_database(
     );
 
     // Import based on file type
+    eprintln!("🔀 [TARDIS] Dispatching to handler for file_type: {:?}", file_info.file_type);
+    
     match file_info.file_type {
         TardisFileType::Trades => {
-            let (trades_inserted, rows_processed) = parse_and_insert_trades(
+            eprintln!("📈 [TARDIS] Calling parse_and_insert_trades...");
+            let result = parse_and_insert_trades(
                 &file_data,
                 normalized_symbol,
                 normalized_exchange,
                 security_id,
                 exchange_id,
                 pool,
-            ).await?;
-            Ok((trades_inserted, "trades"))
+            ).await;
+            
+            match result {
+                Ok((trades_inserted, rows_processed)) => {
+                    eprintln!("✅ [TARDIS] parse_and_insert_trades returned Ok: trades_inserted={}, rows_processed={}", trades_inserted, rows_processed);
+                    Ok((trades_inserted, "trades"))
+                }
+                Err(e) => {
+                    eprintln!("❌ [TARDIS] parse_and_insert_trades returned Err: {}", e);
+                    Err(e)
+                }
+            }
         }
         TardisFileType::Orderbook => {
             let (snapshots_inserted, _rows_processed) = parse_and_insert_l2_orderbook(
@@ -895,8 +954,18 @@ async fn parse_and_insert_trades(
     exchange_id: uuid::Uuid,
     pool: Arc<deadpool::Pool<AsyncPgConnection>>,
 ) -> Result<(usize, usize), String> {
+    eprintln!("📝 [TARDIS] parse_and_insert_trades called:");
+    eprintln!("   data_len: {} bytes", data.len());
+    eprintln!("   symbol: {}", symbol);
+    eprintln!("   exchange: {}", exchange);
+    eprintln!("   security_id: {}", security_id);
+    eprintln!("   exchange_id: {}", exchange_id);
+    
     // Decompress if gzipped
-    let reader: Box<dyn Read + Send> = if data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b {
+    let is_gzipped = data.len() >= 2 && data[0] == 0x1f && data[1] == 0x8b;
+    eprintln!("📦 [TARDIS] Data is gzipped: {}", is_gzipped);
+    
+    let reader: Box<dyn Read + Send> = if is_gzipped {
         Box::new(GzDecoder::new(std::io::Cursor::new(data)))
     } else {
         Box::new(std::io::Cursor::new(data))
@@ -906,36 +975,64 @@ async fn parse_and_insert_trades(
     let mut lines = buf_reader.lines();
     
     // Read header
+    eprintln!("📋 [TARDIS] Reading header line...");
     let header = lines.next()
-        .ok_or("Empty file")?
-        .map_err(|e| format!("Read error: {}", e))?;
+        .ok_or_else(|| {
+            eprintln!("❌ [TARDIS] File is empty (no header line)");
+            "Empty file"
+        })?
+        .map_err(|e| {
+            eprintln!("❌ [TARDIS] Error reading header: {}", e);
+            format!("Read error: {}", e)
+        })?;
+    
+    eprintln!("📋 [TARDIS] Header line: {}", header);
     
     let header_fields: Vec<&str> = header.split(',').collect();
+    eprintln!("📋 [TARDIS] Header has {} columns: {:?}", header_fields.len(), header_fields);
     
     // Find column indices
     let timestamp_idx = header_fields.iter().position(|&f| f == "timestamp")
-        .ok_or("Missing 'timestamp' column")?;
+        .ok_or_else(|| {
+            eprintln!("❌ [TARDIS] Missing 'timestamp' column in header");
+            "Missing 'timestamp' column"
+        })?;
     let id_idx = header_fields.iter().position(|&f| f == "id")
-        .ok_or("Missing 'id' column")?;
+        .ok_or_else(|| {
+            eprintln!("❌ [TARDIS] Missing 'id' column in header");
+            "Missing 'id' column"
+        })?;
     let side_idx = header_fields.iter().position(|&f| f == "side")
-        .ok_or("Missing 'side' column")?;
+        .ok_or_else(|| {
+            eprintln!("❌ [TARDIS] Missing 'side' column in header");
+            "Missing 'side' column"
+        })?;
     let price_idx = header_fields.iter().position(|&f| f == "price")
-        .ok_or("Missing 'price' column")?;
+        .ok_or_else(|| {
+            eprintln!("❌ [TARDIS] Missing 'price' column in header");
+            "Missing 'price' column"
+        })?;
     let amount_idx = header_fields.iter().position(|&f| f == "amount")
-        .ok_or("Missing 'amount' column")?;
+        .ok_or_else(|| {
+            eprintln!("❌ [TARDIS] Missing 'amount' column in header");
+            "Missing 'amount' column"
+        })?;
     
-    tracing::info!(
-        "Trades columns - timestamp: {}, id: {}, side: {}, price: {}, amount: {}",
-        timestamp_idx, id_idx, side_idx, price_idx, amount_idx
-    );
+    eprintln!("📊 [TARDIS] Column indices - timestamp: {}, id: {}, side: {}, price: {}, amount: {}",
+        timestamp_idx, id_idx, side_idx, price_idx, amount_idx);
     
     let mut rows_processed = 0;
     let mut trades_inserted = 0;
+    let mut skipped_empty = 0;
+    let mut skipped_parse_error = 0;
+    let mut skipped_fields = 0;
     
     // Batch for efficient inserts
     const BATCH_SIZE: usize = 5000;
     let mut trade_batch: Vec<NewTrade> = Vec::with_capacity(BATCH_SIZE);
     let mut historical_order_batch: Vec<NewHistoricalOrder> = Vec::with_capacity(BATCH_SIZE);
+    
+    eprintln!("🔄 [TARDIS] Starting to parse trades rows...");
     
     for line_result in lines {
         let line = match line_result {
@@ -955,6 +1052,10 @@ async fn parse_and_insert_trades(
             .max()
             .unwrap();
         if fields.len() <= max_idx {
+            skipped_fields += 1;
+            if skipped_fields <= 3 {
+                eprintln!("⚠️ [TARDIS] Row {}: not enough fields ({} <= {})", rows_processed, fields.len(), max_idx);
+            }
             continue;
         }
         
@@ -965,15 +1066,28 @@ async fn parse_and_insert_trades(
         let price_str = fields[price_idx];
         let amount_str = fields[amount_idx];
         
+        // Log first few rows for debugging
+        if rows_processed <= 3 {
+            eprintln!("📝 [TARDIS] Row {}: timestamp={}, id={}, side={}, price={}, amount={}",
+                rows_processed, timestamp_str, trade_id_str, side_str, price_str, amount_str);
+        }
+        
         // Skip empty values
         if price_str.is_empty() || amount_str.is_empty() {
+            skipped_empty += 1;
             continue;
         }
         
         // Parse timestamp (microseconds from epoch)
         let timestamp = match timestamp_str.parse::<i64>() {
             Ok(ts_micros) => Utc.timestamp_micros(ts_micros).single(),
-            Err(_) => None,
+            Err(e) => {
+                skipped_parse_error += 1;
+                if skipped_parse_error <= 3 {
+                    eprintln!("⚠️ [TARDIS] Row {}: timestamp parse error: {} (value='{}')", rows_processed, e, timestamp_str);
+                }
+                None
+            },
         };
         let timestamp = match timestamp {
             Some(ts) => ts,
@@ -983,11 +1097,23 @@ async fn parse_and_insert_trades(
         // Parse price and quantity
         let price = match BigDecimal::from_str(price_str) {
             Ok(p) => p,
-            Err(_) => continue,
+            Err(e) => {
+                skipped_parse_error += 1;
+                if skipped_parse_error <= 3 {
+                    eprintln!("⚠️ [TARDIS] Row {}: price parse error: {} (value='{}')", rows_processed, e, price_str);
+                }
+                continue;
+            }
         };
         let quantity = match BigDecimal::from_str(amount_str) {
             Ok(q) => q,
-            Err(_) => continue,
+            Err(e) => {
+                skipped_parse_error += 1;
+                if skipped_parse_error <= 3 {
+                    eprintln!("⚠️ [TARDIS] Row {}: amount parse error: {} (value='{}')", rows_processed, e, amount_str);
+                }
+                continue;
+            }
         };
         
         // Normalize side to "BUY" or "SELL"
@@ -1032,43 +1158,63 @@ async fn parse_and_insert_trades(
         if trade_batch.len() >= BATCH_SIZE {
             let batch_len = trade_batch.len();
             
+            eprintln!("💾 [TARDIS] Inserting batch of {} trades...", batch_len);
+            
             // Insert into trades table
             trades_ops::create_trades(pool.clone(), std::mem::take(&mut trade_batch))
                 .await
-                .map_err(|e| format!("Database insert error (trades): {}", e))?;
+                .map_err(|e| {
+                    eprintln!("❌ [TARDIS] trades table insert failed: {}", e);
+                    format!("Database insert error (trades): {}", e)
+                })?;
             
             // Insert into historical_orders for candle aggregation
             historical_order_ops::create_historical_orders(pool.clone(), std::mem::take(&mut historical_order_batch))
                 .await
-                .map_err(|e| format!("Database insert error (historical_orders): {}", e))?;
+                .map_err(|e| {
+                    eprintln!("❌ [TARDIS] historical_orders table insert failed: {}", e);
+                    format!("Database insert error (historical_orders): {}", e)
+                })?;
             
             trades_inserted += batch_len;
             
             if trades_inserted % 50000 == 0 {
-                tracing::info!("Inserted {} trades...", trades_inserted);
+                eprintln!("📊 [TARDIS] Progress: {} trades inserted so far...", trades_inserted);
             }
         }
     }
     
+    eprintln!("📊 [TARDIS] Parsing complete. rows_processed={}, pending_batch={}", rows_processed, trade_batch.len());
+    eprintln!("   skipped_empty={}, skipped_parse_error={}, skipped_fields={}", skipped_empty, skipped_parse_error, skipped_fields);
+    
     // Insert remaining batch
     if !trade_batch.is_empty() {
         let batch_len = trade_batch.len();
+        eprintln!("💾 [TARDIS] Inserting final batch of {} trades...", batch_len);
         
         trades_ops::create_trades(pool.clone(), trade_batch)
             .await
-            .map_err(|e| format!("Database insert error (trades): {}", e))?;
+            .map_err(|e| {
+                eprintln!("❌ [TARDIS] Final trades table insert failed: {}", e);
+                format!("Database insert error (trades): {}", e)
+            })?;
         
         historical_order_ops::create_historical_orders(pool.clone(), historical_order_batch)
             .await
-            .map_err(|e| format!("Database insert error (historical_orders): {}", e))?;
+            .map_err(|e| {
+                eprintln!("❌ [TARDIS] Final historical_orders table insert failed: {}", e);
+                format!("Database insert error (historical_orders): {}", e)
+            })?;
         
         trades_inserted += batch_len;
     }
     
-    tracing::info!(
-        "Trades import complete: {} trades inserted into both trades and historical_orders from {} rows",
-        trades_inserted, rows_processed
-    );
+    eprintln!("✅ [TARDIS] ====== IMPORT COMPLETE ======");
+    eprintln!("   Total rows processed: {}", rows_processed);
+    eprintln!("   Total trades inserted: {}", trades_inserted);
+    eprintln!("   Skipped (empty): {}", skipped_empty);
+    eprintln!("   Skipped (parse error): {}", skipped_parse_error);
+    eprintln!("   Skipped (not enough fields): {}", skipped_fields);
     
     Ok((trades_inserted, rows_processed))
 }
