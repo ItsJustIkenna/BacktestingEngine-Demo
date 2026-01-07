@@ -1735,7 +1735,7 @@ async fn parse_and_insert_l2_orderbook(
                 timestamp,
                 &format!("{}_{}_bid_{}_{}", symbol, timestamp.timestamp_micros(), i, rows_processed),
                 "snapshot",
-                "bid",
+                "buy",
                 price,
                 qty,
                 None,
@@ -1752,7 +1752,7 @@ async fn parse_and_insert_l2_orderbook(
                 timestamp,
                 &format!("{}_{}_ask_{}_{}", symbol, timestamp.timestamp_micros(), i, rows_processed),
                 "snapshot",
-                "ask",
+                "sell",
                 price,
                 qty,
                 None,
@@ -1903,12 +1903,12 @@ async fn parse_and_insert_incremental_l2(
         // Parse is_snapshot (true = initial snapshot, false = delta update)
         let is_snapshot: bool = fields[is_snapshot_idx].parse().unwrap_or(false);
         
-        // Parse side (bid/ask)
+        // Parse side (bid/ask) - convert to buy/sell for database constraint
         let side_str = fields[side_idx].to_lowercase();
         let side = if side_str == "bid" || side_str == "buy" {
-            "bid"
+            "buy"
         } else if side_str == "ask" || side_str == "sell" {
-            "ask"
+            "sell"
         } else {
             continue;
         };
