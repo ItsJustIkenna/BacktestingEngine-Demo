@@ -32,10 +32,14 @@ pub struct ExecutionComparison {
     pub backtest_latency_ms: i64,
     
     // Live execution results
-    pub live_fill_price: f64,
-    pub live_fill_qty: f64,
-    pub live_fee: f64,
-    pub live_latency_ms: i64,
+    #[serde(alias = "live_fill_price")]
+    pub observed_fill_price: f64,
+    #[serde(alias = "live_fill_qty")]
+    pub observed_fill_qty: f64,
+    #[serde(alias = "live_fee")]
+    pub observed_fee: f64,
+    #[serde(alias = "live_latency_ms")]
+    pub observed_latency_ms: i64,
     
     // Computed differences
     pub price_slippage_bps: f64,
@@ -52,7 +56,8 @@ pub struct AccuracyMetrics {
     
     // Fill rate accuracy
     pub backtest_fill_rate: f64,
-    pub live_fill_rate: f64,
+    #[serde(alias = "live_fill_rate")]
+    pub observed_fill_rate: f64,
     pub fill_rate_error_pct: f64,
     
     // Price accuracy
@@ -75,7 +80,8 @@ pub struct AccuracyMetrics {
     
     // PnL accuracy
     pub backtest_total_pnl: f64,
-    pub live_total_pnl: f64,
+    #[serde(alias = "live_total_pnl")]
+    pub observed_total_pnl: f64,
     pub pnl_tracking_error: f64, // (backtest - live) / live
     pub pnl_correlation: f64, // Correlation of per-trade PnL
     
@@ -95,12 +101,12 @@ pub struct AccuracyValidator {
     backtest_fills: usize,
     backtest_total_pnl: f64,
     /// Running totals for live
-    live_orders: usize,
-    live_fills: usize,
-    live_total_pnl: f64,
+    observed_orders: usize,
+    observed_fills: usize,
+    observed_total_pnl: f64,
     /// Per-trade PnL for correlation
     backtest_trade_pnl: Vec<f64>,
-    live_trade_pnl: Vec<f64>,
+    observed_trade_pnl: Vec<f64>,
 }
 
 impl AccuracyValidator {
@@ -110,11 +116,11 @@ impl AccuracyValidator {
             backtest_orders: 0,
             backtest_fills: 0,
             backtest_total_pnl: 0.0,
-            live_orders: 0,
-            live_fills: 0,
-            live_total_pnl: 0.0,
+            observed_orders: 0,
+            observed_fills: 0,
+            observed_total_pnl: 0.0,
             backtest_trade_pnl: Vec::new(),
-            live_trade_pnl: Vec::new(),
+            observed_trade_pnl: Vec::new(),
         }
     }
     
@@ -131,15 +137,15 @@ impl AccuracyValidator {
     }
     
     /// Record a live order attempt
-    pub fn record_live_order(&mut self) {
-        self.live_orders += 1;
+    pub fn record_observed_order(&mut self) {
+        self.observed_orders += 1;
     }
     
     /// Record a live fill
-    pub fn record_live_fill(&mut self, pnl: f64) {
-        self.live_fills += 1;
-        self.live_total_pnl += pnl;
-        self.live_trade_pnl.push(pnl);
+    pub fn record_observed_fill(&mut self, pnl: f64) {
+        self.observed_fills += 1;
+        self.observed_total_pnl += pnl;
+        self.observed_trade_pnl.push(pnl);
     }
     
     /// Add a matched execution comparison
@@ -153,14 +159,14 @@ impl AccuracyValidator {
         backtest_fill_qty: f64,
         backtest_fee: f64,
         backtest_latency_ms: i64,
-        live_fill_price: f64,
-        live_fill_qty: f64,
-        live_fee: f64,
-        live_latency_ms: i64,
+        observed_fill_price: f64,
+        observed_fill_qty: f64,
+        observed_fee: f64,
+        observed_latency_ms: i64,
     ) {
         // Calculate differences
         let price_slippage_bps = if backtest_fill_price > 0.0 {
-            ((live_fill_price - backtest_fill_price) / backtest_fill_price) * 10000.0
+            ((observed_fill_price - backtest_fill_price) / backtest_fill_price) * 10000.0
         } else {
             0.0
         };
@@ -175,18 +181,18 @@ impl AccuracyValidator {
         };
         
         let qty_fill_ratio = if backtest_fill_qty > 0.0 {
-            live_fill_qty / backtest_fill_qty
+            observed_fill_qty / backtest_fill_qty
         } else {
             0.0
         };
         
         let fee_error_pct = if backtest_fee > 0.0 {
-            ((live_fee - backtest_fee) / backtest_fee) * 100.0
+            ((observed_fee - backtest_fee) / backtest_fee) * 100.0
         } else {
             0.0
         };
         
-        let latency_error_ms = live_latency_ms - backtest_latency_ms;
+        let latency_error_ms = observed_latency_ms - backtest_latency_ms;
         
         self.comparisons.push(ExecutionComparison {
             trade_id: trade_id.to_string(),
@@ -197,10 +203,10 @@ impl AccuracyValidator {
             backtest_fill_qty,
             backtest_fee,
             backtest_latency_ms,
-            live_fill_price,
-            live_fill_qty,
-            live_fee,
-            live_latency_ms,
+            observed_fill_price,
+            observed_fill_qty,
+            observed_fee,
+            observed_latency_ms,
             price_slippage_bps,
             qty_fill_ratio,
             fee_error_pct,
@@ -223,14 +229,14 @@ impl AccuracyValidator {
             0.0
         };
         
-        let live_fill_rate = if self.live_orders > 0 {
-            self.live_fills as f64 / self.live_orders as f64
+        let observed_fill_rate = if self.observed_orders > 0 {
+            self.observed_fills as f64 / self.observed_orders as f64
         } else {
             0.0
         };
         
-        let fill_rate_error_pct = if live_fill_rate > 0.0 {
-            ((backtest_fill_rate - live_fill_rate) / live_fill_rate).abs() * 100.0
+        let fill_rate_error_pct = if observed_fill_rate > 0.0 {
+            ((backtest_fill_rate - observed_fill_rate) / observed_fill_rate).abs() * 100.0
         } else {
             0.0
         };
@@ -251,7 +257,7 @@ impl AccuracyValidator {
         let fee_errors: Vec<f64> = self.comparisons.iter().map(|c| c.fee_error_pct).collect();
         let mean_fee_error_pct = fee_errors.iter().sum::<f64>() / n as f64;
         let total_fee_underestimate: f64 = self.comparisons.iter()
-            .map(|c| (c.live_fee - c.backtest_fee).max(0.0))
+            .map(|c| (c.observed_fee - c.backtest_fee).max(0.0))
             .sum();
         
         // Latency accuracy
@@ -260,13 +266,13 @@ impl AccuracyValidator {
         let latency_underestimate_pct = (latency_errors.iter().filter(|&&e| e > 0).count() as f64 / n as f64) * 100.0;
         
         // PnL accuracy
-        let pnl_tracking_error = if self.live_total_pnl.abs() > 0.0 {
-            (self.backtest_total_pnl - self.live_total_pnl) / self.live_total_pnl.abs()
+        let pnl_tracking_error = if self.observed_total_pnl.abs() > 0.0 {
+            (self.backtest_total_pnl - self.observed_total_pnl) / self.observed_total_pnl.abs()
         } else {
             0.0
         };
         
-        let pnl_correlation = correlation(&self.backtest_trade_pnl, &self.live_trade_pnl);
+        let pnl_correlation = correlation(&self.backtest_trade_pnl, &self.observed_trade_pnl);
         
         // Calculate overall accuracy score (0-100)
         let accuracy_score = self.calculate_accuracy_score(
@@ -291,7 +297,7 @@ impl AccuracyValidator {
         AccuracyMetrics {
             num_comparisons: n,
             backtest_fill_rate,
-            live_fill_rate,
+            observed_fill_rate,
             fill_rate_error_pct,
             mean_price_slippage_bps,
             median_price_slippage_bps,
@@ -304,7 +310,7 @@ impl AccuracyValidator {
             mean_latency_error_ms,
             latency_underestimate_pct,
             backtest_total_pnl: self.backtest_total_pnl,
-            live_total_pnl: self.live_total_pnl,
+            observed_total_pnl: self.observed_total_pnl,
             pnl_tracking_error,
             pnl_correlation,
             accuracy_score,
@@ -410,11 +416,11 @@ impl AccuracyValidator {
         self.backtest_orders = 0;
         self.backtest_fills = 0;
         self.backtest_total_pnl = 0.0;
-        self.live_orders = 0;
-        self.live_fills = 0;
-        self.live_total_pnl = 0.0;
+        self.observed_orders = 0;
+        self.observed_fills = 0;
+        self.observed_total_pnl = 0.0;
         self.backtest_trade_pnl.clear();
-        self.live_trade_pnl.clear();
+        self.observed_trade_pnl.clear();
     }
 }
 
@@ -429,7 +435,7 @@ impl Default for AccuracyMetrics {
         Self {
             num_comparisons: 0,
             backtest_fill_rate: 0.0,
-            live_fill_rate: 0.0,
+            observed_fill_rate: 0.0,
             fill_rate_error_pct: 0.0,
             mean_price_slippage_bps: 0.0,
             median_price_slippage_bps: 0.0,
@@ -442,7 +448,7 @@ impl Default for AccuracyMetrics {
             mean_latency_error_ms: 0.0,
             latency_underestimate_pct: 0.0,
             backtest_total_pnl: 0.0,
-            live_total_pnl: 0.0,
+            observed_total_pnl: 0.0,
             pnl_tracking_error: 0.0,
             pnl_correlation: 0.0,
             accuracy_score: 0.0,
@@ -539,11 +545,11 @@ mod tests {
             // Record PnL for correlation calculation (simulate some profit variance)
             let pnl = 10.0 + (i as f64) * 0.1;  // Varying PnL
             validator.record_backtest_fill(pnl);
-            validator.record_live_fill(pnl);  // Same PnL = perfect correlation
+            validator.record_observed_fill(pnl);  // Same PnL = perfect correlation
         }
         
         validator.backtest_orders = 100;
-        validator.live_orders = 100;
+        validator.observed_orders = 100;
         
         let metrics = validator.calculate_metrics();
         

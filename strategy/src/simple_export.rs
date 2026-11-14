@@ -145,8 +145,9 @@ pub struct ExportableStrategy {
     pub performance: PerformanceData,
     /// Optimized parameters from backtesting
     pub optimized_parameters: HashMap<String, ParameterValue>,
-    /// Configuration for the live_trading_config field
-    pub live_trading_config: LiveTradingConfig,
+    /// Configuration for the exported_runtime_config field
+    #[serde(alias = "live_trading_config")]
+    pub exported_runtime_config: ExportedRuntimeConfig,
     /// Export metadata
     pub export_metadata: ExportMetadata,
 }
@@ -188,9 +189,9 @@ pub enum ParameterValue {
     String(String),
 }
 
-/// Configuration for the live_trading_config field
+/// Configuration for the exported_runtime_config field
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LiveTradingConfig {
+pub struct ExportedRuntimeConfig {
     pub max_position_pct: f64,
     pub stop_loss_pct: f64,
     pub take_profit_pct: Option<f64>,
@@ -201,7 +202,7 @@ pub struct LiveTradingConfig {
     pub paper_trading_days: u32,
 }
 
-impl Default for LiveTradingConfig {
+impl Default for ExportedRuntimeConfig {
     fn default() -> Self {
         Self {
             max_position_pct: 0.05,
@@ -341,7 +342,7 @@ impl StrategyExporter {
                 backtest_end: results.backtest_end,
             },
             optimized_parameters: param_values,
-            live_trading_config: LiveTradingConfig::default(),
+            exported_runtime_config: ExportedRuntimeConfig::default(),
             export_metadata: ExportMetadata {
                 export_time: Utc::now(),
                 strategy_version: "1.0.0".to_string(),
@@ -414,7 +415,7 @@ impl StrategyExporter {
                 backtest_end: results.backtest_end,
             },
             optimized_parameters: param_values,
-            live_trading_config: LiveTradingConfig::default(),
+            exported_runtime_config: ExportedRuntimeConfig::default(),
             export_metadata: ExportMetadata {
                 export_time: Utc::now(),
                 strategy_version: "1.0.0".to_string(),

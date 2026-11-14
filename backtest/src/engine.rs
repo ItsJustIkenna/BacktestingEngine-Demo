@@ -222,7 +222,7 @@ impl BacktestEngine {
                 current_mode = AnalysisMode::Production;
                 mode_escalated = true;
                 escalation_triggers.push("Excellent performance detected - escalated to Production".to_string());
-                log_info!(BACKTEST_LOGGER, "Auto-escalating to Production mode");
+                log_info!(BACKTEST_LOGGER, "Auto-escalating to full analysis mode");
             }
         }
         
