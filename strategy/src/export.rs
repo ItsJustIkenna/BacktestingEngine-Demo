@@ -1,6 +1,6 @@
 //! Simple Strategy Export System
 //!
-//! Exports successful strategies for live trading with minimal configuration.
+//! Exports successful strategies with minimal configuration.
 
 use crate::logging_facade::STRATEGY_LOGGER;
 use crate::{log_info, log_error};
@@ -91,7 +91,7 @@ pub struct BacktestResults {
     pub backtest_end: DateTime<Utc>,
 }
 
-/// Exportable strategy for live trading
+/// Exportable strategy
 #[derive(Debug, Clone, Serialize, Deserialize)]  
 pub struct ExportableStrategy {
     /// Strategy name

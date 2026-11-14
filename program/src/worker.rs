@@ -414,7 +414,7 @@ use crate::progress_broadcaster::{get_progress_broadcaster, ProgressUpdate};
 /// Efficient progress tracker using broadcast channels for real-time updates
 /// 
 /// # Architecture
-/// - Real-time updates go to broadcast channel (non-blocking, ~176ns)
+/// - Real-time updates go to broadcast channel (non-blocking)
 /// - DB writes only on phase changes (start, complete, fail)
 /// - No RwLock contention in hot path
 /// - No deadlock possible
@@ -496,7 +496,7 @@ impl ProgressTracker {
     /// - Does NOT hold any locks
     /// - Does NOT write to database
     /// - Does NOT await anything
-    /// - Uses fire-and-forget broadcast (~176ns latency)
+    /// - Uses fire-and-forget broadcast
     pub fn generation_callback(self: &Arc<Self>) -> Arc<dyn Fn(usize, usize) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync> {
         let job_id = self.job_id.clone();
         let job_queue = Arc::clone(&self.job_queue);
@@ -515,7 +515,7 @@ impl ProgressTracker {
                     "progress_pct" => format!("{:.1}", (current as f64 / total as f64) * 100.0)
                 );
                 
-                // Broadcast to WebSocket clients (fire-and-forget, ~176ns)
+                // Broadcast to WebSocket clients (fire-and-forget)
                 get_progress_broadcaster().publish_generation(&job_id, current, total);
                 
                 // Persist progress to database for UI polling
@@ -1251,7 +1251,7 @@ impl Worker {
             cancelled_orders: Some(0),
             avg_slippage: result.core.transaction_costs.as_ref().map(|tc| tc.total_slippage / result.core.num_trades.max(1) as f64),
             total_commission_paid: result.core.transaction_costs.as_ref().map(|tc| tc.total_commission),
-            // Comprehensive strategy params for live trading deployment
+            // Comprehensive strategy params for strategy export
             strategy_params: Some(Self::build_strategy_params_for_live(&job.params)),
             // Date range for equity curve x-axis - use actual trade timestamps
             start_date: result.core.first_trade_timestamp.map(|ts| ts.to_rfc3339())
@@ -4977,7 +4977,7 @@ impl Worker {
             cancelled_orders: Some(0),
             avg_slippage: result.core.transaction_costs.as_ref().map(|tc| tc.total_slippage / result.core.num_trades.max(1) as f64),
             total_commission_paid: result.core.transaction_costs.as_ref().map(|tc| tc.total_commission),
-            // Comprehensive strategy params from GA-optimized chromosome for live trading
+            // Comprehensive strategy params from GA-optimized chromosome for export
             strategy_params: Some(Self::build_strategy_params_from_chromosome(
                 chromosome, order_size_units, exchange, symbol
             )),
@@ -5649,9 +5649,9 @@ impl Worker {
         }
     }
     
-    /// Build comprehensive strategy parameters for live trading deployment
+    /// Build comprehensive strategy parameters for strategy export
     /// 
-    /// This ensures all parameters needed for live trading are saved to the database,
+    /// This ensures all parameters needed for export are saved to the database,
     /// not just the basic 3 params that were being saved before.
     fn build_strategy_params_for_live(params: &crate::job_queue::BacktestJobParams) -> serde_json::Value {
         serde_json::json!({

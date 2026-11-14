@@ -1,6 +1,6 @@
 //! Simple Strategy Export System
 //!
-//! Exports successful strategies for live trading with minimal configuration.
+//! Exports successful strategies with minimal configuration.
 
 use crate::logging_facade::STRATEGY_LOGGER;
 use crate::log_info;
@@ -136,7 +136,7 @@ pub struct BacktestResults {
     pub backtest_end: DateTime<Utc>,
 }
 
-/// Exportable strategy for live trading (SignalEngine format)
+/// Exportable strategy in SignalEngine format
 #[derive(Debug, Clone, Serialize, Deserialize)]  
 pub struct ExportableStrategy {
     /// Strategy configuration section
@@ -145,7 +145,7 @@ pub struct ExportableStrategy {
     pub performance: PerformanceData,
     /// Optimized parameters from backtesting
     pub optimized_parameters: HashMap<String, ParameterValue>,
-    /// Live trading configuration
+    /// Configuration for the live_trading_config field
     pub live_trading_config: LiveTradingConfig,
     /// Export metadata
     pub export_metadata: ExportMetadata,
@@ -188,7 +188,7 @@ pub enum ParameterValue {
     String(String),
 }
 
-/// Live trading configuration
+/// Configuration for the live_trading_config field
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LiveTradingConfig {
     pub max_position_pct: f64,

@@ -1,6 +1,6 @@
 //! Portfolio-Level Risk Management and Multi-Asset Correlation
 //!
-//! This module provides institutional-grade portfolio risk analytics:
+//! This module provides portfolio risk analytics:
 //! - Multi-asset correlation tracking
 //! - Portfolio-level VaR and Expected Shortfall
 //! - Correlation breakdown detection

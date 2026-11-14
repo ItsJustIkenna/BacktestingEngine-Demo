@@ -12,9 +12,9 @@
 //! ```
 //!
 //! # Benefits
-//! - Non-blocking: publish() is fire-and-forget (~176ns latency)
+//! - Non-blocking: publish() is fire-and-forget
 //! - No deadlocks: No RwLock, no DB connection pool contention
-//! - Real-time: Sub-millisecond delivery to connected clients
+//! - Real-time: Delivery to connected clients
 //! - Scalable: Works across multiple worker pods
 
 use std::sync::Arc;
