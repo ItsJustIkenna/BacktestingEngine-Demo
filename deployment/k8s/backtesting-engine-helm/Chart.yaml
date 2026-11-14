@@ -1,6 +1,6 @@
 apiVersion: v2
 name: backtesting-engine
-description: A Helm chart for BacktestingEngine - High-performance quantitative trading backtesting platform
+description: A Helm chart for BacktestingEngine
 
 # Chart version - increment this when you make changes to the chart
 version: 0.1.0

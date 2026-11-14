@@ -306,7 +306,7 @@ impl ExchangeFeeConfig {
     }
     
     /// Create Kraken configuration for co-located infrastructure (e.g., Beeks Group)
-    /// Sub-millisecond latency to Kraken's matching engine
+    /// Configuration for co-located infrastructure simulation
     /// Use this with FillModelType::CoLocated for accurate simulation
     pub fn kraken_colocated() -> Self {
         let mut config = Self::kraken();

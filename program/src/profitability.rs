@@ -140,7 +140,7 @@ impl ProfitabilityCriteria {
         }
     }
     
-    /// Create strict criteria for production-ready strategies
+    /// Create strict profitability criteria
     pub fn strict() -> Self {
         Self {
             min_sharpe_ratio: 1.5,

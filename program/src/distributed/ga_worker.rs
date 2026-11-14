@@ -1694,7 +1694,7 @@ impl DistributedGAWorker {
             exchange_fee_config.latency_mean_ms, exchange_fee_config.latency_std_ms,
             exchange_fee_config.starting_30d_volume);
         
-        // Convert chromosome to realistic simulation parameters with institutional-grade settings
+        // Convert chromosome to realistic simulation parameters with configured settings
         // All operational parameters come from exchange configuration - no hardcoded values
         let _realistic_params = RealisticASParams {
             risk_aversion: chromosome.risk_aversion,

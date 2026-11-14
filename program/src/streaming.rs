@@ -862,7 +862,7 @@ impl DataStream {
 }
 
 // ============================================================================
-// PARALLEL STREAMING LOADER - 10x FASTER DATA LOADING
+// PARALLEL STREAMING LOADER
 // ============================================================================
 
 #[cfg(feature = "postgres")]

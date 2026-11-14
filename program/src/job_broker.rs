@@ -24,7 +24,7 @@
 //! - `backtest.jobs.failed.{job_id}` - Job failed
 //!
 //! # Benefits over PostgreSQL polling
-//! - Instant job delivery (~176ns vs 1-5 second poll interval)
+//! - Instant job delivery compared with a polling interval
 //! - No database load from polling queries
 //! - Natural load balancing (first subscriber to receive wins)
 //! - Horizontal scaling without coordination

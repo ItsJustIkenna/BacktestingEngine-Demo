@@ -1,7 +1,7 @@
 //! Strategy Export Integration System
 //!
 //! This module provides a comprehensive integration layer between the backtesting engine 
-//! and strategy export system to automatically export successful strategies for live trading.
+//! and strategy export system to automatically export successful strategies.
 //!
 //! ## Features
 //! - Automatic export based on performance thresholds
@@ -38,7 +38,7 @@ use anyhow::Result;
 /// 
 /// This struct manages the automatic export of successful trading strategies based on
 /// configurable performance criteria. It bridges the gap between backtesting results
-/// and live trading deployment.
+/// and strategy export.
 pub struct BacktestIntegration {
     exporter: StrategyExporter,
     auto_export_enabled: bool,

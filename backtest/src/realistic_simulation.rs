@@ -128,11 +128,11 @@ pub fn order_to_event(order: &HistoricalOrder) -> OrderBookEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FillModelType {
     /// Optimistic: You get filled whenever price touches your level
-    /// Assumes you're first in queue - UNREALISTIC for live trading
+    /// Assumes you're first in queue - UNREALISTIC for real venues
     Optimistic,
     
     /// CoLocated: Models co-located infrastructure (e.g., Beeks Group with Kraken)
-    /// Sub-millisecond latency, front of queue position, can cancel before adverse fills
+    /// Front of queue position, can cancel before adverse fills
     /// Use this if your bot runs on the same infrastructure as the exchange
     CoLocated,
     

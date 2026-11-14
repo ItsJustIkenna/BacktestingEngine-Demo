@@ -30,10 +30,10 @@
 //! ```
 //!
 //! # Performance
-//! - Data broadcast: ~36s once (vs 36s × N jobs currently)
-//! - Chromosome distribution: ~176ns per message
+//! - Data broadcast once, rather than once per job
+//! - Chromosome distribution over the message broker
 //! - With 4 workers × 6 concurrent each = 24 parallel evaluations
-//! - Generation time: 45 min → ~9 min (5x speedup)
+//! - Generation time reduced by running evaluations in parallel
 
 use std::collections::HashMap;
 use std::sync::Arc;
