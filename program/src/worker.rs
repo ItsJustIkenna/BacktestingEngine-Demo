@@ -1252,7 +1252,7 @@ impl Worker {
             avg_slippage: result.core.transaction_costs.as_ref().map(|tc| tc.total_slippage / result.core.num_trades.max(1) as f64),
             total_commission_paid: result.core.transaction_costs.as_ref().map(|tc| tc.total_commission),
             // Comprehensive strategy params for strategy export
-            strategy_params: Some(Self::build_strategy_params_for_live(&job.params)),
+            strategy_params: Some(Self::build_strategy_params_for_export(&job.params)),
             // Date range for equity curve x-axis - use actual trade timestamps
             start_date: result.core.first_trade_timestamp.map(|ts| ts.to_rfc3339())
                 .or_else(|| job.params.start_date.clone()),
@@ -5653,7 +5653,7 @@ impl Worker {
     /// 
     /// This ensures all parameters needed for export are saved to the database,
     /// not just the basic 3 params that were being saved before.
-    fn build_strategy_params_for_live(params: &crate::job_queue::BacktestJobParams) -> serde_json::Value {
+    fn build_strategy_params_for_export(params: &crate::job_queue::BacktestJobParams) -> serde_json::Value {
         serde_json::json!({
             // Core AS parameters
             "risk_aversion": params.risk_aversion,

@@ -92,7 +92,7 @@ async fn main() -> Result<()> {
     println!("Results: Total P&L: {}", result1.basic_result.total_pnl);
     
     // Test 2: Production Mode with full analysis
-    println!("\n🔹 Test 2: Production Mode");
+    println!("\n🔹 Test 2: Full analysis mode");
     let result2 = engine.run_enhanced_backtest(
         market_data.clone(),
         config.clone(),
@@ -111,7 +111,7 @@ async fn main() -> Result<()> {
     println!("The system supports multiple analysis modes:");
     println!("   • Development: Fast execution (30s timeout)");
     println!("   • Validation: Medium depth (5-10min + Monte Carlo)");
-    println!("   • Production: Full analysis (20-45min + Walk-Forward)");
+    println!("   • Full analysis: walk-forward plus the complete analysis pass");
     
     Ok(())
 }
