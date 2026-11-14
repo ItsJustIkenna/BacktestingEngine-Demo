@@ -21,7 +21,7 @@ riskmanager = { path = "../riskmanager" }
 tokio = { version = "1.0", features = ["full"] }
 chrono = { version = "0.4", features = ["serde"] }
 bigdecimal = "0.4"
-databaseschema = { path = "../../databaseschema", optional = true }
+databaseschema = { path = "../local/databaseschema", optional = true }
 uuid = "1.0"
 
 # Performance optimizations
@@ -31,7 +31,7 @@ smallvec = "1.11"
 futures = "0.3"  # For async execution in Rayon threads
 
 # Logging
-ultra-logger = { path = "../../LoggingEngine/ultra-logger" }
+ultra-logger = { path = "../local/ultra-logger" }
 once_cell = "1.0"
 
 [dev-dependencies]

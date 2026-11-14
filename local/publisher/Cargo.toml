@@ -1,0 +1,10 @@
+[package]
+name = "publisher"
+version = "0.1.0"
+edition = "2021"
+description = "In-repo publisher stub used by this demo. Written fresh for standalone builds; not copied from MessageBrokerEngine."
+license = "MIT"
+
+[dependencies]
+protocol = { path = "../protocol" }
+thiserror = "1"

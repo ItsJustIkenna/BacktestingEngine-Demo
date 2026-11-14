@@ -1,0 +1,18 @@
+[package]
+name = "databaseschema"
+version = "0.1.0"
+edition = "2021"
+description = "In-repo schema types and diesel tables used by this demo. Written fresh for standalone builds; not copied from the archived databaseschema repository."
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+bigdecimal = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+diesel = { version = "2.2", features = ["chrono", "uuid", "numeric", "64-column-tables", "postgres", "serde_json"] }
+diesel-async = { version = "0.5", features = ["deadpool", "postgres"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+futures-util = { version = "0.3.17", features = ["std", "async-await", "async-await-macro", "sink"] }
+uuid = { version = "1", features = ["serde", "v4"] }

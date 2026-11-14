@@ -36,7 +36,7 @@ ta = "0.5"  # Technical analysis library
 indexmap = { version = "2.0", features = ["serde"] }
 
 # Integration with existing modules
-databaseschema = { path = "../../databaseschema", optional = true }
+databaseschema = { path = "../local/databaseschema", optional = true }
 dataloader = { path = "../dataloader" }
 
 # Portfolio manager integration
@@ -46,7 +46,7 @@ portfoliomanager = { path = "../portfoliomanager" }
 riskmanager = { path = "../riskmanager" }
 
 # Logging and metrics
-ultra-logger = { path = "../../LoggingEngine/ultra-logger" }
+ultra-logger = { path = "../local/ultra-logger" }
 once_cell = "1.0"
 
 # Async utilities
