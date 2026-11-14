@@ -20,17 +20,17 @@ This directory contains configuration templates for different analysis modes of 
   - Enabled Monte Carlo (2,500 runs)
   - Disabled Walk-Forward
   - 10-minute timeout
-- **Use Case**: Pre-production strategy validation
+- **Use Case**: Strategy validation before further use
 
 ### `analysis-modes-production.yaml`
-- **Purpose**: Full production backtesting with comprehensive analysis
+- **Purpose**: Full backtesting with comprehensive analysis (analysis-modes-production.yaml)
 - **Characteristics**:
   - Long timeframes (5 years)
   - Full Monte Carlo (10,000 runs)
   - Full Walk-Forward analysis
   - 1-hour timeout
   - Complete reporting suite
-- **Use Case**: Production strategy deployment validation
+- **Use Case**: Full-mode strategy validation
 
 ## Usage with Helm
 
@@ -48,7 +48,7 @@ helm install backtesting-validation ./backtesting-engine-helm \
   -f config-examples/analysis-modes-validation.yaml
 ```
 
-### Production Environment
+### Prod values example
 ```bash
 helm install backtesting-prod ./backtesting-engine-helm \
   -f values-prod.yaml \
