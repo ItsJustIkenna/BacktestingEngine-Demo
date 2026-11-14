@@ -25,4 +25,8 @@ members = [
     
     # Applications
     "program",           # CLI application (TODO: rename to 'cli')
+    "local/ultra-logger",
+    "local/protocol",
+    "local/publisher",
+    "local/databaseschema"
 ]

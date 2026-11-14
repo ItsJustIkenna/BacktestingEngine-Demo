@@ -21,7 +21,7 @@ futures = "0.3"
 # Database (optional)
 diesel = { version = "2.2", features = ["postgres", "chrono", "numeric", "uuid"], optional = true }
 diesel-async = { version = "0.5", features = ["postgres", "deadpool"], optional = true }
-databaseschema = { path = "../../databaseschema", optional = true }
+databaseschema = { path = "../local/databaseschema", optional = true }
 
 # Compression
 lz4_flex = "0.11"
