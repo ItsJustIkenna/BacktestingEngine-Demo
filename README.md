@@ -18,7 +18,7 @@ Backtesting and genetic optimization platform for algorithmic trading strategies
 
 ## Performance
 
-No benchmark results are published for this demo. Criterion benchmarks live in the `benches/` directories of several crates; run `cargo bench -p <crate>` to measure on your own hardware.
+No benchmark results are published for this demo. Criterion benchmarks live in the `benches/` directories of several crates (e.g. `cargo bench -p config`); they are micro-benchmarks of individual components, not an end-to-end backtest timing.
 
 ## Quick Start
 
