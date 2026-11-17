@@ -159,7 +159,7 @@ pub fn number_of_trades(trade_returns: &[f64]) -> usize {
 
 // ============================================================================
 // SIMD-accelerated helper functions
-// Uses 4-wide vectorization for 1.5-2x speedup on large datasets
+// Uses 4-wide vectorization (speedup not benchmarked in this repo)
 // ============================================================================
 
 /// SIMD-accelerated sum

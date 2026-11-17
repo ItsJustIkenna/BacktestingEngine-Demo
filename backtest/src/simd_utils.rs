@@ -4,7 +4,7 @@
 //! executed millions of times during backtesting. Uses portable SIMD
 //! operations that work across x86_64 (AVX2/AVX-512) and ARM (NEON).
 //!
-//! Performance gains: 1.5-4x speedup on hot paths depending on operation.
+//! Speedups depend on hardware and data size; no benchmark is included in this repo.
 
 /// SIMD lane width - we use 4 f64s per vector for broad compatibility
 const SIMD_LANES: usize = 4;

@@ -4,8 +4,8 @@
 //! - Early generations: Coarser sampling for faster exploration
 //! - Later generations: Full resolution for precise fine-tuning
 //!
-//! This can provide 1.3-1.5x speedup by reducing iterations in early generations
-//! while maintaining accuracy in final parameter tuning.
+//! This is intended to reduce run time by cutting iterations in early generations
+//! while keeping full resolution for final tuning (not benchmarked in this repo).
 
 use dataloader::MarketData;
 

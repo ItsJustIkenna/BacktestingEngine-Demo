@@ -67,7 +67,7 @@ fn create_elasticsearch_config() -> LoggerConfig {
         // Get credentials from environment variables set by Kubernetes
         let endpoint = std::env::var("ELASTICSEARCH_ENDPOINT")
             .or_else(|_| std::env::var("ELASTIC_CLOUD_ENDPOINT"))
-            .unwrap_or_else(|_| "https://my-observability-deployment-76d771.es.us-east-2.aws.elastic-cloud.com".to_string());
+            .unwrap_or_else(|_| "http://localhost:9200".to_string());
         let username = std::env::var("ELASTICSEARCH_USERNAME")
             .or_else(|_| std::env::var("ELASTIC_CLOUD_USERNAME"))
             .unwrap_or_else(|_| "elastic".to_string());
@@ -683,8 +683,8 @@ impl<C: Chromosome + 'static> GeneticOptimizer<C> {
 /// Adaptive Genetic Algorithm optimizer with generation-aware sampling
 /// 
 /// Uses coarser data sampling in early generations for faster exploration,
-/// then switches to full resolution for precise fine-tuning. This provides
-/// 1.3-1.5x speedup with minimal accuracy loss.
+/// then switches to full resolution for precise fine-tuning. Intended to
+/// reduce run time; the effect is not benchmarked in this repo.
 /// 
 /// Also supports dynamic concurrency based on available memory.
 pub struct AdaptiveGeneticOptimizer<C: Chromosome> {

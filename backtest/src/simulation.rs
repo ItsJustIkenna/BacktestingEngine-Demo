@@ -374,7 +374,7 @@ impl SimulationLoop {
     let mut _early_stopped = false;
     
     // Stable region detector: skip strategy recalculation when price hasn't moved significantly
-    // This provides 1.2-1.3x speedup by avoiding redundant computations
+    // This avoids redundant computations (speedup not benchmarked in this repo)
     let opt = &config.trading.optimization;
     let mut stable_detector = if opt.stable_region_skipping {
         StableRegionDetector::new(opt.stable_region_threshold, opt.max_skip_ticks)
