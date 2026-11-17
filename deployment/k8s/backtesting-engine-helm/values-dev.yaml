@@ -38,16 +38,19 @@ secrets:
   
   database:
     enabled: true
-    # Azure TimescaleDB (production database)
-    username: "tsdbadmin"
-    password: "m1jgd4o66synfmi8"
-    url: "postgresql://tsdbadmin:m1jgd4o66synfmi8@ha42vyxkd7.yd4ed8gjcp.tsdb.cloud.timescale.com:39470/tsdb"
+    # Credentials are injected at deploy time (never commit real values), e.g.:
+    #   --set-string secrets.database.username=$POSTGRES_USER
+    #   --set-string secrets.database.password=$POSTGRES_PASSWORD
+    #   --set-string secrets.database.url=$DATABASE_URL
+    username: ""
+    password: ""
+    url: ""
   
   elasticsearch:
     enabled: true
-    endpoint: "https://trading-bot-observability-6b76eb.es.us-central1.gcp.cloud.es.io"
+    endpoint: "https://your-elasticsearch-endpoint.example.com"
     username: "elastic"
-    password: "iXMYLAxROoLWzmxerC0V1ivR"
+    password: ""  # Injected at deployment
 
 # External database configuration
 externalDatabase:

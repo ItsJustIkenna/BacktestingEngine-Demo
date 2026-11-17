@@ -126,7 +126,7 @@ secrets:
   # Elasticsearch credentials (optional for logging)
   elasticsearch:
     enabled: true
-    endpoint: "https://my-observability-deployment-76d771.es.us-east-2.aws.elastic-cloud.com"
+    endpoint: "https://your-elasticsearch-endpoint.example.com"
     username: "elastic"
     password: "CHANGE_ME_IN_PRODUCTION"
 

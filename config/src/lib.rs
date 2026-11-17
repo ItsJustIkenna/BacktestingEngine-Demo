@@ -90,11 +90,11 @@ pub struct TradingConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PerformanceOptimization {
     /// Enable adaptive sampling in GA (coarser data in early generations)
-    /// Provides 1.3-1.5x speedup with minimal accuracy loss
+    /// Trades some accuracy for speed (not benchmarked in this repo)
     #[serde(default = "default_true")]
     pub adaptive_sampling_enabled: bool,
     /// Enable stable region skipping (skip strategy recalc when price unchanged)
-    /// Provides 1.2-1.3x speedup depending on market activity
+    /// Speed benefit depends on market activity (not benchmarked in this repo)
     #[serde(default = "default_true")]
     pub stable_region_skipping: bool,
     /// Price change threshold for stable region detection (as ratio, e.g., 0.0001 = 1bp)

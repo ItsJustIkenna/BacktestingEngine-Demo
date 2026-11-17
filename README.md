@@ -4,7 +4,7 @@
 
 ## Overview
 
-High-performance backtesting and genetic optimization platform for algorithmic trading strategies, built in Rust.
+Backtesting and genetic optimization platform for algorithmic trading strategies, built in Rust.
 
 ## Features
 
@@ -18,7 +18,7 @@ High-performance backtesting and genetic optimization platform for algorithmic t
 
 ## Performance
 
-Measured on an 8-vCPU VM: 10,000-run Monte Carlo under 100 ms.
+No benchmark results are published for this demo. Criterion benchmarks live in the `benches/` directories of several crates (e.g. `cargo bench -p config`); they are micro-benchmarks of individual components, not an end-to-end backtest timing.
 
 ## Quick Start
 

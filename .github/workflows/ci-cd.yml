@@ -736,7 +736,7 @@ jobs:
           Write-Host "`nSecrets: Kubernetes secret 'backtesting-secrets'"
           Write-Host "`nIngress: Nginx Ingress Controller installed"
           Write-Host "Access UI:"
-          Write-Host "  - http://backtesting.local (add '192.81.111.116 backtesting.local' to local hosts file)"
+          Write-Host "  - http://backtesting.local (map backtesting.local to your ingress IP in your local hosts file)"
           Write-Host "  - kubectl port-forward -n backtestingengine svc/backtesting-engine-ui 8000:80"
           Write-Host "`nRollback:"
           Write-Host "  helm rollback backtesting-engine -n backtestingengine"
