@@ -43,7 +43,7 @@ export class ErrorBoundary extends Component<Props, State> {
       this.props.onError(error, errorInfo);
     }
 
-    // In production, you might want to send this to an error reporting service
+    // In a deployment, you might want to send this to an error reporting service
     // Example: logErrorToService(error, errorInfo);
   }
 

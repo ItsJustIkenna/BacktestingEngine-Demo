@@ -16,10 +16,10 @@ use std::sync::Arc;
 use std::collections::HashSet;
 use tracing::{info, warn};
 
-/// API key store (in production, load from database or secrets manager)
+/// API key store (in a deployment, load from database or secrets manager)
 #[derive(Clone)]
 pub struct ApiKeyStore {
-    /// Valid API keys (in production, use database lookup with hashing)
+    /// Valid API keys (in a deployment, use database lookup with hashing)
     valid_keys: Arc<HashSet<String>>,
     /// Whether authentication is required (can be disabled for development)
     auth_required: bool,
@@ -28,7 +28,7 @@ pub struct ApiKeyStore {
 impl ApiKeyStore {
     /// Create a new API key store
     /// 
-    /// In production, keys should be loaded from:
+    /// In a deployment, keys should be loaded from:
     /// - Environment variables
     /// - Kubernetes secrets
     /// - HashiCorp Vault
@@ -47,7 +47,7 @@ impl ApiKeyStore {
             }
         }
         
-        // Check if auth is required (default: true in production)
+        // Check if auth is required (default: true)
         let auth_required = std::env::var("API_AUTH_REQUIRED")
             .map(|v| v != "false" && v != "0")
             .unwrap_or(true);

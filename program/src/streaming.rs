@@ -350,7 +350,7 @@ impl OrderBookBatchLoader {
     }
     
     /// Load ALL order events and trades without any limit
-    /// Use this for production backtesting where accuracy matters more than memory
+    /// Use this for full-length backtesting where accuracy matters more than memory
     pub async fn load_all(
         &self,
     ) -> Result<Vec<MarketData>, Box<dyn std::error::Error + Send + Sync>> {

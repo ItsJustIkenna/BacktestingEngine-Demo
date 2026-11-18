@@ -145,7 +145,7 @@ impl PortfolioState {
     /// 2. Balance and position updates are atomic and consistent
     /// 3. Fees are proportionally adjusted if quantity is reduced
     pub fn apply_fill(&mut self, fill: &Fill) -> Result<()> {
-        let symbol = "BTC/USD".to_string(); // TODO: Get from fill/order in production
+        let symbol = "BTC/USD".to_string(); // TODO: Get from fill/order in a fuller version
         
         // Update timestamp
         self.timestamp = fill.timestamp;

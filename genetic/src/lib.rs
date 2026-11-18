@@ -61,7 +61,7 @@ fn create_elasticsearch_config() -> LoggerConfig {
     // Check if we should use Elasticsearch (environment variable or default)
     let use_elasticsearch = std::env::var("USE_ELASTICSEARCH_LOGGING")
         .map(|v| v.to_lowercase() == "true")
-        .unwrap_or(true); // Default to true for production
+        .unwrap_or(true); // Default to true
 
     if use_elasticsearch {
         // Get credentials from environment variables set by Kubernetes

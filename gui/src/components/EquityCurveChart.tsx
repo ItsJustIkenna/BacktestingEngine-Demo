@@ -14,7 +14,7 @@ interface EquityCurveChartProps {
 
 export const EquityCurveChart: React.FC<EquityCurveChartProps> = ({ data, startDate, endDate }) => {
   // Basic SVG chart implementation
-  // For production, use a library like recharts or Chart.js
+  // For a fuller chart, use a library like recharts or Chart.js
   
   if (!data || data.length === 0) {
     return <div style={{ padding: '20px', textAlign: 'center' }}>No data available</div>;

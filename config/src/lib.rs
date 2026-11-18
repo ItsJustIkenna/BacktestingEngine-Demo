@@ -1244,7 +1244,7 @@ impl AnalysisConfig {
             mode: AnalysisMode::Production,
             auto_monte_carlo: true,
             auto_walk_forward: true,
-            monte_carlo_runs: 1000, // More thorough for production
+            monte_carlo_runs: 1000, // More thorough for full analysis
             ..Default::default()
         }
     }
