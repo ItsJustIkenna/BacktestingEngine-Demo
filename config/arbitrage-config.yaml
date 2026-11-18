@@ -22,7 +22,7 @@ trading:
   # Multi-exchange arbitrage configuration
   routing_mode:
     Arbitrage:
-      exchanges: ["binance", "coinbase", "kraken", "ftx"]
+      exchanges: ["kraken"]
       min_profit_bps: 15.0          # Minimum 15 bps profit threshold
       max_holding_time_seconds: 300  # Maximum 5 minutes holding time
       risk_limits:
@@ -34,7 +34,7 @@ trading:
 # Data source configuration
 data:
   default_timeframe: "1m"  # 1-minute intervals for arbitrage
-  data_sources: ["binance", "coinbase", "kraken", "ftx"]
+  data_sources: ["kraken"]
   cache_enabled: true
   cache_duration_hours: 1  # Short cache duration for fresh data
 
@@ -63,22 +63,6 @@ analysis:
 
 # Exchange-specific configurations
 exchange_configs:
-  binance:
-    maker_fee: 0.001    # 10 bps
-    taker_fee: 0.001    # 10 bps
-    min_order_size: 0.001  # 0.001 BTC minimum
-    max_order_size: 100.0  # 100 BTC maximum
-    latency_ms: 15      # Average 15ms latency
-    uptime_pct: 99.95   # 99.95% uptime
-    
-  coinbase:
-    maker_fee: 0.005    # 50 bps
-    taker_fee: 0.005    # 50 bps  
-    min_order_size: 0.001
-    max_order_size: 50.0
-    latency_ms: 30      # Average 30ms latency
-    uptime_pct: 99.9    # 99.9% uptime
-    
   kraken:
     maker_fee: 0.0016   # 16 bps
     taker_fee: 0.0026   # 26 bps
@@ -87,13 +71,6 @@ exchange_configs:
     latency_ms: 50      # Average 50ms latency
     uptime_pct: 99.8    # 99.8% uptime
     
-  ftx:
-    maker_fee: 0.0002   # 2 bps (maker rebate in some cases)
-    taker_fee: 0.0007   # 7 bps
-    min_order_size: 0.001
-    max_order_size: 100.0
-    latency_ms: 20      # Average 20ms latency
-    uptime_pct: 99.5    # 99.5% uptime
 
 # Strategy-specific parameters
 strategy_params:
@@ -116,7 +93,7 @@ strategy_params:
   # Performance optimization
   batch_processing: true           # Process multiple opportunities together
   latency_compensation: true       # Adjust for network latency
-  priority_exchanges: ["binance", "ftx"]  # Prefer these exchanges
+  priority_exchanges: ["kraken"]  # Prefer these exchanges
 
 # Simulation parameters
 simulation:

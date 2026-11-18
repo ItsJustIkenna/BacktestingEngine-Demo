@@ -563,7 +563,7 @@ export const TardisUpload: React.FC = () => {
         
         <ol style={{ margin: 0, paddingLeft: '20px', lineHeight: 1.8, fontSize: '14px' }}>
           <li>Go to <a href="https://tardis.dev/datasets" target="_blank" rel="noopener noreferrer">tardis.dev/datasets</a></li>
-          <li>Select an exchange (Binance US, Kraken, Coinbase, etc.)</li>
+          <li>Select an exchange (for example, Kraken)</li>
           <li>Choose a trading pair (e.g., BTC-USD)</li>
           <li>Download both <strong>trades</strong> and <strong>book_snapshot</strong> (or <strong>incremental_book_L2</strong>) data</li>
           <li>Upload the .csv.gz files here</li>
@@ -600,7 +600,7 @@ export const TardisUpload: React.FC = () => {
         </div>
         
         <div style={{ marginTop: '12px', fontSize: '13px', color: '#666' }}>
-          <strong>Supported Exchanges:</strong> Binance US, Kraken, Coinbase, Binance, OKX, Bybit
+          <strong>Supported Exchanges:</strong> Kraken
         </div>
       </div>
     </div>

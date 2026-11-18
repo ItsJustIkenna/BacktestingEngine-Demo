@@ -15,7 +15,7 @@ The CronJobs in this directory demonstrate how to schedule automated backtests b
 
 **Configuration:**
 - Symbol: BTC-USD
-- Exchange: Binance
+- Exchange: Kraken
 - Standard parameters for consistency
 - Keeps last 3 successful and 3 failed job histories
 

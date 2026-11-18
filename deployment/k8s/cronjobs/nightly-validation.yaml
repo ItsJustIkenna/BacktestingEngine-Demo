@@ -30,7 +30,7 @@ spec:
                 -H "Content-Type: application/json" \
                 -d '{
                   "symbol": "BTC-USD",
-                  "exchange": "Binance",
+                  "exchange": "Kraken",
                   "risk_aversion": 0.5,
                   "inventory_target": 0.5,
                   "order_size": 0.01,

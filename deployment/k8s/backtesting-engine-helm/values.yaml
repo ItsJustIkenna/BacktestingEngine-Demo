@@ -220,8 +220,7 @@ config:
   data:
     default_timeframe: "1h"
     data_sources:
-      - "binance"
-      - "coinbase"
+      - "kraken"
     cache_enabled: true
     cache_duration_hours: 24
   output:

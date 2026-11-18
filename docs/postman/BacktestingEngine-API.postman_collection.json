@@ -104,7 +104,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"symbol\": \"BTC/USDT\",\n  \"exchange\": \"binance\",\n  \"strategy\": \"arbitrage\",\n  \"initial_capital\": 100000.0,\n  \"optimization_method\": \"genetic\",\n  \"population_size\": 50,\n  \"generations\": 20,\n  \"commission_rate\": 0.001,\n  \"fee_rate\": 0.001,\n  \"start_date\": \"2024-01-01\",\n  \"end_date\": \"2024-12-31\"\n}"
+              "raw": "{\n  \"symbol\": \"BTC/USDT\",\n  \"exchange\": \"kraken\",\n  \"strategy\": \"arbitrage\",\n  \"initial_capital\": 100000.0,\n  \"optimization_method\": \"genetic\",\n  \"population_size\": 50,\n  \"generations\": 20,\n  \"commission_rate\": 0.001,\n  \"fee_rate\": 0.001,\n  \"start_date\": \"2024-01-01\",\n  \"end_date\": \"2024-12-31\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/backtest",
@@ -141,7 +141,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"symbol\": \"ETH/USDT\",\n  \"exchange\": \"coinbase\",\n  \"strategy\": \"arbitrage\",\n  \"initial_capital\": 50000.0,\n  \"optimization_method\": \"manual\",\n  \"risk_aversion\": 0.5,\n  \"inventory_target\": 0.5,\n  \"order_size\": 0.01,\n  \"commission_rate\": 0.002,\n  \"fee_rate\": 0.002,\n  \"start_date\": \"2024-06-01\",\n  \"end_date\": \"2024-11-30\"\n}"
+              "raw": "{\n  \"symbol\": \"ETH/USDT\",\n  \"exchange\": \"kraken\",\n  \"strategy\": \"arbitrage\",\n  \"initial_capital\": 50000.0,\n  \"optimization_method\": \"manual\",\n  \"risk_aversion\": 0.5,\n  \"inventory_target\": 0.5,\n  \"order_size\": 0.01,\n  \"commission_rate\": 0.002,\n  \"fee_rate\": 0.002,\n  \"start_date\": \"2024-06-01\",\n  \"end_date\": \"2024-11-30\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/backtest",
@@ -178,7 +178,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"symbol\": \"SOL/USDT\",\n  \"exchange\": \"binance\",\n  \"strategy\": \"arbitrage\",\n  \"initial_capital\": 25000.0,\n  \"optimization_method\": \"grid_search\",\n  \"commission_rate\": 0.001,\n  \"fee_rate\": 0.001\n}"
+              "raw": "{\n  \"symbol\": \"SOL/USDT\",\n  \"exchange\": \"kraken\",\n  \"strategy\": \"arbitrage\",\n  \"initial_capital\": 25000.0,\n  \"optimization_method\": \"grid_search\",\n  \"commission_rate\": 0.001,\n  \"fee_rate\": 0.001\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/backtest",
@@ -354,13 +354,13 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/api/backtests?exchange=binance",
+              "raw": "{{base_url}}/api/backtests?exchange=kraken",
               "host": ["{{base_url}}"],
               "path": ["api", "backtests"],
               "query": [
                 {
                   "key": "exchange",
-                  "value": "binance"
+                  "value": "kraken"
                 }
               ]
             },
@@ -374,7 +374,7 @@
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/api/backtests?status=completed&symbol=BTC/USDT&exchange=binance&page=1&page_size=10",
+              "raw": "{{base_url}}/api/backtests?status=completed&symbol=BTC/USDT&exchange=kraken&page=1&page_size=10",
               "host": ["{{base_url}}"],
               "path": ["api", "backtests"],
               "query": [
@@ -388,7 +388,7 @@
                 },
                 {
                   "key": "exchange",
-                  "value": "binance"
+                  "value": "kraken"
                 },
                 {
                   "key": "page",
