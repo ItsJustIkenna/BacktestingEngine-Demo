@@ -1,4 +1,4 @@
-# Production Mode Configuration
+# Full-analysis Mode Configuration
 # Full analysis with Monte Carlo + Walk-Forward - optimized for accuracy
 
 database:
@@ -7,11 +7,11 @@ database:
   database: "{{ .Values.database.name }}"
   username: "{{ .Values.database.username }}"
   password: "{{ .Values.database.password }}"
-  max_connections: 20       # Higher connections for production
-  connection_timeout: 60    # Longer timeout for production
+  max_connections: 20       # Higher connections for full analysis
+  connection_timeout: 60    # Longer timeout for full analysis
 
 trading:
-  initial_capital: 1000000.0  # Real production capital
+  initial_capital: 1000000.0  # Example capital for full analysis
   commission_rate: 0.0008     # Actual broker rates
   slippage_rate: 0.0003       # Realistic slippage
   risk_free_rate: 0.045       # Current risk-free rate
@@ -37,18 +37,18 @@ output:
 
 analysis:
   mode: "production"
-  auto_monte_carlo: true      # Always enabled in production
+  auto_monte_carlo: true      # Always enabled in this mode
   monte_carlo_runs: 10000     # High accuracy Monte Carlo
-  auto_walk_forward: true     # Always enabled in production
+  auto_walk_forward: true     # Always enabled in this mode
   wf_training_days: 730       # 2 years training window
   wf_test_days: 90           # 3 months test window
   wf_step_days: 30           # Monthly rebalancing
   min_duration_for_auto: 30   # Low threshold (1 month)
-  validation_sharpe_threshold: 0.8   # Lower bar for production validation
+  validation_sharpe_threshold: 0.8   # Lower bar for full-analysis validation
   validation_pf_threshold: 1.1
   validation_min_trades: 20
-  timeout_seconds: 3600      # 1 hour timeout for production
-  confidence_levels:         # Production statistical analysis
+  timeout_seconds: 3600      # 1 hour timeout for full analysis
+  confidence_levels:         # Full statistical analysis
     - 0.90
     - 0.95
     - 0.99

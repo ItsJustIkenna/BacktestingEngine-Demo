@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # API-ONLY BUILD: Lean container for the Rust API server
-# UI is served separately via nginx/CDN in production (see k8s/ for orchestration)
+# UI is served separately via nginx/CDN when deployed (see k8s/ for orchestration)
 # Build: docker build -f deployment/Dockerfile -t backtesting-engine:latest .
 # Build context MUST be parent directory containing: BacktestingEngine/, databaseschema/, LoggingEngine/, MessageBrokerEngine/
 

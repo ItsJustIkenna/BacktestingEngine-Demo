@@ -45,7 +45,7 @@ api:
   resources:
     limits:
       cpu: "1000m"
-      memory: "2Gi"      # Reduced for Docker Desktop (increase for production)
+      memory: "2Gi"      # Reduced for Docker Desktop (increase for larger runs)
     requests:
       cpu: "250m"
       memory: "1Gi"      # Reduced for Docker Desktop scheduling
@@ -100,7 +100,7 @@ affinity: {}
 
 # Secrets (injected at deployment time from Azure Key Vault or CI/CD)
 secrets:
-  # Use an existing Kubernetes secret (recommended for production)
+  # Use an existing Kubernetes secret (recommended for real deployments)
   # If specified, the secret should contain these keys:
   #   - database-username
   #   - database-password
@@ -128,7 +128,7 @@ secrets:
     enabled: true
     endpoint: "https://your-elasticsearch-endpoint.example.com"
     username: "elastic"
-    password: "CHANGE_ME_IN_PRODUCTION"
+    password: "CHANGE_ME"
 
 externalDatabase:
   enabled: true
